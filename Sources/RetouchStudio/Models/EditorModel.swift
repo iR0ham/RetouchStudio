@@ -112,6 +112,7 @@ final class EditorModel: ObservableObject {
     @Published var zoom: Double = 1
     @Published var panOffset: CGSize = .zero
     @Published private(set) var canvasSize: CGSize = .zero
+    @Published var toolMode: ToolMode = .skin
 
     private let processor = ImageProcessor.shared
     private let previewMaxDimension: CGFloat = 1800

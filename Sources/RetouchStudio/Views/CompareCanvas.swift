@@ -43,25 +43,20 @@ struct CompareCanvas: View {
             events.start()
         }
         .onDisappear { events.stop() }
+        .overlay(alignment: .topLeading) {
+            if model.hasImage {
+                statusPill.padding(14)
+            }
+        }
         .overlay(alignment: .bottom) {
             if model.hasImage {
-                statusBar.padding(.bottom, 12)
-            }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if model.hasImage {
-                zoomControls.padding(12)
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            if model.hasImage && model.compareEnabled {
-                compareBadges.padding(12)
+                canvasDock.padding(.bottom, 14)
             }
         }
         .overlay {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [9, 6]))
+                    .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
                     .padding(10)
                     .allowsHitTesting(false)
             }
@@ -117,6 +112,16 @@ struct CompareCanvas: View {
                         .position(center)
 
                     compareHandle(displayed: displayed, canvas: canvas, center: center)
+
+                    HStack(spacing: 0) {
+                        compareBadge(model.s.before, highlighted: false)
+                        Spacer(minLength: 0)
+                        compareBadge(model.s.after, highlighted: true)
+                    }
+                    .padding(10)
+                    .frame(width: displayed.width, height: displayed.height, alignment: .top)
+                    .position(center)
+                    .allowsHitTesting(false)
                 }
 
                 if model.showFaceOverlay {
@@ -174,123 +179,200 @@ struct CompareCanvas: View {
         return ZStack {
             Rectangle()
                 .fill(Color.white.opacity(0.85))
-                .frame(width: 1.5, height: lineHeight)
+                .frame(width: 1, height: lineHeight)
+                .allowsHitTesting(false)
 
             ZStack {
                 Circle()
-                    .fill(.regularMaterial)
-                    .frame(width: 34, height: 34)
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.85), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.30), radius: 5, y: 1)
+                    .fill(Theme.panel)
+                    .frame(width: 32, height: 32)
+                    .overlay(Circle().strokeBorder(Theme.accent.opacity(0.85), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.45), radius: 7, y: 2)
                 Image(systemName: "arrow.left.and.right")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.primary.opacity(0.8))
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Theme.accentBright)
             }
+            // Only the knob is grabbable. A full-height hit strip would swallow
+            // clicks far from the split and teleport it.
+            .frame(width: 44, height: 56)
+            .contentShape(Rectangle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        guard displayed.width > 0 else { return }
+                        // value.location is local to the 44-wide knob area, so
+                        // convert back to canvas space before solving for the
+                        // fraction.
+                        let canvasX = x - 22 + value.location.x
+                        let left = center.x - displayed.width / 2
+                        let fraction = (canvasX - left) / displayed.width
+                        model.comparePosition = min(1, max(0, Double(fraction)))
+                    }
+            )
         }
-        // The frame, hit area and gesture must all be established BEFORE
-        // .position(). Applying .contentShape after .position() puts the hit
-        // area at the canvas origin instead of on the handle, which is why the
-        // handle could not be grabbed.
-        .frame(width: 46, height: lineHeight)
-        .contentShape(Rectangle())
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    guard displayed.width > 0 else { return }
-                    // value.location is already in this 46-wide strip's local
-                    // space, so convert back to canvas space before solving for
-                    // the fraction.
-                    let localX = value.location.x
-                    let canvasX = x - 23 + localX
-                    let left = center.x - displayed.width / 2
-                    let fraction = (canvasX - left) / displayed.width
-                    model.comparePosition = min(1, max(0, Double(fraction)))
-                }
-        )
+        .frame(width: 44, height: lineHeight)
         .position(x: x, y: center.y)
     }
 
     // MARK: - Chrome
 
-    private var compareBadges: some View {
-        HStack(spacing: 6) {
-            Text(model.s.before)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.regularMaterial, in: Capsule())
-            Text(model.s.after)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.regularMaterial, in: Capsule())
-        }
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(.secondary)
-        .allowsHitTesting(false)
+    private func compareBadge(_ title: String, highlighted: Bool) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 9, weight: .semibold))
+            .tracking(0.6)
+            .foregroundStyle(highlighted ? Theme.accentBright : Color.white.opacity(0.78))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.black.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(highlighted ? Theme.accent.opacity(0.5) : Color.white.opacity(0.16),
+                                  lineWidth: 0.5)
+            )
     }
 
-    private var zoomControls: some View {
-        HStack(spacing: 4) {
-            Button { model.zoomOut() } label: {
-                Image(systemName: "minus.magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 24, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .disabled(model.zoom <= 1.0001)
-            .help(model.s.zoomOut)
-
-            Text(model.zoom > 1.0001 ? "\(Int((model.zoom * 100).rounded()))%" : model.s.fit)
-                .font(.system(size: 11, weight: .semibold))
-                .monospacedDigit()
-                .frame(minWidth: 50)
-                .foregroundStyle(model.zoom > 1.0001 ? Color.accentColor : Color.secondary)
-
-            Button { model.zoomIn() } label: {
-                Image(systemName: "plus.magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 24, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .disabled(model.zoom >= model.effectiveMaxZoom - 0.001)
-            .help(model.s.zoomIn)
-
-            Divider().frame(height: 14)
-
-            Button { model.resetView() } label: {
-                Image(systemName: "arrow.counterclockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 24, height: 20)
-            }
-            .buttonStyle(.borderless)
-            .disabled(model.zoom <= 1.0001)
-            .help(model.s.fitToWindow)
-        }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
-        .help(model.s.canvasHelp)
-    }
-
-    private var statusBar: some View {
-        HStack(spacing: 8) {
+    private var statusPill: some View {
+        HStack(spacing: 7) {
             if model.isBusy {
-                ProgressView().controlSize(.small)
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(width: 6, height: 6)
+            } else {
+                Circle()
+                    .fill(model.faceStatusIsGood ? Theme.positive : Theme.warning)
+                    .frame(width: 5, height: 5)
             }
+
             Text(model.status)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            if !model.imageInfo.isEmpty {
-                Text("·").foregroundStyle(.quaternary)
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.muted)
+                .lineLimit(1)
+
+            if !model.imageInfo.isEmpty && model.canvasSize.width > 980 {
+                Text("·").foregroundStyle(Theme.faint)
                 Text(model.imageInfo)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.faint)
+                    .lineLimit(1)
             }
         }
         .padding(.vertical, 5)
-        .padding(.horizontal, 12)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
+        .padding(.horizontal, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Theme.panel.opacity(0.86))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Theme.stroke, lineWidth: 0.5)
+        )
+        .allowsHitTesting(false)
+    }
+
+    private var canvasDock: some View {
+        HStack(spacing: 2) {
+            dockButton(icon: "arrow.up.left.and.arrow.down.right",
+                       active: model.zoom <= 1.0001,
+                       help: model.s.fitToWindow) {
+                model.resetView()
+            }
+
+            dockButton(icon: "minus.magnifyingglass",
+                       enabled: model.zoom > 1.0001,
+                       help: model.s.zoomOut) {
+                model.zoomOut()
+            }
+
+            Text(model.zoom > 1.0001 ? "\(Int((model.zoom * 100).rounded()))%" : model.s.fit)
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(model.zoom > 1.0001 ? Theme.accentBright : Theme.muted)
+                .frame(minWidth: 38, minHeight: 28)
+
+            dockButton(icon: "plus.magnifyingglass",
+                       enabled: model.zoom < model.effectiveMaxZoom - 0.001,
+                       help: model.s.zoomIn) {
+                model.zoomIn()
+            }
+
+            dockSeparator
+
+            dockButton(icon: "rectangle.split.2x1",
+                       label: model.s.compare,
+                       active: model.compareEnabled,
+                       help: model.s.compareToggle) {
+                model.compareEnabled.toggle()
+            }
+            dockButton(icon: "face.dashed",
+                       label: model.s.faceBox,
+                       active: model.showFaceOverlay,
+                       help: model.s.faceBoxHelp) {
+                model.showFaceOverlay.toggle()
+            }
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Theme.panel.opacity(0.94))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(Theme.stroke, lineWidth: 0.75)
+        )
+        .shadow(color: .black.opacity(0.42), radius: 16, y: 6)
+    }
+
+    private func dockButton(icon: String,
+                            label: String? = nil,
+                            active: Bool = false,
+                            enabled: Bool = true,
+                            help: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .medium))
+                if let label {
+                    Text(label)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+            .foregroundStyle(active ? Theme.accentBright : Theme.muted)
+            .frame(height: 28)
+            .padding(.horizontal, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(active ? Theme.accentSoft : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(DockButtonStyle())
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.3)
+        .help(help)
+    }
+
+    private var dockSeparator: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.10))
+            .frame(width: 1, height: 16)
+            .padding(.horizontal, 3)
+    }
+}
+
+/// Press feedback for the dock buttons without the stock macOS bezel.
+private struct DockButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.08 : 0))
+            )
     }
 }
 
@@ -299,9 +381,9 @@ struct CompareCanvas: View {
 struct CanvasSurface: View {
     var body: some View {
         ZStack {
-            Color(nsColor: .underPageBackgroundColor)
-            RadialGradient(colors: [Color.white.opacity(0.045), .clear],
-                           center: .center, startRadius: 10, endRadius: 640)
+            Theme.background
+            RadialGradient(colors: [Color.white.opacity(0.038), .clear],
+                           center: .center, startRadius: 20, endRadius: 720)
         }
     }
 }
@@ -316,13 +398,14 @@ struct FaceOverlayView: View {
             ZStack(alignment: .topLeading) {
                 ForEach(Array(faces.enumerated()), id: \.offset) { _, face in
                     roundedBox(viewRect(face.boundingBox, in: size),
-                               color: Color.accentColor, lineWidth: 1.5)
+                               color: Theme.accent, lineWidth: 1.5)
                     ForEach(Array(face.eyeRects.enumerated()), id: \.offset) { _, rect in
-                        roundedBox(viewRect(rect, in: size), color: .green.opacity(0.85),
+                        roundedBox(viewRect(rect, in: size), color: Theme.positive.opacity(0.9),
                                    lineWidth: 1, dashed: true)
                     }
                     if let lip = face.lipRect {
-                        roundedBox(viewRect(lip, in: size), color: .pink.opacity(0.9),
+                        roundedBox(viewRect(lip, in: size),
+                                   color: Color(red: 0.90, green: 0.55, blue: 0.62),
                                    lineWidth: 1, dashed: true)
                     }
                 }
@@ -353,22 +436,31 @@ struct DropZone: View {
         VStack(spacing: 18) {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 44, weight: .light))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.faint)
 
             VStack(spacing: 5) {
                 Text(model.s.dropTitle)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.text)
                 Text(model.s.dropSubtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.center)
             }
 
             Button(action: open) {
                 Text(model.s.openImage)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Theme.Font.button)
+                    .padding(.horizontal, 16)
+                    .frame(height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(LinearGradient(colors: [Theme.accentBright, Theme.accent],
+                                                 startPoint: .top, endPoint: .bottom))
+                    )
+                    .foregroundStyle(Theme.accentInk)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 7) {
                 featureLine("sparkles", model.s.featureSmooth)
@@ -386,11 +478,11 @@ struct DropZone: View {
         HStack(spacing: 9) {
             Image(systemName: icon)
                 .font(.system(size: 10))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Theme.accent.opacity(0.85))
                 .frame(width: 14)
             Text(text)
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.muted)
         }
     }
 }

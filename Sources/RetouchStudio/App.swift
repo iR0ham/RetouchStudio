@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -7,6 +8,9 @@ struct RetouchStudioApp: App {
     init() {
         // Headless engine check (no UI) for verifying the processing pipeline.
         SelfCheck.runIfRequested()
+        // Also behaves like a normal app when launched from a terminal binary.
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     var body: some Scene {
@@ -14,6 +18,8 @@ struct RetouchStudioApp: App {
             EditorView(model: model)
         }
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 1320, height: 860)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button(model.s.openMenu) { model.openImage() }

@@ -6,12 +6,13 @@ struct EditorView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SidebarControls(model: model)
-                .frame(width: 320)
-            Divider()
+            ToolRail(model: model)
+            InspectorView(model: model)
             CompareCanvas(model: model, isDropTarget: $isDropTarget)
         }
-        .frame(minWidth: 1020, minHeight: 660)
+        .frame(minWidth: 1080, minHeight: 700)
+        .background(Theme.background)
+        .preferredColorScheme(.dark)
         .toolbar { toolbar }
         .sheet(isPresented: $model.showExportSheet) {
             ExportSheet(model: model)
@@ -24,7 +25,7 @@ struct EditorView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .navigation) {
+        ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 model.openImage()
             } label: {
@@ -43,30 +44,78 @@ struct EditorView: View {
             Button {
                 model.resetAll()
             } label: {
-                Label(model.s.reset, systemImage: "arrow.uturn.backward")
+                Label(model.s.reset, systemImage: "arrow.counterclockwise")
             }
             .disabled(!model.hasImage || model.adjustments.isIdentity)
             .help(model.s.resetHelp)
         }
+    }
+}
 
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button {
-                model.compareEnabled.toggle()
-            } label: {
-                Label(model.s.compare,
-                      systemImage: model.compareEnabled ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
-            }
-            .help(model.s.compareHelp)
+/// The narrow icon column. Tool selection lives here, and the two canvas
+/// overlays sit at the bottom where they are always reachable.
+private struct ToolRail: View {
+    @ObservedObject var model: EditorModel
 
-            Button {
-                model.showFaceOverlay.toggle()
-            } label: {
-                Label(model.s.faceBox,
-                      systemImage: model.showFaceOverlay ? "face.dashed.fill" : "face.dashed")
+    var body: some View {
+        VStack(spacing: 4) {
+            logo
+                .padding(.bottom, 10)
+
+            ForEach(ToolMode.allCases) { mode in
+                toolButton(mode)
             }
-            .disabled(!model.hasImage)
-            .help(model.s.faceBoxHelp)
+
+            Spacer(minLength: 0)
         }
+        .padding(.vertical, 14)
+        .frame(width: Theme.Metrics.rail)
+        .background(Theme.rail)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(width: 1)
+        }
+    }
+
+    private var logo: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(LinearGradient(colors: [Theme.accentBright, Theme.accent],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 30, height: 30)
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.accentInk)
+        }
+    }
+
+    private func toolButton(_ mode: ToolMode) -> some View {
+        let active = model.toolMode == mode
+
+        return Button {
+            model.toolMode = mode
+        } label: {
+            Image(systemName: mode.icon)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(active ? Theme.accent : Theme.muted)
+                .frame(width: 38, height: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(active ? Theme.accentSoft : Color.clear)
+                )
+                .overlay(alignment: .leading) {
+                    if active {
+                        Capsule()
+                            .fill(Theme.accent)
+                            .frame(width: 2, height: 18)
+                            .offset(x: -8)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(mode.title)
     }
 }
 
@@ -77,56 +126,122 @@ struct ExportSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(model.s.exportSection)
                 .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.text)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(model.s.format)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Picker(model.s.format, selection: $model.exportFormat) {
-                    ForEach(ExportFormat.allCases) { format in
-                        Text(format.title).tag(format)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
+                Text(model.s.format.uppercased())
+                    .font(Theme.Font.section)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.faint)
+                formatPicker
             }
 
             if model.exportFormat.supportsQuality {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text(model.s.quality)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                        Text(model.s.quality.uppercased())
+                            .font(Theme.Font.section)
+                            .tracking(0.6)
+                            .foregroundStyle(Theme.faint)
                         Spacer()
-                        Text("\(Int(model.exportQuality * 100))%")
-                            .font(.system(size: 11))
-                            .monospacedDigit()
+                        Text("\(Int((model.exportQuality * 100).rounded()))%")
+                            .font(Theme.Font.value)
+                            .foregroundStyle(Theme.muted)
                     }
-                    Slider(value: $model.exportQuality, in: 0.4...1.0)
+                    BipolarSlider(value: $model.exportQuality, range: 0.4...1.0, step: 0.01)
                 }
             }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.s.originalSize(model.imageInfo))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.muted)
                 Text(model.s.suggestedName(model.suggestedFileName()))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.faint)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
-            Divider()
+            Hairline()
 
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
-                Button(model.s.cancel) { model.showExportSheet = false }
-                    .keyboardShortcut(.cancelAction)
-                Button(model.s.save) { model.saveExport() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                Button {
+                    model.showExportSheet = false
+                } label: {
+                    Text(model.s.cancel)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Theme.muted)
+                        .frame(height: 28)
+                        .padding(.horizontal, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Theme.card)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(Theme.stroke, lineWidth: 0.5)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+
+                Button {
+                    model.saveExport()
+                } label: {
+                    Text(model.s.save)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(Theme.accentInk)
+                        .frame(height: 28)
+                        .padding(.horizontal, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(LinearGradient(colors: [Theme.accentBright, Theme.accent],
+                                                     startPoint: .top, endPoint: .bottom))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
         .frame(width: 400)
+        .background(Theme.panel)
+        .preferredColorScheme(.dark)
+    }
+
+    private var formatPicker: some View {
+        HStack(spacing: 2) {
+            ForEach(ExportFormat.allCases) { format in
+                let active = model.exportFormat == format
+                Button {
+                    model.exportFormat = format
+                } label: {
+                    Text(format.title)
+                        .font(.system(size: 11.5, weight: active ? .semibold : .regular))
+                        .foregroundStyle(active ? Theme.accentBright : Theme.muted)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(active ? Theme.accentSoft : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.black.opacity(0.25))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Theme.stroke, lineWidth: 0.5)
+        )
     }
 }
