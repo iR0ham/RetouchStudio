@@ -64,23 +64,26 @@ struct LoadResult {
     var preview: CGImage
     var pixelSize: CGSize
     var fileName: String
+    /// Working color space of the source. Previews and exports are rendered in
+    /// this space so a Display P3 photo keeps its gamut instead of being clipped
+    /// through sRGB.
+    var colorSpace: CGColorSpace
 }
 
 /// Retouch engine on Core Image.
 ///
 /// Pipeline order follows how retouchers actually work:
-///   1. geometry (reshape) first, so later masks line up with final feature
-///      positions;
-///   2. texture: blemish → wrinkle → tone evening → smoothing;
-///   3. local tone: under-eye, brightness;
-///   4. eyes and teeth;
-///   5. global color and light last.
+///   1. skin texture and tone, under-eye, eyes and teeth — using masks built for
+///      the original feature positions;
+///   2. geometry (reshape), so the local edits are warped together with the
+///      features they were applied to and no mask can drift out of alignment;
+///   3. global color and light last.
 final class ImageProcessor {
 
     static let shared = ImageProcessor()
 
     let context: CIContext
-    private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    let defaultColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     private init() {
         context = CIContext(options: [.cacheIntermediates: true, .useSoftwareRenderer: false])
@@ -89,11 +92,10 @@ final class ImageProcessor {
     // MARK: - Loading
 
     func load(from url: URL, previewMaxDimension: CGFloat) -> LoadResult? {
-        guard let image = loadCGImage(url: url) else { return nil }
+        guard let (image, colorSpace) = loadCGImageWithColorSpace(url: url) else { return nil }
 
         let extent = CGRect(x: 0, y: 0, width: image.width, height: image.height)
         let full = CIImage(cgImage: image).cropped(to: extent)
-        let faces = FaceAnalyzer.analyze(image)
 
         let scale = Self.previewScale(for: extent, maxDimension: previewMaxDimension)
         let previewExtent = CGRect(x: 0, y: 0,
@@ -103,13 +105,19 @@ final class ImageProcessor {
             ? full
             : full.transformed(by: CGAffineTransform(scaleX: scale, y: scale)).cropped(to: previewExtent)
 
+        // Teeth visibility has to be measured from pixels, not geometry, and the
+        // mask builder needs the answer, so annotation happens before masks.
+        var faces = FaceAnalyzer.analyze(image)
+        if !faces.isEmpty, let buffer = AutoAnalyzer.analysisBuffer(previewSource) {
+            faces = AutoAnalyzer.annotateTeeth(faces: faces, buffer: buffer)
+        }
+
         let masksFull = buildMasks(extent: full.extent, faces: faces)
         let masksPreview = buildMasks(extent: previewSource.extent, faces: faces)
 
-        guard let originalPreview = renderCGImage(previewSource, scale: 1) else { return nil }
-        reshapeFaces = faces
-        let processed = process(previewSource, adjustments: .zero, masks: masksPreview)
-        guard let preview = renderCGImage(processed, scale: 1) else { return nil }
+        guard let originalPreview = renderCGImage(previewSource, scale: 1, colorSpace: colorSpace) else { return nil }
+        let processed = process(previewSource, adjustments: .zero, masks: masksPreview, faces: faces)
+        guard let preview = renderCGImage(processed, scale: 1, colorSpace: colorSpace) else { return nil }
 
         return LoadResult(sourceFull: full,
                           sourcePreview: previewSource,
@@ -119,32 +127,32 @@ final class ImageProcessor {
                           originalPreview: originalPreview,
                           preview: preview,
                           pixelSize: extent.size,
-                          fileName: url.lastPathComponent)
+                          fileName: url.lastPathComponent,
+                          colorSpace: colorSpace)
     }
 
     func loadCGImage(url: URL) -> CGImage? {
+        loadCGImageWithColorSpace(url: url)?.0
+    }
+
+    private func loadCGImageWithColorSpace(url: URL) -> (CGImage, CGColorSpace)? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: true] as CFDictionary)
         else { return nil }
 
+        let colorSpace = cgImage.colorSpace ?? defaultColorSpace
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         let raw = (properties?[kCGImagePropertyOrientation] as? UInt32)
             ?? UInt32((properties?[kCGImagePropertyOrientation] as? Int) ?? 1)
         let orientation = CGImagePropertyOrientation(rawValue: raw) ?? .up
-        guard orientation != .up else { return cgImage }
+        guard orientation != .up else { return (cgImage, colorSpace) }
 
         let oriented = CIImage(cgImage: cgImage).oriented(forExifOrientation: Int32(orientation.rawValue))
         let zeroed = oriented.transformed(by: CGAffineTransform(translationX: -oriented.extent.origin.x,
                                                                y: -oriented.extent.origin.y))
-        return renderCGImage(zeroed, scale: 1)
+        guard let normalized = renderCGImage(zeroed, scale: 1, colorSpace: colorSpace) else { return nil }
+        return (normalized, colorSpace)
     }
-
-    // MARK: - Faces (needed by the reshape stage)
-
-    /// Faces detected for the currently loaded image, set during `load`.
-    /// The reshape stage reads this because it needs the feature positions that
-    /// match the image being processed.
-    var reshapeFaces: [FaceGeometry]?
 
     // MARK: - Masks
 
@@ -173,7 +181,10 @@ final class ImageProcessor {
             // Face silhouette: contour plus a soft band over forehead/cheeks.
             if face.faceContour.count >= 3 {
                 faceShapes.append(MaskShape(points: face.faceContour))
-                skinShapes.append(MaskShape(points: face.faceContour))
+                // Pull the skin edge slightly inside the silhouette: the
+                // contour runs along the hairline and jaw, where smoothing the
+                // background would read as a halo.
+                skinShapes.append(MaskShape(points: FaceGeometry.scaled(face.faceContour, by: 0.985)))
             }
             faceShapes.append(MaskShape(rect: face.upperFaceRectForMask, cornerRadius: 0.34))
             skinShapes.append(MaskShape(ellipse: face.foreheadRect))
@@ -198,7 +209,9 @@ final class ImageProcessor {
                 lipShapes.append(MaskShape(points: face.lipPolygon))
             }
 
-            if let teeth = face.teethRect {
+            // Whitening a closed mouth would lighten lips, not teeth, so the
+            // mask only exists when teeth were measured as visible.
+            if face.hasVisibleTeeth, let teeth = face.teethRect {
                 teethShapes.append(MaskShape(ellipse: teeth))
             }
 
@@ -227,7 +240,10 @@ final class ImageProcessor {
 
     // MARK: - Processing
 
-    func process(_ source: CIImage, adjustments a: Adjustments, masks: MaskSet?) -> CIImage {
+    func process(_ source: CIImage,
+                 adjustments a: Adjustments,
+                 masks: MaskSet?,
+                 faces: [FaceGeometry] = []) -> CIImage {
         let extent = source.extent
         // Every radius is expressed relative to image size so the preview and
         // the full-resolution export look the same.
@@ -235,21 +251,15 @@ final class ImageProcessor {
 
         var image = source
 
-        // 1) Geometry first, so the masks below line up with the moved features.
-        //    The caller supplies the faces for the image being processed (the
-        //    preview and the full-resolution source have different extents).
-        if a.hasReshape, let reshapeFaces = reshapeFaces, !reshapeFaces.isEmpty {
-            let controls = reshapeFaces.flatMap { FeatureReshaper.controls(for: $0, adjustments: a) }
-            image = FeatureReshaper.apply(image, controls: controls)
-        }
-
-        // 2) Skin texture and tone.
+        // 1) Local retouch runs first, while the masks still line up with the
+        //    feature positions they were built from. Warping first would move
+        //    eyes and lips out from under their own masks.
         if let skinMask = masks?.skin, let textureMask = masks?.skinTexture {
             // Blemish size scales with the face, not the image: a spot is a
             // roughly constant fraction of a face's width. Deriving the median
             // radius this way keeps the slider behaving the same on the preview
             // and on the full-resolution export.
-            let faceWidthPx = (reshapeFaces?.first.map { $0.boundingBox.width * extent.width })
+            let faceWidthPx = faces.first.map { $0.boundingBox.width * extent.width }
                 ?? (extent.width * 0.30)
             // Factor chosen by measurement, not taste. The median can only heal
             // a blemish smaller than its own kernel (about 2.3x the radius), so
@@ -289,13 +299,13 @@ final class ImageProcessor {
             }
         }
 
-        // 3) Under-eye correction.
+        // 2) Under-eye correction.
         if a.darkCircles > 0, let underEyeMask = masks?.underEyes {
             image = SkinEngine.correctDarkCircles(image, strength: a.darkCircles,
                                                   mask: underEyeMask, scale: scale)
         }
 
-        // 4) Teeth and eyes.
+        // 3) Teeth and eyes.
         if a.teethWhiten > 0, let teethMask = masks?.teeth {
             image = SkinEngine.whitenTeeth(image, strength: a.teethWhiten, mask: teethMask)
         }
@@ -303,6 +313,13 @@ final class ImageProcessor {
             image = SkinEngine.enhanceEyes(image, brighten: a.eyeBrighten,
                                            sharpen: a.eyeSharpen,
                                            mask: eyeMask, scale: scale)
+        }
+
+        // 4) Geometry after the local edits: the warp then carries the
+        //    retouched pixels with the features, and every mask stays aligned.
+        if a.hasReshape, !faces.isEmpty {
+            let controls = faces.flatMap { FeatureReshaper.controls(for: $0, adjustments: a) }
+            image = FeatureReshaper.apply(image, controls: controls)
         }
 
         // 5) Global color and light.
@@ -363,7 +380,9 @@ final class ImageProcessor {
 
     // MARK: - Render and export
 
-    func renderCGImage(_ image: CIImage, scale: CGFloat) -> CGImage? {
+    func renderCGImage(_ image: CIImage,
+                       scale: CGFloat,
+                       colorSpace: CGColorSpace? = nil) -> CGImage? {
         var working = image
         if scale != 1 {
             working = working.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
@@ -372,16 +391,21 @@ final class ImageProcessor {
         guard extent.width >= 1, extent.height >= 1 else { return nil }
         let rect = CGRect(x: extent.origin.x, y: extent.origin.y,
                           width: extent.width.rounded(), height: extent.height.rounded())
-        return context.createCGImage(working, from: rect, format: .RGBA8, colorSpace: colorSpace)
+        return context.createCGImage(working, from: rect, format: .RGBA8,
+                                     colorSpace: colorSpace ?? defaultColorSpace)
     }
 
-    func renderNSImage(_ image: CIImage, scale: CGFloat) -> NSImage? {
-        guard let cgImage = renderCGImage(image, scale: scale) else { return nil }
+    func renderNSImage(_ image: CIImage, scale: CGFloat, colorSpace: CGColorSpace? = nil) -> NSImage? {
+        guard let cgImage = renderCGImage(image, scale: scale, colorSpace: colorSpace) else { return nil }
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
-    func write(_ image: CIImage, to url: URL, format: ExportFormat, quality: Double) -> Bool {
-        guard let cgImage = renderCGImage(image, scale: 1) else { return false }
+    func write(_ image: CIImage,
+               to url: URL,
+               format: ExportFormat,
+               quality: Double,
+               colorSpace: CGColorSpace? = nil) -> Bool {
+        guard let cgImage = renderCGImage(image, scale: 1, colorSpace: colorSpace) else { return false }
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL,
                                                               format.utType.identifier as CFString,
                                                               1,

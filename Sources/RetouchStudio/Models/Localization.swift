@@ -47,6 +47,10 @@ struct L10n {
     var autoRetouchScope: String {
         "Face only. Rest of photo untouched."
     }
+    var autoStrength: String { "Strength" }
+    var teethNotVisible: String {
+        "Teeth aren't visible in this photo, so whitening has nothing to target."
+    }
     var autoColorLightScope: String {
         "Whole photo, color and light only."
     }

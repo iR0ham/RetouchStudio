@@ -211,6 +211,10 @@ struct InspectorView: View {
                              range: 0...100,
                              onReset: { model.resetEffect(\.eyeSharpen) })
             }
+
+            if model.hasImage, model.faceCount > 0, !model.hasVisibleTeeth {
+                SectionNote(text: model.s.teethNotVisible)
+            }
         }
     }
 
@@ -268,6 +272,11 @@ struct InspectorView: View {
 
                 Spacer(minLength: 0)
             }
+
+            ParameterRow(title: model.s.autoStrength,
+                         value: $model.autoRetouchStrength,
+                         range: 0...100,
+                         onReset: { model.autoRetouchStrength = 70 })
 
             AccentButton(title: "Apply Auto Retouch",
                          icon: "wand.and.stars",

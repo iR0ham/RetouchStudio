@@ -12,6 +12,9 @@ final class EditorModel: ObservableObject {
     @Published var compareEnabled = true
     @Published var comparePosition: Double = 0.45
     @Published var showFaceOverlay = false
+    /// How strongly Auto Retouch's derived values are applied. 100 applies the
+    /// analysis as measured; lower values scale every effect down together.
+    @Published var autoRetouchStrength: Double = 70
 
     // Export
     @Published var showExportSheet = false
@@ -126,6 +129,7 @@ final class EditorModel: ObservableObject {
     private var sourcePreview: CIImage?
     private var masksFull: MaskSet?
     private var masksPreview: MaskSet?
+    private var sourceColorSpace: CGColorSpace?
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var generation = 0
@@ -175,6 +179,7 @@ final class EditorModel: ObservableObject {
         sourcePreview = result.sourcePreview
         masksFull = result.masksFull
         masksPreview = result.masksPreview
+        sourceColorSpace = result.colorSpace
         faces = result.faces
         faceCount = result.faces.count
         originalImage = NSImage(cgImage: result.originalPreview,
@@ -298,6 +303,8 @@ final class EditorModel: ObservableObject {
 
         let adjustments = self.adjustments
         let masks = self.masksPreview
+        let faces = self.faces
+        let colorSpace = self.sourceColorSpace
         let processor = self.processor
         isBusy = true
 
@@ -308,8 +315,9 @@ final class EditorModel: ObservableObject {
             self?.commitAdjustments()
 
             let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
-                let processed = processor.process(source, adjustments: adjustments, masks: masks)
-                return processor.renderCGImage(processed, scale: 1)
+                let processed = processor.process(source, adjustments: adjustments,
+                                                  masks: masks, faces: faces)
+                return processor.renderCGImage(processed, scale: 1, colorSpace: colorSpace)
             }.value
 
             guard let self, self.generation == generation else { return }
@@ -349,6 +357,8 @@ final class EditorModel: ObservableObject {
     /// itself. Skin, teeth and eye adjustments are left exactly as they were.
     func autoColorLight() {
         guard let source = sourcePreview else { return }
+        generation += 1
+        let generation = self.generation
         isBusy = true
         status = s.analyzingColor
         Task { [weak self] in
@@ -356,7 +366,7 @@ final class EditorModel: ObservableObject {
                 guard let buffer = AutoAnalyzer.analysisBuffer(source) else { return nil }
                 return AutoAnalyzer.autoColorLight(buffer)
             }.value
-            guard let self else { return }
+            guard let self, self.generation == generation else { return }
             self.isBusy = false
             guard let patch else {
                 self.status = self.s.autoColorFailed
@@ -379,34 +389,42 @@ final class EditorModel: ObservableObject {
             status = s.autoRetouchNeedsFace
             return
         }
+        generation += 1
+        let generation = self.generation
         isBusy = true
         status = s.analyzingSkin
         let faces = self.faces
-        let faceMask = self.masksPreview?.face
+        let skinMask = self.masksPreview?.skin
+        let strength = self.autoRetouchStrength
         Task { [weak self] in
             let patch = await Task.detached(priority: .userInitiated) { () -> Adjustments? in
                 guard let buffer = AutoAnalyzer.analysisBuffer(source) else { return nil }
-                let overall = AutoAnalyzer.stats(buffer).meanLuminance
-                let maskBuffer = faceMask.flatMap { AutoAnalyzer.analysisBuffer($0) }
+                let overall = AutoAnalyzer.stats(buffer).medianLuminance
+                let maskBuffer = skinMask.flatMap { AutoAnalyzer.analysisBuffer($0) }
                 return AutoAnalyzer.autoRetouch(buffer,
-                                                faceMask: maskBuffer,
+                                                skinMask: maskBuffer,
                                                 faces: faces,
-                                                globalMeanLuminance: overall)
+                                                globalMedianLuminance: overall)
             }.value
-            guard let self else { return }
+            guard let self, self.generation == generation else { return }
             self.isBusy = false
             guard let patch else {
                 self.status = self.s.autoRetouchFailed
                 return
             }
             // Only the retouch fields are replaced; geometry and color/light
-            // are carried over untouched.
+            // are carried over untouched. The strength slider scales the
+            // derived values together.
             self.commitAdjustments()
-            self.adjustments = self.adjustments.applyingRetouch(patch)
+            self.adjustments = self.adjustments.applyingRetouch(patch.scaledRetouch(by: strength))
             self.commitAdjustments()
             self.status = self.s.autoRetouchApplied
         }
     }
+
+    /// True when at least one detected face actually shows teeth. The teeth
+    /// mask only exists in that case, so the UI can explain the skip.
+    var hasVisibleTeeth: Bool { faces.contains { $0.hasVisibleTeeth } }
 
     // MARK: - Status text
 
@@ -445,6 +463,8 @@ final class EditorModel: ObservableObject {
         guard let source = sourceFull else { return }
         let adjustments = self.adjustments
         let masks = self.masksFull
+        let faces = self.faces
+        let colorSpace = self.sourceColorSpace
         let processor = self.processor
         let format = self.exportFormat
         let quality = self.exportQuality
@@ -454,8 +474,10 @@ final class EditorModel: ObservableObject {
 
         Task { [weak self] in
             let success = await Task.detached(priority: .userInitiated) { () -> Bool in
-                let processed = processor.process(source, adjustments: adjustments, masks: masks)
-                return processor.write(processed, to: url, format: format, quality: quality)
+                let processed = processor.process(source, adjustments: adjustments,
+                                                  masks: masks, faces: faces)
+                return processor.write(processed, to: url, format: format,
+                                       quality: quality, colorSpace: colorSpace)
             }.value
 
             guard let self else { return }

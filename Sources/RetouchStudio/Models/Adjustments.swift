@@ -129,6 +129,24 @@ struct Adjustments: Equatable {
         return result
     }
 
+    /// Scales the strength of an auto-generated retouch patch. Only the actual
+    /// effects are scaled; `texturePreserve` is a preference about how the
+    /// smoothing looks, so it is carried over unchanged.
+    func scaledRetouch(by percent: Double) -> Adjustments {
+        let factor = min(1, max(0, percent / 100))
+        var result = self
+        result.smooth = smooth * factor
+        result.blemish = blemish * factor
+        result.wrinkle = wrinkle * factor
+        result.skinToneEvens = skinToneEvens * factor
+        result.darkCircles = darkCircles * factor
+        result.skinBrighten = skinBrighten * factor
+        result.teethWhiten = teethWhiten * factor
+        result.eyeBrighten = eyeBrighten * factor
+        result.eyeSharpen = eyeSharpen * factor
+        return result
+    }
+
     /// Copy with ONLY the geometry fields taken from `patch`.
     func applyingReshape(_ patch: Adjustments) -> Adjustments {
         var result = self

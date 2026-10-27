@@ -28,6 +28,11 @@ struct FaceGeometry {
     var medianLine: [CGPoint]
     var hasLandmarks: Bool
 
+    /// True when the inner-mouth region actually shows teeth. Geometry alone
+    /// cannot decide this: a closed smile and an open smile can have the same
+    /// lip opening, so the flag is set from pixels by `AutoAnalyzer`.
+    var hasVisibleTeeth: Bool = false
+
     // MARK: - Derived regions
 
     var eyePolygons: [[CGPoint]] { [leftEye, rightEye].filter { $0.count >= 3 } }
@@ -60,6 +65,13 @@ struct FaceGeometry {
         guard !r.isNull else { return nil }
         // Inset vertically to stay inside the lips.
         return r.insetBy(dx: r.width * 0.12, dy: r.height * 0.18)
+    }
+
+    /// Inner-lip height over outer-lip height. Used together with a pixel
+    /// measurement to decide whether teeth are actually visible.
+    var mouthOpenness: Double {
+        guard let inner = innerLipRect, let outer = lipRect, outer.height > 0.0001 else { return 0 }
+        return Double(inner.height / outer.height)
     }
 
     /// Forehead: the upper part of the face contour, used for skin work.

@@ -43,6 +43,8 @@ enum SelfCheck {
         passed = checkMaskConvention() && passed
         print("-- blemish gate separates skin from spots --")
         passed = checkBlemishGate() && passed
+        print("-- teeth whitening only when teeth are visible --")
+        passed = checkTeethGating() && passed
         if let facePath {
             print("-- real photo --")
             passed = checkRealFace(path: facePath, outDirectory: outDirectory) && passed
@@ -98,7 +100,6 @@ enum SelfCheck {
             leftEye: [], rightEye: [], leftEyebrow: [], rightEyebrow: [], outerLips: [], innerLips: [], nose: [])
 
         let processor = ImageProcessor.shared
-        processor.reshapeFaces = [face]
         guard let masks = processor.buildMasks(extent: extent, faces: [face]),
               let faceMask = masks.face,
               let maskImage = processor.renderCGImage(faceMask, scale: 1),
@@ -112,7 +113,8 @@ enum SelfCheck {
         adjustments.smooth = 100
         adjustments.blemish = 100
 
-        let output = processor.process(CIImage(cgImage: base), adjustments: adjustments, masks: masks)
+        let output = processor.process(CIImage(cgImage: base), adjustments: adjustments,
+                                       masks: masks, faces: [face])
         guard let rendered = processor.renderCGImage(output, scale: 1),
               let beforeCenter = luminance(base, x: 200, y: 200),
               let afterCenter = luminance(rendered, x: 200, y: 200),
@@ -206,7 +208,8 @@ enum SelfCheck {
         adjustments.smooth = 80
 
         let source = CIImage(cgImage: base).cropped(to: extent)
-        let output = processor.process(source, adjustments: adjustments, masks: masks)
+        let output = processor.process(source, adjustments: adjustments,
+                                       masks: masks, faces: [face])
         guard let rendered = processor.renderCGImage(output, scale: 1) else {
             print("  ✗ processing failed")
             return false
@@ -222,10 +225,10 @@ enum SelfCheck {
         let eyeAfter = roughness(rendered, rect: eyeRectPx)
 
         // برای اینکه تشخیص بدهیم «منطقه‌ی تست» درست انتخاب شده، خودِ ماسک را هم می‌خوانیم.
-        if let faceMask = masks.face, let maskImage = processor.renderCGImage(faceMask, scale: 1) {
-            let skinMask = luminance(maskImage, x: Int(skinRect.midX), y: Int(skinRect.midY))
-            let eyeMask = luminance(maskImage, x: Int(eyeRectPx.midX), y: Int(eyeRectPx.midY))
-            print("  • skin mask value at skin sample=\(skinMask.map(String.init) ?? "?") and at eye sample=\(eyeMask.map(String.init) ?? "?") (expect high on skin, ~0 on eye)")
+        if let skinMask = masks.skin, let maskImage = processor.renderCGImage(skinMask, scale: 1) {
+            let skinMaskValue = luminance(maskImage, x: Int(skinRect.midX), y: Int(skinRect.midY))
+            let eyeMaskValue = luminance(maskImage, x: Int(eyeRectPx.midX), y: Int(eyeRectPx.midY))
+            print("  • skin mask value at skin sample=\(skinMaskValue.map(String.init) ?? "?") and at eye sample=\(eyeMaskValue.map(String.init) ?? "?") (expect high on skin, ~0 on eye)")
         }
 
         guard let skinBefore, let skinAfter, let eyeBefore, let eyeAfter else {
@@ -266,7 +269,8 @@ enum SelfCheck {
         guard let masks = processor.buildMasks(extent: extent, faces: [face]) else { return false }
         let source = CIImage(cgImage: base).cropped(to: extent)
         let preset = Preset.all[1].adjustments
-        let output = processor.process(source, adjustments: preset, masks: masks)
+        let output = processor.process(source, adjustments: preset,
+                                       masks: masks, faces: [face])
 
         let directory = URL(fileURLWithPath: outDirectory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -298,7 +302,7 @@ enum SelfCheck {
         }
 
         let fullExtent = CGRect(x: 0, y: 0, width: full.width, height: full.height)
-        let faces = FaceAnalyzer.analyze(full)
+        var faces = FaceAnalyzer.analyze(full)
         print("  • size: \(full.width)×\(full.height) | faces detected: \(faces.count)")
         for face in faces {
             print("    - face box: x=\(String(format: "%.3f", face.boundingBox.minX)) y=\(String(format: "%.3f", face.boundingBox.minY)) w=\(String(format: "%.3f", face.boundingBox.width)) h=\(String(format: "%.3f", face.boundingBox.height))")
@@ -317,6 +321,14 @@ enum SelfCheck {
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .cropped(to: previewExtent)
 
+        if let buffer = AutoAnalyzer.analysisBuffer(source) {
+            faces = AutoAnalyzer.annotateTeeth(faces: faces, buffer: buffer)
+            for face in faces {
+                let fraction = AutoAnalyzer.visibleTeethFraction(buffer: buffer, face: face)
+                print("    - visible teeth: \(face.hasVisibleTeeth ? "yes" : "no") | openness=\(String(format: "%.2f", face.mouthOpenness)) | fraction=\(String(format: "%.2f", fraction))")
+            }
+        }
+
         guard let masks = processor.buildMasks(extent: previewExtent, faces: faces) else {
             print("  ✗ could not build mask")
             return false
@@ -333,7 +345,8 @@ enum SelfCheck {
 
         _ = processor.write(source, to: directory.appendingPathComponent("selftest-face-before.png"), format: .png, quality: 1)
 
-        let output = processor.process(source, adjustments: Preset.all[1].adjustments, masks: masks)
+        let output = processor.process(source, adjustments: Preset.all[1].adjustments,
+                                       masks: masks, faces: faces)
         let wrote = processor.write(output, to: directory.appendingPathComponent("selftest-face-after.png"), format: .png, quality: 1)
         print("  \(wrote ? "✓" : "✗") retouched output written: selftest-face-after.png")
         return wrote
@@ -368,13 +381,13 @@ enum SelfCheck {
         let extent = src.extent
         let processor = ImageProcessor.shared
         let masks = processor.buildMasks(extent: extent, faces: [face])
-        let maskBuffer = masks?.face.flatMap { AutoAnalyzer.analysisBuffer($0) }
+        let maskBuffer = masks?.skin.flatMap { AutoAnalyzer.analysisBuffer($0) }
 
         let colorPatch = AutoAnalyzer.autoColorLight(buffer)
         let retouchPatch = AutoAnalyzer.autoRetouch(buffer,
-                                                    faceMask: maskBuffer,
+                                                    skinMask: maskBuffer,
                                                     faces: [face],
-                                                    globalMeanLuminance: AutoAnalyzer.stats(buffer).meanLuminance)
+                                                    globalMedianLuminance: AutoAnalyzer.stats(buffer).medianLuminance)
 
         // «خودکار رنگ و نور» نباید هیچ فیلد رتوشی را تغییر دهد.
         let colorTouchesRetouch = colorPatch.smooth != 0 || colorPatch.blemish != 0
@@ -450,27 +463,27 @@ enum SelfCheck {
             .cropped(to: extent)
 
         guard let masks = processor.buildMasks(extent: extent, faces: faces),
-              let faceMask = masks.face else {
+              let skinMask = masks.skin else {
             print("  ✗ could not build masks")
             return false
         }
 
         // Derive the retouch patch the same way the model does.
         guard let buffer = AutoAnalyzer.analysisBuffer(source),
-              let maskBuffer = AutoAnalyzer.analysisBuffer(faceMask) else {
+              let maskBuffer = AutoAnalyzer.analysisBuffer(skinMask) else {
             print("  ✗ could not build analysis buffers")
             return false
         }
         let patch = AutoAnalyzer.autoRetouch(buffer,
-                                             faceMask: maskBuffer,
+                                             skinMask: maskBuffer,
                                              faces: faces,
-                                             globalMeanLuminance: AutoAnalyzer.stats(buffer).meanLuminance)
+                                             globalMedianLuminance: AutoAnalyzer.stats(buffer).medianLuminance)
         print("  • patch: smooth=\(fmt(patch.smooth)) blemish=\(fmt(patch.blemish)) skinBrighten=\(fmt(patch.skinBrighten)) eyes=\(fmt(patch.eyeBrighten))")
 
         guard let before = processor.renderCGImage(source, scale: 1),
               let after = processor.renderCGImage(
-                processor.process(source, adjustments: patch, masks: masks), scale: 1),
-              let maskImage = processor.renderCGImage(faceMask, scale: 1) else {
+                processor.process(source, adjustments: patch, masks: masks, faces: faces), scale: 1),
+              let maskImage = processor.renderCGImage(skinMask, scale: 1) else {
             print("  ✗ could not render")
             return false
         }
@@ -517,7 +530,11 @@ enum SelfCheck {
         let outsideMean = outsideDelta / outsideCount
         let ratio = outsideMean / max(insideMean, 1e-6)
 
-        let faceChanged = insideMean > 2.0
+        // Only skin is measured here (eyes and lips are outside the mask), so
+        // the expected delta is small; 0.5 still proves a real change while
+        // staying above the untouched background by more than an order of
+        // magnitude.
+        let faceChanged = insideMean > 0.5
         let backgroundIntact = ratio < 0.25
         print("  \(faceChanged ? "✓" : "✗") face region changed: mean |Δ| = \(String(format: "%.2f", insideMean)) (\(Int(insideCount)) px)")
         print("  \(backgroundIntact ? "✓" : "✗") background nearly untouched: mean |Δ| = \(String(format: "%.2f", outsideMean)) (\(Int(outsideCount)) px), ratio = \(String(format: "%.3f", ratio)) (expect < 0.25)")
@@ -630,7 +647,8 @@ enum SelfCheck {
         adjustments.blemish = 75
 
         let source = CIImage(cgImage: base).cropped(to: extent)
-        let output = processor.process(source, adjustments: adjustments, masks: masks)
+        let output = processor.process(source, adjustments: adjustments,
+                                       masks: masks, faces: [face])
         guard let rendered = processor.renderCGImage(output, scale: 1) else {
             print("  ✗ processing failed")
             return false
@@ -690,6 +708,87 @@ enum SelfCheck {
         for (sx, sy, r) in [(0.34, 0.62, 7.0), (0.46, 0.46, 8.0), (0.60, 0.56, 6.5)] {
             context.fillEllipse(in: CGRect(x: s * sx - r, y: s * sy - r, width: r * 2, height: r * 2))
         }
+        return context.makeImage()
+    }
+
+    // MARK: - ۸) سفیدکردن دندان فقط وقتی دندان دیده می‌شود
+
+    /// A closed mouth and an open one can share identical lip geometry, so the
+    /// teeth flag has to come from pixels. This verifies both halves: the flag
+    /// and the mask gate — and that whitening a closed mouth changes nothing.
+    private static func checkTeethGating() -> Bool {
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let face = FaceGeometry.synthetic(
+            boundingBox: CGRect(x: 0.20, y: 0.20, width: 0.60, height: 0.60),
+            faceContour: [CGPoint(x: 0.20, y: 0.20), CGPoint(x: 0.80, y: 0.20),
+                          CGPoint(x: 0.80, y: 0.80), CGPoint(x: 0.20, y: 0.80)],
+            leftEye: [], rightEye: [], leftEyebrow: [], rightEyebrow: [],
+            outerLips: [CGPoint(x: 0.40, y: 0.40), CGPoint(x: 0.60, y: 0.40),
+                        CGPoint(x: 0.60, y: 0.52), CGPoint(x: 0.40, y: 0.52)],
+            innerLips: [CGPoint(x: 0.44, y: 0.43), CGPoint(x: 0.56, y: 0.43),
+                        CGPoint(x: 0.56, y: 0.49), CGPoint(x: 0.44, y: 0.49)],
+            nose: [])
+
+        guard let closed = makeMouthImage(size: size, showsTeeth: false),
+              let open = makeMouthImage(size: size, showsTeeth: true),
+              let closedBuffer = AutoAnalyzer.analysisBuffer(CIImage(cgImage: closed)),
+              let openBuffer = AutoAnalyzer.analysisBuffer(CIImage(cgImage: open)) else {
+            print("  ✗ could not build mouth fixtures")
+            return false
+        }
+
+        let closedFaces = AutoAnalyzer.annotateTeeth(faces: [face], buffer: closedBuffer)
+        let openFaces = AutoAnalyzer.annotateTeeth(faces: [face], buffer: openBuffer)
+        let closedFraction = AutoAnalyzer.visibleTeethFraction(buffer: closedBuffer, face: face)
+        let openFraction = AutoAnalyzer.visibleTeethFraction(buffer: openBuffer, face: face)
+
+        let closedOK = !closedFaces[0].hasVisibleTeeth
+        let openOK = openFaces[0].hasVisibleTeeth
+        print("  \(closedOK ? "✓" : "✗") closed mouth: teeth fraction=\(String(format: "%.2f", closedFraction)) → not visible")
+        print("  \(openOK ? "✓" : "✗") open smile: teeth fraction=\(String(format: "%.2f", openFraction)) → visible")
+
+        let processor = ImageProcessor.shared
+        guard let closedMask = processor.buildMasks(extent: extent, faces: closedFaces),
+              let openMask = processor.buildMasks(extent: extent, faces: openFaces) else {
+            print("  ✗ could not build masks")
+            return false
+        }
+        let gateOK = closedMask.teeth == nil && openMask.teeth != nil
+        print("  \(gateOK ? "✓" : "✗") teeth mask: closed=\(closedMask.teeth == nil ? "absent" : "present") open=\(openMask.teeth == nil ? "absent" : "present")")
+
+        var adjustments = Adjustments()
+        adjustments.teethWhiten = 100
+        let output = processor.process(CIImage(cgImage: closed), adjustments: adjustments,
+                                       masks: closedMask, faces: closedFaces)
+        guard let rendered = processor.renderCGImage(output, scale: 1),
+              let before = luminance(closed, x: 200, y: 200),
+              let after = luminance(rendered, x: 200, y: 200) else {
+            print("  ✗ could not process closed mouth")
+            return false
+        }
+        let untouched = abs(after - before) <= 1
+        print("  \(untouched ? "✓" : "✗") closed mouth unchanged by whitening: \(before) → \(after)")
+
+        return closedOK && openOK && gateOK && untouched
+    }
+
+    /// Flat skin with a rectangular mouth. `showsTeeth` fills the inner mouth
+    /// with bright neutral enamel; otherwise it is dark and saturated.
+    private static func makeMouthImage(size: Int, showsTeeth: Bool) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+        context.setFillColor(CGColor(red: 0.62, green: 0.30, blue: 0.30, alpha: 1))
+        context.fill(CGRect(x: s * 0.40, y: s * 0.40, width: s * 0.20, height: s * 0.12))
+        context.setFillColor(showsTeeth
+                             ? CGColor(red: 0.93, green: 0.91, blue: 0.86, alpha: 1)
+                             : CGColor(red: 0.32, green: 0.12, blue: 0.13, alpha: 1))
+        context.fill(CGRect(x: s * 0.44, y: s * 0.43, width: s * 0.12, height: s * 0.06))
         return context.makeImage()
     }
 
