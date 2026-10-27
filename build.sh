@@ -67,9 +67,15 @@ fi
 codesign --force --sign - "$APP_BUNDLE" >/dev/null 2>&1 || echo "  (بدون امضا ادامه می‌دهیم)"
 
 echo "→ بررسی سلامت موتور پردازش…"
-"$OUT_DIR/$BINARY_NAME" --selftest --out build/selftest >/dev/null 2>&1 \
-  && echo "  ✓ خودآزمون پردازش پاس شد" \
-  || echo "  ! خودآزمون پردازش خطا داد (اجرا کن: ./build/bin/$BINARY_NAME --selftest)"
+mkdir -p build/selftest
+if "$OUT_DIR/$BINARY_NAME" --selftest --out build/selftest > build/selftest/selftest.log 2>&1; then
+  echo "  ✓ خودآزمون پردازش پاس شد"
+else
+  echo "✗ خودآزمون پردازش خطا داد — بیلد متوقف شد." >&2
+  echo "  جزئیات: build/selftest/selftest.log" >&2
+  tail -n 30 build/selftest/selftest.log >&2 || true
+  exit 1
+fi
 
 echo "✓ آماده است: $(pwd)/$APP_BUNDLE"
 echo "  اجرا:  open \"$(pwd)/$APP_BUNDLE\""

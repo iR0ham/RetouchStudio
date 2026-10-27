@@ -55,6 +55,8 @@ enum SelfCheck {
         passed = checkColorGateSpace() && passed
         print("-- 16-bit export and metadata --")
         passed = checkExportDepthAndMetadata(outDirectory: outDirectory) && passed
+        print("-- undo and redo history --")
+        passed = checkUndoHistory() && passed
         if let facePath {
             print("-- real photo --")
             passed = checkRealFace(path: facePath, outDirectory: outDirectory) && passed
@@ -306,14 +308,18 @@ enum SelfCheck {
     private static func checkRealFace(path: String, outDirectory: String) -> Bool {
         let processor = ImageProcessor.shared
         let url = URL(fileURLWithPath: path)
-        guard let full = processor.loadCGImage(url: url) else {
+
+        // Exercise the same entry point as the app, including detection on the
+        // preview and mask building, so this test cannot drift from production.
+        guard let result = processor.load(from: url, previewMaxDimension: 1400) else {
             print("  ✗ could not read test photo: \(path)")
             return false
         }
 
-        let fullExtent = CGRect(x: 0, y: 0, width: full.width, height: full.height)
-        var faces = FaceAnalyzer.analyze(full)
-        print("  • size: \(full.width)×\(full.height) | faces detected: \(faces.count)")
+        let source = result.sourcePreview
+        let previewExtent = source.extent
+        let faces = result.faces
+        print("  • size: \(Int(result.pixelSize.width))×\(Int(result.pixelSize.height)) | faces detected: \(faces.count)")
         for face in faces {
             print("    - face box: x=\(String(format: "%.3f", face.boundingBox.minX)) y=\(String(format: "%.3f", face.boundingBox.minY)) w=\(String(format: "%.3f", face.boundingBox.width)) h=\(String(format: "%.3f", face.boundingBox.height))")
             print("      contour=\(face.faceContour.count) eyes=\(face.eyePolygons.count) brows=\(face.eyebrowPolygons.count) lips=\(face.lipPolygon.count) nose=\(face.nose.count)")
@@ -323,17 +329,7 @@ enum SelfCheck {
             return false
         }
 
-        let scale = ImageProcessor.previewScale(for: fullExtent, maxDimension: 1400)
-        let previewExtent = CGRect(x: 0, y: 0,
-                                   width: (fullExtent.width * scale).rounded(),
-                                   height: (fullExtent.height * scale).rounded())
-        let source = CIImage(cgImage: full)
-            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            .cropped(to: previewExtent)
-
         if let buffer = AutoAnalyzer.analysisBuffer(source) {
-            faces = AutoAnalyzer.annotateTeeth(faces: faces, buffer: buffer)
-            faces = AutoAnalyzer.annotateEyes(faces: faces, buffer: buffer)
             for face in faces {
                 let fraction = AutoAnalyzer.visibleTeethFraction(buffer: buffer, face: face)
                 print("    - visible teeth: \(face.hasVisibleTeeth ? "yes" : "no") | openness=\(String(format: "%.2f", face.mouthOpenness)) | fraction=\(String(format: "%.2f", fraction))")
@@ -341,7 +337,7 @@ enum SelfCheck {
             }
         }
 
-        guard let masks = processor.buildMasks(extent: previewExtent, faces: faces, image: source) else {
+        guard let masks = result.masksPreview else {
             print("  ✗ could not build mask")
             return false
         }
@@ -463,26 +459,18 @@ enum SelfCheck {
     /// if it moves, "Auto Retouch" is behaving like a global edit.
     private static func checkAutoRetouchIsFaceLocal(path: String) -> Bool {
         let processor = ImageProcessor.shared
-        guard let full = processor.loadCGImage(url: URL(fileURLWithPath: path)) else {
+        guard let result = processor.load(from: URL(fileURLWithPath: path), previewMaxDimension: 1400) else {
             print("  ✗ could not read \(path)")
             return false
         }
-        let fullExtent = CGRect(x: 0, y: 0, width: full.width, height: full.height)
-        let faces = FaceAnalyzer.analyze(full)
+        let source = result.sourcePreview
+        let faces = result.faces
         guard !faces.isEmpty else {
             print("  ✗ no face found")
             return false
         }
 
-        let scale = ImageProcessor.previewScale(for: fullExtent, maxDimension: 1400)
-        let extent = CGRect(x: 0, y: 0,
-                            width: (fullExtent.width * scale).rounded(),
-                            height: (fullExtent.height * scale).rounded())
-        let source = CIImage(cgImage: full)
-            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            .cropped(to: extent)
-
-        guard let masks = processor.buildMasks(extent: extent, faces: faces, image: source),
+        guard let masks = result.masksPreview,
               let skinMask = masks.skin else {
             print("  ✗ could not build masks")
             return false
@@ -1059,7 +1047,8 @@ enum SelfCheck {
     }
 
     /// Flat skin with one eye: bright sclera, dark iris and a lash line.
-    private static func makeEyeImage(size: Int) -> CGImage? {        guard let context = CGContext(data: nil, width: size, height: size,
+    private static func makeEyeImage(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
                                       bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
@@ -1133,6 +1122,53 @@ enum SelfCheck {
         return wroteOK && depthOK && metadataOK
     }
 
+    // MARK: - ۱۳) تاریخچه‌ی واگرد
+
+    /// The undo stack is pure model logic, so it can be exercised without a
+    /// photo. The debounce is the part most likely to regress: a slider drag
+    /// must undo as one step, and a pending change must not be skipped.
+    private static func checkUndoHistory() -> Bool {
+        MainActor.assumeIsolated {
+            var ok = true
+            let model = EditorModel()
+
+            model.adjustments.smooth = 30
+            model.undo()
+            let pendingUndone = model.adjustments.smooth == 0 && model.canRedo
+            print("  \(pendingUndone ? "✓" : "✗") pending drag undone: smooth=\(Int(model.adjustments.smooth)) canRedo=\(model.canRedo)")
+            ok = pendingUndone && ok
+
+            model.redo()
+            let redone = model.adjustments.smooth == 30
+            print("  \(redone ? "✓" : "✗") redo restores the drag: smooth=\(Int(model.adjustments.smooth))")
+            ok = redone && ok
+
+            model.commitAdjustments()
+            model.adjustments.smooth = 60
+            model.commitAdjustments()
+            model.undo()
+            let firstUndo = model.adjustments.smooth == 30
+            model.undo()
+            let secondUndo = model.adjustments.smooth == 0
+            print("  \(firstUndo && secondUndo ? "✓" : "✗") settled edits step back one at a time: smooth=\(Int(model.adjustments.smooth)) after two undos")
+            ok = firstUndo && secondUndo && ok
+
+            model.redo()
+            model.adjustments.smooth = 80
+            let branchDropped = !model.canRedo
+            print("  \(branchDropped ? "✓" : "✗") a new edit clears the redo branch")
+            ok = branchDropped && ok
+
+            let presetModel = EditorModel()
+            presetModel.apply(Preset.all[0])
+            presetModel.undo()
+            let presetUndone = presetModel.adjustments == .zero
+            print("  \(presetUndone ? "✓" : "✗") preset applies as one undo step")
+            ok = presetUndone && ok
+
+            return ok
+        }
+    }
 
     /// «زبری» یک ناحیه: میانگین اختلاف روشنایی هر پیکسل با همسایه‌ی راست و بالایش.
     /// عدد بزرگ‌تر = بافت/جزئیات بیشتر. برای سنجش اثر صافی پوست استفاده می‌شود.
@@ -1215,7 +1251,8 @@ enum SelfCheck {
         return total / samples
     }
 
-    private static func meanLuminance(_ image: CGImage) -> Double? {        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return nil }
+    private static func meanLuminance(_ image: CGImage) -> Double? {
+        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return nil }
         let bytesPerPixel = max(1, image.bitsPerPixel / 8)
         let count = CFDataGetLength(data)
         var total = 0.0

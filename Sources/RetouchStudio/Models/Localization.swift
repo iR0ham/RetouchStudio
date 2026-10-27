@@ -88,6 +88,8 @@ struct L10n {
     var resetGroupHelp: String { "Reset this section" }
     var undoHelp: String { "Undo (⌘Z)" }
     var redoHelp: String { "Redo (⇧⌘Z)" }
+    var undoMenu: String { "Undo" }
+    var redoMenu: String { "Redo" }
     var doubleClickHint: String {
         "Double-click a slider to reset just that effect"
     }
@@ -124,6 +126,13 @@ struct L10n {
     var renderingExport: String { "Rendering full-quality export…" }
     func saved(_ name: String) -> String { "Saved \(name)" }
     var exportFailed: String { "Could not save the export." }
+
+    // Unsaved changes
+    var unsavedTitle: String { "Discard unsaved adjustments?" }
+    var unsavedMessage: String {
+        "This photo has adjustments that haven't been exported. If you continue, they will be lost."
+    }
+    var discardChanges: String { "Discard Changes" }
 
     // Drop zone
     var dropTitle: String { "Drop a portrait here" }
@@ -163,6 +172,7 @@ struct L10n {
     // Menus
     var retouchMenu: String { "Retouch" }
     var openMenu: String { "Open Image…" }
+    var closeWindow: String { "Close Window" }
     var exportMenu: String { "Export…" }
     var autoColorMenu: String { "Auto Color & Light" }
     var autoRetouchMenu: String { "Auto Retouch" }

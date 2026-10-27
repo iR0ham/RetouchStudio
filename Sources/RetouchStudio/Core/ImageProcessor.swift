@@ -114,7 +114,11 @@ final class ImageProcessor {
 
         // Teeth and eye splits are pixel measurements, not geometry, and the
         // mask builder needs the answers, so annotation happens before masks.
-        var faces = FaceAnalyzer.analyze(image)
+        // Vision reports landmarks normalized to the face box, so the preview
+        // render gives the same geometry as the full-resolution photo while
+        // being far cheaper to analyze.
+        guard let originalPreview = renderCGImage(previewSource, scale: 1, colorSpace: colorSpace) else { return nil }
+        var faces = FaceAnalyzer.analyze(originalPreview)
         if !faces.isEmpty, let buffer = AutoAnalyzer.analysisBuffer(previewSource) {
             faces = AutoAnalyzer.annotateTeeth(faces: faces, buffer: buffer)
             faces = AutoAnalyzer.annotateEyes(faces: faces, buffer: buffer)
@@ -123,7 +127,6 @@ final class ImageProcessor {
         let masksFull = buildMasks(extent: full.extent, faces: faces, image: full)
         let masksPreview = buildMasks(extent: previewSource.extent, faces: faces, image: previewSource)
 
-        guard let originalPreview = renderCGImage(previewSource, scale: 1, colorSpace: colorSpace) else { return nil }
         let processed = process(previewSource, adjustments: .zero, masks: masksPreview, faces: faces)
         guard let preview = renderCGImage(processed, scale: 1, colorSpace: colorSpace) else { return nil }
 
@@ -138,10 +141,6 @@ final class ImageProcessor {
                           fileName: url.lastPathComponent,
                           colorSpace: colorSpace,
                           metadata: metadata)
-    }
-
-    func loadCGImage(url: URL) -> CGImage? {
-        loadCGImageWithColorSpace(url: url)?.0
     }
 
     private func loadCGImageWithColorSpace(url: URL) -> (CGImage, CGColorSpace, [CFString: Any])? {

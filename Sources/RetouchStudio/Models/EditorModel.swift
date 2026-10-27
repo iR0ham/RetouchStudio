@@ -8,7 +8,9 @@ import UniformTypeIdentifiers
 final class EditorModel: ObservableObject {
 
     // Adjustments
-    @Published var adjustments = Adjustments()
+    @Published var adjustments = Adjustments() {
+        didSet { adjustmentsChanged() }
+    }
     @Published var compareEnabled = true
     @Published var comparePosition: Double = 0.45
     @Published var showFaceOverlay = false
@@ -31,24 +33,42 @@ final class EditorModel: ObservableObject {
     @Published private(set) var imageInfo = ""
     @Published private(set) var hasImage = false
     @Published private(set) var faceCount = 0
+    /// True when the sliders differ from the state that was loaded or last
+    /// exported, which is what the discard prompt is about.
+    @Published private(set) var hasUnsavedChanges = false
 
     // MARK: - Undo / redo
 
     private var undoStack: [Adjustments] = []
     private var redoStack: [Adjustments] = []
-    private var lastCommitted: Adjustments = Adjustments()
+    private var lastCommitted = Adjustments()
+    private var cleanAdjustments = Adjustments()
     private var coalesceTask: Task<Void, Never>?
 
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
-    /// Records the current adjustments as an undo step. Consecutive rapid
-    /// changes (dragging one slider) collapse into a single step so undo does
-    /// not need fifty presses to escape one drag.
-    func commitAdjustments() {
-        let current = adjustments
-        guard current != lastCommitted else { return }
+    /// Slider drags fire continuously; recording every tick would make ⌘Z step
+    /// through dozens of near-identical states. A short idle window after the
+    /// last change collapses one gesture into one undo step.
+    private func scheduleCommit() {
         coalesceTask?.cancel()
+        coalesceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            self?.commitAdjustments()
+        }
+    }
+
+    /// Records the current adjustments as an undo step.
+    func commitAdjustments() {
+        coalesceTask?.cancel()
+        coalesceTask = nil
+        let current = adjustments
+        guard current != lastCommitted else {
+            updateUndoFlags()
+            return
+        }
         undoStack.append(lastCommitted)
         if undoStack.count > 100 { undoStack.removeFirst() }
         redoStack.removeAll()
@@ -57,24 +77,64 @@ final class EditorModel: ObservableObject {
     }
 
     func undo() {
+        // Flush a change whose debounce is still waiting, so ⌘Z right after a
+        // drag undoes that drag instead of skipping past it.
+        commitAdjustments()
         guard let previous = undoStack.popLast() else { return }
         redoStack.append(adjustments)
         adjustments = previous
         lastCommitted = previous
         updateUndoFlags()
+        refreshStatusAfterHistoryChange()
     }
 
     func redo() {
+        // Editing after an undo starts a new branch; the old redo history goes.
+        guard adjustments == lastCommitted else {
+            commitAdjustments()
+            return
+        }
         guard let next = redoStack.popLast() else { return }
         undoStack.append(adjustments)
         adjustments = next
         lastCommitted = next
         updateUndoFlags()
+        refreshStatusAfterHistoryChange()
+    }
+
+    /// The pill used to keep saying "Auto Color & Light applied" after ⌘Z, when
+    /// that change no longer existed. Fall back to the neutral face status.
+    private func refreshStatusAfterHistoryChange() {
+        guard hasImage else { return }
+        status = faceCount == 0 ? s.noFaceColorOnly : s.facesDetected(faceCount)
     }
 
     private func updateUndoFlags() {
-        canUndo = !undoStack.isEmpty
-        canRedo = !redoStack.isEmpty
+        canUndo = !undoStack.isEmpty || adjustments != lastCommitted
+        canRedo = !redoStack.isEmpty && adjustments == lastCommitted
+    }
+
+    private func adjustmentsChanged() {
+        scheduleCommit()
+        updateUndoFlags()
+        updateCleanState()
+    }
+
+    private func updateCleanState() {
+        hasUnsavedChanges = hasImage && adjustments != cleanAdjustments
+    }
+
+    /// Undo history belongs to one photo. Carrying it across a load would let
+    /// ⌘Z overwrite the new image with the previous image's slider values.
+    private func resetHistory() {
+        coalesceTask?.cancel()
+        coalesceTask = nil
+        undoStack.removeAll()
+        redoStack.removeAll()
+        lastCommitted = adjustments
+        cleanAdjustments = adjustments
+        updateUndoFlags()
+        updateCleanState()
     }
 
     /// Zeroes one effect and records it as a single undo step.
@@ -144,7 +204,51 @@ final class EditorModel: ObservableObject {
         panel.canChooseDirectories = false
         panel.message = "Choose a photo to retouch"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Ask only once a replacement is actually chosen, not before the panel.
+        guard confirmDiscardIfNeeded() else { return }
         load(url: url)
+    }
+
+    /// Entry point for drag-and-drop and for Finder / Open With.
+    func requestLoad(url: URL) {
+        guard confirmDiscardIfNeeded() else { return }
+        load(url: url)
+    }
+
+    /// True when it is safe to replace the current photo.
+    func confirmDiscardIfNeeded() -> Bool {
+        guard hasUnsavedChanges else { return true }
+        let alert = NSAlert()
+        alert.messageText = s.unsavedTitle
+        alert.informativeText = s.unsavedMessage
+        alert.alertStyle = .warning
+        let discard = alert.addButton(withTitle: s.discardChanges)
+        discard.hasDestructiveAction = true
+        // The first button inherits Return as its key equivalent; clear it so
+        // only Cancel below answers Return.
+        discard.keyEquivalent = ""
+        let cancel = alert.addButton(withTitle: s.cancel)
+        // Cancel is the default: Return must never throw away edits.
+        cancel.keyEquivalent = "\r"
+        // AppKit does not wire Esc to the cancel button for programmatic
+        // alerts, so dismiss the modal ourselves.
+        let escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }
+            NSApp.stopModal(withCode: .abort)
+            return nil
+        }
+        let response = alert.runModal()
+        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        if response == .abort { alert.window.orderOut(nil) }
+        return response == .alertFirstButtonReturn
+    }
+
+    /// The user confirmed they are done with these adjustments, so the current
+    /// values become the clean baseline. Without this, closing the window would
+    /// ask again during the termination that follows.
+    func discardUnsavedChanges() {
+        cleanAdjustments = adjustments
+        updateCleanState()
     }
 
     func load(url: URL) {
@@ -192,8 +296,10 @@ final class EditorModel: ObservableObject {
         imageInfo = "\(Int(result.pixelSize.width)) × \(Int(result.pixelSize.height)) px"
         imageName = result.fileName
         hasImage = true
+        cleanAdjustments = .zero
         adjustments = .zero
         comparePosition = 0.45
+        resetHistory()
         resetView()
         isBusy = false
 
@@ -313,8 +419,6 @@ final class EditorModel: ObservableObject {
         renderTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 40_000_000)
             if Task.isCancelled { return }
-            // The user has stopped dragging for a moment: record an undo step.
-            self?.commitAdjustments()
 
             let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
                 let processed = processor.process(source, adjustments: adjustments,
@@ -341,6 +445,7 @@ final class EditorModel: ObservableObject {
     }
 
     func apply(_ preset: Preset) {
+        commitAdjustments()
         adjustments = preset.adjustments
     }
 
@@ -471,6 +576,7 @@ final class EditorModel: ObservableObject {
         let processor = self.processor
         let format = self.exportFormat
         let quality = self.exportQuality
+        let exportedAdjustments = adjustments
 
         isBusy = true
         status = s.renderingExport
@@ -489,6 +595,8 @@ final class EditorModel: ObservableObject {
             if success {
                 self.showExportSheet = false
                 self.status = self.s.saved(url.lastPathComponent)
+                self.cleanAdjustments = exportedAdjustments
+                self.updateCleanState()
             } else {
                 self.status = self.s.exportFailed
             }

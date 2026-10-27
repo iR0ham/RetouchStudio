@@ -71,7 +71,7 @@ struct CompareCanvas: View {
                     url = itemURL
                 }
                 guard let url else { return }
-                DispatchQueue.main.async { model.load(url: url) }
+                DispatchQueue.main.async { model.requestLoad(url: url) }
             }
             return true
         }
