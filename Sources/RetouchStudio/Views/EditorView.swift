@@ -9,12 +9,7 @@ struct EditorView: View {
             SidebarControls(model: model)
                 .frame(width: 320)
             Divider()
-            // The canvas always draws left-to-right: its geometry is pixel-based
-            // (image position, compare fraction, face boxes). Letting RTL in
-            // would mirror the composite while DragGesture coordinates stayed
-            // unmirrored, which is what made the compare handle move backwards.
             CompareCanvas(model: model, isDropTarget: $isDropTarget)
-                .environment(\.layoutDirection, .leftToRight)
         }
         .frame(minWidth: 1020, minHeight: 660)
         .toolbar { toolbar }
@@ -25,7 +20,6 @@ struct EditorView: View {
             model.schedulePreview()
         }
         .onAppear { model.refreshDefaultStatus() }
-        .onChange(of: model.language) { _, _ in model.refreshDefaultStatus() }
     }
 
     @ToolbarContentBuilder
@@ -134,6 +128,5 @@ struct ExportSheet: View {
         }
         .padding(20)
         .frame(width: 400)
-        .environment(\.layoutDirection, model.language.layoutDirection)
     }
 }

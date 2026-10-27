@@ -226,7 +226,6 @@ struct CompareCanvas: View {
         .font(.system(size: 10, weight: .semibold))
         .foregroundStyle(.secondary)
         .allowsHitTesting(false)
-        .environment(\.layoutDirection, model.language.layoutDirection)
     }
 
     private var zoomControls: some View {
@@ -292,7 +291,6 @@ struct CompareCanvas: View {
         .padding(.horizontal, 12)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
-        .environment(\.layoutDirection, model.language.layoutDirection)
     }
 }
 
@@ -382,7 +380,6 @@ struct DropZone: View {
             .padding(.top, 10)
         }
         .padding(34)
-        .environment(\.layoutDirection, model.language.layoutDirection)
     }
 
     private func featureLine(_ icon: String, _ text: String) -> some View {

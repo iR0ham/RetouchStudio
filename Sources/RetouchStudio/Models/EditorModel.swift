@@ -104,15 +104,8 @@ final class EditorModel: ObservableObject {
         commitAdjustments()
     }
 
-    /// UI language. Persisted so the choice survives relaunches.
-    @Published var language: AppLanguage = AppLanguage(
-        rawValue: UserDefaults.standard.string(forKey: "uiLanguage") ?? ""
-    ) ?? .english {
-        didSet { UserDefaults.standard.set(language.rawValue, forKey: "uiLanguage") }
-    }
-
-    /// Strings for the current language.
-    var s: L10n { L10n(language: language) }
+    /// UI copy. The app is English-only.
+    let s = L10n.shared
     @Published private(set) var previewSize = CGSize(width: 1, height: 1)
 
     // Canvas view state. zoom == 1 means the image is fitted to the window.
@@ -123,7 +116,7 @@ final class EditorModel: ObservableObject {
     private let processor = ImageProcessor.shared
     private let previewMaxDimension: CGFloat = 1800
 
-    /// Set once at init and whenever the language changes.
+    /// Restores the neutral status shown when no image is open.
     func refreshDefaultStatus() {
         if !hasImage { status = s.dropHint }
     }

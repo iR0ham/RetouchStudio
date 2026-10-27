@@ -21,7 +21,6 @@ struct SidebarControls: View {
             }
         }
         .background(.ultraThinMaterial)
-        .environment(\.layoutDirection, model.language.layoutDirection)
     }
 
     // MARK: - Header
@@ -52,24 +51,6 @@ struct SidebarControls: View {
             }
 
             Spacer(minLength: 4)
-
-            // Language switch. A segmented control shows both options, which is
-            // unambiguous in a way a single toggling glyph is not.
-            Picker("", selection: Binding(
-                get: { model.language },
-                set: { newValue in
-                    withAnimation(.easeInOut(duration: 0.15)) { model.language = newValue }
-                    model.refreshDefaultStatus()
-                }
-            )) {
-                Text("EN").tag(AppLanguage.english)
-                Text("فا").tag(AppLanguage.persian)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.mini)
-            .frame(width: 62)
-            .help(model.s.languageHelp)
 
             Button {
                 model.undo()

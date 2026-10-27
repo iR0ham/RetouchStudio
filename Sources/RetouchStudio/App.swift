@@ -12,9 +12,6 @@ struct RetouchStudioApp: App {
     var body: some Scene {
         WindowGroup(model.s.appName) {
             EditorView(model: model)
-                // The window chrome follows the chosen language; the canvas
-                // inside EditorView pins itself back to left-to-right.
-                .environment(\.layoutDirection, model.language.layoutDirection)
         }
         .windowResizability(.contentMinSize)
         .commands {
@@ -52,12 +49,6 @@ struct RetouchStudioApp: App {
                 Button(model.s.fitMenu) { model.resetView() }
                     .keyboardShortcut("0")
                     .disabled(!model.hasImage || model.zoom <= 1.0001)
-                Divider()
-                Picker(model.s.languageMenu, selection: $model.language) {
-                    ForEach(AppLanguage.allCases) { language in
-                        Text(language.displayName).tag(language)
-                    }
-                }
             }
         }
     }
