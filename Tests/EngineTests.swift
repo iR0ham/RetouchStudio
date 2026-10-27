@@ -1,0 +1,324 @@
+import AppKit
+import CoreImage
+import Foundation
+
+// Verifies the new engine's core guarantees, each of which was a real defect:
+//
+//   1. Smoothing must KEEP more texture than a Gaussian blur of similar
+//      strength (the old engine's whole problem).
+//   2. Blemish removal must clear spots while leaving pore-level texture.
+//   3. Texture Preserve must actually change how much texture survives.
+//   4. Reshape must move features, and must not alter the image far outside the
+//      face.
+//   5. Each reshape slider must produce a distinct change (no dead sliders).
+//   6. Every skin/reshape/colour field must be individually meaningful
+//      (toggling it alone changes the output).
+
+struct Fail: Error { let message: String }
+var failures: [String] = []
+func check(_ condition: Bool, _ label: String, _ detail: String = "") {
+    if condition {
+        print("  ✓ \(label)\(detail.isEmpty ? "" : " — \(detail)")")
+    } else {
+        print("  ✗ \(label)\(detail.isEmpty ? "" : " — \(detail)")")
+        failures.append(label)
+    }
+}
+
+let processor = ImageProcessor.shared
+let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+
+// MARK: - fixtures
+
+func poly(_ r: CGRect) -> [CGPoint] {
+    [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+     CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+}
+
+/// A synthetic face with real pore-level noise and a few dark spots.
+func makeFace(size: Int) -> (CIImage, CGImage, CGPoint) {
+    let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let s = CGFloat(size)
+    ctx.setFillColor(CGColor(srgbRed: 0.86, green: 0.72, blue: 0.64, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
+    var gen = SystemRandomNumberGenerator()
+    for _ in 0..<(size * size / 6) {
+        let x = CGFloat.random(in: s * 0.22...s * 0.78, using: &gen)
+        let y = CGFloat.random(in: s * 0.30...s * 0.88, using: &gen)
+        // Realistic pore contrast: subtle, a few levels either side of the base tone.
+        let v = Double.random(in: 0.80...0.94, using: &gen)
+        ctx.setFillColor(CGColor(srgbRed: v, green: v * 0.86, blue: v * 0.78, alpha: 1))
+        ctx.fill(CGRect(x: x, y: y, width: 1, height: 1))
+    }
+    ctx.setFillColor(CGColor(srgbRed: 0.55, green: 0.35, blue: 0.33, alpha: 1))
+    for (sx, sy, r) in [(0.34, 0.62, 7.0), (0.46, 0.46, 8.0), (0.60, 0.56, 6.5)] {
+        ctx.fillEllipse(in: CGRect(x: s * sx - r, y: s * sy - r, width: r * 2, height: r * 2))
+    }
+    let cg = ctx.makeImage()!
+    return (CIImage(cgImage: cg), cg, CGPoint(x: size / 2, y: size / 2))
+}
+
+func face(_ size: Int) -> FaceGeometry {
+    let s = CGFloat(size)
+    let f = FaceGeometry.synthetic(
+        boundingBox: CGRect(x: 0.18, y: 0.28, width: 0.64, height: 0.64),
+        faceContour: poly(CGRect(x: 0.18, y: 0.28, width: 0.64, height: 0.64)),
+        leftEye: poly(CGRect(x: 0.30, y: 0.66, width: 0.14, height: 0.07)),
+        rightEye: poly(CGRect(x: 0.56, y: 0.66, width: 0.14, height: 0.07)),
+        leftEyebrow: poly(CGRect(x: 0.29, y: 0.75, width: 0.16, height: 0.03)),
+        rightEyebrow: poly(CGRect(x: 0.55, y: 0.75, width: 0.16, height: 0.03)),
+        outerLips: poly(CGRect(x: 0.42, y: 0.36, width: 0.16, height: 0.06)),
+        innerLips: poly(CGRect(x: 0.44, y: 0.375, width: 0.12, height: 0.03)),
+        nose: poly(CGRect(x: 0.45, y: 0.52, width: 0.10, height: 0.08)))
+    _ = s
+    return f
+}
+
+func texture(_ img: CGImage, _ rect: CGRect) -> Double {
+    guard let data = img.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return -1 }
+    let bpp = img.bitsPerPixel / 8
+    let x0 = max(1, Int(rect.minX)), x1 = min(img.width - 2, Int(rect.maxX))
+    let y0 = max(1, Int(rect.minY)), y1 = min(img.height - 2, Int(rect.maxY))
+    guard x1 > x0, y1 > y0 else { return -1 }
+    func lum(_ x: Int, _ y: Int) -> Double {
+        let i = y * img.bytesPerRow + x * bpp
+        return 0.2126 * Double(p[i]) + 0.7152 * Double(p[i + 1]) + 0.0722 * Double(p[i + 2])
+    }
+    var total = 0.0, n = 0.0
+    for y in y0..<y1 {
+        for x in x0..<x1 {
+            total += abs(lum(x, y) - lum(x + 1, y)) + abs(lum(x, y) - lum(x, y + 1))
+            n += 2
+        }
+    }
+    return n > 0 ? total / n : -1
+}
+
+/// Mean absolute difference between two renders inside one normalized region.
+/// Effects are localized, so a whole-image mean hides them; measuring in the
+/// effect's own region is the honest test.
+func localDelta(_ a: CGImage, _ b: CGImage, normalized: CGRect) -> Double {
+    guard let da = a.dataProvider?.data, let db = b.dataProvider?.data,
+          let pa = CFDataGetBytePtr(da), let pb = CFDataGetBytePtr(db) else { return -1 }
+    let ba = a.bitsPerPixel / 8, bb = b.bitsPerPixel / 8
+    let x0 = max(0, Int(normalized.minX * CGFloat(a.width)))
+    let x1 = min(a.width, Int(normalized.maxX * CGFloat(a.width)))
+    let y0 = max(0, Int((1 - normalized.maxY) * CGFloat(a.height)))
+    let y1 = min(a.height, Int((1 - normalized.minY) * CGFloat(a.height)))
+    guard x1 > x0, y1 > y0 else { return -1 }
+    var total = 0.0, n = 0.0
+    for y in y0..<y1 {
+        for x in x0..<x1 {
+            let ia = y * a.bytesPerRow + x * ba
+            let ib = y * b.bytesPerRow + x * bb
+            total += abs(Double(pa[ia]) - Double(pb[ib]))
+                + abs(Double(pa[ia + 1]) - Double(pb[ib + 1]))
+                + abs(Double(pa[ia + 2]) - Double(pb[ib + 2]))
+            n += 3
+        }
+    }
+    return n > 0 ? total / n : -1
+}
+
+/// Mean absolute difference between two renders, over the whole image.
+func meanDelta(_ a: CGImage, _ b: CGImage) -> Double {
+    guard let da = a.dataProvider?.data, let db = b.dataProvider?.data,
+          let pa = CFDataGetBytePtr(da), let pb = CFDataGetBytePtr(db) else { return -1 }
+    let ba = a.bitsPerPixel / 8, bb = b.bitsPerPixel / 8
+    guard a.width == b.width, a.height == b.height else { return -1 }
+    var total = 0.0, n = 0.0
+    for y in stride(from: 0, to: a.height, by: 3) {
+        for x in stride(from: 0, to: a.width, by: 3) {
+            let ia = y * a.bytesPerRow + x * ba
+            let ib = y * b.bytesPerRow + x * bb
+            total += abs(Double(pa[ia]) - Double(pb[ib]))
+                + abs(Double(pa[ia + 1]) - Double(pb[ib + 1]))
+                + abs(Double(pa[ia + 2]) - Double(pb[ib + 2]))
+            n += 3
+        }
+    }
+    return n > 0 ? total / n : -1
+}
+
+let size = 420
+let (source, baseCG, _) = makeFace(size: size)
+let extent = CGRect(x: 0, y: 0, width: size, height: size)
+let f = face(size)
+processor.reshapeFaces = [f]
+guard let masks = processor.buildMasks(extent: extent, faces: [f]) else {
+    print("could not build masks"); exit(1)
+}
+// The texture sample must sit on CLEAN skin: the engine's leftCheekRect
+// overlaps blemish #1 at (0.34, 0.62), and removing that blemish legitimately
+// lowers texture there. Measuring texture over a blemish would report correct
+// blemish removal as texture loss.
+//
+// This patch is clear of all three fixture blemishes at (0.34,0.62),
+// (0.46,0.46) and (0.60,0.56), and clear of the eyes and lips.
+let fRef = face(size)
+let cheekNorm = CGRect(x: 0.62, y: 0.34, width: 0.12, height: 0.11)
+let cheek = CGRect(x: cheekNorm.minX * CGFloat(size),
+                   y: (1 - cheekNorm.maxY) * CGFloat(size),
+                   width: cheekNorm.width * CGFloat(size),
+                   height: cheekNorm.height * CGFloat(size))
+
+func render(_ a: Adjustments) -> CGImage? {
+    processor.renderCGImage(processor.process(source, adjustments: a, masks: masks), scale: 1)
+}
+
+print("\n[1] smoothing retains more texture than a plain blur")
+var smooth = Adjustments(); smooth.smooth = 70; smooth.texturePreserve = 85
+let blur = source.clampedToExtent()
+    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 4.0]).cropped(to: extent)
+if let sm = render(smooth), let bl = processor.renderCGImage(blur, scale: 1) {
+    let base = texture(baseCG, cheek), smT = texture(sm, cheek), blT = texture(bl, cheek)
+    check(smT / base > blT / base,
+          "engine keeps more texture than a blur",
+          String(format: "engine %.2f vs blur %.2f (base %.2f)", smT / base, blT / base, base))
+    check(smT / base > 0.45, "smoothed skin still has texture", String(format: "%.2f of original", smT / base))
+} else { check(false, "smoothing render") }
+
+print("\n[2] blemish removal clears spots")
+var blem = Adjustments(); blem.blemish = 75
+func spotProminence(_ img: CGImage, _ nx: CGFloat, _ ny: CGFloat) -> Double {
+    guard let data = img.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return -1 }
+    let bpp = img.bitsPerPixel / 8
+    let cx = Int(nx * CGFloat(img.width)), cy = Int((1 - ny) * CGFloat(img.height))
+    func lum(_ x: Int, _ y: Int) -> Double {
+        let i = y * img.bytesPerRow + x * bpp
+        return (Double(p[i]) + Double(p[i + 1]) + Double(p[i + 2])) / 3
+    }
+    var ring = 0.0, n = 0.0
+    for dx in [-15, 0, 15] { for dy in [-15, 0, 15] where !(dx == 0 && dy == 0) {
+        ring += lum(cx + dx, cy + dy); n += 1 } }
+    return (ring / n) - lum(cx, cy)
+}
+if let bm = render(blem) {
+    var cleared = 0
+    for (nx, ny) in [(0.34, 0.62), (0.46, 0.46), (0.60, 0.56)] {
+        let before = spotProminence(baseCG, nx, ny), after = spotProminence(bm, nx, ny)
+        if after < before * 0.7 { cleared += 1 }
+    }
+    check(cleared >= 2, "spots cleared by median", "\(cleared)/3 cleared")
+    let t = texture(bm, cheek) / texture(baseCG, cheek)
+    check(t > 0.5, "pores survive blemish removal", String(format: "%.2f of original texture", t))
+} else { check(false, "blemish render") }
+
+print("\n[3] Texture Preserve changes how much texture survives")
+var lowTP = Adjustments(); lowTP.smooth = 70; lowTP.texturePreserve = 10
+var highTP = Adjustments(); highTP.smooth = 70; highTP.texturePreserve = 95
+if let lo = render(lowTP), let hi = render(highTP) {
+    let loT = texture(lo, cheek), hiT = texture(hi, cheek)
+    check(hiT > loT * 1.05, "higher Texture Preserve keeps more texture",
+          String(format: "%.2f vs %.2f", hiT, loT))
+} else { check(false, "texture preserve render") }
+
+print("\n[4] reshape moves features and stays local")
+var reshape = Adjustments(); reshape.eyeSize = 70; reshape.lipSize = 60
+if let rs = render(reshape) {
+    let faceBox = f.boundingBox
+    let facePx = CGRect(x: faceBox.minX * CGFloat(size),
+                        y: (1 - faceBox.maxY) * CGFloat(size),
+                        width: faceBox.width * CGFloat(size),
+                        height: faceBox.height * CGFloat(size))
+    // Magnitude outside the face, ignoring the feather band.
+    guard let d = processor.renderCGImage(
+        CIImage(cgImage: rs).applyingFilter("CIDifferenceBlendMode", parameters: [
+            kCIInputBackgroundImageKey: CIImage(cgImage: baseCG)]), scale: 1),
+        let data = d.dataProvider?.data, let p = CFDataGetBytePtr(data) else {
+        check(false, "reshape diff render"); exit(1)
+    }
+    let bpp = d.bitsPerPixel / 8
+    var outSum = 0.0, outN = 0.0, inSum = 0.0, inN = 0.0
+    for y in stride(from: 2, to: d.height - 2, by: 2) {
+        for x in stride(from: 2, to: d.width - 2, by: 2) {
+            let i = y * d.bytesPerRow + x * bpp
+            let delta = Double(Int(p[i]) + Int(p[i + 1]) + Int(p[i + 2])) / 3.0
+            // Exclude the 6% feather band around the face box.
+            let band = facePx.insetBy(dx: -facePx.width * 0.06, dy: -facePx.height * 0.06)
+            if band.contains(CGPoint(x: x, y: y)) { inSum += delta; inN += 1 }
+            else { outSum += delta; outN += 1 }
+        }
+    }
+    let inMean = inSum / max(inN, 1), outMean = outSum / max(outN, 1)
+    check(inMean > 1.5, "reshape changes the face", String(format: "mean delta %.2f inside", inMean))
+    check(outMean < 1.0, "reshape leaves the background alone",
+          String(format: "mean delta %.2f outside", outMean))
+} else { check(false, "reshape render") }
+
+print("\n[5] every reshape slider has an independent effect")
+// Each reshape slider is measured inside the region it is supposed to move,
+// because a nose is ~1% of the frame and a whole-image mean would hide it.
+let reshapeKeys: [(String, WritableKeyPath<Adjustments, Double>, CGRect)] = [
+    ("eyeSize", \.eyeSize, fRef.leftEyeRect),
+    ("noseSize", \.noseSize, fRef.noseRect),
+    ("lipSize", \.lipSize, fRef.lipRect ?? fRef.noseRect),
+    ("cheekSize", \.cheekSize, fRef.leftCheekRect),
+    ("jawWidth", \.jawWidth, fRef.jawRects.left),
+    ("chinLength", \.chinLength, fRef.chinRect),
+    ("faceWidth", \.faceWidth, fRef.boundingBox),
+    ("faceLength", \.faceLength, fRef.boundingBox)
+]
+for (name, key, region) in reshapeKeys {
+    var a = Adjustments()
+    a[keyPath: key] = 80
+    if let out = render(a) {
+        let d = localDelta(baseCG, out, normalized: region)
+        check(d > 0.5, "\(name) moves its feature", String(format: "mean delta %.2f in region", d))
+    } else { check(false, "\(name) render") }
+}
+
+// noseTip needs the nose crest, which the synthetic fixture does not provide,
+// so it is verified on a real photo elsewhere. Assert the guard instead: with
+// no crest data it must be a clean no-op rather than a crash or a whole-image
+// change.
+var tipNoData = Adjustments(); tipNoData.noseTip = 80
+if let out = render(tipNoData) {
+    let d = meanDelta(baseCG, out)
+    check(d < 0.02, "noseTip is a safe no-op without crest data", String(format: "mean delta %.4f", d))
+}
+
+print("\n[6] every skin, detail and colour slider has an effect")
+let skinKeys: [(String, WritableKeyPath<Adjustments, Double>, CGRect)] = [
+    ("smooth", \.smooth, fRef.leftCheekRect),
+    ("blemish", \.blemish, fRef.leftCheekRect),
+    ("wrinkle", \.wrinkle, fRef.leftCheekRect),
+    ("skinToneEvens", \.skinToneEvens, fRef.leftCheekRect),
+    ("darkCircles", \.darkCircles, fRef.leftUnderEyeRect),
+    ("skinBrighten", \.skinBrighten, fRef.leftCheekRect),
+    ("teethWhiten", \.teethWhiten, fRef.teethRect ?? fRef.noseRect),
+    ("eyeBrighten", \.eyeBrighten, fRef.leftEyeRect),
+    ("eyeSharpen", \.eyeSharpen, fRef.leftEyeRect),
+    ("exposure", \.exposure, fRef.boundingBox),
+    ("contrast", \.contrast, fRef.boundingBox),
+    ("saturation", \.saturation, fRef.boundingBox),
+    ("vibrance", \.vibrance, fRef.boundingBox),
+    ("warmth", \.warmth, fRef.boundingBox),
+    ("clarity", \.clarity, fRef.boundingBox),
+    ("vignette", \.vignette, CGRect(x: 0, y: 0, width: 1, height: 1))
+]
+for (name, key, region) in skinKeys {
+    var a = Adjustments()
+    a[keyPath: key] = 85
+    if let out = render(a) {
+        let d = localDelta(baseCG, out, normalized: region)
+        check(d > 0.5, "\(name) has a real effect", String(format: "mean delta %.2f in region", d))
+    } else { check(false, "\(name) render") }
+}
+
+print("\n[7] a fresh Adjustments() is a genuine no-op")
+if let ident = render(Adjustments()) {
+    let d = meanDelta(baseCG, ident)
+    check(d < 0.01, "default settings change nothing", String(format: "mean delta %.4f", d))
+} else { check(false, "identity render") }
+
+print("\n" + String(repeating: "-", count: 60))
+if failures.isEmpty {
+    print("ENGINE TESTS: PASS")
+    exit(0)
+} else {
+    print("ENGINE TESTS: FAIL (\(failures.count))")
+    for f in failures { print("   - \(f)") }
+    exit(1)
+}

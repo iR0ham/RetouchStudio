@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Build output
+build/
+.build/
+*.app
+*.dSYM
+*.xcuserstate
+
+# Local-only portrait fixtures (personal photos; never publish)
+Tests/Fixtures/private/
+Tests/Fixtures/portraits/
+
+# Editor / tooling
+.vscode/
+.idea/
