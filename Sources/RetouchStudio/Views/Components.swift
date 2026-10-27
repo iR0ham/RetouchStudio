@@ -67,12 +67,12 @@ struct BipolarSlider: View {
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.white.opacity(0.115))
+                    .fill(Theme.bone.opacity(0.13))
                     .frame(height: track)
 
                 if let zeroX {
                     Rectangle()
-                        .fill(Color.white.opacity(0.16))
+                        .fill(Theme.bone.opacity(0.20))
                         .frame(width: 1, height: 7)
                         .offset(x: zeroX - 0.5)
                 }
@@ -188,6 +188,8 @@ struct AccentButton: View {
     var enabled: Bool = true
     let action: () -> Void
 
+    @State private var isHovering = false
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
@@ -200,15 +202,19 @@ struct AccentButton: View {
             .frame(height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LinearGradient(colors: enabled
-                                         ? [Theme.accentBright, Theme.accent]
-                                         : [Theme.cardStrong, Theme.cardStrong],
-                                         startPoint: .top, endPoint: .bottom))
+                    .fill(enabled
+                          ? (isHovering ? Theme.accentBright : Theme.accent)
+                          : Theme.cardStrong)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Theme.bone.opacity(enabled ? 0.14 : 0), lineWidth: 0.5)
             )
             .foregroundStyle(enabled ? Theme.accentInk : Theme.faint)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .onHover { isHovering = $0 }
     }
 }
 
@@ -226,7 +232,7 @@ struct PresetChip: View {
                 .frame(height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isActive ? Theme.accentSoft : Color.white.opacity(0.03))
+                        .fill(isActive ? Theme.accentSoft : Theme.bone.opacity(0.035))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)

@@ -12,6 +12,7 @@ struct EditorView: View {
         }
         .frame(minWidth: 1080, minHeight: 700)
         .background(Theme.background)
+        .tint(Theme.accent)
         .preferredColorScheme(.dark)
         .toolbar { toolbar }
         .sheet(isPresented: $model.showExportSheet) {
@@ -81,11 +82,13 @@ private struct ToolRail: View {
     private var logo: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(LinearGradient(colors: [Theme.accentBright, Theme.accent],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .fill(Theme.accent)
                 .frame(width: 30, height: 30)
-            Image(systemName: "wand.and.stars")
-                .font(.system(size: 12, weight: .semibold))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Theme.bone.opacity(0.16), lineWidth: 0.5)
+                .frame(width: 30, height: 30)
+            Image(systemName: "camera.aperture")
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.accentInk)
         }
     }
@@ -98,7 +101,7 @@ private struct ToolRail: View {
         } label: {
             Image(systemName: mode.icon)
                 .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(active ? Theme.accent : Theme.muted)
+                .foregroundStyle(active ? Theme.accentBright : Theme.muted)
                 .frame(width: 38, height: 38)
                 .background(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -107,7 +110,7 @@ private struct ToolRail: View {
                 .overlay(alignment: .leading) {
                     if active {
                         Capsule()
-                            .fill(Theme.accent)
+                            .fill(Theme.accentBright)
                             .frame(width: 2, height: 18)
                             .offset(x: -8)
                     }
@@ -198,8 +201,11 @@ struct ExportSheet: View {
                         .padding(.horizontal, 16)
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(LinearGradient(colors: [Theme.accentBright, Theme.accent],
-                                                     startPoint: .top, endPoint: .bottom))
+                                .fill(Theme.accent)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(Theme.bone.opacity(0.16), lineWidth: 0.5)
                         )
                         .contentShape(Rectangle())
                 }
@@ -237,7 +243,7 @@ struct ExportSheet: View {
         .padding(2)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.black.opacity(0.25))
+                .fill(Theme.background)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)

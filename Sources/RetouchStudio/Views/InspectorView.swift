@@ -254,7 +254,7 @@ struct InspectorView: View {
     private var autoRetouchCard: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .top, spacing: 10) {
-                autoIcon("sparkles")
+                autoIcon("wand.and.stars")
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.s.autoRetouch)
@@ -270,7 +270,7 @@ struct InspectorView: View {
             }
 
             AccentButton(title: "Apply Auto Retouch",
-                         icon: "sparkles",
+                         icon: "wand.and.stars",
                          enabled: model.hasImage && !model.isBusy) {
                 model.autoRetouch()
             }
@@ -279,12 +279,11 @@ struct InspectorView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(LinearGradient(colors: [Theme.accentSoft, Color.white.opacity(0.018)],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .fill(Theme.accentSoft)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Theme.accent.opacity(0.26), lineWidth: 0.75)
+                .strokeBorder(Theme.accent.opacity(0.30), lineWidth: 0.75)
         )
     }
 
@@ -316,7 +315,7 @@ struct InspectorView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.028))
+                .fill(Theme.card)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

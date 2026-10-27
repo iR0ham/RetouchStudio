@@ -178,7 +178,7 @@ struct CompareCanvas: View {
 
         return ZStack {
             Rectangle()
-                .fill(Color.white.opacity(0.85))
+                .fill(Theme.bone.opacity(0.88))
                 .frame(width: 1, height: lineHeight)
                 .allowsHitTesting(false)
 
@@ -220,7 +220,7 @@ struct CompareCanvas: View {
         Text(title.uppercased())
             .font(.system(size: 9, weight: .semibold))
             .tracking(0.6)
-            .foregroundStyle(highlighted ? Theme.accentBright : Color.white.opacity(0.78))
+            .foregroundStyle(highlighted ? Theme.accentBright : Theme.bone.opacity(0.80))
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(
@@ -229,7 +229,7 @@ struct CompareCanvas: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(highlighted ? Theme.accent.opacity(0.5) : Color.white.opacity(0.16),
+                    .strokeBorder(highlighted ? Theme.accent.opacity(0.55) : Theme.bone.opacity(0.18),
                                   lineWidth: 0.5)
             )
     }
@@ -359,7 +359,7 @@ struct CompareCanvas: View {
 
     private var dockSeparator: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.10))
+            .fill(Theme.bone.opacity(0.11))
             .frame(width: 1, height: 16)
             .padding(.horizontal, 3)
     }
@@ -371,7 +371,7 @@ private struct DockButtonStyle: ButtonStyle {
         configuration.label
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.08 : 0))
+                    .fill(Theme.bone.opacity(configuration.isPressed ? 0.08 : 0))
             )
     }
 }
@@ -382,7 +382,7 @@ struct CanvasSurface: View {
     var body: some View {
         ZStack {
             Theme.background
-            RadialGradient(colors: [Color.white.opacity(0.038), .clear],
+            RadialGradient(colors: [Theme.bone.opacity(0.042), .clear],
                            center: .center, startRadius: 20, endRadius: 720)
         }
     }
@@ -400,12 +400,12 @@ struct FaceOverlayView: View {
                     roundedBox(viewRect(face.boundingBox, in: size),
                                color: Theme.accent, lineWidth: 1.5)
                     ForEach(Array(face.eyeRects.enumerated()), id: \.offset) { _, rect in
-                        roundedBox(viewRect(rect, in: size), color: Theme.positive.opacity(0.9),
+                        roundedBox(viewRect(rect, in: size), color: Theme.overlayEye.opacity(0.9),
                                    lineWidth: 1, dashed: true)
                     }
                     if let lip = face.lipRect {
                         roundedBox(viewRect(lip, in: size),
-                                   color: Color(red: 0.90, green: 0.55, blue: 0.62),
+                                   color: Theme.overlayLip,
                                    lineWidth: 1, dashed: true)
                     }
                 }
@@ -455,15 +455,18 @@ struct DropZone: View {
                     .frame(height: 32)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(LinearGradient(colors: [Theme.accentBright, Theme.accent],
-                                                 startPoint: .top, endPoint: .bottom))
+                            .fill(Theme.accent)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Theme.bone.opacity(0.16), lineWidth: 0.5)
                     )
                     .foregroundStyle(Theme.accentInk)
             }
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 7) {
-                featureLine("sparkles", model.s.featureSmooth)
+                featureLine("wand.and.stars", model.s.featureSmooth)
                 featureLine("wand.and.rays", model.s.featureBlemish)
                 featureLine("mouth", model.s.featureTeeth)
                 featureLine("camera.filters", model.s.featureColor)

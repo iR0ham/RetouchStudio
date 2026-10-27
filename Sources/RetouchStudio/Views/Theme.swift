@@ -2,35 +2,49 @@ import SwiftUI
 
 /// Visual tokens for the whole app. Everything visible should come from here so
 /// the UI stays consistent instead of accumulating one-off opacities.
+///
+/// The palette is warm and low-chroma: espresso graphite for the chrome and a
+/// patina green for anything interactive. Warm neutrals keep the app from
+/// reading as a generic blue-black panel, and green stays clear of the skin
+/// tones that fill the canvas.
 enum Theme {
 
     // MARK: Surfaces
 
-    static let background = Color(red: 0.043, green: 0.043, blue: 0.051)
-    static let rail = Color(red: 0.055, green: 0.055, blue: 0.067)
-    static let panel = Color(red: 0.082, green: 0.082, blue: 0.094)
-    static let card = Color.white.opacity(0.035)
-    static let cardStrong = Color.white.opacity(0.06)
-    static let stroke = Color.white.opacity(0.075)
-    static let hairline = Color.white.opacity(0.05)
+    /// Warm paper white. Hairlines and subtle lifts use this instead of pure
+    /// white so highlights stay in the same temperature as the greys.
+    static let bone = Color(red: 0.98, green: 0.95, blue: 0.905)
+
+    static let background = Color(red: 0.070, green: 0.066, blue: 0.060)
+    static let rail = Color(red: 0.093, green: 0.087, blue: 0.079)
+    static let panel = Color(red: 0.117, green: 0.110, blue: 0.099)
+    static let card = bone.opacity(0.04)
+    static let cardStrong = bone.opacity(0.07)
+    static let stroke = bone.opacity(0.105)
+    static let hairline = bone.opacity(0.065)
 
     // MARK: Text
 
-    static let text = Color(red: 0.93, green: 0.93, blue: 0.94)
-    static let muted = Color(red: 0.62, green: 0.62, blue: 0.66)
-    static let faint = Color(red: 0.42, green: 0.42, blue: 0.46)
+    static let text = Color(red: 0.930, green: 0.912, blue: 0.875)
+    static let muted = Color(red: 0.660, green: 0.625, blue: 0.570)
+    static let faint = Color(red: 0.445, green: 0.415, blue: 0.370)
 
-    // MARK: Accent
+    // MARK: Accent — patina green
 
-    static let accent = Color(red: 0.788, green: 0.545, blue: 0.384)
-    static let accentBright = Color(red: 0.867, green: 0.627, blue: 0.467)
-    static let accentInk = Color(red: 0.11, green: 0.075, blue: 0.05)
-    static let accentSoft = Color(red: 0.788, green: 0.545, blue: 0.384).opacity(0.13)
+    static let accent = Color(red: 0.400, green: 0.620, blue: 0.549)
+    static let accentBright = Color(red: 0.588, green: 0.800, blue: 0.718)
+    static let accentInk = Color(red: 0.035, green: 0.078, blue: 0.063)
+    static let accentSoft = Color(red: 0.400, green: 0.620, blue: 0.549).opacity(0.15)
 
     // MARK: Status
 
-    static let positive = Color(red: 0.42, green: 0.76, blue: 0.52)
-    static let warning = Color(red: 0.91, green: 0.68, blue: 0.36)
+    static let positive = Color(red: 0.545, green: 0.790, blue: 0.660)
+    static let warning = Color(red: 0.850, green: 0.680, blue: 0.440)
+
+    // MARK: Detection overlays
+
+    static let overlayEye = Color(red: 0.565, green: 0.745, blue: 0.816)
+    static let overlayLip = Color(red: 0.855, green: 0.596, blue: 0.580)
 
     enum Metrics {
         static let rail: CGFloat = 54
