@@ -130,6 +130,7 @@ final class EditorModel: ObservableObject {
     private var masksFull: MaskSet?
     private var masksPreview: MaskSet?
     private var sourceColorSpace: CGColorSpace?
+    private var sourceMetadata: [CFString: Any] = [:]
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var generation = 0
@@ -180,6 +181,7 @@ final class EditorModel: ObservableObject {
         masksFull = result.masksFull
         masksPreview = result.masksPreview
         sourceColorSpace = result.colorSpace
+        sourceMetadata = result.metadata
         faces = result.faces
         faceCount = result.faces.count
         originalImage = NSImage(cgImage: result.originalPreview,
@@ -465,6 +467,7 @@ final class EditorModel: ObservableObject {
         let masks = self.masksFull
         let faces = self.faces
         let colorSpace = self.sourceColorSpace
+        let metadata = self.sourceMetadata
         let processor = self.processor
         let format = self.exportFormat
         let quality = self.exportQuality
@@ -477,7 +480,8 @@ final class EditorModel: ObservableObject {
                 let processed = processor.process(source, adjustments: adjustments,
                                                   masks: masks, faces: faces)
                 return processor.write(processed, to: url, format: format,
-                                       quality: quality, colorSpace: colorSpace)
+                                       quality: quality, colorSpace: colorSpace,
+                                       metadata: metadata)
             }.value
 
             guard let self else { return }

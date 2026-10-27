@@ -34,26 +34,55 @@ import Foundation
 /// the face changes.
 enum SkinEngine {
 
-    // MARK: - Why there is no explicit frequency-separation step
+    // MARK: - Frequency separation
 
-    // Frequency separation is the textbook skin-retouch technique, but it cannot
-    // be expressed correctly in Core Image here:
+    // Frequency separation is the textbook skin-retouch technique: split the
+    // image into a base band (tone, shading, blotches) and a detail band
+    // (pores, texture, edges), treat each band, then recombine.
     //
-    //   * a signed difference needs a kernel, because CIKernel's two-input
-    //     maths (CISubtractBlendMode) works on premultiplied values and clamps;
-    //   * CIColorMatrix clamps to 0...1, so a detail band centred on zero cannot
-    //     survive an 8-bit round trip.
+    // The split itself is `detail = image - base`, which is SIGNED. That cannot
+    // be expressed with CIColorMatrix (it clamps) and CISubtractBlendMode
+    // (which subtracts premultiplied values), so it happens inside a kernel
+    // that keeps float intermediates. With `retention == 1` the reconstruction
+    // is the identity: base + (image - base) = image. That round trip is
+    // checked in the self-test, which is what makes this a real split rather
+    // than a blur blended over the original.
     //
-    // Measured consequence: a "split" built that way lost almost all high
-    // frequency energy and recombining it did not reconstruct the input
-    // (mean error 27/255). Any texture slider built on it would be dead — which
-    // is exactly what the tests showed.
-    //
-    // The controls are therefore expressed directly, which is both correct and
-    // verifiable: smoothing blends a filtered copy over the original through a
-    // mask, and `texturePreserve` sets how much of the original is kept. That is
-    // mathematically the same "keep N% of the detail" control, without needing
-    // signed intermediates.
+    // Recombination is amplitude-aware: fine, low-amplitude texture follows the
+    // slider, while strongly contrasting structure (specular edges, unmasked
+    // detail) keeps more of itself. That is what separates this from a plain
+    // blur blend, which flattens both equally.
+    private static let frequencyKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 recombineBands(__sample src, __sample base,
+                                   float retention, float knee)
+        {
+            vec3 detail = src.rgb - base.rgb;
+            float amp = max(max(abs(detail.r), abs(detail.g)), abs(detail.b));
+            float keep = mix(retention, 1.0, smoothstep(knee, knee * 2.5, amp));
+            return vec4(base.rgb + detail * keep, src.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
+
+    static var isFrequencySeparationAvailable: Bool { frequencyKernel != nil }
+
+    /// Recombines a base band with the signed detail from `image`.
+    ///
+    /// `retention` 1 keeps every frequency (identity); 0 leaves only the base.
+    /// `knee` is the linear detail amplitude above which structure is
+    /// preserved regardless of retention.
+    static func recombineFrequencies(_ image: CIImage,
+                                     base: CIImage,
+                                     retention: Double,
+                                     knee: Double = 0.55) -> CIImage {
+        guard let kernel = frequencyKernel else { return image }
+        let result = kernel.apply(extent: image.extent, arguments: [
+            image, base, min(1, max(0, retention)), knee
+        ])
+        return result?.cropped(to: image.extent) ?? image
+    }
 
     // MARK: - Blemish and spot removal
 
@@ -85,14 +114,14 @@ enum SkinEngine {
         let extent = image.extent
 
         /// Median with an effective kernel of about `radius` pixels.
-        func median(effectiveRadius radius: CGFloat) -> CIImage {
+        func median(_ source: CIImage, effectiveRadius radius: CGFloat) -> CIImage {
             let factor = max(1.0, min(8.0, radius))
             guard factor > 1.2 else {
-                return image.clampedToExtent()
+                return source.clampedToExtent()
                     .applyingFilter("CIMedianFilter")
                     .cropped(to: extent)
             }
-            let down = image.clampedToExtent()
+            let down = source.clampedToExtent()
                 .applyingFilter("CILanczosScaleTransform", parameters: [
                     kCIInputScaleKey: 1 / factor,
                     kCIInputAspectRatioKey: 1.0
@@ -108,7 +137,7 @@ enum SkinEngine {
                 .cropped(to: extent)
         }
 
-        // The median is used to LOCATE blemishes and to provide their
+        // The median is used to LOCATE blemishes and to supply their
         // replacement colour — it is never blended in over clean skin.
         //
         // Measurement showed why: a median is a rank filter, so it removes
@@ -119,7 +148,22 @@ enum SkinEngine {
         //   1. the median supplies a clean estimate of the local skin colour;
         //   2. the deviation between the pixel and that estimate detects spots;
         //   3. only pixels above a measured threshold are replaced.
-        let cleaned = median(effectiveRadius: max(1.6, spotRadius * 1.15))
+        let cleaned = median(image, effectiveRadius: max(1.6, spotRadius * 1.15))
+
+        // A flat median patch reads as a smudge at 100%. Real healing borrows
+        // TEXTURE from nearby skin while taking COLOUR from the local median:
+        // the donor's detail band is added on top of the clean colour. The
+        // donor is offset far enough that the blemish itself cannot be copied.
+        let donor = image.clampedToExtent()
+            .transformed(by: CGAffineTransform(translationX: spotRadius * 2.6, y: 0))
+            .cropped(to: extent)
+        let donorClean = median(donor, effectiveRadius: max(1.6, spotRadius * 1.15))
+
+        var replacement = cleaned
+        if let kernel = healKernel,
+           let healed = kernel.apply(extent: extent, arguments: [cleaned, donor, donorClean, 0.85]) {
+            replacement = healed.cropped(to: extent)
+        }
 
         let deviation = image.applyingFilter("CIDifferenceBlendMode", parameters: [
             kCIInputBackgroundImageKey: cleaned
@@ -158,7 +202,17 @@ enum SkinEngine {
         ])
 
         // Feather the gate by the spot radius so the repaired patch blends into
-        // the surrounding skin instead of leaving a hard disc.
+        // the surrounding skin instead of leaving a hard disc. The gate is
+        // dilated first: a bare blur gives partial coverage exactly on the
+        // blemish's own edge, so half of the original dark rim survives the
+        // blend and leaves a visible ring around every healed spot.
+        if CIFilter(name: "CIMorphologyMaximum") != nil {
+            gate = gate.clampedToExtent()
+                .applyingFilter("CIMorphologyMaximum", parameters: [
+                    kCIInputRadiusKey: max(0.8, spotRadius * 0.55)
+                ])
+                .cropped(to: extent)
+        }
         gate = gate.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(0.8, spotRadius * 0.45)])
             .cropped(to: extent)
@@ -166,15 +220,29 @@ enum SkinEngine {
         // Confine to the skin. Uses alpha intersection, not CIMultiplyBlendMode.
         let gated = MaskBuilder.intersect(gate, mask)
 
-        return blend(cleaned, over: image, mask: gated, strength: amount)
+        return blend(replacement, over: image, mask: gated, strength: amount)
     }
+
+    /// Adds the donor's high-frequency band onto the clean colour. Both
+    /// operands are opaque, so premultiplied sampling is exact; the signed
+    /// difference needs a kernel because CIColorMatrix clamps.
+    private static let healKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 transplantTexture(__sample clean, __sample donor,
+                                      __sample donorClean, float texture)
+        {
+            vec3 detail = donor.rgb - donorClean.rgb;
+            return vec4(clean.rgb + detail * texture, clean.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
 
     // MARK: - Wrinkle reduction
 
-    /// Softens fine lines. Wrinkles are thin 1D structures, so an
-    /// edge-preserving reduction (noise reduction followed by a *small* blur)
-    /// is used and then blended back at low strength; the detail band is
-    /// partially restored afterwards by `addTexture`.
+    /// Softens fine lines. Wrinkles are low-contrast, medium-frequency line
+    /// structures, so the detail band is attenuated uniformly (no amplitude
+    /// gate) at a blur width wide enough to reach a crease.
     static func reduceWrinkles(_ image: CIImage,
                                strength: Double,
                                mask: CIImage,
@@ -183,34 +251,34 @@ enum SkinEngine {
         guard amount > 0.001 else { return image }
         let extent = image.extent
 
-        // Wrinkles are low-contrast, low-frequency line structures. Flatten them
-        // with an edge-preserving pass first (so lashes and lip edges survive),
-        // then with a blur wide enough to actually reach a crease.
-        var softened = image
+        var lowSource = image
         if CIFilter(name: "CINoiseReduction") != nil {
-            softened = softened.applyingFilter("CINoiseReduction", parameters: [
+            lowSource = lowSource.applyingFilter("CINoiseReduction", parameters: [
                 "inputNoiseLevel": 0.030 + 0.030 * amount,
                 "inputSharpness": 0.35
             ])
         }
-        let crease = image.clampedToExtent()
+        let base = lowSource.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(2.0, 4.5 * scale)])
             .cropped(to: extent)
-        softened = blend(crease, over: softened, mask: mask, strength: 0.8 * amount)
 
-        return blend(softened, over: image, mask: mask, strength: amount)
+        // knee above 1 keeps the retention uniform: no detail counts as an
+        // "edge" at this scale, because wrinkles are the target themselves.
+        let recombined = recombineFrequencies(image, base: base,
+                                              retention: 1 - 0.85 * amount,
+                                              knee: 1e6)
+        return blend(recombined, over: image, mask: mask, strength: 1)
     }
 
     // MARK: - Smoothing
 
-    /// Smooths skin while `texturePreserve` controls how much original detail
-    /// survives.
+    /// Smooths skin through a real base/detail split. `texturePreserve`
+    /// controls how much of the detail band is kept.
     ///
-    /// The filtered copy is only ever *blended*, never reconstructed from bands,
-    /// so the operation is well-defined and monotonic: raising `texturePreserve`
-    /// always keeps more texture. CINoiseReduction runs first because it is
-    /// edge-preserving, so eyelashes, lip edges and hair keep their contrast
-    /// even where the mask feathers over them.
+    /// CINoiseReduction runs first because it is edge-preserving, so eyelashes,
+    /// lip edges and hair keep their contrast even where the mask feathers over
+    /// them; it only feeds the base band, while detail is always taken from the
+    /// untouched image.
     static func smoothSkin(_ image: CIImage,
                            strength: Double,
                            texturePreserve: Double,
@@ -224,14 +292,14 @@ enum SkinEngine {
         // export look the same.
         let radius = max(1.6, 3.2 * scale)
 
-        var filtered = image
+        var lowSource = image
         if CIFilter(name: "CINoiseReduction") != nil {
-            filtered = filtered.applyingFilter("CINoiseReduction", parameters: [
+            lowSource = lowSource.applyingFilter("CINoiseReduction", parameters: [
                 "inputNoiseLevel": 0.018,
                 "inputSharpness": 0.55
             ])
         }
-        filtered = filtered.clampedToExtent()
+        let base = lowSource.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
             .cropped(to: extent)
 
@@ -239,13 +307,10 @@ enum SkinEngine {
         // texturePreserve 100 -> still 30% of it, so the slider never becomes a
         //                        dead control at the top of its range.
         let preserve = min(1, max(0, texturePreserve / 100))
-        let mix = amount * (1 - preserve * 0.70)
-        return blend(filtered, over: image, mask: mask, strength: mix)
+        let retention = 1 - amount * (1 - preserve * 0.70)
+        let recombined = recombineFrequencies(image, base: base, retention: retention)
+        return blend(recombined, over: image, mask: mask, strength: 1)
     }
-
-    // `addTexture` is gone: with the mix-based smoothing above, texture
-    // retention is a property of the smoothing itself rather than a separate
-    // re-application step, so there is no second knob to fight the first.
 
     // MARK: - Tone
 
@@ -332,33 +397,38 @@ enum SkinEngine {
 
     // MARK: - Eyes and teeth
 
-    /// Brightens and sharpens the eyes. Sharpening is applied to the eye region
-    /// only so lashes and iris detail increase without haloing the skin.
-    static func enhanceEyes(_ image: CIImage,
-                            brighten: Double,
-                            sharpen: Double,
-                            mask: CIImage,
-                            scale: CGFloat) -> CIImage {
-        let brightAmount = min(1, max(0, brighten / 100))
-        let sharpAmount = min(1, max(0, sharpen / 100))
-        guard brightAmount > 0.001 || sharpAmount > 0.001 else { return image }
-        let extent = image.extent
+    /// Lifts the white of the eye. Runs on the sclera mask only: brightening
+    /// the whole eye makes the iris look milky and the lid look puffy.
+    static func brightenSclera(_ image: CIImage,
+                               strength: Double,
+                               mask: CIImage) -> CIImage {
+        let amount = min(1, max(0, strength / 100))
+        guard amount > 0.001 else { return image }
 
-        var adjusted = image
-        if brightAmount > 0 {
-            adjusted = adjusted.applyingFilter("CIColorControls", parameters: [
-                kCIInputBrightnessKey: 0.085 * brightAmount,
-                kCIInputContrastKey: 1 + 0.14 * brightAmount
-            ])
-        }
-        if sharpAmount > 0 {
-            adjusted = adjusted.applyingFilter("CIUnsharpMask", parameters: [
-                kCIInputRadiusKey: max(1.0, 1.1 * scale),
-                kCIInputIntensityKey: 0.85 * sharpAmount
-            ])
-        }
-        return blend(adjusted.cropped(to: extent), over: image, mask: mask,
-                     strength: max(brightAmount, sharpAmount))
+        let adjusted = image.applyingFilter("CIColorControls", parameters: [
+            kCIInputBrightnessKey: 0.10 * amount,
+            kCIInputContrastKey: 1 + 0.08 * amount,
+            kCIInputSaturationKey: 1 - 0.10 * amount
+        ])
+        return blend(adjusted.cropped(to: image.extent), over: image, mask: mask,
+                     strength: amount * 0.95)
+    }
+
+    /// Sharpens iris and lash detail. Kept off the sclera, which has little
+    /// detail but plenty of noise and red veins to amplify.
+    static func sharpenEyeDetail(_ image: CIImage,
+                                 strength: Double,
+                                 mask: CIImage,
+                                 scale: CGFloat) -> CIImage {
+        let amount = min(1, max(0, strength / 100))
+        guard amount > 0.001 else { return image }
+
+        let sharpened = image.applyingFilter("CIUnsharpMask", parameters: [
+            kCIInputRadiusKey: max(0.8, 0.9 * scale),
+            kCIInputIntensityKey: 0.95 * amount
+        ])
+        return blend(sharpened.cropped(to: image.extent), over: image, mask: mask,
+                     strength: amount)
     }
 
     /// Whitens teeth: removes yellow, lifts brightness slightly, and keeps the

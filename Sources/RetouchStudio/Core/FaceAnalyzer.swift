@@ -33,6 +33,12 @@ struct FaceGeometry {
     /// lip opening, so the flag is set from pixels by `AutoAnalyzer`.
     var hasVisibleTeeth: Bool = false
 
+    /// Luminance that separates sclera from iris inside the eye opening. Also
+    /// measured from pixels: a fixed threshold fails on darker skin tones,
+    /// where sclera is still the brightest part of the eye but nowhere near
+    /// white. The default stays usable when eyes were not annotated.
+    var eyeScleraLuminance: Double = 0.55
+
     // MARK: - Derived regions
 
     var eyePolygons: [[CGPoint]] { [leftEye, rightEye].filter { $0.count >= 3 } }
@@ -58,13 +64,25 @@ struct FaceGeometry {
     var innerLipPolygon: [CGPoint] { innerLips }
 
     /// Teeth sit inside the inner mouth. Vision's innerLips traces the mouth
-    /// opening, so the middle of it is where the teeth are.
+    /// opening, so the middle of it is where the teeth are. Used for the
+    /// visibility measurement, where a tight region keeps lips out of the
+    /// bright/low-saturation count.
     var teethRect: CGRect? {
         guard !innerLips.isEmpty else { return nil }
         let r = Self.boundingBox(of: innerLips)
         guard !r.isNull else { return nil }
         // Inset vertically to stay inside the lips.
         return r.insetBy(dx: r.width * 0.12, dy: r.height * 0.18)
+    }
+
+    /// Region handed to the enamel mask. Vision's inner-lip outline stops
+    /// short of the smile corners: measured on the fixtures it spans about
+    /// 42% of the outer-lip width, so a mask seeded from it whitens only a
+    /// patch of the teeth. The outer lips cover the whole opening; the pixel
+    /// gate trims that back down to enamel.
+    var enamelRect: CGRect? {
+        guard let r = lipRect, r.width > 0, r.height > 0 else { return teethRect }
+        return r.insetBy(dx: r.width * 0.08, dy: r.height * 0.10)
     }
 
     /// Inner-lip height over outer-lip height. Used together with a pixel

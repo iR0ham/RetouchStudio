@@ -252,6 +252,62 @@ enum AutoAnalyzer {
         return bright / total
     }
 
+    // MARK: - Eye brightness
+
+    /// Measures where sclera sits in luminance for each face. An absolute
+    /// threshold cannot work for both a pale and a deep skin tone, so the
+    /// split is taken from the eye opening itself: the dark part of the
+    /// histogram is iris, lashes and lid line; the bright part is sclera.
+    static func annotateEyes(faces: [FaceGeometry], buffer: PixelBuffer) -> [FaceGeometry] {
+        faces.map { face in
+            var annotated = face
+            if let split = eyeLuminanceSplit(buffer: buffer, face: face) {
+                annotated.eyeScleraLuminance = split
+            }
+            return annotated
+        }
+    }
+
+    /// 30th percentile of luminance inside the inner half of each eye opening,
+    /// nudged up slightly so iris pixels stay below it. Returns nil when the
+    /// eyes are closed or too small to measure.
+    static func eyeLuminanceSplit(buffer: PixelBuffer, face: FaceGeometry) -> Double? {
+        var histogram = [Int](repeating: 0, count: 256)
+        var samples = 0
+
+        for eye in face.eyePolygons {
+            let box = FaceGeometry.boundingBox(of: eye)
+            guard box.width > 0.005, box.height > 0.003 else { continue }
+            // Inner half of the opening: mostly sclera and iris, no lid skin.
+            let inner = CGRect(x: box.midX - box.width * 0.28,
+                               y: box.midY - box.height * 0.30,
+                               width: box.width * 0.56,
+                               height: box.height * 0.60)
+            let width = Double(buffer.width), height = Double(buffer.height)
+            let x0 = max(0, Int(inner.minX * width))
+            let x1 = min(buffer.width - 1, Int(inner.maxX * width))
+            let y0 = max(0, Int((1 - inner.maxY) * height))
+            let y1 = min(buffer.height - 1, Int((1 - inner.minY) * height))
+            guard x1 > x0, y1 > y0 else { continue }
+
+            var y = y0
+            while y <= y1 {
+                var x = x0
+                while x <= x1 {
+                    let luma = buffer.luminance(x: x, y: y)
+                    histogram[min(255, max(0, Int(luma * 255)))] += 1
+                    samples += 1
+                    x += max(1, (x1 - x0) / 16)
+                }
+                y += max(1, (y1 - y0) / 8)
+            }
+        }
+
+        guard samples >= 24 else { return nil }
+        let low = percentile(histogram, fraction: 0.30, total: samples)
+        return min(0.82, max(0.30, low + 0.04))
+    }
+
     // MARK: - خودکار ۱: رنگ و نور
 
     /// تنظیمات «رنگ و نور» را از روی آماره‌های خود تصویر حساب می‌کند.

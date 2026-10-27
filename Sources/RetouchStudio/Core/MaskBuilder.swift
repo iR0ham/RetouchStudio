@@ -162,4 +162,56 @@ enum MaskBuilder {
             kCIInputBackgroundImageKey: b
         ]).cropped(to: a.extent)
     }
+
+    // MARK: - Pixel gates
+
+    /// A real region is rarely a clean geometric shape: enamel stops where the
+    /// gum starts and sclera stops at the iris. This kernel turns those
+    /// decisions into a soft mask from luminance and saturation, so the
+    /// geometric shape only has to be roughly right.
+    ///
+    /// A kernel is used instead of CIColorMatrix because saturation is a
+    /// max/min ratio, which a linear matrix cannot express.
+    private static let colorGateKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 colorGate(__sample s, float lumaMin, float lumaMax,
+                              float satMax, float softness)
+        {
+            // Kernels sample the linear working space, but every threshold fed
+            // here was measured on 8-bit pixels (AutoAnalyzer) and matches what
+            // the eye sees. Encode back to sRGB so both sides of the comparison
+            // describe the same values; otherwise only highlights clear the
+            // luma floor and saturation reads far too high.
+            vec3 c = clamp(s.rgb, 0.0, 1.0);
+            c = pow(c, vec3(0.4545));
+            float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            float mx = max(c.r, max(c.g, c.b));
+            float mn = min(c.r, min(c.g, c.b));
+            float sat = mx > 0.0001 ? (mx - mn) / mx : 0.0;
+
+            float lower = smoothstep(lumaMin - softness, lumaMin + softness, luma);
+            float upper = 1.0 - smoothstep(lumaMax - softness, lumaMax + softness, luma);
+            float color = 1.0 - smoothstep(satMax - 0.06, satMax + 0.06, sat);
+            float v = lower * upper * color;
+            return vec4(v, v, v, 1.0);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
+
+    static var isColorGateAvailable: Bool { colorGateKernel != nil }
+
+    /// White where the pixel luminance/saturation fall inside the band.
+    /// `lumaMax` 1 and `saturationMax` 1 leave that half of the test open.
+    static func colorGate(_ image: CIImage,
+                          lumaMin: Double,
+                          lumaMax: Double = 1,
+                          saturationMax: Double = 1,
+                          softness: Double = 0.03) -> CIImage? {
+        guard let kernel = colorGateKernel else { return nil }
+        let gate = kernel.apply(extent: image.extent, arguments: [
+            image, lumaMin, lumaMax, saturationMax, softness
+        ])
+        return gate?.cropped(to: image.extent)
+    }
 }

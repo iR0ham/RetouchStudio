@@ -46,8 +46,12 @@ struct MaskSet {
     var eyes: CIImage?          // both eyes including lashes
     var leftEye: CIImage?
     var rightEye: CIImage?
+    var sclera: CIImage?        // white of the eye, measured from pixels
+    var iris: CIImage?          // iris and pupil
+    var lashes: CIImage?        // lash line around the opening
+    var eyeDetail: CIImage?     // iris + lashes, the target for sharpening
     var lips: CIImage?          // outer lip shape
-    var teeth: CIImage?         // inner-mouth region
+    var teeth: CIImage?         // enamel pixels inside the mouth
     var underEyes: CIImage?     // tear-trough bands
     var forehead: CIImage?
     var nose: CIImage?
@@ -68,6 +72,9 @@ struct LoadResult {
     /// this space so a Display P3 photo keeps its gamut instead of being clipped
     /// through sRGB.
     var colorSpace: CGColorSpace
+    /// Source metadata (EXIF, TIFF, IPTC, GPS), carried into exports so camera,
+    /// lens, date and copyright survive a retouch.
+    var metadata: [CFString: Any]
 }
 
 /// Retouch engine on Core Image.
@@ -92,7 +99,7 @@ final class ImageProcessor {
     // MARK: - Loading
 
     func load(from url: URL, previewMaxDimension: CGFloat) -> LoadResult? {
-        guard let (image, colorSpace) = loadCGImageWithColorSpace(url: url) else { return nil }
+        guard let (image, colorSpace, metadata) = loadCGImageWithColorSpace(url: url) else { return nil }
 
         let extent = CGRect(x: 0, y: 0, width: image.width, height: image.height)
         let full = CIImage(cgImage: image).cropped(to: extent)
@@ -105,15 +112,16 @@ final class ImageProcessor {
             ? full
             : full.transformed(by: CGAffineTransform(scaleX: scale, y: scale)).cropped(to: previewExtent)
 
-        // Teeth visibility has to be measured from pixels, not geometry, and the
-        // mask builder needs the answer, so annotation happens before masks.
+        // Teeth and eye splits are pixel measurements, not geometry, and the
+        // mask builder needs the answers, so annotation happens before masks.
         var faces = FaceAnalyzer.analyze(image)
         if !faces.isEmpty, let buffer = AutoAnalyzer.analysisBuffer(previewSource) {
             faces = AutoAnalyzer.annotateTeeth(faces: faces, buffer: buffer)
+            faces = AutoAnalyzer.annotateEyes(faces: faces, buffer: buffer)
         }
 
-        let masksFull = buildMasks(extent: full.extent, faces: faces)
-        let masksPreview = buildMasks(extent: previewSource.extent, faces: faces)
+        let masksFull = buildMasks(extent: full.extent, faces: faces, image: full)
+        let masksPreview = buildMasks(extent: previewSource.extent, faces: faces, image: previewSource)
 
         guard let originalPreview = renderCGImage(previewSource, scale: 1, colorSpace: colorSpace) else { return nil }
         let processed = process(previewSource, adjustments: .zero, masks: masksPreview, faces: faces)
@@ -128,37 +136,43 @@ final class ImageProcessor {
                           preview: preview,
                           pixelSize: extent.size,
                           fileName: url.lastPathComponent,
-                          colorSpace: colorSpace)
+                          colorSpace: colorSpace,
+                          metadata: metadata)
     }
 
     func loadCGImage(url: URL) -> CGImage? {
         loadCGImageWithColorSpace(url: url)?.0
     }
 
-    private func loadCGImageWithColorSpace(url: URL) -> (CGImage, CGColorSpace)? {
+    private func loadCGImageWithColorSpace(url: URL) -> (CGImage, CGColorSpace, [CFString: Any])? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: true] as CFDictionary)
         else { return nil }
 
         let colorSpace = cgImage.colorSpace ?? defaultColorSpace
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        let raw = (properties?[kCGImagePropertyOrientation] as? UInt32)
-            ?? UInt32((properties?[kCGImagePropertyOrientation] as? Int) ?? 1)
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
+        let raw = (properties[kCGImagePropertyOrientation] as? UInt32)
+            ?? UInt32((properties[kCGImagePropertyOrientation] as? Int) ?? 1)
         let orientation = CGImagePropertyOrientation(rawValue: raw) ?? .up
-        guard orientation != .up else { return (cgImage, colorSpace) }
+        guard orientation != .up else { return (cgImage, colorSpace, properties) }
 
         let oriented = CIImage(cgImage: cgImage).oriented(forExifOrientation: Int32(orientation.rawValue))
         let zeroed = oriented.transformed(by: CGAffineTransform(translationX: -oriented.extent.origin.x,
                                                                y: -oriented.extent.origin.y))
         guard let normalized = renderCGImage(zeroed, scale: 1, colorSpace: colorSpace) else { return nil }
-        return (normalized, colorSpace)
+        return (normalized, colorSpace, properties)
     }
 
     // MARK: - Masks
 
     /// Builds the full per-region mask set. Feathering is proportional to image
     /// size so the preview and the full-resolution export match visually.
-    func buildMasks(extent: CGRect, faces: [FaceGeometry]) -> MaskSet? {
+    ///
+    /// Passing `image` turns on pixel gates for regions whose true boundary is
+    /// not geometric: enamel stops at the gum line, sclera stops at the iris.
+    /// Without it the masks fall back to their geometric shapes, which is what
+    /// synthetic fixtures and tests without pixels use.
+    func buildMasks(extent: CGRect, faces: [FaceGeometry], image: CIImage? = nil) -> MaskSet? {
         guard !faces.isEmpty else { return nil }
 
         let shortSide = min(extent.width, extent.height)
@@ -176,6 +190,10 @@ final class ImageProcessor {
         var underEyeShapes: [MaskShape] = []
         var foreheadShapes: [MaskShape] = []
         var noseShapes: [MaskShape] = []
+
+        var scleraParts: [CIImage] = []
+        var irisParts: [CIImage] = []
+        var lashParts: [CIImage] = []
 
         for face in faces {
             // Face silhouette: contour plus a soft band over forehead/cheeks.
@@ -210,9 +228,12 @@ final class ImageProcessor {
             }
 
             // Whitening a closed mouth would lighten lips, not teeth, so the
-            // mask only exists when teeth were measured as visible.
-            if face.hasVisibleTeeth, let teeth = face.teethRect {
-                teethShapes.append(MaskShape(ellipse: teeth))
+            // mask only exists when teeth were measured as visible. The shape
+            // comes from the outer lips because the inner-lip outline stops
+            // short of the smile corners; a rounded rect keeps the diagonal
+            // tooth band intact where an ellipse would clip its ends.
+            if face.hasVisibleTeeth, let teeth = face.enamelRect {
+                teethShapes.append(MaskShape(rect: teeth, cornerRadius: 0.30))
             }
 
             underEyeShapes.append(MaskShape(ellipse: face.leftUnderEyeRect))
@@ -221,6 +242,68 @@ final class ImageProcessor {
             if face.rightEye.count >= 3 { underEyeShapes.append(MaskShape(mode: .erase, points: face.rightEye)) }
 
             foreheadShapes.append(MaskShape(ellipse: face.foreheadRect))
+
+            // Per-eye splits. The geometric shapes are only approximate; the
+            // gates decide the real boundary from the pixels.
+            for eye in face.eyePolygons {
+                let box = FaceGeometry.boundingBox(of: eye)
+                guard box.width > 0.004, box.height > 0.002 else { continue }
+
+                let scleraGeometry = MaskBuilder.makeMask(
+                    extent: extent,
+                    shapes: [MaskShape(points: FaceGeometry.scaled(eye, by: 0.88))],
+                    feather: tightFeather)
+                if let part = gatedMask(geometry: scleraGeometry, image: image,
+                                        lumaMin: face.eyeScleraLuminance,
+                                        saturationMax: 0.45) {
+                    scleraParts.append(part)
+                }
+
+                let irisRect = CGRect(x: box.midX - box.width * 0.32,
+                                      y: box.midY - box.height * 0.44,
+                                      width: box.width * 0.64,
+                                      height: box.height * 0.88)
+                let irisGeometry = MaskBuilder.makeMask(
+                    extent: extent,
+                    shapes: [MaskShape(ellipse: irisRect)],
+                    feather: tightFeather)
+                if let part = gatedMask(geometry: irisGeometry, image: image,
+                                        lumaMin: 0,
+                                        lumaMax: face.eyeScleraLuminance,
+                                        saturationMax: 1) {
+                    irisParts.append(part)
+                }
+
+                let lashGeometry = MaskBuilder.makeMask(
+                    extent: extent,
+                    shapes: [
+                        MaskShape(points: FaceGeometry.scaled(eye, by: 1.06)),
+                        MaskShape(mode: .erase, ellipse: irisRect.insetBy(dx: irisRect.width * 0.18,
+                                                                          dy: irisRect.height * 0.10))
+                    ],
+                    feather: tightFeather)
+                if let part = gatedMask(geometry: lashGeometry, image: image,
+                                        lumaMin: 0,
+                                        lumaMax: face.eyeScleraLuminance * 0.95,
+                                        saturationMax: 1) {
+                    lashParts.append(part)
+                }
+            }
+        }
+
+        let teethGeometry = MaskBuilder.makeMask(extent: extent, shapes: teethShapes, feather: tightFeather)
+        // Enamel only: bright and low-saturation. This is the same test the
+        // visibility annotation uses, so whitening cannot land on gums or the
+        // dark gap between teeth.
+        let teethMask = gatedMask(geometry: teethGeometry, image: image,
+                                  lumaMin: 0.45, saturationMax: 0.30)
+
+        let scleraMask = unionAll(scleraParts)
+        let irisMask = unionAll(irisParts)
+        let lashMask = unionAll(lashParts)
+        var eyeDetail = irisMask
+        if let lashMask {
+            eyeDetail = eyeDetail.map { MaskBuilder.union($0, lashMask) } ?? lashMask
         }
 
         return MaskSet(
@@ -229,13 +312,59 @@ final class ImageProcessor {
             eyes: MaskBuilder.makeMask(extent: extent, shapes: eyeShapes, feather: tightFeather),
             leftEye: MaskBuilder.makeMask(extent: extent, shapes: leftEyeShapes, feather: tightFeather),
             rightEye: MaskBuilder.makeMask(extent: extent, shapes: rightEyeShapes, feather: tightFeather),
+            sclera: scleraMask,
+            iris: irisMask,
+            lashes: lashMask,
+            eyeDetail: eyeDetail,
             lips: MaskBuilder.makeMask(extent: extent, shapes: lipShapes, feather: tightFeather),
-            teeth: MaskBuilder.makeMask(extent: extent, shapes: teethShapes, feather: tightFeather),
+            teeth: teethMask,
             underEyes: MaskBuilder.makeMask(extent: extent, shapes: underEyeShapes, feather: softFeather),
             forehead: MaskBuilder.makeMask(extent: extent, shapes: foreheadShapes, feather: softFeather),
             nose: MaskBuilder.makeMask(extent: extent, shapes: noseShapes, feather: softFeather),
             skinTexture: MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: softFeather)
         )
+    }
+
+    /// Intersects a geometric mask with a pixel gate. Returns nil when the gate
+    /// would leave almost nothing, so callers can fall back to the geometry
+    /// instead of silently doing nothing.
+    private func gatedMask(geometry: CIImage?,
+                           image: CIImage?,
+                           lumaMin: Double,
+                           lumaMax: Double = 1,
+                           saturationMax: Double,
+                           minimumCoverage: Double = 0.02) -> CIImage? {
+        guard let geometry else { return nil }
+        guard let image, MaskBuilder.isColorGateAvailable,
+              let gate = MaskBuilder.colorGate(image, lumaMin: lumaMin, lumaMax: lumaMax,
+                                               saturationMax: saturationMax) else {
+            return geometry
+        }
+        let combined = MaskBuilder.intersect(geometry, gate).cropped(to: geometry.extent)
+        if let partial = meanMaskValue(combined), let whole = meanMaskValue(geometry),
+           whole > 0.0001, partial / whole < minimumCoverage {
+            return nil
+        }
+        return combined
+    }
+
+    private func unionAll(_ parts: [CIImage]) -> CIImage? {
+        parts.dropFirst().reduce(parts.first) { accumulated, next in
+            accumulated.map { MaskBuilder.union($0, next) } ?? next
+        }
+    }
+
+    /// Mean gray level of a mask, used to judge gate coverage without reading
+    /// the whole image back.
+    private func meanMaskValue(_ image: CIImage) -> Double? {
+        let average = image.applyingFilter("CIAreaAverage", parameters: [
+            kCIInputExtentKey: CIVector(cgRect: image.extent)
+        ])
+        var pixel = [UInt8](repeating: 0, count: 4)
+        context.render(average, toBitmap: &pixel, rowBytes: 4,
+                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8, colorSpace: nil)
+        return Double(pixel[0]) / 255.0
     }
 
     // MARK: - Processing
@@ -309,10 +438,12 @@ final class ImageProcessor {
         if a.teethWhiten > 0, let teethMask = masks?.teeth {
             image = SkinEngine.whitenTeeth(image, strength: a.teethWhiten, mask: teethMask)
         }
-        if (a.eyeBrighten > 0 || a.eyeSharpen > 0), let eyeMask = masks?.eyes {
-            image = SkinEngine.enhanceEyes(image, brighten: a.eyeBrighten,
-                                           sharpen: a.eyeSharpen,
-                                           mask: eyeMask, scale: scale)
+        if a.eyeBrighten > 0, let scleraMask = masks?.sclera ?? masks?.eyes {
+            image = SkinEngine.brightenSclera(image, strength: a.eyeBrighten, mask: scleraMask)
+        }
+        if a.eyeSharpen > 0, let detailMask = masks?.eyeDetail ?? masks?.eyes {
+            image = SkinEngine.sharpenEyeDetail(image, strength: a.eyeSharpen,
+                                                mask: detailMask, scale: scale)
         }
 
         // 4) Geometry after the local edits: the warp then carries the
@@ -382,7 +513,8 @@ final class ImageProcessor {
 
     func renderCGImage(_ image: CIImage,
                        scale: CGFloat,
-                       colorSpace: CGColorSpace? = nil) -> CGImage? {
+                       colorSpace: CGColorSpace? = nil,
+                       format: CIFormat = .RGBA8) -> CGImage? {
         var working = image
         if scale != 1 {
             working = working.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
@@ -391,7 +523,7 @@ final class ImageProcessor {
         guard extent.width >= 1, extent.height >= 1 else { return nil }
         let rect = CGRect(x: extent.origin.x, y: extent.origin.y,
                           width: extent.width.rounded(), height: extent.height.rounded())
-        return context.createCGImage(working, from: rect, format: .RGBA8,
+        return context.createCGImage(working, from: rect, format: format,
                                      colorSpace: colorSpace ?? defaultColorSpace)
     }
 
@@ -400,17 +532,36 @@ final class ImageProcessor {
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
+    /// Writes the image; PNG and TIFF keep 16 bits per channel, JPEG stays at 8
+    /// because the format defines no deeper container. Source metadata is
+    /// carried over, with orientation normalized to 1 since the pixels have
+    /// already been rotated upright.
     func write(_ image: CIImage,
                to url: URL,
                format: ExportFormat,
                quality: Double,
-               colorSpace: CGColorSpace? = nil) -> Bool {
-        guard let cgImage = renderCGImage(image, scale: 1, colorSpace: colorSpace) else { return false }
+               colorSpace: CGColorSpace? = nil,
+               metadata: [CFString: Any] = [:]) -> Bool {
+        let ciFormat: CIFormat = format == .jpeg ? .RGBA8 : .RGBA16
+        guard let cgImage = renderCGImage(image, scale: 1, colorSpace: colorSpace, format: ciFormat) else {
+            return false
+        }
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL,
                                                               format.utType.identifier as CFString,
                                                               1,
                                                               nil) else { return false }
-        var properties: [CFString: Any] = [:]
+        var properties = metadata
+        // These describe the source pixels, not the exported ones.
+        for key in [kCGImagePropertyPixelWidth, kCGImagePropertyPixelHeight,
+                    kCGImagePropertyDepth, kCGImagePropertyColorModel,
+                    kCGImagePropertyProfileName, kCGImagePropertyHasAlpha] {
+            properties.removeValue(forKey: key)
+        }
+        properties[kCGImagePropertyOrientation] = 1
+        if var tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
+            tiff[kCGImagePropertyTIFFOrientation] = 1
+            properties[kCGImagePropertyTIFFDictionary] = tiff
+        }
         if format.supportsQuality {
             properties[kCGImageDestinationLossyCompressionQuality] = quality
         }

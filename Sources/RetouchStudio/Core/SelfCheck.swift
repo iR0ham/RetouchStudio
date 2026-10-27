@@ -45,6 +45,16 @@ enum SelfCheck {
         passed = checkBlemishGate() && passed
         print("-- teeth whitening only when teeth are visible --")
         passed = checkTeethGating() && passed
+        print("-- frequency separation reconstructs exactly --")
+        passed = checkFrequencySeparation() && passed
+        print("-- healing keeps texture while clearing spots --")
+        passed = checkHealing() && passed
+        print("-- enamel and eye pixel gates --")
+        passed = checkEyeAndEnamelGates() && passed
+        print("-- pixel gates compare sRGB values --")
+        passed = checkColorGateSpace() && passed
+        print("-- 16-bit export and metadata --")
+        passed = checkExportDepthAndMetadata(outDirectory: outDirectory) && passed
         if let facePath {
             print("-- real photo --")
             passed = checkRealFace(path: facePath, outDirectory: outDirectory) && passed
@@ -266,8 +276,8 @@ enum SelfCheck {
             innerLips: [], nose: [])
 
         let processor = ImageProcessor.shared
-        guard let masks = processor.buildMasks(extent: extent, faces: [face]) else { return false }
         let source = CIImage(cgImage: base).cropped(to: extent)
+        guard let masks = processor.buildMasks(extent: extent, faces: [face], image: source) else { return false }
         let preset = Preset.all[1].adjustments
         let output = processor.process(source, adjustments: preset,
                                        masks: masks, faces: [face])
@@ -323,16 +333,19 @@ enum SelfCheck {
 
         if let buffer = AutoAnalyzer.analysisBuffer(source) {
             faces = AutoAnalyzer.annotateTeeth(faces: faces, buffer: buffer)
+            faces = AutoAnalyzer.annotateEyes(faces: faces, buffer: buffer)
             for face in faces {
                 let fraction = AutoAnalyzer.visibleTeethFraction(buffer: buffer, face: face)
                 print("    - visible teeth: \(face.hasVisibleTeeth ? "yes" : "no") | openness=\(String(format: "%.2f", face.mouthOpenness)) | fraction=\(String(format: "%.2f", fraction))")
+                print("    - eye sclera split: luma >= \(String(format: "%.2f", face.eyeScleraLuminance))")
             }
         }
 
-        guard let masks = processor.buildMasks(extent: previewExtent, faces: faces) else {
+        guard let masks = processor.buildMasks(extent: previewExtent, faces: faces, image: source) else {
             print("  ✗ could not build mask")
             return false
         }
+        print("    - masks: teeth=\(masks.teeth != nil ? "yes" : "no") sclera=\(masks.sclera != nil ? "yes" : "no") iris=\(masks.iris != nil ? "yes" : "no") lashes=\(masks.lashes != nil ? "yes" : "no")")
 
         let directory = URL(fileURLWithPath: outDirectory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -341,6 +354,13 @@ enum SelfCheck {
             let overBlack = faceMask.composited(over: CIImage(color: .black).cropped(to: previewExtent))
             _ = processor.write(overBlack, to: directory.appendingPathComponent("selftest-mask.png"), format: .png, quality: 1)
             print("  ✓ skin mask written: selftest-mask.png")
+        }
+        for (name, mask) in [("sclera", masks.sclera), ("iris", masks.iris),
+                             ("teeth", masks.teeth), ("lashes", masks.lashes)] {
+            guard let mask else { continue }
+            let overBlack = mask.composited(over: CIImage(color: .black).cropped(to: previewExtent))
+            _ = processor.write(overBlack, to: directory.appendingPathComponent("selftest-\(name).png"),
+                                format: .png, quality: 1)
         }
 
         _ = processor.write(source, to: directory.appendingPathComponent("selftest-face-before.png"), format: .png, quality: 1)
@@ -380,7 +400,7 @@ enum SelfCheck {
 
         let extent = src.extent
         let processor = ImageProcessor.shared
-        let masks = processor.buildMasks(extent: extent, faces: [face])
+        let masks = processor.buildMasks(extent: extent, faces: [face], image: src)
         let maskBuffer = masks?.skin.flatMap { AutoAnalyzer.analysisBuffer($0) }
 
         let colorPatch = AutoAnalyzer.autoColorLight(buffer)
@@ -462,7 +482,7 @@ enum SelfCheck {
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .cropped(to: extent)
 
-        guard let masks = processor.buildMasks(extent: extent, faces: faces),
+        guard let masks = processor.buildMasks(extent: extent, faces: faces, image: source),
               let skinMask = masks.skin else {
             print("  ✗ could not build masks")
             return false
@@ -792,7 +812,327 @@ enum SelfCheck {
         return context.makeImage()
     }
 
-    // MARK: - کمکی‌ها
+    // MARK: - ۹) تفکیک فرکانسی واقعی
+
+    /// A real base/detail split must reconstruct the input exactly: base plus
+    /// (image - base) is the image. The old blend-based approach could not do
+    /// this because signed detail was clamped. With retention 1 the error must
+    /// be at the 8-bit rounding level, and lowering retention must remove fine
+    /// texture.
+    private static func checkFrequencySeparation() -> Bool {
+        guard SkinEngine.isFrequencySeparationAvailable else {
+            print("  ✗ frequency separation kernel unavailable")
+            return false
+        }
+        let size = 400
+        guard let base = makeNoisyImage(size: size) else {
+            print("  ✗ could not build test image")
+            return false
+        }
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let source = CIImage(cgImage: base).cropped(to: extent)
+        let low = source.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 3])
+            .cropped(to: extent)
+
+        let identity = SkinEngine.recombineFrequencies(source, base: low, retention: 1)
+        let smoothed = SkinEngine.recombineFrequencies(source, base: low, retention: 0.2)
+
+        guard let identityImage = ImageProcessor.shared.renderCGImage(identity, scale: 1),
+              let smoothedImage = ImageProcessor.shared.renderCGImage(smoothed, scale: 1) else {
+            print("  ✗ could not render")
+            return false
+        }
+
+        let delta = meanAbsoluteDifference(base, identityImage) ?? 999
+        let rect = CGRect(x: 150, y: 150, width: 100, height: 100)
+        let before = roughness(base, rect: rect) ?? 0
+        let after = roughness(smoothedImage, rect: rect) ?? 0
+
+        let exact = delta < 1.0
+        let reduced = after < before * 0.6
+        print("  \(exact ? "✓" : "✗") round trip: mean |Δ| = \(String(format: "%.2f", delta))/255 (expect < 1)")
+        print("  \(reduced ? "✓" : "✗") detail reduced: \(String(format: "%.1f", before)) → \(String(format: "%.1f", after)) (expect < 0.6×)")
+        return exact && reduced
+    }
+
+    // MARK: - ۱۰) هیلینگ: لک برود، بافت بماند
+
+    /// Healing must not leave a flat disc where a blemish was. Colour comes
+    /// from the local median, texture from a donor patch, so the repaired area
+    /// keeps roughly the same detail as nearby skin.
+    private static func checkHealing() -> Bool {
+        let size = 420
+        guard let base = makeSkinFixture(size: size) else {
+            print("  ✗ could not build skin fixture")
+            return false
+        }
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let face = FaceGeometry.synthetic(
+            boundingBox: CGRect(x: 0.18, y: 0.28, width: 0.64, height: 0.64),
+            faceContour: [CGPoint(x: 0.18, y: 0.28), CGPoint(x: 0.82, y: 0.28),
+                          CGPoint(x: 0.82, y: 0.92), CGPoint(x: 0.18, y: 0.92)],
+            leftEye: [], rightEye: [], leftEyebrow: [], rightEyebrow: [],
+            outerLips: [], innerLips: [], nose: [])
+
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: base).cropped(to: extent)
+        guard let masks = processor.buildMasks(extent: extent, faces: [face], image: source) else {
+            print("  ✗ could not build mask")
+            return false
+        }
+
+        var adjustments = Adjustments()
+        adjustments.blemish = 100
+        let output = processor.process(source, adjustments: adjustments, masks: masks, faces: [face])
+        guard let rendered = processor.renderCGImage(output, scale: 1) else {
+            print("  ✗ processing failed")
+            return false
+        }
+
+        let blemishCentres: [(CGFloat, CGFloat)] = [(0.34, 0.62), (0.46, 0.46), (0.60, 0.56)]
+        var cleared = 0
+        for (nx, ny) in blemishCentres {
+            let x = Int(nx * CGFloat(size))
+            let y = Int((1 - ny) * CGFloat(size))
+            guard let before = luminance(base, x: x, y: y),
+                  let after = luminance(rendered, x: x, y: y),
+                  let ringBefore = luminance(base, x: x + 18, y: y),
+                  let ringAfter = luminance(rendered, x: x + 18, y: y) else { continue }
+            let contrastBefore = abs(Double(ringBefore - before))
+            let contrastAfter = abs(Double(ringAfter - after))
+            if contrastAfter < contrastBefore * 0.5 { cleared += 1 }
+        }
+
+        // The first blemish centre, and clean skin elsewhere on the face.
+        let healedRect = CGRect(x: 136, y: 153, width: 14, height: 14)
+        let cleanRect = CGRect(x: 100, y: 85, width: 14, height: 14)
+        let healedTexture = roughness(rendered, rect: healedRect) ?? 0
+        let cleanTexture = roughness(rendered, rect: cleanRect) ?? 0
+        let textureRatio = cleanTexture > 0 ? healedTexture / cleanTexture : 0
+
+        let spotsCleared = cleared >= 2
+        let textureKept = textureRatio > 0.3
+        print("  \(spotsCleared ? "✓" : "✗") spots cleared: \(cleared)/3 (expect >= 2)")
+        print("  \(textureKept ? "✓" : "✗") healed patch texture: \(String(format: "%.1f", healedTexture)) vs clean skin \(String(format: "%.1f", cleanTexture)) (\(String(format: "%.2f", textureRatio))×, expect > 0.30)")
+        return spotsCleared && textureKept
+    }
+
+    // MARK: - ۱۱) دروازه‌های پیکسلی مینا و چشم
+
+    /// Enamel must not cover lips, sclera must not cover the iris, and
+    /// brightening must therefore leave the iris alone.
+    private static func checkEyeAndEnamelGates() -> Bool {
+        let processor = ImageProcessor.shared
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        var passed = true
+
+        // --- Enamel ---
+        let mouthFace = FaceGeometry.synthetic(
+            boundingBox: CGRect(x: 0.20, y: 0.20, width: 0.60, height: 0.60),
+            faceContour: [CGPoint(x: 0.20, y: 0.20), CGPoint(x: 0.80, y: 0.20),
+                          CGPoint(x: 0.80, y: 0.80), CGPoint(x: 0.20, y: 0.80)],
+            leftEye: [], rightEye: [], leftEyebrow: [], rightEyebrow: [],
+            outerLips: [CGPoint(x: 0.40, y: 0.40), CGPoint(x: 0.60, y: 0.40),
+                        CGPoint(x: 0.60, y: 0.52), CGPoint(x: 0.40, y: 0.52)],
+            innerLips: [CGPoint(x: 0.44, y: 0.43), CGPoint(x: 0.56, y: 0.43),
+                        CGPoint(x: 0.56, y: 0.49), CGPoint(x: 0.44, y: 0.49)],
+            nose: [])
+        guard let openImage = makeMouthImage(size: size, showsTeeth: true) else {
+            print("  ✗ could not build mouth fixture")
+            return false
+        }
+        let openCI = CIImage(cgImage: openImage).cropped(to: extent)
+        guard let openBuffer = AutoAnalyzer.analysisBuffer(openCI) else {
+            print("  ✗ could not build mouth buffer")
+            return false
+        }
+        let mouthFaces = AutoAnalyzer.annotateTeeth(faces: [mouthFace], buffer: openBuffer)
+        if let masks = processor.buildMasks(extent: extent, faces: mouthFaces, image: openCI),
+           let teeth = masks.teeth,
+           let teethImage = processor.renderCGImage(teeth, scale: 1) {
+            let tooth = luminance(teethImage, x: 200, y: 216) ?? 0
+            let lip = luminance(teethImage, x: 200, y: 234) ?? 255
+            let enamelOK = tooth > 180 && lip < 20
+            print("  \(enamelOK ? "✓" : "✗") enamel mask: tooth=\(tooth) lip=\(lip) (expect > 180 / < 20)")
+            passed = enamelOK && passed
+        } else {
+            print("  ✗ could not build enamel mask")
+            passed = false
+        }
+
+        // --- Eyes ---
+        let eyeFace = FaceGeometry.synthetic(
+            boundingBox: CGRect(x: 0.30, y: 0.45, width: 0.40, height: 0.30),
+            faceContour: [CGPoint(x: 0.30, y: 0.45), CGPoint(x: 0.70, y: 0.45),
+                          CGPoint(x: 0.70, y: 0.75), CGPoint(x: 0.30, y: 0.75)],
+            leftEye: [CGPoint(x: 0.36, y: 0.52), CGPoint(x: 0.50, y: 0.52),
+                      CGPoint(x: 0.50, y: 0.60), CGPoint(x: 0.36, y: 0.60)],
+            rightEye: [], leftEyebrow: [], rightEyebrow: [],
+            outerLips: [], innerLips: [], nose: [])
+        guard let eyeImage = makeEyeImage(size: size) else {
+            print("  ✗ could not build eye fixture")
+            return false
+        }
+        let eyeCI = CIImage(cgImage: eyeImage).cropped(to: extent)
+        guard let eyeBuffer = AutoAnalyzer.analysisBuffer(eyeCI) else {
+            print("  ✗ could not build eye buffer")
+            return false
+        }
+        let eyeFaces = AutoAnalyzer.annotateEyes(faces: [eyeFace], buffer: eyeBuffer)
+        let split = eyeFaces[0].eyeScleraLuminance
+
+        guard let masks = processor.buildMasks(extent: extent, faces: eyeFaces, image: eyeCI),
+              let sclera = masks.sclera, let iris = masks.iris, masks.eyeDetail != nil,
+              let scleraImage = processor.renderCGImage(sclera, scale: 1),
+              let irisImage = processor.renderCGImage(iris, scale: 1) else {
+            print("  ✗ could not build eye masks")
+            return false
+        }
+
+        let scleraSample = luminance(scleraImage, x: 186, y: 176) ?? 0
+        let scleraAtIris = luminance(scleraImage, x: 172, y: 176) ?? 255
+        let irisSample = luminance(irisImage, x: 172, y: 176) ?? 0
+        let irisAtSclera = luminance(irisImage, x: 186, y: 176) ?? 255
+
+        let scleraOK = scleraSample > 200 && scleraAtIris < 40
+        let irisOK = irisSample > 180 && irisAtSclera < 60
+        print("  \(scleraOK ? "✓" : "✗") sclera mask: white=\(scleraSample) at iris=\(scleraAtIris) (split=\(String(format: "%.2f", split)))")
+        print("  \(irisOK ? "✓" : "✗") iris mask: iris=\(irisSample) at sclera=\(irisAtSclera)")
+
+        var adjustments = Adjustments()
+        adjustments.eyeBrighten = 100
+        let output = processor.process(eyeCI, adjustments: adjustments, masks: masks, faces: eyeFaces)
+        guard let rendered = processor.renderCGImage(output, scale: 1),
+              let whiteBefore = luminance(eyeImage, x: 186, y: 176),
+              let whiteAfter = luminance(rendered, x: 186, y: 176),
+              let irisBefore = luminance(eyeImage, x: 172, y: 176),
+              let irisAfter = luminance(rendered, x: 172, y: 176) else {
+            print("  ✗ could not process eye fixture")
+            return false
+        }
+        let scleraBrightened = whiteAfter - whiteBefore > 12
+        let irisIntact = abs(irisAfter - irisBefore) <= 6
+        print("  \(scleraBrightened ? "✓" : "✗") sclera brightened: \(whiteBefore) → \(whiteAfter)")
+        print("  \(irisIntact ? "✓" : "✗") iris untouched: \(irisBefore) → \(irisAfter)")
+
+        return passed && scleraOK && irisOK && scleraBrightened && irisIntact
+    }
+
+    /// Kernels sample the linear working space, while every gate threshold is
+    /// measured on 8-bit pixels. A mid neutral (sRGB 0.60) must clear a 0.45
+    /// luma floor and a saturated lip red must fail the 0.30 saturation cap.
+    /// Before the gate encoded back to sRGB, the neutral landed at 0.32 and
+    /// only specular highlights passed — which is the bug this pins down.
+    private static func checkColorGateSpace() -> Bool {
+        let size = 200
+        guard let fixture = makeGateFixture(size: size) else {
+            print("  ✗ could not build gate fixture")
+            return false
+        }
+        let ci = CIImage(cgImage: fixture)
+        guard let gate = MaskBuilder.colorGate(ci, lumaMin: 0.45, saturationMax: 0.30),
+              let rendered = ImageProcessor.shared.renderCGImage(gate, scale: 1),
+              let neutral = luminance(rendered, x: 50, y: 50),
+              let saturated = luminance(rendered, x: 150, y: 50) else {
+            print("  ✗ could not render gate")
+            return false
+        }
+        let ok = neutral > 200 && saturated < 30
+        print("  \(ok ? "✓" : "✗") mid neutral (sRGB 0.60)=\(neutral) lip red=\(saturated) (expect > 200 / < 30)")
+        return ok
+    }
+
+    /// Left half mid neutral, right half saturated lip red.
+    private static func makeGateFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.60, green: 0.60, blue: 0.60, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s / 2, height: s))
+        context.setFillColor(CGColor(red: 0.62, green: 0.30, blue: 0.30, alpha: 1))
+        context.fill(CGRect(x: s / 2, y: 0, width: s / 2, height: s))
+        return context.makeImage()
+    }
+
+    /// Flat skin with one eye: bright sclera, dark iris and a lash line.
+    private static func makeEyeImage(size: Int) -> CGImage? {        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+
+        context.setFillColor(CGColor(red: 0.93, green: 0.94, blue: 0.93, alpha: 1))
+        context.fillEllipse(in: CGRect(x: s * 0.36, y: s * 0.52, width: s * 0.14, height: s * 0.08))
+
+        context.setFillColor(CGColor(red: 0.15, green: 0.18, blue: 0.25, alpha: 1))
+        context.fillEllipse(in: CGRect(x: s * 0.40, y: s * 0.53, width: s * 0.06, height: s * 0.06))
+
+        context.setFillColor(CGColor(red: 0.10, green: 0.09, blue: 0.09, alpha: 1))
+        context.fill(CGRect(x: s * 0.37, y: s * 0.594, width: s * 0.12, height: s * 0.006))
+        return context.makeImage()
+    }
+
+    // MARK: - ۱۲) خروجی ۱۶ بیتی و متادیتا
+
+    private static func checkExportDepthAndMetadata(outDirectory: String) -> Bool {
+        let size = 96
+        guard let cg = makeGrayImage(size: size, spotCenter: CGPoint(x: 48, y: 48), spotSize: 10) else {
+            print("  ✗ could not build test image")
+            return false
+        }
+        let ci = CIImage(cgImage: cg)
+        let directory = URL(fileURLWithPath: outDirectory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let processor = ImageProcessor.shared
+
+        let metadata: [CFString: Any] = [
+            kCGImagePropertyDPIWidth: 300,
+            kCGImagePropertyDPIHeight: 300,
+            kCGImagePropertyOrientation: 6,
+            kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFArtist: "Retouch SelfTest"]
+        ]
+
+        let pngURL = directory.appendingPathComponent("selftest-export-16.png")
+        let tiffURL = directory.appendingPathComponent("selftest-export-16.tif")
+        let jpegURL = directory.appendingPathComponent("selftest-export-8.jpg")
+        let wrote = processor.write(ci, to: pngURL, format: .png, quality: 1, metadata: metadata)
+            && processor.write(ci, to: tiffURL, format: .tiff, quality: 1, metadata: metadata)
+            && processor.write(ci, to: jpegURL, format: .jpeg, quality: 0.9, metadata: metadata)
+
+        func depth(_ url: URL) -> Int? {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+            return image.bitsPerComponent
+        }
+        func properties(_ url: URL) -> [CFString: Any] {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return [:] }
+            return props
+        }
+
+        let pngDepth = depth(pngURL) ?? 0
+        let tiffDepth = depth(tiffURL) ?? 0
+        let jpegDepth = depth(jpegURL) ?? 0
+        let tiffProps = properties(tiffURL)
+        let dpi = (tiffProps[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 0
+        let orientation = (tiffProps[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 0
+        let tiff = tiffProps[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+        let artist = tiff[kCGImagePropertyTIFFArtist] as? String ?? ""
+
+        let depthOK = pngDepth >= 16 && tiffDepth >= 16 && jpegDepth == 8
+        let metadataOK = abs(dpi - 300) < 1 && orientation == 1 && artist == "Retouch SelfTest"
+        let wroteOK = wrote
+        print("  \(wroteOK ? "✓" : "✗") files written: png=\(pngDepth)-bit tiff=\(tiffDepth)-bit jpeg=\(jpegDepth)-bit (expect 16 / 16 / 8)")
+        print("  \(metadataOK ? "✓" : "✗") metadata: dpi=\(Int(dpi)) orientation=\(orientation) artist=\(artist.isEmpty ? "missing" : artist)")
+        return wroteOK && depthOK && metadataOK
+    }
+
 
     /// «زبری» یک ناحیه: میانگین اختلاف روشنایی هر پیکسل با همسایه‌ی راست و بالایش.
     /// عدد بزرگ‌تر = بافت/جزئیات بیشتر. برای سنجش اثر صافی پوست استفاده می‌شود.
@@ -854,8 +1194,28 @@ enum SelfCheck {
         return (Int(pointer[index]) + Int(pointer[index + 1]) + Int(pointer[index + 2])) / 3
     }
 
-    private static func meanLuminance(_ image: CGImage) -> Double? {
-        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return nil }
+    /// Mean absolute per-pixel luminance difference, sampled on a grid.
+    private static func meanAbsoluteDifference(_ a: CGImage, _ b: CGImage) -> Double? {
+        guard a.width == b.width, a.height == b.height else { return nil }
+        var total = 0.0
+        var samples = 0.0
+        var y = 0
+        while y < a.height {
+            var x = 0
+            while x < a.width {
+                if let la = luminance(a, x: x, y: y), let lb = luminance(b, x: x, y: y) {
+                    total += abs(Double(la - lb))
+                    samples += 1
+                }
+                x += 3
+            }
+            y += 3
+        }
+        guard samples > 0 else { return nil }
+        return total / samples
+    }
+
+    private static func meanLuminance(_ image: CGImage) -> Double? {        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return nil }
         let bytesPerPixel = max(1, image.bitsPerPixel / 8)
         let count = CFDataGetLength(data)
         var total = 0.0
