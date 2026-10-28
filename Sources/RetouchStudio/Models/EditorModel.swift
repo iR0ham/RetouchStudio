@@ -195,6 +195,15 @@ final class EditorModel: ObservableObject {
         commitAdjustments()
     }
 
+    /// Zeroes several effects together as one undo step, for a group that is not
+    /// one of the five reset groups — the eye and teeth sliders, say.
+    func resetEffects(_ keyPaths: [WritableKeyPath<Adjustments, Double>]) {
+        guard keyPaths.contains(where: { adjustments[keyPath: $0] != 0 }) else { return }
+        commitAdjustments()
+        for key in keyPaths { adjustments[keyPath: key] = 0 }
+        commitAdjustments()
+    }
+
     /// Zeroes a whole group (skin, reshape, makeup, color/light or look) while
     /// leaving the other groups exactly as they were.
     func resetGroup(_ group: AdjustmentGroup) {

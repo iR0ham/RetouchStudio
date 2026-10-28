@@ -1,40 +1,59 @@
 import SwiftUI
 
-/// Visual tokens for the whole app. Everything visible should come from here so
-/// the UI stays consistent instead of accumulating one-off opacities.
+/// Visual tokens for the whole app. Everything visible comes from here so the
+/// UI stays consistent instead of accumulating one-off opacities.
 ///
-/// The palette is warm and low-chroma: espresso graphite for the chrome and a
-/// patina green for anything interactive. Warm neutrals keep the app from
-/// reading as a generic blue-black panel, and green stays clear of the skin
-/// tones that fill the canvas.
+/// The shell is a neutral graphite — no colour cast that would lie about the
+/// photo sitting in the middle of it. Surfaces step up in small even increments
+/// (#1D → #24 → #2E), and only the chrome carries colour: chartreuse for the
+/// action that commits work, sky for the action that generates one.
 enum Theme {
 
     // MARK: Surfaces
 
-    /// Warm paper white. Hairlines and subtle lifts use this instead of pure
-    /// white so highlights stay in the same temperature as the greys.
-    static let bone = Color(red: 0.98, green: 0.95, blue: 0.905)
+    /// Cool near-white for anything that must read as light on graphite:
+    /// hairlines, the active tool pill, slider knobs.
+    static let bone = Color(red: 0.965, green: 0.965, blue: 0.965)
 
-    static let background = Color(red: 0.070, green: 0.066, blue: 0.060)
-    static let rail = Color(red: 0.093, green: 0.087, blue: 0.079)
-    static let panel = Color(red: 0.117, green: 0.110, blue: 0.099)
-    static let card = bone.opacity(0.04)
-    static let cardStrong = bone.opacity(0.07)
-    static let stroke = bone.opacity(0.105)
-    static let hairline = bone.opacity(0.065)
+    /// Window shell.
+    static let background = Color(red: 0.114, green: 0.114, blue: 0.114)
+    /// Bar and panel cards, one step up from the shell.
+    static let panel = Color(red: 0.141, green: 0.141, blue: 0.141)
+    /// Wells inside a card: chips, text fields, segmented pickers.
+    static let inset = Color(red: 0.180, green: 0.180, blue: 0.180)
+    /// A well that is hovered or selected.
+    static let raised = Color(red: 0.220, green: 0.220, blue: 0.220)
+
+    static let card = panel
+    static let cardStrong = inset
+
+    static let stroke = bone.opacity(0.085)
+    static let hairline = bone.opacity(0.075)
 
     // MARK: Text
 
-    static let text = Color(red: 0.930, green: 0.912, blue: 0.875)
-    static let muted = Color(red: 0.660, green: 0.625, blue: 0.570)
-    static let faint = Color(red: 0.445, green: 0.415, blue: 0.370)
+    static let text = Color(red: 0.949, green: 0.949, blue: 0.949)
+    static let muted = Color(red: 0.639, green: 0.639, blue: 0.639)
+    static let faint = Color(red: 0.431, green: 0.431, blue: 0.431)
 
-    // MARK: Accent — patina green
+    // MARK: Accent — chartreuse
 
-    static let accent = Color(red: 0.400, green: 0.620, blue: 0.549)
-    static let accentBright = Color(red: 0.588, green: 0.800, blue: 0.718)
-    static let accentInk = Color(red: 0.035, green: 0.078, blue: 0.063)
-    static let accentSoft = Color(red: 0.400, green: 0.620, blue: 0.549).opacity(0.15)
+    static let accent = Color(red: 0.875, green: 0.961, blue: 0.478)
+    static let accentBright = Color(red: 0.937, green: 0.980, blue: 0.682)
+    static let accentDeep = Color(red: 0.659, green: 0.827, blue: 0.235)
+    /// Text and glyphs on a filled chartreuse surface.
+    static let accentInk = Color(red: 0.106, green: 0.129, blue: 0.020)
+    static let accentSoft = Color(red: 0.875, green: 0.961, blue: 0.478).opacity(0.13)
+
+    // MARK: Secondary — sky
+
+    /// The generative action: Auto Retouch and Auto Color, the reference's
+    /// "Generate" button. Kept apart from chartreuse so "make it" and "ship it"
+    /// never look like the same control.
+    static let sky = Color(red: 0.561, green: 0.784, blue: 0.973)
+    static let skyDeep = Color(red: 0.290, green: 0.584, blue: 0.886)
+    static let skyInk = Color(red: 0.024, green: 0.122, blue: 0.196)
+    static let skySoft = Color(red: 0.561, green: 0.784, blue: 0.973).opacity(0.13)
 
     // MARK: Status
 
@@ -46,27 +65,113 @@ enum Theme {
     static let overlayEye = Color(red: 0.565, green: 0.745, blue: 0.816)
     static let overlayLip = Color(red: 0.855, green: 0.596, blue: 0.580)
 
+    // MARK: Geometry
+
     enum Metrics {
-        static let rail: CGFloat = 54
-        static let panel: CGFloat = 304
+        static let bar: CGFloat = 52
+        static let gutter: CGFloat = 14
+        /// The window buttons keep a band of their own above the bar, so the bar
+        /// only needs a whisper of space before it.
+        static let topGutter: CGFloat = 8
+        static let leftPanel: CGFloat = 292
+        static let rightPanel: CGFloat = 318
         static let headerPadding: CGFloat = 16
     }
 
+    enum Radius {
+        static let card: CGFloat = 18
+        static let control: CGFloat = 12
+        static let chip: CGFloat = 10
+        static let canvas: CGFloat = 16
+        static let pill: CGFloat = 999
+    }
+
     enum Font {
-        static let panelTitle = SwiftUI.Font.system(size: 16, weight: .semibold)
+        static let panelTitle = SwiftUI.Font.system(size: 15, weight: .semibold)
         static let section = SwiftUI.Font.system(size: 10.5, weight: .semibold)
         static let label = SwiftUI.Font.system(size: 12, weight: .regular)
         static let caption = SwiftUI.Font.system(size: 11, weight: .regular)
         static let value = SwiftUI.Font.system(size: 11, weight: .medium, design: .monospaced)
-        static let button = SwiftUI.Font.system(size: 12, weight: .medium)
+        static let button = SwiftUI.Font.system(size: 12.5, weight: .semibold)
     }
 }
 
-/// A one-pixel separator that reads correctly on the dark surfaces.
+/// Motion for the shell. Springs, because every control in the reference moves
+/// rather than snaps; the response times are short enough that a drag still
+/// tracks the pointer.
+enum Motion {
+    /// Taps, hovers, knob growth.
+    static let snappy = Animation.spring(response: 0.24, dampingFraction: 0.78)
+    /// Tool pill sliding along the bar, section rows opening.
+    static let smooth = Animation.spring(response: 0.40, dampingFraction: 0.86)
+    /// Anything that carries content: panels cross-fading, the photo loading.
+    static let swell = Animation.spring(response: 0.52, dampingFraction: 0.92)
+
+    /// The press feedback shared by every button in the app.
+    static let press = Animation.spring(response: 0.20, dampingFraction: 0.62)
+}
+
+/// A one-pixel separator that reads correctly on the graphite surfaces.
 struct Hairline: View {
     var body: some View {
         Rectangle()
             .fill(Theme.hairline)
             .frame(height: 1)
+    }
+}
+
+/// The card every panel group sits in: lifted graphite, soft corner, hairline
+/// that brightens when the pointer is over it.
+struct CardBackground: View {
+    var radius: CGFloat = Theme.Radius.card
+    var fill: Color = Theme.panel
+    @State private var hovering = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(fill)
+            .overlay(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .strokeBorder(hovering ? Theme.bone.opacity(0.12) : Theme.stroke,
+                                  lineWidth: 0.75)
+            )
+            .shadow(color: .black.opacity(0.30), radius: 10, y: 4)
+            .onHover { hovering = $0 }
+            .animation(Motion.snappy, value: hovering)
+    }
+}
+
+/// Press feedback for the whole app: the control dips instead of the OS bezel
+/// flashing. Applied through `PressableButtonStyle` so every button agrees.
+struct PressableButtonStyle: ButtonStyle {
+    var dip: CGFloat = 0.965
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? dip : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(Motion.press, value: configuration.isPressed)
+    }
+}
+
+/// Fades and lifts a view in the first time it appears, so switching tools or
+/// loading a photo reads as the panel settling rather than as a hard repaint.
+struct AppearTransition: ViewModifier {
+    @State private var shown = false
+    var delay: Double = 0
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : 6)
+            .onAppear {
+                withAnimation(Motion.smooth.delay(delay)) { shown = true }
+            }
+    }
+}
+
+extension View {
+    func appearAfter(_ delay: Double = 0) -> some View {
+        modifier(AppearTransition(delay: delay))
     }
 }

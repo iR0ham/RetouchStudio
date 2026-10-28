@@ -15,9 +15,14 @@ struct CompareCanvas: View {
 
             if let processed = model.previewImage, let original = model.originalImage {
                 editor(processed: processed, original: original)
+                    .transition(.opacity.combined(with: .scale(scale: 0.985)))
             } else {
                 DropZone(model: model) { model.openImage() }
+                    .transition(.opacity)
             }
+        }
+        .onChange(of: model.hasImage) { _, _ in
+            withAnimation(Motion.swell) { }
         }
         .background(
             ViewAnchor { view in events.attach(view: view) }
@@ -44,10 +49,15 @@ struct CompareCanvas: View {
         }
         .onDisappear { events.stop() }
         .overlay(alignment: .topLeading) {
-            if model.hasImage {
+            // The face count lives in the status card; this pill is only for
+            // what just happened, so it does not sit there repeating itself.
+            if model.isBusy || showsToast {
                 statusPill.padding(14)
+                    .transition(.opacity.combined(with: .offset(y: -6)))
             }
         }
+        .animation(Motion.smooth, value: model.status)
+        .animation(Motion.smooth, value: model.isBusy)
         .overlay(alignment: .bottom) {
             if model.hasImage {
                 canvasDock.padding(.bottom, 14)
@@ -55,12 +65,21 @@ struct CompareCanvas: View {
         }
         .overlay {
             if isDropTarget {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.canvas, style: .continuous)
                     .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
                     .padding(10)
                     .allowsHitTesting(false)
             }
         }
+        // The stage is a card of its own: rounded, hairlined, and the only thing
+        // between the photo and the shell.
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.canvas, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.canvas, style: .continuous)
+                .strokeBorder(Theme.stroke, lineWidth: 0.75)
+        )
+        .shadow(color: .black.opacity(0.30), radius: 12, y: 5)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget) { providers in
             guard let provider = providers.first else { return false }
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
@@ -79,6 +98,19 @@ struct CompareCanvas: View {
 
     // MARK: - Canvas
 
+    /// True when the status line is reporting an action rather than the standing
+    /// face count.
+    private var showsToast: Bool {
+        model.hasImage && !model.status.isEmpty && model.status != model.faceStatusText
+    }
+
+    /// The photo gets soft corners while the whole sheet is visible, the way the
+    /// reference presents it. Once zoomed in the stage crops it anyway, so the
+    /// corners go square and no pixel is hidden behind a radius.
+    private var sheetRadius: CGFloat {
+        model.zoom > 1.0001 ? 0 : 10
+    }
+
     private func editor(processed: NSImage, original: NSImage) -> some View {
         GeometryReader { geometry in
             let canvas = geometry.size
@@ -89,11 +121,11 @@ struct CompareCanvas: View {
             ZStack {
                 // A soft drop shadow makes the photo read as a sheet lying on
                 // the surface, the way Photos and Preview present an image.
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                RoundedRectangle(cornerRadius: sheetRadius, style: .continuous)
                     .fill(Color.black.opacity(0.60))
                     .frame(width: displayed.width, height: displayed.height)
-                    .position(x: center.x, y: center.y + 4)
-                    .blur(radius: 10)
+                    .position(x: center.x, y: center.y + 6)
+                    .blur(radius: 14)
                     .opacity(model.zoom > 1.0001 ? 0 : 1)
                     .allowsHitTesting(false)
 
@@ -101,6 +133,7 @@ struct CompareCanvas: View {
                     .resizable()
                     .interpolation(.high)
                     .frame(width: displayed.width, height: displayed.height)
+                    .clipShape(RoundedRectangle(cornerRadius: sheetRadius, style: .continuous))
                     .position(center)
 
                 if model.toolMode == .crop {
@@ -119,6 +152,7 @@ struct CompareCanvas: View {
                         .interpolation(.high)
                         .frame(width: displayed.width, height: displayed.height)
                         .clipShape(PartialRect(fraction: model.comparePosition))
+                        .clipShape(RoundedRectangle(cornerRadius: sheetRadius, style: .continuous))
                         .position(center)
 
                     compareHandle(displayed: displayed, canvas: canvas, center: center)
@@ -330,14 +364,15 @@ struct CompareCanvas: View {
         }
         .padding(4)
         .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Theme.panel.opacity(0.94))
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.panel.opacity(0.96))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Theme.stroke, lineWidth: 0.75)
         )
         .shadow(color: .black.opacity(0.42), radius: 16, y: 6)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func dockButton(icon: String,

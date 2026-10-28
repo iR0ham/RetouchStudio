@@ -12,6 +12,43 @@ struct PartialRect: Shape {
     }
 }
 
+/// The title row of a card in the left column.
+struct CardHeader: View {
+    let title: String
+    var subtitle: String? = nil
+    var icon: String? = nil
+    var tint: Color = Theme.text
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if let icon {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tint.opacity(0.14))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 /// A flat section header. No card, no border: whitespace and type do the work.
 struct SectionHeader: View {
     let title: String
@@ -33,7 +70,7 @@ struct SectionHeader: View {
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle(dip: 0.9))
                 .help(resetHelp ?? "Reset this section")
             }
         }
@@ -48,11 +85,19 @@ struct BipolarSlider: View {
     /// Smallest change a drag can make. Sliders that show whole numbers use the
     /// default; precision controls such as export quality pass a fraction.
     var step: Double = 1
+    /// Chartreuse for retouch amounts, sky for the generative controls.
+    var tint: Color = Theme.accent
 
     @State private var isHovering = false
+    @State private var isDragging = false
 
-    private let knob: CGFloat = 11
-    private let track: CGFloat = 3
+    private let knob: CGFloat = 12
+    private let track: CGFloat = 4
+
+    private var fill: some ShapeStyle {
+        LinearGradient(colors: [tint.opacity(0.72), tint],
+                       startPoint: .leading, endPoint: .trailing)
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -64,34 +109,36 @@ struct BipolarSlider: View {
             let zeroX: CGFloat? = (range.lowerBound < 0 && range.upperBound > 0)
                 ? knob / 2 + usable * CGFloat((0 - range.lowerBound) / span)
                 : nil
+            let grown = isHovering || isDragging
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Theme.bone.opacity(0.13))
+                    .fill(Theme.bone.opacity(0.14))
                     .frame(height: track)
 
                 if let zeroX {
                     Rectangle()
-                        .fill(Theme.bone.opacity(0.20))
-                        .frame(width: 1, height: 7)
+                        .fill(Theme.bone.opacity(0.22))
+                        .frame(width: 1, height: 8)
                         .offset(x: zeroX - 0.5)
                 }
 
                 Capsule()
-                    .fill(Theme.accent.opacity(isHovering ? 1 : 0.9))
+                    .fill(fill)
                     .frame(width: max(0, zeroX.map { abs(knobX - $0) } ?? knobX), height: track)
                     .offset(x: zeroX.map { min($0, knobX) } ?? 0)
 
                 ZStack {
                     Circle()
-                        .fill(Theme.accent.opacity(isHovering ? 0.18 : 0.10))
-                        .frame(width: 20, height: 20)
+                        .fill(tint.opacity(grown ? 0.22 : 0))
+                        .frame(width: 22, height: 22)
                     Circle()
-                        .fill(Theme.background)
+                        .fill(Theme.bone)
                         .frame(width: knob, height: knob)
-                        .overlay(Circle().strokeBorder(Theme.accent, lineWidth: 1.5))
+                        .shadow(color: .black.opacity(grown ? 0.45 : 0.30), radius: grown ? 4 : 2, y: 1)
                 }
-                .frame(width: 20, height: 20)
+                .scaleEffect(grown ? 1.18 : 1)
+                .frame(width: 22, height: 22)
                 .offset(x: knobX - 10)
             }
             .frame(maxHeight: .infinity, alignment: .center)
@@ -99,13 +146,17 @@ struct BipolarSlider: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
+                        isDragging = true
                         let fraction = min(1, max(0, (gesture.location.x - knob / 2) / usable))
                         commit(range.lowerBound + Double(fraction) * span, span: span)
                     }
+                    .onEnded { _ in isDragging = false }
             )
             .onHover { isHovering = $0 }
         }
-        .frame(height: knob + 3)
+        .frame(height: knob + 10)
+        .animation(Motion.snappy, value: isHovering || isDragging)
+        .animation(Motion.snappy, value: value)
         .accessibilityRepresentation {
             Slider(value: $value, in: range)
         }
@@ -134,6 +185,7 @@ struct ParameterRow: View {
     let title: String
     @Binding var value: Double
     var range: ClosedRange<Double> = -100...100
+    var tint: Color = Theme.accent
     var onReset: (() -> Void)? = nil
 
     @State private var isHovering = false
@@ -141,10 +193,10 @@ struct ParameterRow: View {
     private var isModified: Bool { abs(value) > 0.5 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(Theme.accent)
+                    .fill(tint)
                     .frame(width: 4, height: 4)
                     .opacity(isModified ? 1 : 0)
 
@@ -161,31 +213,47 @@ struct ParameterRow: View {
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Theme.faint)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle(dip: 0.9))
                     .help("Reset this slider")
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
 
                 Text(String(format: "%.0f", value))
                     .font(Theme.Font.value)
-                    .foregroundStyle(isModified ? Theme.accentBright : Theme.faint)
+                    .foregroundStyle(isModified ? tint : Theme.faint)
                     .frame(minWidth: 26, alignment: .trailing)
+                    .contentTransition(.numericText())
+                    .animation(Motion.snappy, value: value)
             }
 
-            BipolarSlider(value: $value, range: range)
+            BipolarSlider(value: $value, range: range, tint: tint)
         }
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
+        .animation(Motion.snappy, value: isHovering)
         .onTapGesture(count: 2) {
             if let onReset { onReset() } else { value = 0 }
         }
     }
 }
 
-/// The one filled, high-emphasis action in the inspector.
-struct AccentButton: View {
+/// The filled, high-emphasis action. Chartreuse commits the work; sky generates
+/// it, so the two are the same button in two colours rather than two designs.
+struct FilledButton: View {
+    enum Tone {
+        case lime
+        case sky
+
+        var fill: Color { self == .lime ? Theme.accent : Theme.sky }
+        var bright: Color { self == .lime ? Theme.accentBright : Theme.skyDeep.opacity(0.85) }
+        var ink: Color { self == .lime ? Theme.accentInk : Theme.skyInk }
+    }
+
     let title: String
     let icon: String
+    var tone: Tone = .lime
     var enabled: Bool = true
+    var height: CGFloat = 38
     let action: () -> Void
 
     @State private var isHovering = false
@@ -199,26 +267,36 @@ struct AccentButton: View {
                     .font(Theme.Font.button)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 32)
+            .frame(height: height)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                     .fill(enabled
-                          ? (isHovering ? Theme.accentBright : Theme.accent)
-                          : Theme.cardStrong)
+                          ? (isHovering ? tone.bright : tone.fill)
+                          : Theme.inset)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Theme.bone.opacity(enabled ? 0.14 : 0), lineWidth: 0.5)
-            )
-            .foregroundStyle(enabled ? Theme.accentInk : Theme.faint)
+            .foregroundStyle(enabled ? tone.ink : Theme.faint)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(!enabled)
         .onHover { isHovering = $0 }
+        .animation(Motion.snappy, value: isHovering)
     }
 }
 
-/// The quieter action next to an AccentButton: outlined, never filled.
+/// The one filled, high-emphasis action in the inspector.
+struct AccentButton: View {
+    let title: String
+    let icon: String
+    var enabled: Bool = true
+    let action: () -> Void
+
+    var body: some View {
+        FilledButton(title: title, icon: icon, tone: .lime,
+                     enabled: enabled, height: 34, action: action)
+    }
+}
+
+/// The quieter action next to a filled one: outlined, never solid.
 struct SecondaryButton: View {
     let title: String
     var icon: String? = nil
@@ -238,20 +316,21 @@ struct SecondaryButton: View {
                     .font(Theme.Font.button)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 30)
+            .frame(height: 34)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(enabled && isHovering ? Theme.cardStrong : Theme.card)
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(enabled && isHovering ? Theme.raised : Theme.inset)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                     .strokeBorder(Theme.stroke, lineWidth: 0.75)
             )
             .foregroundStyle(enabled ? Theme.text : Theme.faint)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .disabled(!enabled)
         .onHover { isHovering = $0 }
+        .animation(Motion.snappy, value: isHovering)
     }
 }
 
@@ -266,19 +345,15 @@ struct PresetChip: View {
                 .font(.system(size: 11, weight: isActive ? .semibold : .regular))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
-                .frame(height: 26)
+                .frame(height: 28)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isActive ? Theme.accentSoft : Theme.bone.opacity(0.035))
+                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                        .fill(isActive ? Theme.accent : Theme.inset)
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(isActive ? Theme.accent.opacity(0.55) : Theme.stroke,
-                                      lineWidth: 0.5)
-                )
-                .foregroundStyle(isActive ? Theme.accentBright : Theme.muted)
+                .foregroundStyle(isActive ? Theme.accentInk : Theme.muted)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(dip: 0.95))
+        .animation(Motion.snappy, value: isActive)
     }
 }
 
@@ -292,37 +367,34 @@ struct ShadeChip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(shade.swatch)
-                    .frame(width: 11, height: 11)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .strokeBorder(Theme.bone.opacity(0.22), lineWidth: 0.5)
-                    )
-                Text(shade.title)
-                    .font(.system(size: 10.5, weight: isActive ? .semibold : .regular))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isActive ? Theme.accentSoft : Theme.bone.opacity(0.035))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(isActive ? Theme.accent.opacity(0.55) : Theme.stroke,
-                                  lineWidth: 0.5)
-            )
-            .foregroundStyle(isActive ? Theme.accentBright : Theme.muted)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(shade.swatch)
+                .frame(height: 30)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(isActive ? Theme.bone : Theme.bone.opacity(0.16),
+                                      lineWidth: isActive ? 1.6 : 0.75)
+                )
+                .overlay(alignment: .bottomTrailing) {
+                    if isActive {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.bone)
+                            .background(Circle().fill(Color.black.opacity(0.45)))
+                            .padding(3)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .scaleEffect(isActive ? 1 : 0.94)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle(dip: 0.92))
+        .frame(height: 30)
         .help(shade.title)
+        .animation(Motion.snappy, value: isActive)
     }
 }
 
-/// Small face-detection readout used in the inspector footer.
+/// Small face-detection readout used in the status card.
 struct StatusChip: View {
     let text: String
     let isGood: Bool
@@ -335,20 +407,21 @@ struct StatusChip: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             Image(systemName: icon)
                 .font(.system(size: 9, weight: .bold))
             Text(text)
                 .font(.system(size: 10.5, weight: .medium))
                 .lineLimit(1)
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .padding(.horizontal, 9)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(neutral ? Theme.card : tint.opacity(0.14))
+            Capsule(style: .continuous)
+                .fill(neutral ? Theme.inset : tint.opacity(0.15))
         )
         .foregroundStyle(tint)
+        .animation(Motion.smooth, value: text)
     }
 }
 
@@ -362,5 +435,33 @@ struct SectionNote: View {
             .foregroundStyle(Theme.faint)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A title and a live number on one line, with the slider underneath — the
+/// reference's "Size …… 69 px" row.
+struct LabeledSliderRow: View {
+    let title: String
+    @Binding var value: Double
+    var range: ClosedRange<Double> = 0...100
+    var step: Double = 1
+    var suffix: String = ""
+    var tint: Color = Theme.accent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(Theme.text)
+                Spacer(minLength: 6)
+                Text("\(String(format: "%.0f", value))\(suffix)")
+                    .font(Theme.Font.value)
+                    .foregroundStyle(Theme.text)
+                    .contentTransition(.numericText())
+                    .animation(Motion.snappy, value: value)
+            }
+            BipolarSlider(value: $value, range: range, step: step, tint: tint)
+        }
     }
 }

@@ -173,6 +173,7 @@ struct L10n {
 
     // Healing brush
     var healCleared: String { "Healing stamps cleared." }
+    var healSubtitle: String { "Click a blemish to heal it. Click a stamp to take it back." }
     func healStampAdded(_ count: Int) -> String {
         count == 1 ? "Healing stamp added — ⌘Z removes it." : "Healing stamps: \(count)."
     }

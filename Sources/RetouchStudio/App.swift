@@ -107,13 +107,22 @@ private struct WindowBridge: NSViewRepresentable {
         Self.sync(model, to: window)
     }
 
-    /// Native document chrome: the photo name in the title bar, the proxy icon
-    /// next to it, and the grey dot that marks edits that are not in a project
-    /// or an export yet.
+    /// The window has no title bar of its own: the app draws its own bar in the
+    /// content area, so the shell colour, the hidden title and the drag
+    /// behaviour all have to be set here. The photo name still goes into
+    /// `window.title` — that is what the switcher and Mission Control show.
     private static func sync(_ model: EditorModel, to window: NSWindow) {
         window.title = model.windowTitle
         window.isDocumentEdited = model.hasUnsavedChanges
         window.representedURL = model.imageURL
+
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = NSColor(Theme.background)
+        window.isMovableByWindowBackground = true
+        window.titlebarSeparatorStyle = .none
     }
 
     final class Coordinator {
@@ -154,9 +163,9 @@ struct RetouchStudioApp: App {
                 // the scene instead of the app delegate.
                 .onOpenURL { url in model.requestOpen(url: url) }
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1320, height: 860)
-        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .undoRedo) {
                 Button(model.s.undoMenu) { model.undo() }
