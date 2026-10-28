@@ -8,6 +8,12 @@ struct CompareCanvas: View {
     @StateObject private var events = CanvasEventMonitor()
     @State private var panStart: CGSize?
     @State private var isPanning = false
+    @State private var compareDrag: (fraction: Double, x: CGFloat)?
+
+    /// Canvas-wide coordinate space. The handle moves as it is dragged, so
+    /// measuring the gesture against a space that stays put is the only way
+    /// the split does not chase its own tail.
+    private let canvasSpace = "compareCanvas"
 
     var body: some View {
         ZStack {
@@ -192,6 +198,7 @@ struct CompareCanvas: View {
                 }
             }
             .frame(width: canvas.width, height: canvas.height)
+            .coordinateSpace(name: canvasSpace)
             .contentShape(Rectangle())
             // Clip to the canvas region. Without this the zoomed photo spills
             // out over the sidebar and toolbar instead of staying in its own
@@ -233,11 +240,13 @@ struct CompareCanvas: View {
             }
     }
 
-    /// Split line plus its drag handle. Only this control moves the before/after
-    /// boundary.
+    /// Split line plus its drag handle. The whole line is grabbable — a knob
+    /// alone is a small target that people miss — but the strip is narrow
+    /// enough that it never swallows a pan that starts well away from it.
     private func compareHandle(displayed: CGSize, canvas: CGSize, center: CGPoint) -> some View {
         let x = center.x - displayed.width / 2 + displayed.width * CGFloat(model.comparePosition)
         let lineHeight = max(displayed.height, canvas.height)
+        let hitWidth: CGFloat = 28
 
         return ZStack {
             Rectangle()
@@ -254,25 +263,23 @@ struct CompareCanvas: View {
                 Icon(name: "arrow.left.and.right", size: 13, emphasised: true)
                     .foregroundStyle(Theme.accentBright)
             }
-            // Only the knob is grabbable. A full-height hit strip would swallow
-            // clicks far from the split and teleport it.
-            .frame(width: 44, height: 56)
-            .contentShape(Rectangle())
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        guard displayed.width > 0 else { return }
-                        // value.location is local to the 44-wide knob area, so
-                        // convert back to canvas space before solving for the
-                        // fraction.
-                        let canvasX = x - 22 + value.location.x
-                        let left = center.x - displayed.width / 2
-                        let fraction = (canvasX - left) / displayed.width
-                        model.comparePosition = min(1, max(0, Double(fraction)))
-                    }
-            )
         }
-        .frame(width: 44, height: lineHeight)
+        .frame(width: hitWidth, height: lineHeight)
+        .contentShape(Rectangle())
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .named(canvasSpace))
+                .onChanged { value in
+                    guard displayed.width > 0 else { return }
+                    if compareDrag == nil {
+                        compareDrag = (model.comparePosition, value.startLocation.x)
+                    }
+                    guard let drag = compareDrag else { return }
+                    let fraction = drag.fraction
+                        + Double((value.location.x - drag.x) / displayed.width)
+                    model.comparePosition = min(1, max(0, fraction))
+                }
+                .onEnded { _ in compareDrag = nil }
+        )
         .position(x: x, y: center.y)
     }
 
