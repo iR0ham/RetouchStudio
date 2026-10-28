@@ -214,6 +214,7 @@ final class ImageProcessor {
 
         var skinShapes: [MaskShape] = []
         var faceShapes: [MaskShape] = []
+        var shieldShapes: [MaskShape] = []
         var eyeShapes: [MaskShape] = []
         var leftEyeShapes: [MaskShape] = []
         var rightEyeShapes: [MaskShape] = []
@@ -253,17 +254,22 @@ final class ImageProcessor {
                 rightEyeShapes.append(MaskShape(points: face.rightEye))
             }
 
-            // Eyes, brows and lips never get smoothed.
-            for eye in face.eyePolygons { skinShapes.append(MaskShape(mode: .erase, points: eye)) }
+            // Eyes, brows and lips never get smoothed. The shield is subtracted
+            // from the finished skin mask instead of punched into it as an erase
+            // shape: a hole drawn before the feather is half refilled by the very
+            // blur that softens the silhouette, which is what put smoothing onto
+            // the lashes.
+            for rect in face.eyeShieldRects {
+                shieldShapes.append(MaskShape(rect: rect, cornerRadius: 0.5))
+            }
+            if face.lipPolygon.count >= 3 {
+                shieldShapes.append(MaskShape(points: face.lipPolygon))
+                lipShapes.append(MaskShape(points: face.lipPolygon))
+            }
             for brow in face.eyebrowPolygons {
-                skinShapes.append(MaskShape(mode: .erase, points: brow))
                 // Vision traces the brow as a thin outline; cosmetics need the
                 // whole hair band, which is a few pixels wider on each side.
                 browShapes.append(MaskShape(points: FaceGeometry.scaled(brow, by: 1.06)))
-            }
-            if face.lipPolygon.count >= 3 {
-                skinShapes.append(MaskShape(mode: .erase, points: face.lipPolygon))
-                lipShapes.append(MaskShape(points: face.lipPolygon))
             }
             cheekShapes.append(MaskShape(ellipse: face.leftBlushRect))
             cheekShapes.append(MaskShape(ellipse: face.rightBlushRect))
@@ -279,8 +285,6 @@ final class ImageProcessor {
 
             underEyeShapes.append(MaskShape(ellipse: face.leftUnderEyeRect))
             underEyeShapes.append(MaskShape(ellipse: face.rightUnderEyeRect))
-            if face.leftEye.count >= 3 { underEyeShapes.append(MaskShape(mode: .erase, points: face.leftEye)) }
-            if face.rightEye.count >= 3 { underEyeShapes.append(MaskShape(mode: .erase, points: face.rightEye)) }
 
             foreheadShapes.append(MaskShape(ellipse: face.foreheadRect))
 
@@ -357,8 +361,21 @@ final class ImageProcessor {
         let brows = browGeometry.map { grown($0, by: max(1.2, 0.0025 * shortSide), feather: browFeather) }
         let cheeks = MaskBuilder.makeMask(extent: extent, shapes: cheekShapes, feather: softFeather)
 
+        // Everything the skin work must not touch: the eye and lip bands, plus
+        // the brow hair itself. Subtracted from the *finished* masks, so the
+        // silhouette's own feather can no longer bleed smoothing into the hole.
+        var protected = MaskBuilder.makeMask(extent: extent, shapes: shieldShapes,
+                                             feather: max(2, 0.004 * shortSide))
+        if let brows {
+            protected = protected.map { MaskBuilder.union($0, brows) } ?? brows
+        }
+        func shielded(_ base: CIImage?) -> CIImage? {
+            guard let base, let protected else { return base }
+            return MaskBuilder.subtract(protected, from: base)
+        }
+
         return MaskSet(
-            skin: MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: feather),
+            skin: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: feather)),
             face: MaskBuilder.makeMask(extent: extent, shapes: faceShapes, feather: feather),
             eyes: MaskBuilder.makeMask(extent: extent, shapes: eyeShapes, feather: tightFeather),
             leftEye: MaskBuilder.makeMask(extent: extent, shapes: leftEyeShapes, feather: tightFeather),
@@ -371,10 +388,10 @@ final class ImageProcessor {
             teeth: teethMask,
             brows: brows,
             cheeks: cheeks,
-            underEyes: MaskBuilder.makeMask(extent: extent, shapes: underEyeShapes, feather: softFeather),
+            underEyes: shielded(MaskBuilder.makeMask(extent: extent, shapes: underEyeShapes, feather: softFeather)),
             forehead: MaskBuilder.makeMask(extent: extent, shapes: foreheadShapes, feather: softFeather),
             nose: MaskBuilder.makeMask(extent: extent, shapes: noseShapes, feather: softFeather),
-            skinTexture: MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: softFeather)
+            skinTexture: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: softFeather))
         )
     }
 

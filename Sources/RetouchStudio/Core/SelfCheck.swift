@@ -35,6 +35,8 @@ enum SelfCheck {
         passed = checkMaskedPipeline() && passed
         print("-- skin smoothing preserves eye/lip detail --")
         passed = checkSmoothPreservesFeatures() && passed
+        print("-- eye shield holds at portrait scale --")
+        passed = checkEyeShieldAtRealScale() && passed
         print("-- full chain on a synthetic portrait --")
         passed = checkSyntheticPortrait(outDirectory: outDirectory) && passed
         print("-- auto color/light vs auto retouch separation --")
@@ -175,7 +177,7 @@ enum SelfCheck {
 
         // Fine grain across the whole frame, so the "inside changed" test has
         // something the engine is meant to reduce.
-        var generator = SystemRandomNumberGenerator()
+        var generator = SeededGenerator(seed: 0x5EED_17A5)
         for _ in 0..<(size * size / 8) {
             let x = Int.random(in: 0..<size, using: &generator)
             let y = Int.random(in: 0..<size, using: &generator)
@@ -266,6 +268,57 @@ enum SelfCheck {
         print("  \(skinSmoothed ? "✓" : "✗") skin smoothed: \(String(format: "%.1f", skinBefore)) → \(String(format: "%.1f", skinAfter)) (\(String(format: "%.2f", skinRatio))×, expect < 0.75)")
         print("  \(eyeIntact ? "✓" : "✗") eyes not blurred: \(String(format: "%.1f", eyeBefore)) → \(String(format: "%.1f", eyeAfter)) (\(String(format: "%.2f", eyeRatio))×, expect > 0.85)")
         return skinSmoothed && eyeIntact
+    }
+
+    // MARK: - ۳b) سپر چشم در مقیاس واقعی یک پرتره
+
+    /// The hole in the skin mask is what protects the eye, and the hole only
+    /// works if the silhouette's feather cannot reach across it. On a real
+    /// portrait the feather is tens of pixels wide while an eye is a couple of
+    /// dozen, so a 400 px fixture cannot see the failure. This one uses a face a
+    /// third of a 2000 px frame — the geometry an actual photo has.
+    private static func checkEyeShieldAtRealScale() -> Bool {
+        let size = 2000
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        func outline(_ r: CGRect) -> [CGPoint] {
+            [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+             CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+        }
+        let leftEye = CGRect(x: 0.409, y: 0.594, width: 0.022, height: 0.011)
+        let rightEye = leftEye.offsetBy(dx: 0.16, dy: 0)
+        let face = FaceGeometry.synthetic(
+            boundingBox: CGRect(x: 0.34, y: 0.22, width: 0.32, height: 0.56),
+            faceContour: outline(CGRect(x: 0.34, y: 0.22, width: 0.32, height: 0.56)),
+            leftEye: outline(leftEye),
+            rightEye: outline(rightEye),
+            outerLips: outline(CGRect(x: 0.46, y: 0.34, width: 0.08, height: 0.03)))
+
+        guard let masks = ImageProcessor.shared.buildMasks(extent: extent, faces: [face]),
+              let skin = masks.skin,
+              let maskImage = ImageProcessor.shared.renderCGImage(skin, scale: 1) else {
+            print("  ✗ could not build the skin mask")
+            return false
+        }
+
+        func coverage(_ x: CGFloat, _ y: CGFloat) -> Int? {
+            luminance(maskImage, normalizedAt: CGPoint(x: x, y: y)).map { $0 * 100 / 255 }
+        }
+        let centre = coverage(leftEye.midX, leftEye.midY)
+        // Lash line and lid crease: outside Vision's outline, inside the shield.
+        let lash = coverage(leftEye.midX, leftEye.maxY + leftEye.height * 0.30)
+        let cheek = coverage(0.42, 0.47)
+
+        guard let centre, let lash, let cheek else {
+            print("  ✗ could not read the skin mask")
+            return false
+        }
+        // The lash sample sits eight pixels from the shield's edge, inside its
+        // feather, so a few percent of the smoothing is still expected there.
+        let eyeClear = centre < 3 && lash < 12
+        let skinCovered = cheek > 60
+        print("  \(eyeClear ? "✓" : "✗") skin coverage inside the eye=\(centre)% and on the lash band=\(lash)% (expect ~0)")
+        print("  \(skinCovered ? "✓" : "✗") skin coverage on the cheek=\(cheek)% (expect > 60)")
+        return eyeClear && skinCovered
     }
 
     // MARK: - ۴) زنجیره‌ی کامل روی تصویر مصنوعی
@@ -425,7 +478,7 @@ enum SelfCheck {
             return false
         }
 
-        let face = FaceGeometry.synthetic(
+        var face = FaceGeometry.synthetic(
             boundingBox: CGRect(x: 0.28, y: 0.42, width: 0.44, height: 0.42),
             faceContour: [CGPoint(x: 0.30, y: 0.44), CGPoint(x: 0.70, y: 0.44),
                           CGPoint(x: 0.74, y: 0.62), CGPoint(x: 0.70, y: 0.82),
@@ -437,6 +490,9 @@ enum SelfCheck {
             outerLips: [CGPoint(x: 0.44, y: 0.50), CGPoint(x: 0.56, y: 0.50),
                          CGPoint(x: 0.56, y: 0.535), CGPoint(x: 0.44, y: 0.535)],
             innerLips: [], nose: [])
+        // The production load path always measures the eyes before Auto Retouch
+        // runs; a hand-built fixture has to say so too.
+        face.hasUsableEyes = true
 
         let extent = src.extent
         let processor = ImageProcessor.shared
@@ -747,7 +803,7 @@ enum SelfCheck {
         context.setFillColor(CGColor(red: 0.86, green: 0.72, blue: 0.64, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: s, height: s))
 
-        var generator = SystemRandomNumberGenerator()
+        var generator = SeededGenerator(seed: 0x5EED_17A5)
         for _ in 0..<(size * size / 6) {
             let x = CGFloat.random(in: s * 0.22...s * 0.78, using: &generator)
             let y = CGFloat.random(in: s * 0.30...s * 0.88, using: &generator)
@@ -1844,7 +1900,7 @@ enum SelfCheck {
         context.setFillColor(CGColor(red: 128 / 255, green: 128 / 255, blue: 128 / 255, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: size, height: size))
 
-        var generator = SystemRandomNumberGenerator()
+        var generator = SeededGenerator(seed: 0x5EED_17A5)
         for _ in 0..<(size * size / 8) {
             let x = Int.random(in: 0..<size, using: &generator)
             let y = Int.random(in: 0..<size, using: &generator)
@@ -1893,6 +1949,22 @@ enum SelfCheck {
         return total / samples
     }
 
+    /// Fixtures must draw the same noise every run. With the system generator
+    /// the healing check failed on roughly one build in ten, because a random
+    /// scatter occasionally left the sample point sitting on a bright grain
+    /// cluster instead of on the median the patch was measured against.
+    struct SeededGenerator: RandomNumberGenerator {
+        private var state: UInt64
+        init(seed: UInt64) { state = seed }
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
     private static func makeNoisyImage(size: Int) -> CGImage? {
         guard let context = CGContext(data: nil, width: size, height: size,
                                       bitsPerComponent: 8, bytesPerRow: 0,
@@ -1902,7 +1974,7 @@ enum SelfCheck {
         context.fill(CGRect(x: 0, y: 0, width: size, height: size))
 
         // نویز ریز و پرکنتراست = شبیه‌سازی بافت پوست و منافذ.
-        var generator = SystemRandomNumberGenerator()
+        var generator = SeededGenerator(seed: 0x5EED_17A5)
         for _ in 0..<(size * size / 3) {
             let x = Int.random(in: 0..<size, using: &generator)
             let y = Int.random(in: 0..<size, using: &generator)

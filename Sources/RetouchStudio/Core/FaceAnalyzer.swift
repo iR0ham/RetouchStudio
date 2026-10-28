@@ -33,6 +33,10 @@ struct FaceGeometry {
     /// lip opening, so the flag is set from pixels by `AutoAnalyzer`.
     var hasVisibleTeeth: Bool = false
 
+    /// True when the eyes were big enough and bright enough to measure, so the
+    /// automatic eye work has something real to act on. Set by `AutoAnalyzer`.
+    var hasUsableEyes: Bool = false
+
     /// Luminance that separates sclera from iris inside the eye opening. Also
     /// measured from pixels: a fixed threshold fails on darker skin tones,
     /// where sclera is still the brightest part of the eye but nowhere near
@@ -47,6 +51,46 @@ struct FaceGeometry {
     var eyeRects: [CGRect] { eyePolygons.map { Self.boundingBox(of: $0) } }
     var leftEyeRect: CGRect { Self.boundingBox(of: leftEye) }
     var rightEyeRect: CGRect { Self.boundingBox(of: rightEye) }
+
+    // MARK: - Shields
+
+    /// Bands that skin smoothing must never reach: the eyes with their lashes
+    /// and lids, and the lips.
+    var eyeShieldRects: [CGRect] { eyePolygons.compactMap { Self.eyeShieldRect(for: $0) } }
+    var shieldRects: [CGRect] {
+        eyeShieldRects + (lipShieldRect.map { [$0] } ?? [])
+    }
+
+    /// The eye opening grown into the region that has to stay sharp.
+    ///
+    /// Vision traces the palpebral opening only, so an outline-based hole leaves
+    /// the lashes and the lid crease inside the skin mask — smoothing there reads
+    /// as a blurred eye even when the hole is centred correctly. The margin is a
+    /// fraction of the eye's own size, which keeps it correct for a small face in
+    /// a wide frame where a fixed outline scale does not.
+    static func eyeShieldRect(for eye: [CGPoint]) -> CGRect? {
+        let box = boundingBox(of: eye)
+        guard box.width > 0.001, box.height > 0.0005 else { return nil }
+        return grownBox(box, side: 0.14, along: 0.60, against: 0.22)
+    }
+
+    /// Lips keep their own texture and their outline is already the outer edge,
+    /// so the margin is small and even.
+    var lipShieldRect: CGRect? {
+        guard let box = lipRect, box.width > 0.001 else { return nil }
+        return Self.grownBox(box, side: 0.08, along: 0.22, against: 0.22)
+    }
+
+    /// A box grown from a feature outline, further `along` the direction the
+    /// hair and skin fold continue (up for eyes, the philtrum side for lips)
+    /// than `against` it.
+    private static func grownBox(_ box: CGRect, side: CGFloat, along: CGFloat, against: CGFloat) -> CGRect {
+        let dx = box.width * side
+        return CGRect(x: box.minX - dx,
+                      y: box.minY - box.height * against,
+                      width: box.width + 2 * dx,
+                      height: box.height * (1 + along + against))
+    }
 
     var noseRect: CGRect { Self.boundingBox(of: nose.isEmpty ? noseCrest : nose) }
     var noseCrestRect: CGRect { Self.boundingBox(of: noseCrest) }

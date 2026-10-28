@@ -263,6 +263,7 @@ enum AutoAnalyzer {
             var annotated = face
             if let split = eyeLuminanceSplit(buffer: buffer, face: face) {
                 annotated.eyeScleraLuminance = split
+                annotated.hasUsableEyes = true
             }
             return annotated
         }
@@ -358,7 +359,11 @@ enum AutoAnalyzer {
         var a = Adjustments()
         guard !faces.isEmpty else { return a }
 
-        let hasEyes = faces.contains { !$0.eyePolygons.isEmpty }
+        // An eye outline alone is not enough: a face seen from behind, an eye
+        // closed, or an eye too small to measure all still report landmarks.
+        // Eye work is gated on the same pixel measurement that sets the sclera
+        // split, so it only ever runs where there is a real eye to brighten.
+        let hasEyes = faces.contains { $0.hasUsableEyes }
         let hasVisibleTeeth = faces.contains { $0.hasVisibleTeeth }
 
         let roughness = skinRoughness(buffer, mask: skinMask) ?? 0.012

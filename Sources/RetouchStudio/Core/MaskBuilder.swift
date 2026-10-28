@@ -136,14 +136,37 @@ enum MaskBuilder {
             .cropped(to: extent)
     }
 
-    /// Subtracts `inner` from `outer` (used to make a ring, e.g. lips without
-    /// the teeth, or eyes without the iris).
-    static func subtract(_ inner: CIImage, from outer: CIImage) -> CIImage {
-        let inverted = inner.applyingFilter("CIColorInvert").cropped(to: outer.extent)
-        return outer.applyingFilter("CIMultiplyBlendMode", parameters: [
-            kCIInputBackgroundImageKey: inverted
-        ]).cropped(to: outer.extent)
+    /// Subtracts `hole` from `base` (used to keep features out of the skin
+    /// mask, or to cut the iris out of an eye ring).
+    ///
+    /// A kernel rather than `CIMultiplyBlendMode`, because Core Image blends in
+    /// linear light: inverting a mask that is 98% white there leaves about 20%
+    /// of the base behind, and that residue is exactly what put skin smoothing
+    /// onto the lashes. Both operands are decoded to the values the bitmap holds
+    /// before the arithmetic, the same way the pixel gates below do.
+    static func subtract(_ hole: CIImage, from base: CIImage) -> CIImage {
+        guard let kernel = maskSubtractKernel,
+              let cut = kernel.apply(extent: base.extent, arguments: [base, hole]) else {
+            let inverted = hole.applyingFilter("CIColorInvert").cropped(to: base.extent)
+            return base.applyingFilter("CIMultiplyBlendMode", parameters: [
+                kCIInputBackgroundImageKey: inverted
+            ]).cropped(to: base.extent)
+        }
+        return cut.cropped(to: base.extent)
     }
+
+    private static let maskSubtractKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 maskSubtract(__sample base, __sample hole)
+        {
+            vec3 b = pow(clamp(base.rgb, 0.0, 1.0), vec3(0.4545));
+            vec3 h = pow(clamp(hole.rgb, 0.0, 1.0), vec3(0.4545));
+            float v = b.r * (1.0 - h.r);
+            return vec4(pow(vec3(v), vec3(2.2)), 1.0);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
 
     static func union(_ a: CIImage, _ b: CIImage) -> CIImage {
         a.applyingFilter("CIAdditionCompositing", parameters: [
