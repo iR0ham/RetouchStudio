@@ -407,6 +407,26 @@ enum SelfCheck {
         }
         print("    - masks: teeth=\(masks.teeth != nil ? "yes" : "no") sclera=\(masks.sclera != nil ? "yes" : "no") iris=\(masks.iris != nil ? "yes" : "no") lashes=\(masks.lashes != nil ? "yes" : "no")")
 
+        // Where the skin mask actually sits on a real eye. Smoothing that
+        // reaches the lash line is the failure a user sees as a blurred eye,
+        // and only the real photo has a real eyelid.
+        var shieldClear = false
+        if let skin = masks.skin, let skinImage = processor.renderCGImage(skin, scale: 1) {
+            var worstEye = 0, worstLash = 0
+            for face in faces {
+                for eye in face.eyePolygons {
+                    let box = FaceGeometry.boundingBox(of: eye)
+                    worstEye = max(worstEye,
+                                   (luminance(skinImage, normalizedAt: CGPoint(x: box.midX, y: box.midY)) ?? 255) * 100 / 255)
+                    worstLash = max(worstLash,
+                                    (luminance(skinImage, normalizedAt: CGPoint(x: box.midX,
+                                                                                y: box.maxY + box.height * 0.30)) ?? 255) * 100 / 255)
+                }
+            }
+            shieldClear = worstEye < 10 && worstLash < 25
+            print("    \(shieldClear ? "✓" : "✗") skin coverage on a real eye: inside=\(worstEye)% lash band=\(worstLash)% (expect < 10 / < 25)")
+        }
+
         let directory = URL(fileURLWithPath: outDirectory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -462,7 +482,7 @@ enum SelfCheck {
                 everyFace = false
             }
         }
-        return wrote && everyFace
+        return wrote && everyFace && shieldClear
     }
 
     // MARK: - ۵) خودکار رنگ/نور و رتوش باید کاملاً جدا باشند
