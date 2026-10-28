@@ -356,35 +356,245 @@ extension Adjustments {
     }
 }
 
+/// What a preset is for. The order of the cases is the order the sections
+/// appear in the inspector.
+enum PresetGroup: String, CaseIterable, Identifiable {
+    case everyday, skin, beauty, color, film, makeup
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .everyday: return "Everyday"
+        case .skin: return "Skin"
+        case .beauty: return "Beauty"
+        case .color: return "Color"
+        case .film: return "Film"
+        case .makeup: return "Makeup"
+        }
+    }
+}
+
 struct Preset: Identifiable, Equatable {
     let id: String
     let title: String
+    let group: PresetGroup
     let adjustments: Adjustments
 
+    static func inGroup(_ group: PresetGroup) -> [Preset] { all.filter { $0.group == group } }
+    static func with(id: String) -> Preset? { all.first { $0.id == id } }
+
+    /// The library. Every entry is a starting point a photographer would
+    /// actually reach for, and each one leaves at least one group alone so
+    /// there is something left to adjust afterwards.
+    ///
+    /// Arguments follow the declaration order of `Adjustments`, which the
+    /// memberwise initialiser keeps.
     static let all: [Preset] = [
-        Preset(id: "natural", title: "Natural", adjustments: Adjustments(
+        // MARK: Everyday — small, defensible corrections
+
+        Preset(id: "natural", title: "Natural", group: .everyday, adjustments: Adjustments(
             smooth: 22, blemish: 30, wrinkle: 18, skinToneEvens: 20,
             darkCircles: 16, texturePreserve: 78,
             teethWhiten: 12, eyeBrighten: 10, eyeSharpen: 14,
             exposure: 3, contrast: 5, vibrance: 8, warmth: 4, clarity: 6)),
-        Preset(id: "glamour", title: "Glamour", adjustments: Adjustments(
+        Preset(id: "clean", title: "Clean", group: .everyday, adjustments: Adjustments(
+            smooth: 16, blemish: 46, wrinkle: 12, skinToneEvens: 18,
+            darkCircles: 24, texturePreserve: 86,
+            teethWhiten: 16, eyeBrighten: 8,
+            contrast: 6, blacks: 10, vibrance: 6, clarity: 8)),
+        Preset(id: "fresh", title: "Fresh", group: .everyday, adjustments: Adjustments(
+            smooth: 18, blemish: 24, skinToneEvens: 22, darkCircles: 34,
+            skinBrighten: 14, texturePreserve: 82,
+            teethWhiten: 20, eyeBrighten: 18, eyeSharpen: 16,
+            exposure: 6, whites: 10, vibrance: 12, warmth: 5, clarity: 4)),
+        Preset(id: "minimal", title: "Barely There", group: .everyday, adjustments: Adjustments(
+            blemish: 38, wrinkle: 6, darkCircles: 22, texturePreserve: 100,
+            eyeSharpen: 8, contrast: 2, vibrance: 2)),
+        Preset(id: "softlight", title: "Soft Light", group: .everyday, adjustments: Adjustments(
+            smooth: 26, blemish: 18, skinToneEvens: 14, texturePreserve: 72,
+            eyeBrighten: 8, exposure: 7, contrast: -6, whites: 14,
+            saturation: -4, vibrance: 6, warmth: 6)),
+
+        // MARK: Skin — what the smoothing itself should feel like
+
+        Preset(id: "airbrush", title: "Airbrush", group: .skin, adjustments: Adjustments(
+            smooth: 62, blemish: 70, wrinkle: 52, skinToneEvens: 56,
+            darkCircles: 44, skinBrighten: 18, texturePreserve: 38,
+            teethWhiten: 30, eyeBrighten: 18,
+            exposure: 3, contrast: 8, vibrance: 8, clarity: 6)),
+        Preset(id: "texture", title: "Kept Texture", group: .skin, adjustments: Adjustments(
+            smooth: 6, blemish: 26, wrinkle: 10, skinToneEvens: 10,
+            texturePreserve: 100, eyeSharpen: 20,
+            contrast: 10, blacks: 14, clarity: 22)),
+        Preset(id: "matte", title: "Matte", group: .skin, adjustments: Adjustments(
+            smooth: 44, blemish: 40, skinToneEvens: 34,
+            texturePreserve: 58, contrast: 12, blacks: 24, whites: -10,
+            saturation: -6, vibrance: -4, clarity: 18)),
+        Preset(id: "glow", title: "Dewy Glow", group: .skin, adjustments: Adjustments(
+            smooth: 34, blemish: 30, skinToneEvens: 28, darkCircles: 26,
+            skinBrighten: 34, texturePreserve: 66,
+            teethWhiten: 22, eyeBrighten: 20, eyeSharpen: 12,
+            exposure: 5, whites: 18, vibrance: 10, warmth: 6)),
+        Preset(id: "eventone", title: "Even Tone", group: .skin, adjustments: Adjustments(
+            smooth: 28, blemish: 44, skinToneEvens: 62, darkCircles: 46,
+            skinBrighten: 12, texturePreserve: 70,
+            contrast: 4, vibrance: 6, warmth: 3, clarity: 4)),
+        Preset(id: "bronze", title: "Bronze", group: .skin, adjustments: Adjustments(
+            smooth: 30, blemish: 26, skinToneEvens: 22, texturePreserve: 64,
+            teethWhiten: 14, exposure: 2, contrast: 8, saturation: 6,
+            vibrance: 10, warmth: 24, clarity: 10, vignette: 8)),
+        Preset(id: "porcelain", title: "Porcelain", group: .skin, adjustments: Adjustments(
+            smooth: 54, blemish: 52, wrinkle: 40, skinToneEvens: 48,
+            darkCircles: 38, skinBrighten: 30, texturePreserve: 48,
+            teethWhiten: 26, eyeBrighten: 16,
+            exposure: 8, contrast: 4, whites: 16, saturation: -6,
+            vibrance: 4, warmth: -4)),
+
+        // MARK: Beauty — full portraits, several groups at once
+
+        Preset(id: "glamour", title: "Glamour", group: .beauty, adjustments: Adjustments(
             smooth: 42, blemish: 50, wrinkle: 34, skinToneEvens: 36,
             darkCircles: 30, texturePreserve: 62,
             teethWhiten: 34, eyeBrighten: 22, eyeSharpen: 28,
             eyeSize: 14, lipSize: 12, cheekSize: 8,
             exposure: 6, contrast: 10, vibrance: 14, warmth: 6, clarity: 10, vignette: 10)),
-        Preset(id: "studio", title: "Studio", adjustments: Adjustments(
+        Preset(id: "studio", title: "Studio", group: .beauty, adjustments: Adjustments(
             smooth: 55, blemish: 62, wrinkle: 44, skinToneEvens: 46,
             darkCircles: 38, texturePreserve: 52,
             teethWhiten: 44, eyeBrighten: 30, eyeSharpen: 38,
             eyeSize: 18, lipSize: 10, cheekSize: 14, jawWidth: -16, chinLength: 8,
             faceWidth: -8,
             exposure: 4, contrast: 16, vibrance: 10, warmth: 8, clarity: 16, vignette: 16)),
-        Preset(id: "editorial", title: "Editorial", adjustments: Adjustments(
+        Preset(id: "editorial", title: "Editorial", group: .beauty, adjustments: Adjustments(
             smooth: 12, blemish: 16, wrinkle: 24, skinToneEvens: 14,
             darkCircles: 20, texturePreserve: 92,
             teethWhiten: 6, eyeBrighten: 8, eyeSharpen: 26,
             cheekSize: -8, jawWidth: -20, chinLength: 10, faceWidth: -12,
-            contrast: 20, saturation: -10, vibrance: -4, warmth: -6, clarity: 24, vignette: 16))
+            contrast: 20, blacks: 18, saturation: -10, vibrance: -4,
+            warmth: -6, clarity: 24, vignette: 16)),
+        Preset(id: "beauty", title: "Beauty", group: .beauty, adjustments: Adjustments(
+            smooth: 38, blemish: 44, wrinkle: 26, skinToneEvens: 32,
+            darkCircles: 30, skinBrighten: 16, texturePreserve: 66,
+            teethWhiten: 28, eyeBrighten: 24, eyeSharpen: 24,
+            eyeSize: 10, lipSize: 8,
+            exposure: 4, contrast: 8, whites: 10, vibrance: 10, warmth: 4,
+            clarity: 8, lipTint: 16, lipShadeID: MakeupShade.rose.rawValue)),
+        Preset(id: "bridal", title: "Bridal", group: .beauty, adjustments: Adjustments(
+            smooth: 46, blemish: 48, wrinkle: 32, skinToneEvens: 40,
+            darkCircles: 34, skinBrighten: 24, texturePreserve: 58,
+            teethWhiten: 38, eyeBrighten: 20, eyeSharpen: 18,
+            eyeSize: 8, cheekSize: 6,
+            exposure: 7, contrast: 4, whites: 20, saturation: -4,
+            vibrance: 8, warmth: 3, clarity: 6, vignette: 6,
+            lipTint: 14, lipShadeID: MakeupShade.peach.rawValue,
+            blush: 16, blushShadeID: MakeupShade.peach.rawValue)),
+        Preset(id: "sculpt", title: "Sculpt", group: .beauty, adjustments: Adjustments(
+            smooth: 26, blemish: 30, skinToneEvens: 18, texturePreserve: 76,
+            eyeSize: 8, cheekSize: -10, jawWidth: -18, chinLength: 6,
+            faceWidth: -12, faceLength: 6,
+            contrast: 14, blacks: 16, clarity: 20, vignette: 12)),
+        Preset(id: "male", title: "Masculine", group: .beauty, adjustments: Adjustments(
+            smooth: 14, blemish: 38, wrinkle: 10, skinToneEvens: 12,
+            texturePreserve: 94, eyeBrighten: 8, eyeSharpen: 14,
+            jawWidth: -8, chinLength: 6, faceWidth: -6,
+            contrast: 14, blacks: 18, saturation: -6, warmth: -4, clarity: 18)),
+
+        // MARK: Colour — the whole frame, no skin work
+
+        Preset(id: "warmsun", title: "Warm Sun", group: .color, adjustments: Adjustments(
+            exposure: 4, contrast: 6, whites: 10, vibrance: 12,
+            warmth: 24, clarity: 4)),
+        Preset(id: "cool", title: "Cool Tone", group: .color, adjustments: Adjustments(
+            exposure: 2, contrast: 8, blacks: 10, saturation: -4,
+            warmth: -22, clarity: 6)),
+        Preset(id: "vibrant", title: "Vibrant", group: .color, adjustments: Adjustments(
+            exposure: 2, contrast: 12, blacks: 12, whites: 12,
+            saturation: 8, vibrance: 24, clarity: 8)),
+        Preset(id: "muted", title: "Muted", group: .color, adjustments: Adjustments(
+            contrast: 4, blacks: 12, saturation: -18, vibrance: -8,
+            warmth: -3, clarity: 6)),
+        Preset(id: "pastel", title: "Pastel", group: .color, adjustments: Adjustments(
+            exposure: 9, contrast: -8, whites: 16, saturation: -12,
+            vibrance: 4, warmth: 4)),
+        Preset(id: "punchy", title: "Punchy", group: .color, adjustments: Adjustments(
+            contrast: 26, blacks: 24, whites: 20, saturation: 4,
+            vibrance: 12, clarity: 16)),
+        Preset(id: "fade", title: "Matte Fade", group: .color, adjustments: Adjustments(
+            exposure: 5, contrast: -12, blacks: -34, whites: -14,
+            saturation: -8, vibrance: -4, warmth: 6)),
+        Preset(id: "noir", title: "Noir", group: .color, adjustments: Adjustments(
+            exposure: -4, contrast: 30, blacks: 26, saturation: -100,
+            clarity: 22, vignette: 26)),
+        Preset(id: "monosoft", title: "Soft Mono", group: .color, adjustments: Adjustments(
+            exposure: 5, contrast: 8, blacks: -16, whites: 10,
+            saturation: -100, clarity: 6, grain: 26)),
+
+        // MARK: Film — grade and grain, lightly supported by skin work
+
+        Preset(id: "golden", title: "Golden Hour", group: .film, adjustments: Adjustments(
+            smooth: 18, blemish: 20, skinBrighten: 10, texturePreserve: 80,
+            exposure: 4, contrast: 6, whites: 12, vibrance: 10, warmth: 16,
+            lookID: FilmLook.warmGold.rawValue, lookStrength: 55, grain: 10)),
+        Preset(id: "portra", title: "Portrait Film", group: .film, adjustments: Adjustments(
+            smooth: 22, blemish: 24, skinToneEvens: 16, texturePreserve: 84,
+            exposure: 3, contrast: 4, whites: 8, saturation: -4, warmth: 6,
+            lookID: FilmLook.portraitFilm.rawValue, lookStrength: 62, grain: 18)),
+        Preset(id: "cinema", title: "Cinematic", group: .film, adjustments: Adjustments(
+            smooth: 16, blemish: 18, texturePreserve: 86, eyeSharpen: 12,
+            contrast: 14, blacks: 16, warmth: -8, clarity: 8, vignette: 18,
+            lookID: FilmLook.nightStock.rawValue, lookStrength: 45, grain: 14)),
+        Preset(id: "faded", title: "Faded Print", group: .film, adjustments: Adjustments(
+            smooth: 14, texturePreserve: 88, exposure: 4, contrast: -6,
+            blacks: -28, saturation: -6, warmth: 4,
+            lookID: FilmLook.fadedMatte.rawValue, lookStrength: 65, grain: 22)),
+        Preset(id: "cross", title: "Cross Process", group: .film, adjustments: Adjustments(
+            smooth: 10, texturePreserve: 90, contrast: 18, blacks: 14,
+            saturation: 6, clarity: 10,
+            lookID: FilmLook.crossProcess.rawValue, lookStrength: 45, grain: 12)),
+        Preset(id: "kodachrome", title: "Vintage Slide", group: .film, adjustments: Adjustments(
+            smooth: 12, texturePreserve: 86, exposure: 2, contrast: 16,
+            blacks: 18, saturation: 10, vibrance: 8, warmth: 10, clarity: 10,
+            lookID: FilmLook.warmGold.rawValue, lookStrength: 38, grain: 20)),
+
+        // MARK: Makeup — cosmetics, with the skin work kept minimal
+
+        Preset(id: "rose", title: "Rose", group: .makeup, adjustments: Adjustments(
+            smooth: 20, blemish: 22, skinToneEvens: 16, skinBrighten: 12,
+            texturePreserve: 78, eyeBrighten: 10, eyeSharpen: 12,
+            contrast: 4, vibrance: 6, warmth: 8,
+            lipTint: 48, lipShadeID: MakeupShade.rose.rawValue,
+            blush: 30, blushShadeID: MakeupShade.rose.rawValue)),
+        Preset(id: "coral", title: "Coral", group: .makeup, adjustments: Adjustments(
+            smooth: 18, blemish: 24, skinToneEvens: 18, skinBrighten: 14,
+            texturePreserve: 74, teethWhiten: 22, eyeBrighten: 12,
+            exposure: 3, vibrance: 12, warmth: 10,
+            lipTint: 54, lipShadeID: MakeupShade.coral.rawValue,
+            blush: 34, blushShadeID: MakeupShade.coral.rawValue)),
+        Preset(id: "berry", title: "Berry", group: .makeup, adjustments: Adjustments(
+            smooth: 24, blemish: 28, skinToneEvens: 20, texturePreserve: 74,
+            teethWhiten: 26, eyeBrighten: 12, eyeSharpen: 10,
+            contrast: 8, blacks: 10, saturation: 4,
+            lipTint: 38, lipShadeID: MakeupShade.berry.rawValue,
+            blush: 14, blushShadeID: MakeupShade.berry.rawValue)),
+        Preset(id: "redcarpet", title: "Red Carpet", group: .makeup, adjustments: Adjustments(
+            smooth: 40, blemish: 46, wrinkle: 28, skinToneEvens: 38,
+            darkCircles: 28, texturePreserve: 60,
+            teethWhiten: 42, eyeBrighten: 22, eyeSharpen: 24, eyeSize: 10,
+            contrast: 12, blacks: 14, saturation: 6, vibrance: 8, warmth: 4,
+            clarity: 8, vignette: 12,
+            lipTint: 48, lipShadeID: MakeupShade.berry.rawValue,
+            blush: 12, blushShadeID: MakeupShade.rose.rawValue, browDefine: 18)),
+        Preset(id: "nude", title: "No-Makeup", group: .makeup, adjustments: Adjustments(
+            smooth: 12, blemish: 34, wrinkle: 8, skinToneEvens: 12,
+            darkCircles: 26, texturePreserve: 94,
+            teethWhiten: 16, eyeBrighten: 14, eyeSharpen: 18,
+            exposure: 4, vibrance: 8, warmth: 4,
+            lipTint: 26, lipShadeID: MakeupShade.peach.rawValue,
+            blush: 18, blushShadeID: MakeupShade.peach.rawValue, browDefine: 28)),
+        Preset(id: "brows", title: "Defined", group: .makeup, adjustments: Adjustments(
+            smooth: 18, blemish: 24, skinToneEvens: 14, texturePreserve: 84,
+            eyeBrighten: 14, eyeSharpen: 22, contrast: 8, clarity: 10,
+            lipTint: 8, lipShadeID: MakeupShade.peach.rawValue, browDefine: 42)),
     ]
 }

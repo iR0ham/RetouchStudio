@@ -72,6 +72,8 @@ enum SelfCheck {
         passed = checkLooksAndGrain() && passed
         print("-- makeup: lips, cheeks and brows --")
         passed = checkMakeup() && passed
+        print("-- preset library --")
+        passed = checkPresetLibrary() && passed
         if let facePath {
             print("-- real photo --")
             passed = checkRealFace(path: facePath, outDirectory: outDirectory) && passed
@@ -346,7 +348,7 @@ enum SelfCheck {
         let processor = ImageProcessor.shared
         let source = CIImage(cgImage: base).cropped(to: extent)
         guard let masks = processor.buildMasks(extent: extent, faces: [face], image: source) else { return false }
-        let preset = Preset.all[1].adjustments
+        let preset = Preset.with(id: "glamour")!.adjustments
         let output = processor.process(source, adjustments: preset,
                                        masks: masks, faces: [face])
 
@@ -367,6 +369,163 @@ enum SelfCheck {
         print("  \(saneOutput ? "✓" : "✗") mean luminance: before=\(meanBefore) after=\(meanAfter)")
         print("  \(wroteBefore && wroteAfter ? "✓" : "✗") test files written to \(outDirectory)")
         return saneOutput && wroteBefore && wroteAfter
+    }
+
+    // MARK: - ۴) کتابخانه‌ی پریست
+
+    /// هر پریست باید یک نقطه‌ی شروع واقعی باشد: شناسه و نام یکتا، همه‌ی
+    /// مقادیر داخل بازه‌ی اسلایدر خودشان، شناسه‌های look/shade که واقعاً
+    /// وجود دارند، و اثر دیدنی روی صورت در خط لوله‌ی واقعی.
+    private static func checkPresetLibrary() -> Bool {
+        var ok = true
+
+        let thinGroups = PresetGroup.allCases.filter { Preset.inGroup($0).count < 4 }
+        let wellStocked = Preset.all.count >= 30 && thinGroups.isEmpty
+        print("  \(wellStocked ? "✓" : "✗") \(Preset.all.count) looks in \(PresetGroup.allCases.count) groups")
+        for group in thinGroups {
+            print("    ✗ \(group.title) has only \(Preset.inGroup(group).count) looks")
+        }
+        ok = wellStocked && ok
+
+        for (label, values) in [("id", Preset.all.map(\.id)),
+                                ("name", Preset.all.map(\.title))] {
+            let repeats = Set(values).count != values.count
+            print("  \(repeats ? "✗" : "✓") every \(label) is unique")
+            ok = !repeats && ok
+        }
+
+        var sameNumbers: [String] = []
+        for i in Preset.all.indices {
+            for j in (i + 1)..<Preset.all.count
+            where Preset.all[i].adjustments == Preset.all[j].adjustments {
+                sameNumbers.append("\(Preset.all[i].title) and \(Preset.all[j].title)")
+            }
+        }
+        print("  \(sameNumbers.isEmpty ? "✓" : "✗") no two looks share the same numbers")
+        for duplicate in sameNumbers { print("    ✗ \(duplicate)") }
+        ok = sameNumbers.isEmpty && ok
+
+        // Fields whose slider only runs one way; a negative preset value here
+        // would be silently clamped in the UI and read as a broken look.
+        let oneSided: [(String, KeyPath<Adjustments, Double>)] = [
+            ("smooth", \.smooth), ("blemish", \.blemish), ("wrinkle", \.wrinkle),
+            ("skinToneEvens", \.skinToneEvens), ("darkCircles", \.darkCircles),
+            ("skinBrighten", \.skinBrighten), ("texturePreserve", \.texturePreserve),
+            ("teethWhiten", \.teethWhiten), ("eyeBrighten", \.eyeBrighten),
+            ("eyeSharpen", \.eyeSharpen), ("vignette", \.vignette),
+            ("lookStrength", \.lookStrength), ("grain", \.grain),
+            ("lipTint", \.lipTint), ("blush", \.blush), ("browDefine", \.browDefine),
+        ]
+        let twoSided: [(String, KeyPath<Adjustments, Double>)] = [
+            ("eyeSize", \.eyeSize), ("noseSize", \.noseSize), ("noseTip", \.noseTip),
+            ("lipSize", \.lipSize), ("cheekSize", \.cheekSize), ("jawWidth", \.jawWidth),
+            ("chinLength", \.chinLength), ("faceWidth", \.faceWidth),
+            ("faceLength", \.faceLength), ("exposure", \.exposure),
+            ("contrast", \.contrast), ("blacks", \.blacks), ("whites", \.whites),
+            ("saturation", \.saturation), ("vibrance", \.vibrance),
+            ("warmth", \.warmth), ("clarity", \.clarity),
+        ]
+
+        var offScale: [String] = []
+        for preset in Preset.all {
+            for (name, path) in oneSided where !preset.adjustments[keyPath: path].isFinite
+                                                || preset.adjustments[keyPath: path] < 0
+                                                || preset.adjustments[keyPath: path] > 100 {
+                offScale.append("\(preset.id).\(name)")
+            }
+            for (name, path) in twoSided where !preset.adjustments[keyPath: path].isFinite
+                                                 || abs(preset.adjustments[keyPath: path]) > 100 {
+                offScale.append("\(preset.id).\(name)")
+            }
+            if !preset.adjustments.lookID.isEmpty,
+               FilmLook.named(preset.adjustments.lookID) == .none || preset.adjustments.lookStrength <= 0 {
+                offScale.append("\(preset.id).look")
+            }
+            for shade in [preset.adjustments.lipShadeID, preset.adjustments.blushShadeID]
+            where !shade.isEmpty && MakeupShade(rawValue: shade) == nil {
+                offScale.append("\(preset.id).shade")
+            }
+        }
+        print("  \(offScale.isEmpty ? "✓" : "✗") every value is inside its own slider")
+        for offender in offScale { print("    ✗ \(offender)") }
+        ok = offScale.isEmpty && ok
+
+        ok = checkPresetsThroughPipeline() && ok
+        return ok
+    }
+
+    /// Small synthetic face, every look run through the real engine: a preset
+    /// that leaves the face untouched is a preset the user cannot see working.
+    private static func checkPresetsThroughPipeline() -> Bool {
+        let width = 420, height = 560
+        let extent = CGRect(x: 0, y: 0, width: width, height: height)
+        let faceBox = CGRect(x: 0.28, y: 0.42, width: 0.44, height: 0.42)
+        guard let base = makeSyntheticPortrait(width: width, height: height) else {
+            print("  ✗ could not build the synthetic portrait")
+            return false
+        }
+        let face = FaceGeometry.synthetic(
+            boundingBox: faceBox,
+            faceContour: [CGPoint(x: 0.30, y: 0.44), CGPoint(x: 0.70, y: 0.44),
+                          CGPoint(x: 0.74, y: 0.62), CGPoint(x: 0.70, y: 0.82),
+                          CGPoint(x: 0.30, y: 0.82), CGPoint(x: 0.26, y: 0.62)],
+            leftEye: [CGPoint(x: 0.38, y: 0.63), CGPoint(x: 0.46, y: 0.63),
+                      CGPoint(x: 0.46, y: 0.67), CGPoint(x: 0.38, y: 0.67)],
+            rightEye: [], leftEyebrow: [], rightEyebrow: [],
+            outerLips: [CGPoint(x: 0.44, y: 0.50), CGPoint(x: 0.56, y: 0.50),
+                        CGPoint(x: 0.56, y: 0.535), CGPoint(x: 0.44, y: 0.535)],
+            innerLips: [], nose: [])
+
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: base).cropped(to: extent)
+        // The baseline is the pipeline run with nothing set, not the raw pixels:
+        // every pass through the renderer shifts the frame a little, and that
+        // shift would otherwise hide what each look actually contributes.
+        guard let masks = processor.buildMasks(extent: extent, faces: [face], image: source) else {
+            print("  ✗ could not build masks for the preset sweep")
+            return false
+        }
+        let cleared = processor.process(source, adjustments: .zero, masks: masks, faces: [face])
+        guard let before = processor.renderCGImage(cleared, scale: 1) else {
+            print("  ✗ could not render the neutral baseline")
+            return false
+        }
+
+        var dead: [String] = []
+        var renders: [(String, CGImage)] = []
+        var weakest = ("", Double.greatestFiniteMagnitude)
+        for preset in Preset.all {
+            let output = processor.process(source, adjustments: preset.adjustments,
+                                           masks: masks, faces: [face])
+            guard let rendered = processor.renderCGImage(output, scale: 1) else {
+                print("    ✗ \(preset.title) did not render")
+                dead.append(preset.title)
+                continue
+            }
+            let delta = regionDifference(before, rendered, normalized: faceBox)
+            if delta < 2 { dead.append(preset.title) }
+            if delta < weakest.1 { weakest = (preset.title, delta) }
+            renders.append((preset.title, rendered))
+        }
+
+        print("  \(dead.isEmpty ? "✓" : "✗") all \(Preset.all.count) looks change the face (weakest: \(weakest.0) Δ\(String(format: "%.1f", weakest.1)))")
+        for name in dead { print("    ✗ \(name) does nothing") }
+
+        // Two looks that render the same face are one look wearing two names —
+        // the usual symptom of a copied entry whose numbers were never changed.
+        // Colour, not brightness: cosmetics and grades move hue first.
+        var twins: [String] = []
+        var closest = ("", "", Double.greatestFiniteMagnitude)
+        for i in renders.indices {
+            for j in (i + 1)..<renders.count {
+                let d = colorDifference(renders[i].1, renders[j].1, normalized: faceBox, stride: 6)
+                if d < closest.2 { closest = (renders[i].0, renders[j].0, d) }
+                if d < 0.6 { twins.append("\(renders[i].0) and \(renders[j].0)") }
+            }
+        }
+        print("  \(twins.isEmpty ? "✓" : "✗") every look is its own image (closest pair: \(closest.0)/\(closest.1) Δ\(String(format: "%.1f", closest.2)))")
+        for pair in twins { print("    ✗ \(pair)") }
+        return dead.isEmpty && twins.isEmpty
     }
 
     // MARK: - ۴) عکس واقعی
@@ -447,7 +606,7 @@ enum SelfCheck {
 
         _ = processor.write(source, to: directory.appendingPathComponent("selftest-face-before.png"), format: .png, quality: 1)
 
-        let output = processor.process(source, adjustments: Preset.all[1].adjustments,
+        let output = processor.process(source, adjustments: Preset.with(id: "glamour")!.adjustments,
                                        masks: masks, faces: faces)
         let wrote = processor.write(output, to: directory.appendingPathComponent("selftest-face-after.png"), format: .png, quality: 1)
         print("  \(wrote ? "✓" : "✗") retouched output written: selftest-face-after.png")
@@ -456,7 +615,7 @@ enum SelfCheck {
         // skin pass are measured inside each face box rather than once overall.
         var everyFace = true
         if faces.count > 1 {
-            let retouch = Preset.all[1].adjustments.retouchOnly
+            let retouch = Preset.with(id: "glamour")!.adjustments.retouchOnly
             if let before = processor.context.createCGImage(source, from: previewExtent),
                let after = processor.context.createCGImage(
                     processor.process(source, adjustments: retouch, masks: masks, faces: faces),
@@ -472,7 +631,7 @@ enum SelfCheck {
                         + "skin coverage \(String(format: "%.2f", coverage)) (expect > 0.10), "
                         + "retouch Δ=\(String(format: "%.2f", delta)) (expect > 0.15)")
                 }
-                let reshape = Preset.all[2].adjustments.reshapeOnly
+                let reshape = Preset.with(id: "studio")!.adjustments.reshapeOnly
                 for (index, face) in faces.enumerated() {
                     let controls = FeatureReshaper.controls(for: face, adjustments: reshape).count
                     let ok = controls > 0
@@ -2273,6 +2432,32 @@ enum SelfCheck {
 
     /// Mean absolute difference over all three channels inside a normalized box.
     /// Luminance alone hides a hue shift: rose and berry differ mostly in blue.
+    /// Mean absolute RGB distance over a coarse grid, with both buffers read
+    /// once — the shape a preset sweep needs when it compares hundreds of pairs.
+    private static func colorDifference(_ a: CGImage, _ b: CGImage,
+                                        normalized rect: CGRect, stride: Int) -> Double {
+        guard a.width == b.width, a.height == b.height,
+              let da = a.dataProvider?.data, let pa = CFDataGetBytePtr(da),
+              let db = b.dataProvider?.data, let pb = CFDataGetBytePtr(db) else { return -1 }
+        let bpp = max(1, a.bitsPerPixel / 8), bpr = a.bytesPerRow
+        let bounds = pixelBounds(of: rect, in: a)
+        var total = 0.0, samples = 0.0
+        var y = bounds.y0
+        while y < bounds.y1 {
+            var x = bounds.x0
+            while x < bounds.x1 {
+                let i = y * bpr + x * bpp
+                total += Double(abs(Int(pa[i]) - Int(pb[i]))
+                              + abs(Int(pa[i + 1]) - Int(pb[i + 1]))
+                              + abs(Int(pa[i + 2]) - Int(pb[i + 2]))) / 3
+                samples += 1
+                x += stride
+            }
+            y += stride
+        }
+        return samples > 0 ? total / samples : -1
+    }
+
     private static func meanColorDifference(_ a: CGImage, _ b: CGImage, normalized rect: CGRect) -> Double {
         guard a.width == b.width, a.height == b.height else { return -1 }
         let bounds = pixelBounds(of: rect, in: a)

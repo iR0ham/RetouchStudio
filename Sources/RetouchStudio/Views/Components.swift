@@ -352,6 +352,95 @@ struct PresetChip: View {
     }
 }
 
+/// The small caps heading over a block of related controls, in the same voice
+/// as the "STRENGTH" label on the auto cards.
+struct GroupLabel: View {
+    let text: String
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(Theme.Font.section)
+            .tracking(0.6)
+            .foregroundStyle(Theme.muted)
+    }
+}
+
+/// A preset with its own preview: the photo that is open, rendered through that
+/// preset, so the choice is made by looking rather than by reading a word.
+/// Without a photo it falls back to a plain tile that still carries the name.
+struct PresetTile: View {
+    let title: String
+    var thumb: NSImage? = nil
+    let isActive: Bool
+    var onDelete: (() -> Void)? = nil
+    var deleteHelp: String = "Delete this look"
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            thumbnail
+                .overlay(
+                    LinearGradient(colors: [.clear, Color.black.opacity(0.66)],
+                                   startPoint: .center, endPoint: .bottom)
+                )
+                .overlay(alignment: .bottomLeading) {
+                    Text(title)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(isActive ? Theme.accentBright : Theme.bone)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.bottom, 3)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(isActive ? Theme.accent
+                                               : Theme.bone.opacity(hovering ? 0.32 : 0.10),
+                                      lineWidth: isActive ? 1.6 : 0.8)
+                )
+        }
+        .buttonStyle(PressableButtonStyle(dip: 0.96))
+        .overlay(alignment: .topTrailing) {
+            // Outside the label, so the click reaches the delete and not the tile.
+            if hovering, let onDelete {
+                Button(action: onDelete) {
+                    Icon(name: "xmark.circle", size: 12)
+                        .foregroundStyle(Theme.bone)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Color.black.opacity(0.55)))
+                }
+                .buttonStyle(.plain)
+                .help(deleteHelp)
+                .padding(3)
+            }
+        }
+        .onHover { hovering = $0 }
+        .animation(Motion.snappy, value: hovering)
+        .animation(Motion.snappy, value: isActive)
+        .help(title)
+    }
+
+    /// The height is fixed here so the scrim and caption measure the tile: a
+    /// `scaledToFill` image reports the photo's own size, which would put the
+    /// caption far below the clipped band.
+    private var thumbnail: some View {
+        Group {
+            if let thumb {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Rectangle().fill(Theme.inset)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 58)
+        .clipped()
+    }
+}
+
 /// A cosmetic shade: the colour itself carries the meaning, so it gets a swatch
 /// rather than a word. Same height and corner as PresetChip so the two read as
 /// one control family.

@@ -26,6 +26,12 @@ struct L10n {
     // Sections
     var auto: String { "Auto" }
     var presets: String { "Presets" }
+    var myLooks: String { "My Looks" }
+    var lookNamePrompt: String { "Name this look" }
+    var saveLook: String { "Save" }
+    var presetSaved: String { "Saved look" }
+    var deleteLookHelp: String { "Delete this look" }
+    var noLooksYet: String { "Nothing saved yet. Set the sliders, then name the look here." }
     var faceDetection: String { "Face Detection" }
     var skin: String { "Skin" }
     var reshape: String { "Reshape" }
@@ -229,15 +235,4 @@ struct L10n {
     var zoomInMenu: String { "Zoom In" }
     var zoomOutMenu: String { "Zoom Out" }
     var fitMenu: String { "Fit to Window" }
-
-    // Preset titles
-    func presetTitle(_ id: String) -> String {
-        switch id {
-        case "natural": return "Natural"
-        case "glamour": return "Glamour"
-        case "studio": return "Studio"
-        case "editorial": return "Editorial"
-        default: return id
-        }
-    }
 }

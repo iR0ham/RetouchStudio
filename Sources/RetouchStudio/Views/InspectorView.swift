@@ -9,6 +9,8 @@ struct InspectorView: View {
 
     /// Rows the user has open. Seeded with the tool the app starts on.
     @State private var open: Set<Panel> = [.skin]
+    /// The name being typed for a saved look.
+    @State private var lookName = ""
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -73,19 +75,82 @@ struct InspectorView: View {
 
     // MARK: - Rows
 
+    private var presetColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
+    }
+
     private var presetsContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2),
-                      spacing: 6) {
-                ForEach(Preset.all) { preset in
-                    PresetChip(title: model.s.presetTitle(preset.id),
-                               isActive: model.isActive(preset)) {
-                        model.apply(preset)
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                GroupLabel(text: model.s.myLooks)
+                HStack(spacing: 6) {
+                    TextField(model.s.lookNamePrompt, text: $lookName)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Theme.inset)
+                        )
+                        .onSubmit(saveLook)
+                    Button(action: saveLook) {
+                        Text(model.s.saveLook)
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 10)
+                            .frame(height: 26)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Theme.accentSoft)
+                            )
+                            .foregroundStyle(Theme.accentInk)
+                    }
+                    .buttonStyle(PressableButtonStyle(dip: 0.95))
+                    .disabled(lookName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+
+                if model.userPresets.isEmpty {
+                    Text(model.s.noLooksYet)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    LazyVGrid(columns: presetColumns, spacing: 6) {
+                        ForEach(model.userPresets) { look in
+                            PresetTile(title: look.name,
+                                       thumb: model.presetThumbs[look.id],
+                                       isActive: model.isActive(look),
+                                       onDelete: { model.removeUserPreset(look) },
+                                       deleteHelp: model.s.deleteLookHelp) {
+                                model.apply(look)
+                            }
+                        }
                     }
                 }
             }
+
+            ForEach(PresetGroup.allCases) { group in
+                VStack(alignment: .leading, spacing: 8) {
+                    GroupLabel(text: group.title)
+                    LazyVGrid(columns: presetColumns, spacing: 6) {
+                        ForEach(Preset.inGroup(group)) { preset in
+                            PresetTile(title: preset.title,
+                                       thumb: model.presetThumbs[preset.id],
+                                       isActive: model.isActive(preset)) {
+                                model.apply(preset)
+                            }
+                        }
+                    }
+                }
+            }
+
             SectionNote(text: model.s.doubleClickHint)
         }
+    }
+
+    private func saveLook() {
+        model.saveCurrentAsPreset(named: lookName)
+        lookName = ""
     }
 
     private var skinContent: some View {

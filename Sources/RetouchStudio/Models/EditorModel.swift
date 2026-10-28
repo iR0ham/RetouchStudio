@@ -39,6 +39,10 @@ final class EditorModel: ObservableObject {
     @Published private(set) var faceCount = 0
     /// Where this edit was last saved as a project, if anywhere.
     @Published private(set) var projectURL: URL?
+    /// Looks the owner saved from their own sliders, in the order they made them.
+    @Published private(set) var userPresets: [UserPreset] = UserPresetStore.load()
+    /// One small render per preset, made from the photo that is open.
+    @Published private(set) var presetThumbs: [String: NSImage] = [:]
     /// Crop relative to the original photo, normalized with a top-left origin.
     /// `nil` means the whole frame.
     @Published private(set) var appliedCrop: CGRect?
@@ -312,6 +316,7 @@ final class EditorModel: ObservableObject {
     private var sourceMetadata: [CFString: Any] = [:]
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    private var thumbTask: Task<Void, Never>?
     private var batchTask: Task<Void, Never>?
     private var batchGeneration = 0
     private var generation = 0
@@ -437,6 +442,7 @@ final class EditorModel: ObservableObject {
         imageURL = result.url
         cropDraft = CropGeometry.full
         hasImage = true
+        buildPresetThumbs()
     }
 
     private func apply(_ result: LoadResult,
@@ -770,6 +776,11 @@ final class EditorModel: ObservableObject {
         adjustments = preset.adjustments
     }
 
+    func apply(_ preset: UserPreset) {
+        commitAdjustments()
+        adjustments = preset.adjustments
+    }
+
     func binding(for keyPath: WritableKeyPath<Adjustments, Double>) -> Binding<Double> {
         Binding(get: { self.adjustments[keyPath: keyPath] },
                 set: { self.adjustments[keyPath: keyPath] = $0 })
@@ -777,6 +788,101 @@ final class EditorModel: ObservableObject {
 
     func isActive(_ preset: Preset) -> Bool {
         adjustments == preset.adjustments
+    }
+
+    func isActive(_ preset: UserPreset) -> Bool {
+        adjustments == preset.adjustments
+    }
+
+    // MARK: - Saved looks
+
+    /// Saves the current sliders as a named look. Re-using a name replaces the
+    /// old one, which is what "save over it" means to everyone.
+    func saveCurrentAsPreset(named raw: String) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        userPresets.removeAll { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }
+        userPresets.append(UserPreset(name: name, adjustments: adjustments))
+        UserPresetStore.save(userPresets)
+        status = "\(s.presetSaved): \(name)"
+        buildPresetThumbs()
+    }
+
+    func removeUserPreset(_ preset: UserPreset) {
+        userPresets.removeAll { $0.id == preset.id }
+        UserPresetStore.save(userPresets)
+        presetThumbs.removeValue(forKey: preset.id)
+    }
+
+    // MARK: - Preset thumbnails
+
+    /// Renders one small tile per preset from the photo that is really open, so
+    /// the choice shows the effect instead of a word. Rebuilt whenever the
+    /// photo or the saved looks change; the tiles are cheap because they run on
+    /// a 320-point copy of the preview with its own masks.
+    func buildPresetThumbs() {
+        thumbTask?.cancel()
+        guard let source = sourcePreview, let faces = facesIfLoaded else {
+            presetThumbs = [:]
+            return
+        }
+        let colorSpace = sourceColorSpace
+        let processor = self.processor
+        let entries: [(id: String, adjustments: Adjustments)] =
+            Preset.all.map { ($0.id, $0.adjustments) }
+            + userPresets.map { ($0.id, $0.adjustments) }
+
+        thumbTask = Task { [weak self] in
+            let rendered = await Task.detached(priority: .utility) { () -> [String: NSImage] in
+                var out: [String: NSImage] = [:]
+                let long = max(source.extent.width, source.extent.height)
+                guard long > 0 else { return out }
+                let scale = min(1, 320 / long)
+                let small = scale >= 1
+                    ? source
+                    : source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                        .cropped(to: CGRect(x: 0, y: 0,
+                                            width: (source.extent.width * scale).rounded(),
+                                            height: (source.extent.height * scale).rounded()))
+                let masks = processor.buildMasks(extent: small.extent, faces: faces, image: small)
+
+                // A tile is a landscape slot, so each thumbnail is cropped
+                // around the primary face with the tile's own proportions; the
+                // uncropped frame would show whatever sits mid-photo, and a
+                // square one would cut away the hair and backdrop that carry a
+                // film grade.
+                let pixels = small.extent
+                let box = faces.first?.boundingBox
+                    ?? CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+                let faceHeight = min(1.7 * box.height * pixels.height, pixels.height)
+                let cropW = min(1.55 * faceHeight, pixels.width)
+                let centre = CGPoint(x: box.midX * pixels.width,
+                                     y: (1 - box.midY) * pixels.height)
+                let crop = CGRect(
+                    x: min(max(0, centre.x - cropW / 2), max(0, pixels.width - cropW)),
+                    y: min(max(0, centre.y - faceHeight / 2), max(0, pixels.height - faceHeight)),
+                    width: cropW, height: faceHeight)
+
+                for entry in entries {
+                    if Task.isCancelled { return [:] }
+                    let image = processor.process(small, adjustments: entry.adjustments,
+                                                  masks: masks, faces: faces)
+                    guard let rendered = processor.renderCGImage(image, scale: 1, colorSpace: colorSpace)
+                    else { continue }
+                    let cg = rendered.cropping(to: crop) ?? rendered
+                    out[entry.id] = NSImage(cgImage: cg,
+                                            size: NSSize(width: cg.width, height: cg.height))
+                }
+                return out
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.presetThumbs = rendered
+        }
+    }
+
+    /// The faces of the loaded photo, or nil when there is nothing loaded.
+    private var facesIfLoaded: [FaceGeometry]? {
+        hasImage ? faces : nil
     }
 
     // MARK: - Auto
