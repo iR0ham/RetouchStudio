@@ -1,15 +1,17 @@
 import Foundation
 
-/// Every retouch setting, in three clearly separated groups so the two Auto
-/// actions stay independent and each effect can be individually reset:
+/// Every retouch setting, in clearly separated groups so the two Auto actions
+/// stay independent and each effect can be individually reset:
 ///
 ///   * skin (retouch) — texture and tone of the face
 ///   * reshape        — geometry of facial features
+///   * makeup         — colour cosmetics on lips, cheeks and brows
 ///   * color/light    — global tonality
+///   * look           — film grade and grain
 ///
-/// All values are -100...100 with 0 meaning "no change", so a fresh
+/// All amounts are -100...100 or 0...100 with 0 meaning "no change", so a fresh
 /// `Adjustments()` is a genuine no-op.
-struct Adjustments: Equatable {
+struct Adjustments: Equatable, Codable {
 
     // MARK: - Skin (retouch)
     var smooth: Double = 0            // overall smoothing amount
@@ -42,6 +44,41 @@ struct Adjustments: Equatable {
     var warmth: Double = 0
     var clarity: Double = 0
     var vignette: Double = 0
+
+    // MARK: - Look (film grade and grain)
+    //
+    // `lookID` is the raw value of a `FilmLook`; an empty string means no look
+    // is applied, so a fresh `Adjustments()` is still a genuine no-op.
+    var lookID: String = ""
+    var lookStrength: Double = 0    // 0...100, how far the grade is blended in
+    var grain: Double = 0           // 0...100
+
+    /// The look as an enum; an unknown identifier reads as no look.
+    var look: FilmLook {
+        get { FilmLook.named(lookID) }
+        set { lookID = newValue.rawValue }
+    }
+
+    // MARK: - Makeup (colour cosmetics)
+    //
+    // The shade identifiers default per region: an empty or unknown value reads
+    // as the shade that region starts with, so a project saved before makeup
+    // existed still shows a sensible swatch.
+    var lipTint: Double = 0
+    var lipShadeID: String = ""
+    var blush: Double = 0
+    var blushShadeID: String = ""
+    var browDefine: Double = 0
+
+    var lipShade: MakeupShade {
+        get { MakeupShade(rawValue: lipShadeID) ?? .rose }
+        set { lipShadeID = newValue.rawValue }
+    }
+
+    var blushShade: MakeupShade {
+        get { MakeupShade(rawValue: blushShadeID) ?? .peach }
+        set { blushShadeID = newValue.rawValue }
+    }
 
     static let zero = Adjustments()
 
@@ -94,11 +131,55 @@ struct Adjustments: Equatable {
     }
 
     /// Does any face-dependent tool have an effect?
-    var usesFaceTools: Bool { retouchOnly != .zero || reshapeOnly != .zero }
+    var usesFaceTools: Bool { retouchOnly != .zero || reshapeOnly != .zero || makeupOnly != .zero }
 
     var hasReshape: Bool { reshapeOnly != .zero }
 
+    /// The look half: grade and grain, with everything else zeroed.
+    var lookOnly: Adjustments {
+        var a = Adjustments()
+        a.lookID = lookID
+        a.lookStrength = lookStrength
+        a.grain = grain
+        return a
+    }
+
+    var hasLook: Bool { lookOnly != .zero }
+
+    /// The makeup half: lips, cheeks, brows.
+    var makeupOnly: Adjustments {
+        var a = Adjustments()
+        a.lipTint = lipTint
+        a.lipShadeID = lipShadeID
+        a.blush = blush
+        a.blushShadeID = blushShadeID
+        a.browDefine = browDefine
+        return a
+    }
+
+    var hasMakeup: Bool { makeupOnly != .zero }
+
     // MARK: - Composing groups (keeps the Auto actions independent)
+
+    /// Copy with ONLY the makeup fields taken from `patch`.
+    func applyingMakeup(_ patch: Adjustments) -> Adjustments {
+        var result = self
+        result.lipTint = patch.lipTint
+        result.lipShadeID = patch.lipShadeID
+        result.blush = patch.blush
+        result.blushShadeID = patch.blushShadeID
+        result.browDefine = patch.browDefine
+        return result
+    }
+
+    /// Copy with ONLY the look fields taken from `patch`.
+    func applyingLook(_ patch: Adjustments) -> Adjustments {
+        var result = self
+        result.lookID = patch.lookID
+        result.lookStrength = patch.lookStrength
+        result.grain = patch.grain
+        return result
+    }
 
     /// Copy with ONLY the color/light fields taken from `patch`.
     func applyingColorLight(_ patch: Adjustments) -> Adjustments {
@@ -166,8 +247,71 @@ struct Adjustments: Equatable {
 /// The three independent tool groups. Used for per-group reset and to keep the
 /// two Auto actions honest about what they touch.
 enum AdjustmentGroup: String, CaseIterable, Identifiable {
-    case skin, reshape, colorLight
+    case skin, reshape, makeup, colorLight, look
     var id: String { rawValue }
+}
+
+// MARK: - Coding
+//
+// A project saved by an older build simply lacks the keys added since. Every
+// field defaults to "no change", so a missing key reads as that default instead
+// of failing the whole file. Living in an extension keeps the memberwise
+// initialiser that the presets below are written with.
+extension Adjustments {
+
+    enum CodingKeys: String, CodingKey {
+        case smooth, blemish, wrinkle, skinToneEvens, darkCircles, skinBrighten
+        case texturePreserve, teethWhiten, eyeBrighten, eyeSharpen
+        case eyeSize, noseSize, noseTip, lipSize, cheekSize, jawWidth, chinLength
+        case faceWidth, faceLength
+        case exposure, contrast, saturation, vibrance, warmth, clarity, vignette
+        case lookID, lookStrength, grain
+        case lipTint, lipShadeID, blush, blushShadeID, browDefine
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func amount(_ key: CodingKeys) -> Double {
+            (try? c.decodeIfPresent(Double.self, forKey: key)) ?? 0
+        }
+        func text(_ key: CodingKeys) -> String {
+            (try? c.decodeIfPresent(String.self, forKey: key)) ?? ""
+        }
+        smooth = amount(.smooth)
+        blemish = amount(.blemish)
+        wrinkle = amount(.wrinkle)
+        skinToneEvens = amount(.skinToneEvens)
+        darkCircles = amount(.darkCircles)
+        skinBrighten = amount(.skinBrighten)
+        texturePreserve = amount(.texturePreserve)
+        teethWhiten = amount(.teethWhiten)
+        eyeBrighten = amount(.eyeBrighten)
+        eyeSharpen = amount(.eyeSharpen)
+        eyeSize = amount(.eyeSize)
+        noseSize = amount(.noseSize)
+        noseTip = amount(.noseTip)
+        lipSize = amount(.lipSize)
+        cheekSize = amount(.cheekSize)
+        jawWidth = amount(.jawWidth)
+        chinLength = amount(.chinLength)
+        faceWidth = amount(.faceWidth)
+        faceLength = amount(.faceLength)
+        exposure = amount(.exposure)
+        contrast = amount(.contrast)
+        saturation = amount(.saturation)
+        vibrance = amount(.vibrance)
+        warmth = amount(.warmth)
+        clarity = amount(.clarity)
+        vignette = amount(.vignette)
+        lookID = text(.lookID)
+        lookStrength = amount(.lookStrength)
+        grain = amount(.grain)
+        lipTint = amount(.lipTint)
+        lipShadeID = text(.lipShadeID)
+        blush = amount(.blush)
+        blushShadeID = text(.blushShadeID)
+        browDefine = amount(.browDefine)
+    }
 }
 
 struct Preset: Identifiable, Equatable {

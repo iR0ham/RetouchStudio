@@ -7,6 +7,7 @@ struct L10n {
 
     // App / general
     var appName: String { "Retouch Studio" }
+    var edited: String { "Edited" }
     var noImageOpen: String { "No image open" }
     var noImageSelected: String { "No image selected" }
 
@@ -86,6 +87,9 @@ struct L10n {
         "Shapes facial features only."
     }
     var resetGroupHelp: String { "Reset this section" }
+    /// Makeup is one group spread over three headings, so its glyph spells out
+    /// what it actually clears.
+    var resetMakeupHelp: String { "Reset lips, cheeks and brows" }
     var undoHelp: String { "Undo (⌘Z)" }
     var redoHelp: String { "Redo (⇧⌘Z)" }
     var undoMenu: String { "Undo" }
@@ -130,9 +134,49 @@ struct L10n {
     // Unsaved changes
     var unsavedTitle: String { "Discard unsaved adjustments?" }
     var unsavedMessage: String {
-        "This photo has adjustments that haven't been exported. If you continue, they will be lost."
+        "This photo has edits that haven't been saved to a project or exported. If you continue, they will be lost."
     }
     var discardChanges: String { "Discard Changes" }
+
+    // Projects
+    var saveProjectMenu: String { "Save Project" }
+    var saveProjectAsMenu: String { "Save Project As…" }
+    var openProjectMenu: String { "Open Project…" }
+    var chooseProjectLocation: String { "Choose where to save the project" }
+    var chooseProject: String { "Choose a Retouch Studio project" }
+    func projectSaved(_ name: String) -> String { "Saved project \(name)" }
+    var projectSaveFailed: String { "Could not save the project." }
+    var projectOpened: String { "Project restored." }
+    var projectOpenFailed: String { "Could not open that project." }
+    var projectPhotoMissing: String {
+        "The photo this project refers to is no longer at that path."
+    }
+
+    // Batch
+    var batchExportMenu: String { "Batch Export…" }
+    var batchChoosePhotos: String { "Choose photos to export" }
+    var batchChooseFolder: String { "Choose a folder for the exported photos" }
+    var batchStarting: String { "Starting batch export…" }
+    func batchProgress(_ index: Int, _ total: Int) -> String {
+        "Exporting \(index) of \(total)…"
+    }
+    func batchFinished(_ saved: Int, _ total: Int) -> String {
+        saved == total
+            ? "Batch export finished: \(saved) photos saved."
+            : "Batch export finished: \(saved) of \(total) photos saved."
+    }
+
+    // Crop
+    var applyingCrop: String { "Applying crop…" }
+    var cropApplied: String { "Crop applied." }
+    var cropReset: String { "Crop reset to the original framing." }
+
+    // Healing brush
+    var healCleared: String { "Healing stamps cleared." }
+    func healStampAdded(_ count: Int) -> String {
+        count == 1 ? "Healing stamp added — ⌘Z removes it." : "Healing stamps: \(count)."
+    }
+    var healStampRemoved: String { "Healing stamp removed." }
 
     // Drop zone
     var dropTitle: String { "Drop a portrait here" }

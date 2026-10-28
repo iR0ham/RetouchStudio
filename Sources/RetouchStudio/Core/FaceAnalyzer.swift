@@ -133,6 +133,24 @@ struct FaceGeometry {
         }
     }
 
+    /// Where blush goes. The cheek rects above are sized for skin work and sit
+    /// low; a flush belongs on the top of the cheekbone, toward the temple, so
+    /// it is lifted and tightened. Coordinates are bottom-left origin, so a
+    /// larger y means higher on the face.
+    var leftBlushRect: CGRect { blushRect(isLeft: true) }
+    var rightBlushRect: CGRect { blushRect(isLeft: false) }
+
+    private func blushRect(isLeft: Bool) -> CGRect {
+        let cheek = isLeft ? leftCheekRect : rightCheekRect
+        let width = cheek.width * 0.90
+        let height = cheek.height * 0.80
+        // Keeping the outer edge and shortening the inner one pulls the colour
+        // away from the nose, which is where a blush band must not start.
+        let x = isLeft ? cheek.minX : cheek.maxX - width
+        let y = cheek.midY - height * 0.30
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
     /// Jawline: the lower quarter of the face contour, left and right of the chin.
     var jawRects: (left: CGRect, right: CGRect) {
         let box = boundingBox

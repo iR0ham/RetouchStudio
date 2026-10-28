@@ -8,8 +8,10 @@ struct InspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            presetStrip
-            Hairline()
+            if model.toolMode.showsPresets {
+                presetStrip
+                Hairline()
+            }
             ScrollView(.vertical, showsIndicators: false) {
                 content
                     .padding(.horizontal, Theme.Metrics.headerPadding)
@@ -103,9 +105,198 @@ struct InspectorView: View {
     private var content: some View {
         switch model.toolMode {
         case .skin: skinContent
+        case .heal: healContent
         case .reshape: reshapeContent
         case .detail: detailContent
+        case .makeup: makeupContent
         case .color: colorContent
+        case .look: lookContent
+        case .crop: cropContent
+        }
+    }
+
+    // MARK: - Looks
+
+    private var lookContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 13) {
+                SectionHeader(title: "Grade",
+                              reset: { model.resetGroup(.look) },
+                              resetHelp: model.s.resetGroupHelp)
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                          spacing: 6) {
+                    ForEach(FilmLook.allCases) { look in
+                        PresetChip(title: look.title,
+                                   isActive: model.adjustments.look == look) {
+                            model.setLook(look)
+                        }
+                    }
+                }
+
+                ParameterRow(title: "Strength",
+                             value: model.binding(for: \.lookStrength),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.lookStrength) })
+            }
+
+            VStack(alignment: .leading, spacing: 13) {
+                SectionHeader(title: "Grain")
+
+                ParameterRow(title: "Amount",
+                             value: model.binding(for: \.grain),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.grain) })
+            }
+
+            SectionNote(text: "A grade is applied to the whole photo after Color & Light, so it reshapes the balance you already set. Grain keeps the same apparent size in the preview and in the export.")
+        }
+    }
+
+    // MARK: - Makeup
+
+    private var makeupContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 13) {
+                SectionHeader(title: "Lips",
+                              reset: { model.resetGroup(.makeup) },
+                              resetHelp: model.s.resetMakeupHelp)
+
+                shadeGrid(model.adjustments.lipShade, model.setLipShade)
+
+                ParameterRow(title: "Color",
+                             value: model.binding(for: \.lipTint),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.lipTint) })
+            }
+
+            VStack(alignment: .leading, spacing: 13) {
+                SectionHeader(title: "Cheeks")
+
+                shadeGrid(model.adjustments.blushShade, model.setBlushShade)
+
+                ParameterRow(title: "Flush",
+                             value: model.binding(for: \.blush),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.blush) })
+            }
+
+            VStack(alignment: .leading, spacing: 13) {
+                SectionHeader(title: "Brows")
+
+                ParameterRow(title: "Define",
+                             value: model.binding(for: \.browDefine),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.browDefine) })
+            }
+
+            SectionNote(text: model.faceCount > 0
+                ? "Cosmetics keep the shading underneath them, so lips, cheeks and brows stay three-dimensional. Nothing outside the detected features changes."
+                : "No face has been detected, so there is nothing for makeup to color.")
+        }
+    }
+
+    private func shadeGrid(_ selected: MakeupShade,
+                           _ pick: @escaping (MakeupShade) -> Void) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4),
+                  spacing: 6) {
+            ForEach(MakeupShade.allCases) { shade in
+                ShadeChip(shade: shade, isActive: selected == shade) {
+                    pick(shade)
+                }
+            }
+        }
+    }
+
+    // MARK: - Healing brush
+
+    private var healContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 9) {
+                SectionHeader(title: "Brush")
+
+                HStack(spacing: 10) {
+                    BipolarSlider(value: $model.healBrushPercent, range: 0.4...6, step: 0.2)
+                    Text("\(model.healBrushPixels) px")
+                        .font(Theme.Font.value)
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.text)
+                        .frame(minWidth: 52, alignment: .trailing)
+                }
+
+                cropRow("Stamps", value: "\(model.healSpots.count)")
+            }
+
+            SecondaryButton(title: "Clear Stamps",
+                            icon: "xmark.circle",
+                            enabled: model.canClearHealSpots) {
+                model.clearHealSpots()
+            }
+
+            SectionNote(text: "Click a blemish to heal it. Click a stamp to take it back, or press ⌘Z. Healing borrows texture from the surrounding skin, so the spot goes without leaving a flat patch.")
+        }
+    }
+
+    // MARK: - Crop
+
+    private var cropContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 9) {
+                SectionHeader(title: "Aspect")
+
+                HStack(spacing: 6) {
+                    ForEach(CropAspect.allCases) { aspect in
+                        PresetChip(title: aspect.title,
+                                   isActive: model.cropAspect == aspect) {
+                            model.setCropAspect(aspect)
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 9) {
+                SectionHeader(title: "Frame")
+                cropRow("Crop size", value: "\(Int(model.cropDraftPixelSize.width)) × \(Int(model.cropDraftPixelSize.height)) px")
+                cropRow("Working size", value: "\(Int(model.workingPixelSize.width)) × \(Int(model.workingPixelSize.height)) px")
+                if model.appliedCrop != nil {
+                    HStack(spacing: 4) {
+                        Image(systemName: "crop")
+                            .font(.system(size: 9, weight: .bold))
+                        Text("CROPPED")
+                            .font(.system(size: 9, weight: .semibold))
+                            .tracking(0.5)
+                    }
+                    .foregroundStyle(Theme.accentBright)
+                }
+            }
+
+            VStack(spacing: 8) {
+                AccentButton(title: "Apply Crop",
+                             icon: "crop",
+                             enabled: model.canApplyCrop) {
+                    model.applyCrop()
+                }
+                SecondaryButton(title: "Reset Crop",
+                                icon: "arrow.counterclockwise",
+                                enabled: model.canResetCrop) {
+                    model.resetCrop()
+                }
+            }
+
+            SectionNote(text: "Drag inside the frame to move it, or a corner to resize. The original file is never changed.")
+        }
+    }
+
+    private func cropRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(Theme.Font.label)
+                .foregroundStyle(Theme.muted)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(Theme.Font.value)
+                .monospacedDigit()
+                .foregroundStyle(Theme.text)
         }
     }
 

@@ -113,30 +113,6 @@ enum SkinEngine {
         guard amount > 0.001 else { return image }
         let extent = image.extent
 
-        /// Median with an effective kernel of about `radius` pixels.
-        func median(_ source: CIImage, effectiveRadius radius: CGFloat) -> CIImage {
-            let factor = max(1.0, min(8.0, radius))
-            guard factor > 1.2 else {
-                return source.clampedToExtent()
-                    .applyingFilter("CIMedianFilter")
-                    .cropped(to: extent)
-            }
-            let down = source.clampedToExtent()
-                .applyingFilter("CILanczosScaleTransform", parameters: [
-                    kCIInputScaleKey: 1 / factor,
-                    kCIInputAspectRatioKey: 1.0
-                ])
-            let filtered = down.clampedToExtent()
-                .applyingFilter("CIMedianFilter")
-                .cropped(to: down.extent)
-            return filtered
-                .applyingFilter("CILanczosScaleTransform", parameters: [
-                    kCIInputScaleKey: factor,
-                    kCIInputAspectRatioKey: 1.0
-                ])
-                .cropped(to: extent)
-        }
-
         // The median is used to LOCATE blemishes and to supply their
         // replacement colour — it is never blended in over clean skin.
         //
@@ -148,7 +124,7 @@ enum SkinEngine {
         //   1. the median supplies a clean estimate of the local skin colour;
         //   2. the deviation between the pixel and that estimate detects spots;
         //   3. only pixels above a measured threshold are replaced.
-        let cleaned = median(image, effectiveRadius: max(1.6, spotRadius * 1.15))
+        let cleaned = localMedian(image, effectiveRadius: max(1.6, spotRadius * 1.15), extent: extent)
 
         // A flat median patch reads as a smudge at 100%. Real healing borrows
         // TEXTURE from nearby skin while taking COLOUR from the local median:
@@ -157,7 +133,7 @@ enum SkinEngine {
         let donor = image.clampedToExtent()
             .transformed(by: CGAffineTransform(translationX: spotRadius * 2.6, y: 0))
             .cropped(to: extent)
-        let donorClean = median(donor, effectiveRadius: max(1.6, spotRadius * 1.15))
+        let donorClean = localMedian(donor, effectiveRadius: max(1.6, spotRadius * 1.15), extent: extent)
 
         var replacement = cleaned
         if let kernel = healKernel,
@@ -221,6 +197,68 @@ enum SkinEngine {
         let gated = MaskBuilder.intersect(gate, mask)
 
         return blend(replacement, over: image, mask: gated, strength: amount)
+    }
+
+    /// Manual spot healing: the same repair as `removeBlemishes` — local median
+    /// colour with neighbouring texture transplanted on top — but without the
+    /// deviation gate. The user pointed at these pixels, so everything under the
+    /// stamp is replaced, which also means a stamp works anywhere in the frame,
+    /// not only where the face masks found skin.
+    ///
+    /// `radius` is in pixels at the resolution being processed, so the preview
+    /// and the export repair the same-sized blemish.
+    static func healSpots(_ image: CIImage, mask: CIImage, radius: CGFloat) -> CIImage {
+        let extent = image.extent
+        guard radius > 0.5 else { return image }
+
+        let cleaned = localMedian(image, effectiveRadius: max(1.6, radius * 1.15), extent: extent)
+
+        // Offset far enough that the blemish itself cannot end up in the donor.
+        let donor = image.clampedToExtent()
+            .transformed(by: CGAffineTransform(translationX: radius * 2.6, y: 0))
+            .cropped(to: extent)
+        let donorClean = localMedian(donor, effectiveRadius: max(1.6, radius * 1.15), extent: extent)
+
+        var replacement = cleaned
+        if let kernel = healKernel,
+           let healed = kernel.apply(extent: extent, arguments: [cleaned, donor, donorClean, 0.9]) {
+            replacement = healed.cropped(to: extent)
+        }
+
+        // No dilation here: the stamp is meant to cover the whole blemish, and a
+        // blurred rim keeps the edge of the patch from reading as a disc.
+        let soft = mask.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(0.8, radius * 0.4)])
+            .cropped(to: extent)
+
+        return blend(replacement, over: image, mask: soft, strength: 1)
+    }
+
+    /// Median with an effective kernel of about `radius` pixels. `CIMedianFilter`
+    /// is a fixed 3x3, so the image is downscaled, medianed and scaled back up.
+    private static func localMedian(_ source: CIImage,
+                                    effectiveRadius radius: CGFloat,
+                                    extent: CGRect) -> CIImage {
+        let factor = max(1.0, min(8.0, radius))
+        guard factor > 1.2 else {
+            return source.clampedToExtent()
+                .applyingFilter("CIMedianFilter")
+                .cropped(to: extent)
+        }
+        let down = source.clampedToExtent()
+            .applyingFilter("CILanczosScaleTransform", parameters: [
+                kCIInputScaleKey: 1 / factor,
+                kCIInputAspectRatioKey: 1.0
+            ])
+        let filtered = down.clampedToExtent()
+            .applyingFilter("CIMedianFilter")
+            .cropped(to: down.extent)
+        return filtered
+            .applyingFilter("CILanczosScaleTransform", parameters: [
+                kCIInputScaleKey: factor,
+                kCIInputAspectRatioKey: 1.0
+            ])
+            .cropped(to: extent)
     }
 
     /// Adds the donor's high-frequency band onto the clean colour. Both

@@ -52,10 +52,19 @@ struct MaskSet {
     var eyeDetail: CIImage?     // iris + lashes, the target for sharpening
     var lips: CIImage?          // outer lip shape
     var teeth: CIImage?         // enamel pixels inside the mouth
+    var brows: CIImage?         // brow hair band, widened for cosmetics
+    var cheeks: CIImage?        // cheekbones, where blush belongs
     var underEyes: CIImage?     // tear-trough bands
     var forehead: CIImage?
     var nose: CIImage?
     var skinTexture: CIImage?   // skin, softer edge, for texture work
+}
+
+/// Where the manual healing brush stamped, ready for a single repair pass.
+struct SpotHealing {
+    var mask: CIImage
+    /// Repair radius in pixels of the image this mask was built for.
+    var radius: CGFloat
 }
 
 struct LoadResult {
@@ -68,6 +77,7 @@ struct LoadResult {
     var preview: CGImage
     var pixelSize: CGSize
     var fileName: String
+    var url: URL
     /// Working color space of the source. Previews and exports are rendered in
     /// this space so a Display P3 photo keeps its gamut instead of being clipped
     /// through sRGB.
@@ -98,12 +108,34 @@ final class ImageProcessor {
 
     // MARK: - Loading
 
-    func load(from url: URL, previewMaxDimension: CGFloat) -> LoadResult? {
+    /// `crop` is normalized with a top-left origin, matching the crop overlay.
+    /// The crop is applied to the pixels before analysis, so faces, masks and
+    /// the preview all describe the cropped image.
+    func load(from url: URL, previewMaxDimension: CGFloat, crop: CGRect? = nil) -> LoadResult? {
         guard let (image, colorSpace, metadata) = loadCGImageWithColorSpace(url: url) else { return nil }
 
-        let extent = CGRect(x: 0, y: 0, width: image.width, height: image.height)
-        let full = CIImage(cgImage: image).cropped(to: extent)
+        let imageExtent = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        var full = CIImage(cgImage: image).cropped(to: imageExtent)
 
+        if let crop, !CropGeometry.isFull(crop) {
+            // Convert top-left view coordinates into Core Image's bottom-left
+            // space, then shift the crop to the origin so every downstream
+            // stage sees a zero-based extent.
+            let pixelRect = CGRect(x: crop.minX * imageExtent.width,
+                                   y: (1 - crop.maxY) * imageExtent.height,
+                                   width: crop.width * imageExtent.width,
+                                   height: crop.height * imageExtent.height)
+                .integral
+                .intersection(imageExtent)
+            if !pixelRect.isEmpty {
+                full = full.cropped(to: pixelRect)
+                    .transformed(by: CGAffineTransform(translationX: -pixelRect.minX,
+                                                       y: -pixelRect.minY))
+                    .cropped(to: CGRect(origin: .zero, size: pixelRect.size))
+            }
+        }
+
+        let extent = full.extent
         let scale = Self.previewScale(for: extent, maxDimension: previewMaxDimension)
         let previewExtent = CGRect(x: 0, y: 0,
                                    width: (extent.width * scale).rounded(),
@@ -139,6 +171,7 @@ final class ImageProcessor {
                           preview: preview,
                           pixelSize: extent.size,
                           fileName: url.lastPathComponent,
+                          url: url,
                           colorSpace: colorSpace,
                           metadata: metadata)
     }
@@ -185,6 +218,8 @@ final class ImageProcessor {
         var leftEyeShapes: [MaskShape] = []
         var rightEyeShapes: [MaskShape] = []
         var lipShapes: [MaskShape] = []
+        var browShapes: [MaskShape] = []
+        var cheekShapes: [MaskShape] = []
         var teethShapes: [MaskShape] = []
         var underEyeShapes: [MaskShape] = []
         var foreheadShapes: [MaskShape] = []
@@ -220,11 +255,18 @@ final class ImageProcessor {
 
             // Eyes, brows and lips never get smoothed.
             for eye in face.eyePolygons { skinShapes.append(MaskShape(mode: .erase, points: eye)) }
-            for brow in face.eyebrowPolygons { skinShapes.append(MaskShape(mode: .erase, points: brow)) }
+            for brow in face.eyebrowPolygons {
+                skinShapes.append(MaskShape(mode: .erase, points: brow))
+                // Vision traces the brow as a thin outline; cosmetics need the
+                // whole hair band, which is a few pixels wider on each side.
+                browShapes.append(MaskShape(points: FaceGeometry.scaled(brow, by: 1.06)))
+            }
             if face.lipPolygon.count >= 3 {
                 skinShapes.append(MaskShape(mode: .erase, points: face.lipPolygon))
                 lipShapes.append(MaskShape(points: face.lipPolygon))
             }
+            cheekShapes.append(MaskShape(ellipse: face.leftBlushRect))
+            cheekShapes.append(MaskShape(ellipse: face.rightBlushRect))
 
             // Whitening a closed mouth would lighten lips, not teeth, so the
             // mask only exists when teeth were measured as visible. The shape
@@ -305,6 +347,16 @@ final class ImageProcessor {
             eyeDetail = eyeDetail.map { MaskBuilder.union($0, lashMask) } ?? lashMask
         }
 
+        // Brows are cosmetics targets, not skin: Vision traces the brow as a
+        // narrow outline, so the band is dilated outward before it is softened.
+        // The feather is deliberately wider than the other tight masks — a brow
+        // band is only a few pixels tall, and a hard edge reads as a drawn-on
+        // stripe instead of thicker hair.
+        let browGeometry = MaskBuilder.makeMask(extent: extent, shapes: browShapes, feather: tightFeather)
+        let browFeather = max(3, 0.007 * shortSide)
+        let brows = browGeometry.map { grown($0, by: max(1.2, 0.0025 * shortSide), feather: browFeather) }
+        let cheeks = MaskBuilder.makeMask(extent: extent, shapes: cheekShapes, feather: softFeather)
+
         return MaskSet(
             skin: MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: feather),
             face: MaskBuilder.makeMask(extent: extent, shapes: faceShapes, feather: feather),
@@ -317,6 +369,8 @@ final class ImageProcessor {
             eyeDetail: eyeDetail,
             lips: MaskBuilder.makeMask(extent: extent, shapes: lipShapes, feather: tightFeather),
             teeth: teethMask,
+            brows: brows,
+            cheeks: cheeks,
             underEyes: MaskBuilder.makeMask(extent: extent, shapes: underEyeShapes, feather: softFeather),
             forehead: MaskBuilder.makeMask(extent: extent, shapes: foreheadShapes, feather: softFeather),
             nose: MaskBuilder.makeMask(extent: extent, shapes: noseShapes, feather: softFeather),
@@ -347,6 +401,20 @@ final class ImageProcessor {
         return combined
     }
 
+    /// Widen an opaque-grayscale mask and soften its new edge. Used for the
+    /// brows, where the traced outline sits inside the hair band.
+    private func grown(_ mask: CIImage, by radius: CGFloat, feather: CGFloat) -> CIImage {
+        var grown = mask
+        if CIFilter(name: "CIMorphologyMaximum") != nil {
+            grown = grown.clampedToExtent()
+                .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: radius])
+                .cropped(to: mask.extent)
+        }
+        return grown.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(0.8, feather)])
+            .cropped(to: mask.extent)
+    }
+
     private func unionAll(_ parts: [CIImage]) -> CIImage? {
         parts.dropFirst().reduce(parts.first) { accumulated, next in
             accumulated.map { MaskBuilder.union($0, next) } ?? next
@@ -368,16 +436,36 @@ final class ImageProcessor {
 
     // MARK: - Processing
 
+    /// Builds the one-pass mask for the manual healing brush. Stamps arrive in
+    /// the coordinates of the image being processed, so a crop or a different
+    /// working resolution needs a fresh mask.
+    func spotsMask(extent: CGRect, spots: [HealSpot]) -> SpotHealing? {
+        guard !spots.isEmpty else { return nil }
+        let shortSide = min(extent.width, extent.height)
+        guard let mask = MaskBuilder.makeMask(extent: extent,
+                                              shapes: HealGeometry.shapes(for: spots),
+                                              feather: max(2, 0.004 * shortSide)) else { return nil }
+        return SpotHealing(mask: mask, radius: max(2, HealGeometry.largestRadius(spots) * shortSide))
+    }
+
     func process(_ source: CIImage,
                  adjustments a: Adjustments,
                  masks: MaskSet?,
-                 faces: [FaceGeometry] = []) -> CIImage {
+                 faces: [FaceGeometry] = [],
+                 spots: SpotHealing? = nil) -> CIImage {
         let extent = source.extent
         // Every radius is expressed relative to image size so the preview and
         // the full-resolution export look the same.
         let scale = max(0.5, min(3.0, min(extent.width, extent.height) / 1400))
 
         var image = source
+
+        // 0) Manual healing runs before anything else: the repaired patch is
+        //    what the automatic skin passes should then work over, and it is
+        //    not limited to the face masks because the user can stamp anywhere.
+        if let spots {
+            image = SkinEngine.healSpots(image, mask: spots.mask, radius: spots.radius)
+        }
 
         // 1) Local retouch runs first, while the masks still line up with the
         //    feature positions they were built from. Warping first would move
@@ -445,6 +533,22 @@ final class ImageProcessor {
                                                 mask: detailMask, scale: scale)
         }
 
+        // 3b) Makeup, after the skin work: smoothing first would dilute the
+        //     colour and blur its edge, and a flush laid on finished skin keeps
+        //     both. Still ahead of the warp, so it travels with the features.
+        if a.lipTint > 0, let lipMask = masks?.lips {
+            image = MakeupEngine.tintLips(image, strength: a.lipTint,
+                                          mask: lipMask, shade: a.lipShade)
+        }
+        if a.blush > 0, let cheekMask = masks?.cheeks {
+            image = MakeupEngine.applyBlush(image, strength: a.blush,
+                                            mask: cheekMask, shade: a.blushShade)
+        }
+        if a.browDefine > 0, let browMask = masks?.brows {
+            image = MakeupEngine.defineBrows(image, strength: a.browDefine,
+                                             mask: browMask, scale: scale)
+        }
+
         // 4) Geometry after the local edits: the warp then carries the
         //    retouched pixels with the features, and every mask stays aligned.
         if a.hasReshape, !faces.isEmpty {
@@ -498,6 +602,13 @@ final class ImageProcessor {
                 kCIInputIntensityKey: 1.4 * a.vignette / 100,
                 kCIInputRadiusKey: shortSide * 0.78
             ])
+        }
+        // 6) The look sits after the tonal sliders so the grade reshapes the
+        //    image the user already balanced, and grain goes last because it
+        //    belongs on top of the finished picture, not under a blur.
+        image = LookEngine.applyLook(image, look: a.look, strength: a.lookStrength / 100)
+        if a.grain > 0 {
+            image = LookEngine.addGrain(image, amount: a.grain / 100, extent: extent)
         }
         return image.cropped(to: extent)
     }

@@ -21,6 +21,11 @@ struct EditorView: View {
         .onChange(of: model.adjustments) { _, _ in
             model.schedulePreview()
         }
+        .onChange(of: model.toolMode) { _, mode in
+            if mode == .crop {
+                model.beginCrop()
+            }
+        }
         .onAppear { model.refreshDefaultStatus() }
     }
 

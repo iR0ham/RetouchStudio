@@ -31,22 +31,54 @@ final class EditorModel: ObservableObject {
     @Published private(set) var status = ""
     @Published private(set) var imageName = ""
     @Published private(set) var imageInfo = ""
+    @Published private(set) var imageURL: URL?
     @Published private(set) var hasImage = false
     @Published private(set) var faceCount = 0
+    /// Where this edit was last saved as a project, if anywhere.
+    @Published private(set) var projectURL: URL?
+    /// Crop relative to the original photo, normalized with a top-left origin.
+    /// `nil` means the whole frame.
+    @Published private(set) var appliedCrop: CGRect?
+    /// The crop being set in the overlay, relative to the image on screen.
+    @Published var cropDraft: CGRect = CropGeometry.full
+    @Published private(set) var cropAspect: CropAspect = .free
+    /// Manual healing stamps, stored against the original photo.
+    @Published private(set) var healSpots: [HealSpot] = [] {
+        didSet { healSpotsChanged() }
+    }
+    /// Brush diameter as a percentage of the short side, so one setting covers
+    /// every photo size and the stamp means the same thing on preview and export.
+    @Published var healBrushPercent: Double = 1.6
+
+    /// Pixel size of the working (possibly cropped) image, used for aspect math
+    /// and the crop size readout.
+    @Published private(set) var workingPixelSize: CGSize = .zero
     /// True when the sliders differ from the state that was loaded or last
     /// exported, which is what the discard prompt is about.
     @Published private(set) var hasUnsavedChanges = false
 
     // MARK: - Undo / redo
 
-    private var undoStack: [Adjustments] = []
-    private var redoStack: [Adjustments] = []
-    private var lastCommitted = Adjustments()
-    private var cleanAdjustments = Adjustments()
+    /// Everything one undo step covers. Stamping the healing brush is an edit
+    /// exactly like moving a slider, so both travel through history together.
+    private struct EditState: Equatable {
+        var adjustments = Adjustments()
+        var healSpots: [HealSpot] = []
+    }
+
+    private var undoStack: [EditState] = []
+    private var redoStack: [EditState] = []
+    private var lastCommitted = EditState()
+    private var cleanState = EditState()
+    private var cleanCrop: CGRect?
     private var coalesceTask: Task<Void, Never>?
 
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
+
+    private var currentState: EditState {
+        EditState(adjustments: adjustments, healSpots: healSpots)
+    }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
     /// through dozens of near-identical states. A short idle window after the
@@ -60,11 +92,11 @@ final class EditorModel: ObservableObject {
         }
     }
 
-    /// Records the current adjustments as an undo step.
+    /// Records the current state as an undo step.
     func commitAdjustments() {
         coalesceTask?.cancel()
         coalesceTask = nil
-        let current = adjustments
+        let current = currentState
         guard current != lastCommitted else {
             updateUndoFlags()
             return
@@ -81,8 +113,8 @@ final class EditorModel: ObservableObject {
         // drag undoes that drag instead of skipping past it.
         commitAdjustments()
         guard let previous = undoStack.popLast() else { return }
-        redoStack.append(adjustments)
-        adjustments = previous
+        redoStack.append(currentState)
+        restore(previous)
         lastCommitted = previous
         updateUndoFlags()
         refreshStatusAfterHistoryChange()
@@ -90,16 +122,24 @@ final class EditorModel: ObservableObject {
 
     func redo() {
         // Editing after an undo starts a new branch; the old redo history goes.
-        guard adjustments == lastCommitted else {
+        guard currentState == lastCommitted else {
             commitAdjustments()
             return
         }
         guard let next = redoStack.popLast() else { return }
-        undoStack.append(adjustments)
-        adjustments = next
+        undoStack.append(currentState)
+        restore(next)
         lastCommitted = next
         updateUndoFlags()
         refreshStatusAfterHistoryChange()
+    }
+
+    /// Assigning both published properties fires their `didSet`, which rebuilds
+    /// the masks and repaints the canvas, so history never leaves a stale stamp
+    /// on screen.
+    private func restore(_ state: EditState) {
+        adjustments = state.adjustments
+        healSpots = state.healSpots
     }
 
     /// The pill used to keep saying "Auto Color & Light applied" after ⌘Z, when
@@ -110,8 +150,8 @@ final class EditorModel: ObservableObject {
     }
 
     private func updateUndoFlags() {
-        canUndo = !undoStack.isEmpty || adjustments != lastCommitted
-        canRedo = !redoStack.isEmpty && adjustments == lastCommitted
+        canUndo = !undoStack.isEmpty || currentState != lastCommitted
+        canRedo = !redoStack.isEmpty && currentState == lastCommitted
     }
 
     private func adjustmentsChanged() {
@@ -120,8 +160,18 @@ final class EditorModel: ObservableObject {
         updateCleanState()
     }
 
+    private func healSpotsChanged() {
+        rebuildSpotMasks()
+        guard !isLoadingState else { return }
+        scheduleCommit()
+        updateUndoFlags()
+        updateCleanState()
+        if hasImage { schedulePreview() }
+    }
+
     private func updateCleanState() {
-        hasUnsavedChanges = hasImage && adjustments != cleanAdjustments
+        hasUnsavedChanges = hasImage
+            && (currentState != cleanState || appliedCrop != cleanCrop)
     }
 
     /// Undo history belongs to one photo. Carrying it across a load would let
@@ -131,8 +181,8 @@ final class EditorModel: ObservableObject {
         coalesceTask = nil
         undoStack.removeAll()
         redoStack.removeAll()
-        lastCommitted = adjustments
-        cleanAdjustments = adjustments
+        lastCommitted = currentState
+        cleanState = currentState
         updateUndoFlags()
         updateCleanState()
     }
@@ -145,25 +195,77 @@ final class EditorModel: ObservableObject {
         commitAdjustments()
     }
 
-    /// Zeroes a whole group (skin, reshape or color/light) while leaving the
-    /// other groups exactly as they were.
+    /// Zeroes a whole group (skin, reshape, makeup, color/light or look) while
+    /// leaving the other groups exactly as they were.
     func resetGroup(_ group: AdjustmentGroup) {
         guard !adjustments.isIdentity else { return }
         commitAdjustments()
         var next = Adjustments()
         switch group {
         case .skin:
-            // Keep geometry and color/light.
+            // Keep everything that is not skin.
             next = next.applyingReshape(adjustments.reshapeOnly)
+                       .applyingMakeup(adjustments.makeupOnly)
                        .applyingColorLight(adjustments.colorLightOnly)
+                       .applyingLook(adjustments.lookOnly)
         case .reshape:
             next = next.applyingRetouch(adjustments.retouchOnly)
+                       .applyingMakeup(adjustments.makeupOnly)
                        .applyingColorLight(adjustments.colorLightOnly)
+                       .applyingLook(adjustments.lookOnly)
+        case .makeup:
+            next = next.applyingRetouch(adjustments.retouchOnly)
+                       .applyingReshape(adjustments.reshapeOnly)
+                       .applyingColorLight(adjustments.colorLightOnly)
+                       .applyingLook(adjustments.lookOnly)
         case .colorLight:
             next = next.applyingRetouch(adjustments.retouchOnly)
                        .applyingReshape(adjustments.reshapeOnly)
+                       .applyingMakeup(adjustments.makeupOnly)
+                       .applyingLook(adjustments.lookOnly)
+        case .look:
+            next = next.applyingRetouch(adjustments.retouchOnly)
+                       .applyingReshape(adjustments.reshapeOnly)
+                       .applyingColorLight(adjustments.colorLightOnly)
+                       .applyingMakeup(adjustments.makeupOnly)
         }
         adjustments = next
+        commitAdjustments()
+    }
+
+    /// Picks a look from the rail. The strength keeps its current value when a
+    /// different look is swapped in, so comparing grades stays comparable.
+    func setLook(_ look: FilmLook) {
+        commitAdjustments()
+        adjustments.look = look
+        if look == .none {
+            adjustments.lookStrength = 0
+        } else if adjustments.lookStrength == 0 {
+            adjustments.lookStrength = look.defaultStrength
+        }
+        commitAdjustments()
+    }
+
+    /// Picks the lip colour and switches the effect on with it. The already
+    /// chosen shade still counts while the amount is zero, since that tap is
+    /// the only way to turn the default on; otherwise it would be dead.
+    func setLipShade(_ shade: MakeupShade) {
+        guard adjustments.lipShade != shade || adjustments.lipTint == 0 else { return }
+        commitAdjustments()
+        adjustments.lipShade = shade
+        if adjustments.lipTint == 0 {
+            adjustments.lipTint = MakeupEngine.defaultLipStrength
+        }
+        commitAdjustments()
+    }
+
+    func setBlushShade(_ shade: MakeupShade) {
+        guard adjustments.blushShade != shade || adjustments.blush == 0 else { return }
+        commitAdjustments()
+        adjustments.blushShade = shade
+        if adjustments.blush == 0 {
+            adjustments.blush = MakeupEngine.defaultBlushStrength
+        }
         commitAdjustments()
     }
 
@@ -189,10 +291,17 @@ final class EditorModel: ObservableObject {
     private var sourcePreview: CIImage?
     private var masksFull: MaskSet?
     private var masksPreview: MaskSet?
+    private var spotsFull: SpotHealing?
+    private var spotsPreview: SpotHealing?
+    /// True while a load installs the stamps that came with the project, so the
+    /// stamp `didSet` does not treat restored state as a new user edit.
+    private var isLoadingState = false
     private var sourceColorSpace: CGColorSpace?
     private var sourceMetadata: [CFString: Any] = [:]
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    private var batchTask: Task<Void, Never>?
+    private var batchGeneration = 0
     private var generation = 0
 
     // MARK: - Input
@@ -213,6 +322,15 @@ final class EditorModel: ObservableObject {
     func requestLoad(url: URL) {
         guard confirmDiscardIfNeeded() else { return }
         load(url: url)
+    }
+
+    /// Finder can send either a photo or a project; route by extension.
+    func requestOpen(url: URL) {
+        if url.pathExtension.lowercased() == RetouchProject.fileExtension {
+            openProject(at: url)
+        } else {
+            requestLoad(url: url)
+        }
     }
 
     /// True when it is safe to replace the current photo.
@@ -247,13 +365,17 @@ final class EditorModel: ObservableObject {
     /// values become the clean baseline. Without this, closing the window would
     /// ask again during the termination that follows.
     func discardUnsavedChanges() {
-        cleanAdjustments = adjustments
+        cleanState = currentState
+        cleanCrop = appliedCrop
         updateCleanState()
     }
 
-    func load(url: URL) {
+    func load(url: URL, restoring project: RetouchProject? = nil, projectURL: URL? = nil) {
         loadTask?.cancel()
         renderTask?.cancel()
+        batchGeneration += 1
+        batchTask?.cancel()
+        batchTask = nil
         generation += 1
         let generation = self.generation
 
@@ -263,10 +385,11 @@ final class EditorModel: ObservableObject {
 
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
+        let crop = project?.crop
 
         loadTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
-                processor.load(from: url, previewMaxDimension: previewMaxDimension)
+                processor.load(from: url, previewMaxDimension: previewMaxDimension, crop: crop)
             }.value
 
             guard let self, self.generation == generation else { return }
@@ -275,11 +398,14 @@ final class EditorModel: ObservableObject {
                 self.status = self.s.couldNotRead
                 return
             }
-            self.apply(result)
+            self.apply(result, restoring: project, projectURL: projectURL)
         }
     }
 
-    private func apply(_ result: LoadResult) {
+    /// Updates everything the pipeline needs for a new set of pixels, without
+    /// touching adjustments, history or clean baselines. Both a fresh load and
+    /// a crop re-load go through here.
+    private func install(_ result: LoadResult) {
         sourceFull = result.sourceFull
         sourcePreview = result.sourcePreview
         masksFull = result.masksFull
@@ -293,21 +419,202 @@ final class EditorModel: ObservableObject {
         previewImage = NSImage(cgImage: result.preview,
                               size: NSSize(width: result.preview.width, height: result.preview.height))
         previewSize = CGSize(width: result.preview.width, height: result.preview.height)
+        workingPixelSize = result.pixelSize
         imageInfo = "\(Int(result.pixelSize.width)) × \(Int(result.pixelSize.height)) px"
         imageName = result.fileName
+        imageURL = result.url
+        cropDraft = CropGeometry.full
         hasImage = true
-        cleanAdjustments = .zero
-        adjustments = .zero
+    }
+
+    private func apply(_ result: LoadResult,
+                       restoring project: RetouchProject? = nil,
+                       projectURL: URL? = nil) {
+        install(result)
+        self.projectURL = projectURL
+
+        if let project {
+            exportFormat = ExportFormat(rawValue: project.exportFormat) ?? .jpeg
+            exportQuality = project.exportQuality
+            autoRetouchStrength = project.autoRetouchStrength
+            adjustments = project.adjustments
+            appliedCrop = project.crop
+        } else {
+            adjustments = .zero
+            appliedCrop = nil
+        }
+        // Loading is not an edit: the stamps arrive with the project, so they are
+        // installed without the change handling a user stamp needs.
+        isLoadingState = true
+        healSpots = project?.healSpots ?? []
+        isLoadingState = false
+        rebuildSpotMasks()
+
+        cropAspect = .free
+        cleanState = currentState
+        cleanCrop = appliedCrop
         comparePosition = 0.45
         resetHistory()
         resetView()
         isBusy = false
+        // The preview from the load has no stamps in it, so repaint when there
+        // are any to draw.
+        if !healSpots.isEmpty { schedulePreview() }
 
-        if result.faces.isEmpty {
+        if project != nil {
+            status = s.projectOpened
+        } else if result.faces.isEmpty {
             status = s.noFaceColorOnly
         } else {
             status = s.facesDetected(result.faces.count)
         }
+    }
+
+    // MARK: - Crop
+
+    /// Pixel aspect ratio of the working image, width ÷ height.
+    var workingAspect: CGFloat {
+        guard workingPixelSize.width > 0, workingPixelSize.height > 0 else { return 1 }
+        return workingPixelSize.width / workingPixelSize.height
+    }
+
+    /// Pixel size of the draft crop, for the live readout.
+    var cropDraftPixelSize: CGSize {
+        CGSize(width: (cropDraft.width * workingPixelSize.width).rounded(),
+               height: (cropDraft.height * workingPixelSize.height).rounded())
+    }
+
+    var cropDraftIsFull: Bool { CropGeometry.isFull(cropDraft) }
+    var canApplyCrop: Bool { hasImage && !isBusy && !cropDraftIsFull }
+    var canResetCrop: Bool { hasImage && !isBusy && (appliedCrop != nil || !cropDraftIsFull) }
+
+    /// Fresh draft and a fitted view whenever the crop tool opens.
+    func beginCrop() {
+        cropDraft = CropGeometry.full
+        cropAspect = .free
+        resetView()
+    }
+
+    func setCropAspect(_ aspect: CropAspect) {
+        cropAspect = aspect
+        guard let target = aspect.ratio(originalAspect: workingAspect) else { return }
+        // Fit the new shape inside the current draft, so changing the aspect
+        // never jumps the crop to an unrelated part of the photo.
+        cropDraft = CropGeometry.aspectFit(target, imageAspect: workingAspect, in: cropDraft)
+    }
+
+    func applyCrop() {
+        guard hasImage, !isBusy else { return }
+        let composed = CropGeometry.clamped(CropGeometry.composed(cropDraft, over: appliedCrop))
+        let target: CGRect? = CropGeometry.isFull(composed) ? nil : composed
+        guard target != appliedCrop else { return }
+        appliedCrop = target
+        reloadCropped()
+    }
+
+    func resetCrop() {
+        guard hasImage, !isBusy, appliedCrop != nil || !cropDraftIsFull else { return }
+        appliedCrop = nil
+        cropAspect = .free
+        cropDraft = CropGeometry.full
+        reloadCropped()
+    }
+
+    /// Re-reads the source with the current crop and rebuilds masks and previews.
+    /// Adjustments and the undo stack survive: the crop changes the pixels, not
+    /// the slider values.
+    private func reloadCropped() {
+        guard let imageURL else { return }
+        loadTask?.cancel()
+        renderTask?.cancel()
+        generation += 1
+        let generation = self.generation
+        let crop = appliedCrop
+        let processor = self.processor
+        let previewMaxDimension = self.previewMaxDimension
+        let url = imageURL
+
+        isBusy = true
+        status = s.applyingCrop
+
+        loadTask = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                processor.load(from: url, previewMaxDimension: previewMaxDimension, crop: crop)
+            }.value
+
+            guard let self, self.generation == generation else { return }
+            guard let result else {
+                self.isBusy = false
+                self.status = self.s.couldNotRead
+                return
+            }
+            self.install(result)
+            // The stamps live in original-photo coordinates, so a new crop moves
+            // them onto the new frame before the canvas repaints.
+            self.rebuildSpotMasks()
+            if !self.healSpots.isEmpty { self.schedulePreview() }
+            self.updateCleanState()
+            self.isBusy = false
+            self.status = crop == nil ? self.s.cropReset : self.s.cropApplied
+        }
+    }
+
+    /// True when the active tool owns the pointer over the canvas, so pan,
+    /// zoom and the compare handle must stand aside.
+    var toolOwnsCanvas: Bool { toolMode == .crop || toolMode == .heal }
+
+    // MARK: - Healing brush
+
+    /// Brush radius as a fraction of the working image's short side. Storing the
+    /// size this way makes one brush behave identically on preview and export.
+    var healBrushRadius: CGFloat { CGFloat(max(0.2, healBrushPercent) / 200) }
+
+    /// Brush diameter in working pixels, for the readout beside the slider.
+    var healBrushPixels: Int {
+        let short = min(workingPixelSize.width, workingPixelSize.height)
+        return Int((healBrushRadius * 2 * short).rounded())
+    }
+
+    var canClearHealSpots: Bool { hasImage && !healSpots.isEmpty }
+
+    /// Stamps as the canvas sees them, with the index into `healSpots` so a
+    /// click can remove the stamp it landed on.
+    var visibleHealSpots: [(index: Int, spot: HealSpot)] {
+        HealGeometry.indexed(healSpots, crop: appliedCrop)
+    }
+
+    /// One click does two jobs, the way a spot tool in a retouch app reads:
+    /// inside an existing stamp it takes that stamp back, anywhere else it
+    /// places a new one.
+    func tapHeal(at point: CGPoint) {
+        guard hasImage else { return }
+        let clamped = CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y)))
+        let visible = visibleHealSpots
+        if let hit = visible.first(where: {
+            hypot($0.spot.center.x - clamped.x, $0.spot.center.y - clamped.y) <= $0.spot.radius
+        }) {
+            healSpots.remove(at: hit.index)
+            status = healSpots.isEmpty ? s.healCleared : s.healStampRemoved
+            return
+        }
+        let center = HealGeometry.originalCenter(clamped, crop: appliedCrop)
+        let radius = HealGeometry.originalRadius(healBrushRadius, crop: appliedCrop)
+        healSpots.append(HealSpot(center: center, radius: radius))
+        status = s.healStampAdded(healSpots.count)
+    }
+
+    func clearHealSpots() {
+        guard !healSpots.isEmpty else { return }
+        healSpots.removeAll()
+        status = s.healCleared
+    }
+
+    /// Rebuilds the healing masks for the current stamps, at both the working
+    /// resolution and the preview resolution.
+    private func rebuildSpotMasks() {
+        let working = HealGeometry.workingSpots(healSpots, crop: appliedCrop)
+        spotsFull = sourceFull.flatMap { processor.spotsMask(extent: $0.extent, spots: working) }
+        spotsPreview = sourcePreview.flatMap { processor.spotsMask(extent: $0.extent, spots: working) }
     }
 
     // MARK: - Zoom and pan
@@ -412,6 +719,7 @@ final class EditorModel: ObservableObject {
         let adjustments = self.adjustments
         let masks = self.masksPreview
         let faces = self.faces
+        let spots = self.spotsPreview
         let colorSpace = self.sourceColorSpace
         let processor = self.processor
         isBusy = true
@@ -422,7 +730,7 @@ final class EditorModel: ObservableObject {
 
             let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
                 let processed = processor.process(source, adjustments: adjustments,
-                                                  masks: masks, faces: faces)
+                                                  masks: masks, faces: faces, spots: spots)
                 return processor.renderCGImage(processed, scale: 1, colorSpace: colorSpace)
             }.value
 
@@ -535,6 +843,11 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Status text
 
+    var windowTitle: String {
+        guard hasImage, !imageName.isEmpty else { return s.appName }
+        return hasUnsavedChanges ? "\(imageName) — \(s.edited)" : imageName
+    }
+
     var faceStatusText: String {
         guard hasImage else { return s.noImageSelected }
         if faceCount == 0 { return s.noFaceDetected }
@@ -571,12 +884,14 @@ final class EditorModel: ObservableObject {
         let adjustments = self.adjustments
         let masks = self.masksFull
         let faces = self.faces
+        let spots = self.spotsFull
         let colorSpace = self.sourceColorSpace
         let metadata = self.sourceMetadata
         let processor = self.processor
         let format = self.exportFormat
         let quality = self.exportQuality
-        let exportedAdjustments = adjustments
+        let exportedState = currentState
+        let exportedCrop = appliedCrop
 
         isBusy = true
         status = s.renderingExport
@@ -584,7 +899,7 @@ final class EditorModel: ObservableObject {
         Task { [weak self] in
             let success = await Task.detached(priority: .userInitiated) { () -> Bool in
                 let processed = processor.process(source, adjustments: adjustments,
-                                                  masks: masks, faces: faces)
+                                                  masks: masks, faces: faces, spots: spots)
                 return processor.write(processed, to: url, format: format,
                                        quality: quality, colorSpace: colorSpace,
                                        metadata: metadata)
@@ -595,11 +910,163 @@ final class EditorModel: ObservableObject {
             if success {
                 self.showExportSheet = false
                 self.status = self.s.saved(url.lastPathComponent)
-                self.cleanAdjustments = exportedAdjustments
+                self.cleanState = exportedState
+                self.cleanCrop = exportedCrop
                 self.updateCleanState()
             } else {
                 self.status = self.s.exportFailed
             }
+        }
+    }
+
+    // MARK: - Projects
+
+    func saveProject() {
+        if let projectURL {
+            writeProject(to: projectURL)
+        } else {
+            saveProjectAs()
+        }
+    }
+
+    func saveProjectAs() {
+        guard hasImage else { return }
+        let base = (imageName as NSString).deletingPathExtension
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(base.isEmpty ? "retouch" : base).\(RetouchProject.fileExtension)"
+        panel.allowedContentTypes = [RetouchProject.contentType]
+        panel.canCreateDirectories = true
+        panel.message = s.chooseProjectLocation
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        writeProject(to: url)
+    }
+
+    private func writeProject(to url: URL) {
+        guard let imageURL else { return }
+        let project = RetouchProject(imagePath: imageURL.path,
+                                     adjustments: adjustments,
+                                     exportFormat: exportFormat.rawValue,
+                                     exportQuality: exportQuality,
+                                     autoRetouchStrength: autoRetouchStrength,
+                                     crop: appliedCrop,
+                                     healSpots: healSpots.isEmpty ? nil : healSpots)
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(project).write(to: url, options: .atomic)
+            projectURL = url
+            // The edit is now persisted, so the discard prompt has nothing to
+            // protect until the next change.
+            cleanState = currentState
+            cleanCrop = appliedCrop
+            updateCleanState()
+            status = s.projectSaved(url.lastPathComponent)
+        } catch {
+            status = s.projectSaveFailed
+        }
+    }
+
+    func openProject() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [RetouchProject.contentType]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = s.chooseProject
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openProject(at: url)
+    }
+
+    /// Opening a project replaces the current photo, so it shares the discard
+    /// guard with normal loading.
+    func openProject(at url: URL) {
+        guard confirmDiscardIfNeeded() else { return }
+        do {
+            let project = try JSONDecoder().decode(RetouchProject.self, from: Data(contentsOf: url))
+            let source = URL(fileURLWithPath: project.imagePath)
+            guard FileManager.default.fileExists(atPath: source.path) else {
+                status = s.projectPhotoMissing
+                return
+            }
+            load(url: source, restoring: project, projectURL: url)
+        } catch {
+            status = s.projectOpenFailed
+        }
+    }
+
+    // MARK: - Batch export
+
+    /// Applies the current adjustments to several photos and writes them into
+    /// one folder. Each photo gets its own face detection and masks, so the
+    /// same slider values land on each face instead of on fixed coordinates.
+    func batchExport() {
+        guard hasImage else { return }
+        let sources = NSOpenPanel()
+        sources.title = s.batchChoosePhotos
+        sources.allowedContentTypes = [.image]
+        sources.allowsMultipleSelection = true
+        sources.canChooseDirectories = false
+        guard sources.runModal() == .OK, !sources.urls.isEmpty else { return }
+
+        let destination = NSOpenPanel()
+        destination.title = s.batchChooseFolder
+        destination.canChooseDirectories = true
+        destination.canChooseFiles = false
+        destination.allowsMultipleSelection = false
+        guard destination.runModal() == .OK, let folder = destination.url else { return }
+
+        runBatch(sources.urls, to: folder)
+    }
+
+    private func runBatch(_ urls: [URL], to folder: URL) {
+        batchGeneration += 1
+        let batch = batchGeneration
+        batchTask?.cancel()
+
+        let adjustments = self.adjustments
+        let format = exportFormat
+        let quality = exportQuality
+        let crop = appliedCrop
+        let processor = self.processor
+        let previewMaxDimension = self.previewMaxDimension
+
+        isBusy = true
+        status = s.batchStarting
+
+        batchTask = Task { [weak self] in
+            var saved = 0
+            for (index, url) in urls.enumerated() {
+                if Task.isCancelled { break }
+                self?.status = self?.s.batchProgress(index + 1, urls.count) ?? ""
+
+                let success = await Task.detached(priority: .userInitiated) { () -> Bool in
+                    guard let result = processor.load(from: url,
+                                                      previewMaxDimension: previewMaxDimension,
+                                                      crop: crop) else {
+                        return false
+                    }
+                    let processed = processor.process(result.sourceFull,
+                                                      adjustments: adjustments,
+                                                      masks: result.masksFull,
+                                                      faces: result.faces)
+                    let base = url.deletingPathExtension().lastPathComponent
+                    var out = folder.appendingPathComponent("\(base)-retouched.\(format.fileExtension)")
+                    var counter = 2
+                    while FileManager.default.fileExists(atPath: out.path) {
+                        out = folder.appendingPathComponent("\(base)-retouched-\(counter).\(format.fileExtension)")
+                        counter += 1
+                    }
+                    return processor.write(processed, to: out, format: format,
+                                           quality: quality, colorSpace: result.colorSpace,
+                                           metadata: result.metadata)
+                }.value
+
+                if success { saved += 1 }
+            }
+
+            guard let self, self.batchGeneration == batch else { return }
+            self.batchTask = nil
+            self.isBusy = false
+            self.status = self.s.batchFinished(saved, urls.count)
         }
     }
 }

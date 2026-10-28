@@ -218,6 +218,43 @@ struct AccentButton: View {
     }
 }
 
+/// The quieter action next to an AccentButton: outlined, never filled.
+struct SecondaryButton: View {
+    let title: String
+    var icon: String? = nil
+    var enabled: Bool = true
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                Text(title)
+                    .font(Theme.Font.button)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(enabled && isHovering ? Theme.cardStrong : Theme.card)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Theme.stroke, lineWidth: 0.75)
+            )
+            .foregroundStyle(enabled ? Theme.text : Theme.faint)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { isHovering = $0 }
+    }
+}
+
 struct PresetChip: View {
     let title: String
     let isActive: Bool
@@ -242,6 +279,46 @@ struct PresetChip: View {
                 .foregroundStyle(isActive ? Theme.accentBright : Theme.muted)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A cosmetic shade: the colour itself carries the meaning, so it gets a swatch
+/// rather than a word. Same height and corner as PresetChip so the two read as
+/// one control family.
+struct ShadeChip: View {
+    let shade: MakeupShade
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(shade.swatch)
+                    .frame(width: 11, height: 11)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .strokeBorder(Theme.bone.opacity(0.22), lineWidth: 0.5)
+                    )
+                Text(shade.title)
+                    .font(.system(size: 10.5, weight: isActive ? .semibold : .regular))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isActive ? Theme.accentSoft : Theme.bone.opacity(0.035))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(isActive ? Theme.accent.opacity(0.55) : Theme.stroke,
+                                  lineWidth: 0.5)
+            )
+            .foregroundStyle(isActive ? Theme.accentBright : Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .help(shade.title)
     }
 }
 

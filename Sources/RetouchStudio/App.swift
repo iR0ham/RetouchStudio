@@ -6,7 +6,11 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: EditorModel?
+    /// Set by the window bridge; reopens the editor scene after SwiftUI tears
+    /// the window down while routing an open event.
+    var openEditorWindow: (() -> Void)?
     private var pendingURL: URL?
+    private var restoringWindow = false
 
     func attach(model: EditorModel) {
         self.model = model
@@ -14,20 +18,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // early URL waits here until the model exists.
         if let pendingURL {
             self.pendingURL = nil
-            model.requestLoad(url: pendingURL)
+            model.requestOpen(url: pendingURL)
         }
     }
 
+    /// SwiftUI routes external file events through its own app delegate and
+    /// closes the only window on the way. Loading happens here and the window
+    /// is put back, so a double-click in Finder keeps the editor on screen.
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else { return }
         if let model {
-            model.requestLoad(url: url)
+            model.requestOpen(url: url)
         } else {
             pendingURL = url
+        }
+        restoringWindow = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.restoringWindow else { return }
+            self.restoringWindow = false
+            if !NSApp.windows.contains(where: { $0.isVisible }) {
+                self.openEditorWindow?()
+            }
         }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Termination caused by the window teardown above, not by the user.
+        if restoringWindow { return .terminateCancel }
         guard let model, model.hasUnsavedChanges else { return .terminateNow }
         return model.confirmDiscardIfNeeded() ? .terminateNow : .terminateCancel
     }
@@ -65,22 +82,39 @@ final class EditorWindowDelegate: NSObject, NSWindowDelegate {
     }
 }
 
-private struct WindowCloseGuard: NSViewRepresentable {
-    let model: EditorModel
+private struct WindowBridge: NSViewRepresentable {
+    @ObservedObject var model: EditorModel
+    let appDelegate: AppDelegate
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> HookView {
+        let openWindow = context.environment.openWindow
+        appDelegate.openEditorWindow = { openWindow(id: "editor") }
         let view = HookView()
-        view.onWindow = { window in
+        view.onWindow = { [weak model] window in
+            guard let model else { return }
             let delegate = EditorWindowDelegate(model: model, forwarding: window.delegate)
             context.coordinator.retained = delegate
             window.delegate = delegate
+            Self.sync(model, to: window)
         }
         return view
     }
 
-    func updateNSView(_ nsView: HookView, context: Context) {}
+    func updateNSView(_ nsView: HookView, context: Context) {
+        guard let window = nsView.window else { return }
+        Self.sync(model, to: window)
+    }
+
+    /// Native document chrome: the photo name in the title bar, the proxy icon
+    /// next to it, and the grey dot that marks edits that are not in a project
+    /// or an export yet.
+    private static func sync(_ model: EditorModel, to window: NSWindow) {
+        window.title = model.windowTitle
+        window.isDocumentEdited = model.hasUnsavedChanges
+        window.representedURL = model.imageURL
+    }
 
     final class Coordinator {
         var retained: EditorWindowDelegate?
@@ -110,13 +144,15 @@ struct RetouchStudioApp: App {
     }
 
     var body: some Scene {
-        // A single window, not a WindowGroup: opening a file from Finder should
-        // load it into the editor, not spawn a second window sharing the same
-        // model.
+        // A single Window: opening a file from Finder should load it into the
+        // editor, not spawn a second window sharing the same model.
         Window(model.s.appName, id: "editor") {
             EditorView(model: model)
-                .background(WindowCloseGuard(model: model))
+                .background(WindowBridge(model: model, appDelegate: appDelegate))
                 .onAppear { appDelegate.attach(model: model) }
+                // A fallback for SwiftUI versions that route the open event to
+                // the scene instead of the app delegate.
+                .onOpenURL { url in model.requestOpen(url: url) }
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1320, height: 860)
@@ -133,6 +169,8 @@ struct RetouchStudioApp: App {
             CommandGroup(replacing: .newItem) {
                 Button(model.s.openMenu) { model.openImage() }
                     .keyboardShortcut("o")
+                Button(model.s.openProjectMenu) { model.openProject() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
             }
             CommandGroup(after: .newItem) {
                 // A single Window scene does not ship the standard Close item.
@@ -140,9 +178,19 @@ struct RetouchStudioApp: App {
                     .keyboardShortcut("w")
             }
             CommandGroup(replacing: .saveItem) {
+                Button(model.s.saveProjectMenu) { model.saveProject() }
+                    .keyboardShortcut("s")
+                    .disabled(!model.hasImage)
+                Button(model.s.saveProjectAsMenu) { model.saveProjectAs() }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                    .disabled(!model.hasImage)
+                Divider()
                 Button(model.s.exportMenu) { model.presentExportSheet() }
                     .keyboardShortcut("e")
                     .disabled(!model.hasImage)
+                Button(model.s.batchExportMenu) { model.batchExport() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(!model.hasImage || model.isBusy)
             }
             CommandMenu(model.s.retouchMenu) {
                 Button(model.s.autoColorMenu) { model.autoColorLight() }

@@ -103,7 +103,17 @@ struct CompareCanvas: View {
                     .frame(width: displayed.width, height: displayed.height)
                     .position(center)
 
-                if model.compareEnabled {
+                if model.toolMode == .crop {
+                    CropOverlay(model: model, displayed: displayed)
+                        .position(center)
+                }
+
+                if model.toolMode == .heal {
+                    HealOverlay(model: model, displayed: displayed)
+                        .position(center)
+                }
+
+                if model.compareEnabled && !model.toolOwnsCanvas {
                     Image(nsImage: original)
                         .resizable()
                         .interpolation(.high)
@@ -124,7 +134,7 @@ struct CompareCanvas: View {
                     .allowsHitTesting(false)
                 }
 
-                if model.showFaceOverlay {
+                if model.showFaceOverlay && !model.toolOwnsCanvas {
                     FaceOverlayView(faces: model.faces)
                         .frame(width: displayed.width, height: displayed.height, alignment: .topLeading)
                         .position(center)
@@ -143,6 +153,7 @@ struct CompareCanvas: View {
             // is the handle's own gesture, so the two never fight.
             .gesture(panGesture)
             .onTapGesture(count: 2) {
+                guard !model.toolOwnsCanvas else { return }
                 if model.zoom > 1.0001 {
                     model.resetView()
                 } else {
@@ -155,6 +166,8 @@ struct CompareCanvas: View {
     private var panGesture: some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { value in
+                // The crop frame and the brush own the pointer in their modes.
+                guard !model.toolOwnsCanvas else { return }
                 if panStart == nil {
                     panStart = model.panOffset
                     isPanning = true
@@ -303,12 +316,14 @@ struct CompareCanvas: View {
             dockButton(icon: "rectangle.split.2x1",
                        label: model.s.compare,
                        active: model.compareEnabled,
+                       enabled: !model.toolOwnsCanvas,
                        help: model.s.compareToggle) {
                 model.compareEnabled.toggle()
             }
             dockButton(icon: "face.dashed",
                        label: model.s.faceBox,
                        active: model.showFaceOverlay,
+                       enabled: !model.toolOwnsCanvas,
                        help: model.s.faceBoxHelp) {
                 model.showFaceOverlay.toggle()
             }

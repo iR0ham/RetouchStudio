@@ -57,6 +57,17 @@ enum SelfCheck {
         passed = checkExportDepthAndMetadata(outDirectory: outDirectory) && passed
         print("-- undo and redo history --")
         passed = checkUndoHistory() && passed
+        print("-- crop geometry, orientation and project round-trip --")
+        passed = checkCropGeometry() && passed
+        passed = checkCropLoad(outDirectory: outDirectory) && passed
+        passed = checkProjectRoundTrip() && passed
+        passed = checkCropProjectFlow(outDirectory: outDirectory) && passed
+        print("-- manual healing brush --")
+        passed = checkManualHealing() && passed
+        print("-- looks: colour cube and grain --")
+        passed = checkLooksAndGrain() && passed
+        print("-- makeup: lips, cheeks and brows --")
+        passed = checkMakeup() && passed
         if let facePath {
             print("-- real photo --")
             passed = checkRealFace(path: facePath, outDirectory: outDirectory) && passed
@@ -365,7 +376,40 @@ enum SelfCheck {
                                        masks: masks, faces: faces)
         let wrote = processor.write(output, to: directory.appendingPathComponent("selftest-face-after.png"), format: .png, quality: 1)
         print("  \(wrote ? "✓" : "✗") retouched output written: selftest-face-after.png")
-        return wrote
+
+        // A group photo has to retouch every person in it, so the mask and the
+        // skin pass are measured inside each face box rather than once overall.
+        var everyFace = true
+        if faces.count > 1 {
+            let retouch = Preset.all[1].adjustments.retouchOnly
+            if let before = processor.context.createCGImage(source, from: previewExtent),
+               let after = processor.context.createCGImage(
+                    processor.process(source, adjustments: retouch, masks: masks, faces: faces),
+                    from: previewExtent),
+               let skin = masks.skin,
+               let skinRender = processor.context.createCGImage(skin, from: previewExtent) {
+                for (index, face) in faces.enumerated() {
+                    let coverage = maskCoverage(skinRender, normalized: face.boundingBox)
+                    let delta = regionDifference(before, after, normalized: face.boundingBox)
+                    let ok = coverage > 0.10 && delta > 0.15
+                    everyFace = everyFace && ok
+                    print("  \(ok ? "✓" : "✗") face \(index + 1) in a \(faces.count)-face photo: "
+                        + "skin coverage \(String(format: "%.2f", coverage)) (expect > 0.10), "
+                        + "retouch Δ=\(String(format: "%.2f", delta)) (expect > 0.15)")
+                }
+                let reshape = Preset.all[2].adjustments.reshapeOnly
+                for (index, face) in faces.enumerated() {
+                    let controls = FeatureReshaper.controls(for: face, adjustments: reshape).count
+                    let ok = controls > 0
+                    everyFace = everyFace && ok
+                    print("  \(ok ? "✓" : "✗") face \(index + 1) reshape: \(controls) mesh controls (expect > 0)")
+                }
+            } else {
+                print("  ✗ could not render the masks for the multi-face check")
+                everyFace = false
+            }
+        }
+        return wrote && everyFace
     }
 
     // MARK: - ۵) خودکار رنگ/نور و رتوش باید کاملاً جدا باشند
@@ -1170,6 +1214,655 @@ enum SelfCheck {
         }
     }
 
+    // MARK: - ۱۴) برش: هندسه، جهت و پروژه
+
+    /// The crop rect is normalized with a TOP-LEFT origin, while Core Image and
+    /// the face landmarks use a bottom-left origin. Mixing the two silently
+    /// crops the wrong half of the photo, so both the math and a real load are
+    /// checked here.
+    private static func checkCropGeometry() -> Bool {
+        var ok = true
+
+        // A 3:4 portrait: the largest square crop is full width and 75% tall.
+        let square = CropGeometry.aspectFit(1, imageAspect: 0.75, in: CropGeometry.full)
+        let squareOK = abs(square.width - 1) < 0.001 && abs(square.height - 0.75) < 0.001
+            && abs(square.midY - 0.5) < 0.001
+        print("  \(squareOK ? "✓" : "✗") square inside 3:4: \(fmtCrop(square)) (expect 1.00 × 0.75, centered)")
+        ok = squareOK && ok
+
+        // Cropping an already-cropped frame stacks, it does not restart.
+        let base = CGRect(x: 0.5, y: 0.25, width: 0.4, height: 0.5)
+        let draft = CGRect(x: 0.5, y: 0, width: 0.5, height: 1)
+        let composed = CropGeometry.composed(draft, over: base)
+        let composedOK = abs(composed.minX - 0.7) < 0.001 && abs(composed.minY - 0.25) < 0.001
+            && abs(composed.width - 0.2) < 0.001 && abs(composed.height - 0.5) < 0.001
+        print("  \(composedOK ? "✓" : "✗") stacked crop: \(fmtCrop(composed)) (expect x=0.70 y=0.25 0.20 × 0.50)")
+        ok = composedOK && ok
+
+        let fullOK = CropGeometry.isFull(CropGeometry.full)
+            && !CropGeometry.isFull(CGRect(x: 0, y: 0, width: 0.999, height: 1))
+        print("  \(fullOK ? "✓" : "✗") a full-frame draft means no crop")
+        return fullOK && ok
+    }
+
+    /// Writes a top-bright / bottom-dark fixture and loads two crops through the
+    /// production entry point. The top crop must come back bright at half size,
+    /// proving the top-left crop rect reaches the right pixels.
+    private static func checkCropLoad(outDirectory: String) -> Bool {
+        let directory = URL(fileURLWithPath: outDirectory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("selftest-crop-source.png")
+
+        guard let fixture = makeCropFixture(width: 200, height: 100) else {
+            print("  ✗ could not build crop fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        guard processor.write(CIImage(cgImage: fixture), to: url, format: .png, quality: 1) else {
+            print("  ✗ could not write crop fixture")
+            return false
+        }
+
+        let top = processor.load(from: url, previewMaxDimension: 400,
+                                 crop: CGRect(x: 0, y: 0, width: 0.5, height: 0.5))
+        let bottom = processor.load(from: url, previewMaxDimension: 400,
+                                    crop: CGRect(x: 0, y: 0.5, width: 1, height: 0.5))
+        guard let top, let bottom else {
+            print("  ✗ could not load crops")
+            return false
+        }
+
+        let sizeOK = abs(top.pixelSize.width - 100) < 1 && abs(top.pixelSize.height - 50) < 1
+        let topMean = meanLuminance(top.originalPreview) ?? 0
+        let bottomMean = meanLuminance(bottom.originalPreview) ?? 0
+        let orientationOK = topMean > 200 && bottomMean < 60
+        print("  \(sizeOK ? "✓" : "✗") crop size: \(Int(top.pixelSize.width))×\(Int(top.pixelSize.height)) (expect 100×50)")
+        print("  \(orientationOK ? "✓" : "✗") crop hits the top half: top=\(topMean) bottom=\(bottomMean) (expect bright / dark)")
+        return sizeOK && orientationOK
+    }
+
+    private static func checkProjectRoundTrip() -> Bool {
+        let crop = CGRect(x: 0.1, y: 0.2, width: 0.5, height: 0.6)
+        let spots = [HealSpot(center: CGPoint(x: 0.3, y: 0.7), radius: 0.02),
+                     HealSpot(center: CGPoint(x: 0.8, y: 0.15), radius: 0.035)]
+        var adjustments = Adjustments()
+        adjustments.smooth = 42
+        adjustments.look = .nightStock
+        adjustments.lookStrength = 65
+        adjustments.grain = 30
+        adjustments.lipTint = 60
+        adjustments.lipShade = .berry
+        adjustments.blush = 35
+        adjustments.browDefine = 50
+
+        let project = RetouchProject(imagePath: "/tmp/photo.jpg",
+                                     adjustments: adjustments,
+                                     exportFormat: "jpeg",
+                                     exportQuality: 0.9,
+                                     autoRetouchStrength: 55,
+                                     crop: crop,
+                                     healSpots: spots)
+        guard let data = try? JSONEncoder().encode(project),
+              let decoded = try? JSONDecoder().decode(RetouchProject.self, from: data) else {
+            print("  ✗ could not encode/decode a project")
+            return false
+        }
+        let roundTrip = decoded.crop == crop && decoded.adjustments == adjustments
+            && decoded.healSpots == spots
+
+        // Projects written before crop existed have no `crop` key at all.
+        var legacyObject = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        legacyObject.removeValue(forKey: "crop")
+        legacyObject.removeValue(forKey: "healSpots")
+        let legacyData = try? JSONSerialization.data(withJSONObject: legacyObject)
+        let legacy = legacyData.flatMap { try? JSONDecoder().decode(RetouchProject.self, from: $0) }
+        let legacyOK = legacy?.crop == nil && legacy?.healSpots == nil && legacy?.adjustments == adjustments
+
+        print("  \(roundTrip ? "✓" : "✗") crop, stamps and sliders survive a project round-trip")
+        print("  \(legacyOK ? "✓" : "✗") a project without a crop key still opens")
+        return roundTrip && legacyOK
+    }
+
+    /// Reopening a project must show the cropped pixels, and an export built from
+    /// them must carry the same size and content: Save Project → reopen → Export.
+    private static func checkCropProjectFlow(outDirectory: String) -> Bool {
+        let directory = URL(fileURLWithPath: outDirectory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let sourceURL = directory.appendingPathComponent("selftest-crop-flow-source.png")
+        let exportURL = directory.appendingPathComponent("selftest-crop-flow-export.png")
+        let processor = ImageProcessor.shared
+
+        guard let fixture = makeCropFixture(width: 200, height: 100),
+              processor.write(CIImage(cgImage: fixture), to: sourceURL, format: .png, quality: 1) else {
+            print("  ✗ could not write the crop-flow fixture")
+            return false
+        }
+
+        // Top-left origin, so y = 0.5 is the lower half — the dark half of the fixture.
+        let project = RetouchProject(imagePath: sourceURL.path,
+                                     adjustments: .zero,
+                                     exportFormat: "png",
+                                     exportQuality: 1,
+                                     autoRetouchStrength: 50,
+                                     crop: CGRect(x: 0, y: 0.5, width: 0.5, height: 0.5))
+        guard let data = try? JSONEncoder().encode(project),
+              let reopened = try? JSONDecoder().decode(RetouchProject.self, from: data) else {
+            print("  ✗ could not encode/decode the crop-flow project")
+            return false
+        }
+        guard let loaded = processor.load(from: URL(fileURLWithPath: reopened.imagePath),
+                                          previewMaxDimension: 400,
+                                          crop: reopened.crop) else {
+            print("  ✗ could not reopen the cropped project")
+            return false
+        }
+        let openedOK = abs(loaded.pixelSize.width - 100) < 1 && abs(loaded.pixelSize.height - 50) < 1
+        print("  \(openedOK ? "✓" : "✗") reopened project is \(Int(loaded.pixelSize.width))×\(Int(loaded.pixelSize.height)) (expect 100×50)")
+
+        let processed = processor.process(loaded.sourceFull, adjustments: reopened.adjustments,
+                                          masks: loaded.masksFull, faces: loaded.faces)
+        guard processor.write(processed, to: exportURL, format: .png, quality: 1,
+                              colorSpace: loaded.colorSpace, metadata: loaded.metadata),
+              let source = CGImageSourceCreateWithURL(exportURL as CFURL, nil),
+              let exported = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            print("  ✗ could not export or read back the cropped project")
+            return false
+        }
+        let exportSizeOK = exported.width == 100 && exported.height == 50
+        // Threshold sits between the dark half (~31) and the bright half (~219).
+        let exportedMean = meanLuminance(exported) ?? 255
+        let contentOK = exportedMean < 90
+        print("  \(exportSizeOK ? "✓" : "✗") export from the reopened crop: \(exported.width)×\(exported.height) (expect 100×50)")
+        print("  \(contentOK ? "✓" : "✗") export holds the cropped half: mean=\(exportedMean) (expect dark)")
+        return openedOK && exportSizeOK && contentOK
+    }
+
+    /// The brush has to heal where it was pointed. Stamps are stored with a
+    /// top-left origin while masks are drawn in bottom-left space, so a stamp on
+    /// the top of the photo must clear the top spot and leave a control spot at
+    /// the bottom untouched. The crop mapping round trip is checked here too,
+    /// because stamps are stored against the original photo, not the frame on
+    /// screen.
+    private static func checkManualHealing() -> Bool {
+        let size = 240
+        let processor = ImageProcessor.shared
+        guard let base = makeTwoSpotFixture(size: size) else {
+            print("  ✗ could not build the healing fixture")
+            return false
+        }
+        let image = CIImage(cgImage: base)
+
+        // Spot A is drawn at CG (60, 180): the buffer row is 240-180 = 60, so its
+        // top-left normalized center is (0.25, 0.25). Spot B is the mirror image
+        // of that and must not move.
+        let stamp = HealSpot(center: CGPoint(x: 0.25, y: 0.25), radius: 0.04)
+        guard let healing = processor.spotsMask(extent: image.extent, spots: [stamp]),
+              let maskImage = processor.renderCGImage(healing.mask, scale: 1),
+              let healedCG = processor.renderCGImage(
+                  processor.process(image, adjustments: .zero, masks: nil, spots: healing),
+                  scale: 1) else {
+            print("  ✗ could not run the healing pass")
+            return false
+        }
+
+        let maskTop = luminance(maskImage, x: 60, y: 60) ?? 0
+        let maskBottom = luminance(maskImage, x: 180, y: 180) ?? 0
+        let maskOK = maskTop > 200 && maskBottom < 30
+        print("  \(maskOK ? "✓" : "✗") stamp lands where it was clicked: mask top=\(maskTop) bottom=\(maskBottom)")
+
+        let beforeA = luminance(base, x: 60, y: 60) ?? 255
+        let afterA = luminance(healedCG, x: 60, y: 60) ?? 0
+        let beforeB = luminance(base, x: 180, y: 180) ?? 0
+        let afterB = luminance(healedCG, x: 180, y: 180) ?? 255
+        let clearedOK = beforeA < 70 && abs(afterA - 128) < 45
+        let untouchedOK = abs(beforeB - afterB) <= 1
+        print("  \(clearedOK ? "✓" : "✗") stamped spot healed: \(beforeA) → \(afterA) (expect dark → near 128)")
+        print("  \(untouchedOK ? "✓" : "✗") unstamped spot untouched: \(beforeB) → \(afterB)")
+
+        // Healing borrows neighbouring texture. A flat median patch would leave
+        // the stamped disc far smoother than clean skin beside it.
+        let healedTexture = roughness(healedCG, rect: CGRect(x: 48, y: 48, width: 26, height: 26)) ?? 0
+        let cleanTexture = roughness(healedCG, rect: CGRect(x: 96, y: 96, width: 26, height: 26)) ?? 0
+        let textureOK = cleanTexture > 0 && healedTexture > cleanTexture * 0.35
+        print("  \(textureOK ? "✓" : "✗") texture survives the patch: healed=\(healedTexture) clean=\(cleanTexture)")
+
+        // A crop moves a stamp onto the new frame and back without drift, and a
+        // stamp outside the crop stops existing on screen.
+        let crop = CGRect(x: 0.2, y: 0.1, width: 0.5, height: 0.4)
+        guard let mapped = HealGeometry.workingSpots([stamp], crop: crop).first else {
+            print("  ✗ the stamp was dropped by a crop that contains it")
+            return false
+        }
+        let back = HealSpot(center: HealGeometry.originalCenter(mapped.center, crop: crop),
+                            radius: HealGeometry.originalRadius(mapped.radius, crop: crop))
+        let roundTripOK = abs(back.center.x - stamp.center.x) < 0.0001
+            && abs(back.center.y - stamp.center.y) < 0.0001
+            && abs(back.radius - stamp.radius) < 0.0001
+        print("  \(roundTripOK ? "✓" : "✗") stamp survives a crop round trip: \(fmtPoint(back.center)) r=\(String(format: "%.4f", back.radius))")
+
+        let outside = HealSpot(center: CGPoint(x: 0.9, y: 0.9), radius: 0.02)
+        let droppedOK = HealGeometry.workingSpots([outside], crop: crop).isEmpty
+        print("  \(droppedOK ? "✓" : "✗") a stamp outside the crop leaves the frame")
+
+        return maskOK && clearedOK && untouchedOK && textureOK && roundTripOK && droppedOK
+    }
+
+    // MARK: - Looks: colour cube and grain
+
+    /// Bottom-to-top grey ramp, drawn in CG space so y = 0 is black.
+    private static func makeRampImage(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        for y in 0..<size {
+            let v = CGFloat(y) / CGFloat(size - 1)
+            context.setFillColor(CGColor(red: v, green: v, blue: v, alpha: 1))
+            context.fill(CGRect(x: 0, y: y, width: size, height: 1))
+        }
+        return context.makeImage()
+    }
+
+    /// Mean difference between horizontally adjacent pixels. A smooth picture —
+    /// a ramp, a defocused sky — scores near zero no matter how bright it is,
+    /// so this is what separates real texture from an overall tone shift.
+    private static func adjacentVariation(_ image: CGImage) -> Double {
+        guard image.width > 1,
+              let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return -1 }
+        let bpp = max(1, image.bitsPerPixel / 8), bpr = image.bytesPerRow
+        let count = CFDataGetLength(data)
+        var total = 0.0, samples = 0.0
+        var y = 0
+        while y < image.height {
+            var x = 0
+            while x + 1 < image.width {
+                let left = y * bpr + x * bpp, right = y * bpr + (x + 1) * bpp
+                if right + 2 < count {
+                    let a = Double(Int(pointer[left]) + Int(pointer[left + 1]) + Int(pointer[left + 2])) / 3.0
+                    let b = Double(Int(pointer[right]) + Int(pointer[right + 1]) + Int(pointer[right + 2])) / 3.0
+                    total += abs(a - b)
+                    samples += 1
+                }
+                x += 2
+            }
+            y += 2
+        }
+        guard samples > 0 else { return -1 }
+        return total / samples
+    }
+
+    /// The darker of the two ends of the ramp fixture, which is where a matte
+    /// lift shows up. Sampling both ends means the check does not depend on
+    /// which way round Core Image hands the bitmap back.
+    private static func rampFloor(_ image: CGImage) -> Double {
+        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return -1 }
+        let bpr = image.bytesPerRow, mid = image.width / 2
+        func row(_ y: Int) -> Double {
+            let i = y * bpr + mid * max(1, image.bitsPerPixel / 8)
+            return Double(Int(pointer[i]) + Int(pointer[i + 1]) + Int(pointer[i + 2])) / 3.0
+        }
+        guard image.height > 1 else { return -1 }
+        return min(row(0), row(image.height - 1))
+    }
+
+    private static func checkLooksAndGrain() -> Bool {
+        var passed = true
+        guard let ramp = makeRampImage(size: 128) else {
+            print("  ✗ could not build the ramp fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: ramp)
+        let extent = source.extent
+        func render(_ image: CIImage) -> CGImage? { processor.context.createCGImage(image, from: extent) }
+        func delta(_ a: CGImage, _ b: CGImage) -> Double { meanAbsoluteDifference(a, b) ?? -1 }
+
+        let baseline = render(source) ?? ramp
+
+        // 1) A look has to be a genuine no-op before it is dialled in.
+        let untouched = LookEngine.applyLook(source, look: .crossProcess, strength: 0)
+        let noLook = LookEngine.applyLook(source, look: .none, strength: 1)
+        let zeroD = delta(baseline, render(untouched) ?? baseline)
+        let noneD = delta(baseline, render(noLook) ?? baseline)
+        let noopOK = zeroD == 0 && noneD == 0
+        print("  \(noopOK ? "✓" : "✗") zero strength and \"None\" change nothing: Δ=\(zeroD) / \(noneD) (expect 0)")
+        passed = noopOK && passed
+
+        // 2) Every named look has to actually move the pixels, and the strength
+        //    slider has to blend monotonically toward it.
+        for look in FilmLook.allCases where look != .none {
+            let quarter = delta(baseline, render(LookEngine.applyLook(source, look: look, strength: 0.25)) ?? baseline)
+            let full = delta(baseline, render(LookEngine.applyLook(source, look: look, strength: 1)) ?? baseline)
+            let ok = full > 0.5 && quarter > 0 && quarter < full
+            print("  \(ok ? "✓" : "✗") \(look.title): quarter Δ=\(String(format: "%.2f", quarter)) < full Δ=\(String(format: "%.2f", full))")
+            passed = ok && passed
+        }
+
+        // 3) A matte grade lifts the black floor; the highlights stay put.
+        let matte = render(LookEngine.applyLook(source, look: .fadedMatte, strength: 1)) ?? baseline
+        let matteFloor = rampFloor(matte)
+        let baseFloor = rampFloor(baseline)
+        let liftOK = matteFloor > baseFloor + 15
+        print("  \(liftOK ? "✓" : "✗") Faded Matte lifts the black floor: \(String(format: "%.1f", baseFloor)) → \(String(format: "%.1f", matteFloor))")
+        passed = liftOK && passed
+
+        // 4) Grain has to add texture, not tone: adjacent pixels start to
+        //    differ while the picture underneath keeps its shape.
+        let cleanTexture = adjacentVariation(baseline)
+        let grainy = render(LookEngine.addGrain(source, amount: 0.6, extent: extent)) ?? baseline
+        let grainyTexture = adjacentVariation(grainy)
+        let grainyMean = meanLuminance(grainy) ?? -1
+        let baseMean = meanLuminance(baseline) ?? -1
+        // Grain is multiplied in linear light, so it costs a little density —
+        // a faded print does the same. What must not happen is the picture
+        // changing shape while it darkens.
+        let grainOK = grainyTexture > max(6, cleanTexture + 6) && abs(grainyMean - baseMean) < 10
+        print("  \(grainOK ? "✓" : "✗") grain adds texture: adjacent Δ \(String(format: "%.2f", cleanTexture)) → "
+            + "\(String(format: "%.2f", grainyTexture)), mean \(baseMean) → \(grainyMean)")
+        let deeper = render(LookEngine.addGrain(source, amount: 1, extent: extent)) ?? baseline
+        let monotonicOK = adjacentVariation(deeper) > grainyTexture
+        print("  \(monotonicOK ? "✓" : "✗") more grain is coarser: \(String(format: "%.2f", grainyTexture)) → \(String(format: "%.2f", adjacentVariation(deeper)))")
+        let noGrain = delta(baseline, render(LookEngine.addGrain(source, amount: 0, extent: extent)) ?? baseline)
+        let grainNoopOK = noGrain == 0
+        print("  \(grainNoopOK ? "✓" : "✗") grain at zero changes nothing: Δ=\(noGrain)")
+        passed = grainOK && monotonicOK && grainNoopOK && passed
+
+        // 5) The grade and the grain have to reach the real pipeline, not just
+        //    the engine helpers.
+        var graded = Adjustments()
+        graded.look = .nightStock
+        graded.lookStrength = 100
+        var grainOnly = Adjustments()
+        grainOnly.grain = 70
+        let throughPipeline = delta(baseline, render(processor.process(source, adjustments: graded, masks: nil)) ?? baseline)
+        let grainThroughPipeline = delta(baseline, render(processor.process(source, adjustments: grainOnly, masks: nil)) ?? baseline)
+        let pipelineOK = throughPipeline > 1 && grainThroughPipeline > 0.3
+        print("  \(pipelineOK ? "✓" : "✗") process() applies them: look Δ=\(String(format: "%.2f", throughPipeline)), "
+            + "grain Δ=\(String(format: "%.2f", grainThroughPipeline))")
+        passed = pipelineOK && passed
+
+        // 6) Group isolation: clearing the look must leave the sliders alone and
+        //    vice versa.
+        var mixed = Adjustments(smooth: 40, exposure: 20)
+        mixed.look = .warmGold
+        mixed.lookStrength = 80
+        mixed.grain = 45
+        let lookCleared = mixed.applyingLook(Adjustments().lookOnly)
+        let otherCleared = mixed.applyingRetouch(Adjustments().retouchOnly)
+            .applyingColorLight(Adjustments().colorLightOnly)
+        let isolationOK = lookCleared.lookStrength == 0 && lookCleared.grain == 0
+            && lookCleared.smooth == 40 && lookCleared.exposure == 20
+            && otherCleared.smooth == 0 && otherCleared.exposure == 0
+            && otherCleared.lookStrength == 80 && otherCleared.grain == 45
+        print("  \(isolationOK ? "✓" : "✗") clearing a look keeps the sliders, and the reverse")
+        passed = isolationOK && passed
+
+        // 7) An older project file has no look keys at all.
+        var legacyObject: [String: Any] = ["smooth": 30.0, "blemish": 12.0]
+        legacyObject["faceWidth"] = nil
+        let legacyData = try? JSONSerialization.data(withJSONObject: legacyObject)
+        let legacy = legacyData.flatMap { try? JSONDecoder().decode(Adjustments.self, from: $0) }
+        let legacyOK = legacy?.smooth == 30 && legacy?.lookID == "" && legacy?.lookStrength == 0 && legacy?.grain == 0
+        print("  \(legacyOK ? "✓" : "✗") adjustments without look keys still decode")
+        passed = legacyOK && passed
+
+        return passed
+    }
+
+    // MARK: - Makeup
+
+    /// Cosmetics have to colour the feature they are named for, keep the
+    /// shading that makes it look three-dimensional, and leave the rest of the
+    /// photo bit-for-bit alone.
+    private static func checkMakeup() -> Bool {
+        var passed = true
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let face = makeupFace()
+        let processor = ImageProcessor.shared
+        guard let fixture = makeMakeupFixture(size: size),
+              let masks = processor.buildMasks(extent: extent, faces: [face]) else {
+            print("  ✗ could not build the makeup fixture or masks")
+            return false
+        }
+        let source = CIImage(cgImage: fixture)
+        func output(_ a: Adjustments) -> CGImage {
+            processor.renderCGImage(processor.process(source, adjustments: a, masks: masks, faces: [face]),
+                                    scale: 1) ?? fixture
+        }
+        let baseline = output(Adjustments())
+
+        // 1) The masks makeup needs. The brow band is the risky one: Vision
+        //    traces a thin outline, so without the widening the colour would
+        //    sit on a line instead of on the brow.
+        let browBox = FaceGeometry.boundingBox(of: face.leftEyebrow)
+        var maskChecks: [Double] = []
+        if let browMask = masks.brows, let rendered = processor.renderCGImage(browMask, scale: 1) {
+            maskChecks.append(maskCoverage(rendered, normalized: browBox))
+        } else {
+            print("  ✗ no brow mask")
+            passed = false
+        }
+        if let cheekMask = masks.cheeks, let rendered = processor.renderCGImage(cheekMask, scale: 1) {
+            maskChecks.append(maskCoverage(rendered, normalized: face.leftBlushRect))
+        } else {
+            print("  ✗ no cheek mask")
+            passed = false
+        }
+        let lipsOK = masks.lips != nil
+        let coverageOK = maskChecks.allSatisfy { $0 > 0.55 } && lipsOK
+        let coverageText = maskChecks.map { String(format: "%.2f", $0) }.joined(separator: ", ")
+        print("  \(coverageOK ? "✓" : "✗") masks cover their features (brow, cheek coverage: \(coverageText))")
+        passed = coverageOK && passed
+
+        // 2) Untouched, makeup is nothing at all.
+        let idle = output(Adjustments(lipShadeID: "berry"))
+        let idleDelta = meanColorDifference(baseline, idle, normalized: CGRect(x: 0, y: 0, width: 1, height: 1))
+        let idleOK = idleDelta == 0
+        print("  \(idleOK ? "✓" : "✗") a shade with no amount changes nothing: Δ=\(String(format: "%.2f", idleDelta))")
+        passed = idleOK && passed
+
+        // 3) Lip colour lands on the lips and nowhere else, and grows with the
+        //    slider.
+        var lip = Adjustments()
+        lip.lipTint = 100
+        var halfLip = Adjustments()
+        halfLip.lipTint = 50
+        let lipResult = output(lip)
+        let lipDelta = meanColorDifference(baseline, lipResult, normalized: face.lipRect ?? .zero)
+        let halfLipDelta = meanColorDifference(baseline, output(halfLip), normalized: face.lipRect ?? .zero)
+        let lipOK = lipDelta > 8 && halfLipDelta > 1 && halfLipDelta < lipDelta
+        print("  \(lipOK ? "✓" : "✗") lips take the colour: Δ=\(String(format: "%.1f", halfLipDelta)) at 50, \(String(format: "%.1f", lipDelta)) at 100")
+        passed = lipOK && passed
+
+        let elsewhere = [mid(face.foreheadRect), mid(FaceGeometry.boundingBox(of: face.leftEyebrow))]
+        let spill = elsewhere.map { sampleDelta(baseline, lipResult, at: $0) }
+        let containedOK = spill.allSatisfy { $0 <= 1 }
+        print("  \(containedOK ? "✓" : "✗") lip colour stays off the forehead and brows: Δ=\(spill.map { String(format: "%.1f", $0) }.joined(separator: ", "))")
+        passed = containedOK && passed
+
+        // 4) The lips must not become a flat sticker: the strip pattern drawn
+        //    into the fixture has to survive.
+        let before = lipStripRange(baseline, face: face, size: size)
+        let after = lipStripRange(lipResult, face: face, size: size)
+        let shadingOK = before > 20 && after > before * 0.5
+        print("  \(shadingOK ? "✓" : "✗") lip shading survives the colour: range \(String(format: "%.0f", before)) → \(String(format: "%.0f", after))")
+        passed = shadingOK && passed
+
+        // 5) Blush flushes the cheeks only.
+        var blush = Adjustments()
+        blush.blush = 100
+        let blushResult = output(blush)
+        let cheekDelta = max(meanColorDifference(baseline, blushResult, normalized: face.leftBlushRect),
+                             meanColorDifference(baseline, blushResult, normalized: face.rightBlushRect))
+        let blushFar = sampleDelta(baseline, blushResult, at: mid(face.foreheadRect))
+        let blushLips = sampleDelta(baseline, blushResult, at: face.lipRect.map(mid) ?? .zero)
+        let blushOK = cheekDelta > 2 && blushFar <= 1 && blushLips <= 1
+        print("  \(blushOK ? "✓" : "✗") blush on the cheeks: Δ=\(String(format: "%.1f", cheekDelta)); forehead \(String(format: "%.1f", blushFar)), lips \(String(format: "%.1f", blushLips))")
+        passed = blushOK && passed
+
+        // 6) Brows get denser, not painted.
+        var brow = Adjustments()
+        brow.browDefine = 100
+        let browResult = output(brow)
+        let browLift = regionMeanLuminance(baseline, normalized: browBox)
+            - regionMeanLuminance(browResult, normalized: browBox)
+        let browFar = sampleDelta(baseline, browResult, at: mid(face.foreheadRect))
+        let browOK = browLift > 1 && browFar <= 1
+        print("  \(browOK ? "✓" : "✗") brows darken: −\(String(format: "%.1f", browLift)) levels inside, Δ=\(String(format: "%.1f", browFar)) on the forehead")
+        passed = browOK && passed
+
+        // 7) The shades have to be different colours, not one colour at
+        //    different strengths. Rose is redder than berry, which carries blue.
+        var berry = Adjustments()
+        berry.lipTint = 100
+        berry.lipShade = .berry
+        var rose = Adjustments()
+        rose.lipTint = 100
+        rose.lipShade = .rose
+        let roseRed = redMinusBlue(rose, face: face, from: output)
+        let berryRed = redMinusBlue(berry, face: face, from: output)
+        let shadeOK = roseRed != nil && berryRed != nil
+            && roseRed! > berryRed! + 2
+        print("  \(shadeOK ? "✓" : "✗") rose vs berry on the lips: red−blue \(String(format: "%.1f", roseRed ?? -999)) vs \(String(format: "%.1f", berryRed ?? -999))")
+        passed = shadeOK && passed
+
+        // 8) Makeup is its own group: clearing it keeps everything else, and
+        //    clearing the others keeps it.
+        var mixed = Adjustments(smooth: 40, exposure: 20)
+        mixed.look = .warmGold
+        mixed.lookStrength = 80
+        mixed.lipTint = 60
+        mixed.browDefine = 30
+        let makeupCleared = mixed.applyingMakeup(Adjustments().makeupOnly)
+        let othersCleared = mixed.applyingRetouch(Adjustments().retouchOnly)
+            .applyingColorLight(Adjustments().colorLightOnly)
+            .applyingLook(Adjustments().lookOnly)
+        let groupOK = makeupCleared.lipTint == 0 && makeupCleared.browDefine == 0
+            && makeupCleared.smooth == 40 && makeupCleared.exposure == 20
+            && makeupCleared.lookStrength == 80
+            && othersCleared.lipTint == 60 && othersCleared.browDefine == 30
+            && othersCleared.smooth == 0 && othersCleared.lookStrength == 0
+        print("  \(groupOK ? "✓" : "✗") makeup resets as one group, alone")
+        passed = groupOK && passed
+
+        // 9) A project file from before makeup has no makeup keys at all.
+        let legacyJSON = "{\"smooth\": 30.0, \"blemish\": 12.0}"
+        let legacy = legacyJSON.data(using: .utf8).flatMap {
+            try? JSONDecoder().decode(Adjustments.self, from: $0)
+        }
+        let legacyOK = legacy?.lipTint == 0 && legacy?.blush == 0 && legacy?.browDefine == 0
+            && legacy?.lipShade == .rose && legacy?.blushShade == .peach
+        print("  \(legacyOK ? "✓" : "✗") adjustments without makeup keys decode, with default shades")
+        passed = legacyOK && passed
+
+        return passed
+    }
+
+    /// Mean red-minus-blue across the lips for a given makeup state.
+    private static func redMinusBlue(_ a: Adjustments,
+                                     face: FaceGeometry,
+                                     from output: (Adjustments) -> CGImage) -> Double? {
+        guard let rect = face.lipRect, let channels = meanChannels(output(a), normalized: rect) else { return nil }
+        return Double(channels.r - channels.b)
+    }
+
+    /// Brightness range across the lip strips, used to prove the colour keeps
+    /// the shading rather than laying a flat sticker over it.
+    private static func lipStripRange(_ image: CGImage, face: FaceGeometry, size: Int) -> Double {
+        guard let rect = face.lipRect else { return 0 }
+        var values: [Double] = []
+        for step in 0..<9 {
+            let x = rect.minX + rect.width * (CGFloat(step) + 0.5) / 9
+            if let value = luminance(image, normalizedAt: CGPoint(x: x, y: rect.midY)) {
+                values.append(Double(value))
+            }
+        }
+        guard let maxV = values.max(), let minV = values.min() else { return 0 }
+        return maxV - minV
+    }
+
+    /// A face with the regions makeup works on, sized so the derived cheek and
+    /// blush rects land clear of the lips and the nose.
+    private static func makeupFace() -> FaceGeometry {
+        func box(_ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat) -> [CGPoint] {
+            [CGPoint(x: x0, y: y0), CGPoint(x: x1, y: y0),
+             CGPoint(x: x1, y: y1), CGPoint(x: x0, y: y1)]
+        }
+        return FaceGeometry.synthetic(
+            boundingBox: CGRect(x: 0.20, y: 0.20, width: 0.60, height: 0.60),
+            faceContour: box(0.20, 0.20, 0.80, 0.80),
+            leftEye: box(0.35, 0.55, 0.45, 0.60),
+            rightEye: box(0.55, 0.55, 0.65, 0.60),
+            leftEyebrow: box(0.34, 0.63, 0.46, 0.655),
+            rightEyebrow: box(0.54, 0.63, 0.66, 0.655),
+            outerLips: box(0.42, 0.32, 0.58, 0.42),
+            innerLips: [],
+            nose: box(0.47, 0.44, 0.53, 0.54))
+    }
+
+    /// Skin-toned canvas with a striped mouth and two dark brows. CG draws from
+    /// the bottom left, the same origin the geometry uses.
+    private static func makeMakeupFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+
+        // Eight strips across the lips, bright to dark: the shading a colour
+        // layer has to preserve.
+        let strips = 8
+        let stripWidth = s * 0.16 / CGFloat(strips)
+        for index in 0..<strips {
+            let factor = 0.55 + 0.50 * Double(index) / Double(strips - 1)
+            context.setFillColor(CGColor(red: 0.62 * factor, green: 0.28 * factor,
+                                         blue: 0.28 * factor, alpha: 1))
+            context.fill(CGRect(x: s * 0.42 + CGFloat(index) * stripWidth, y: s * 0.32,
+                                width: stripWidth + 1, height: s * 0.10))
+        }
+
+        context.setFillColor(CGColor(red: 0.26, green: 0.19, blue: 0.14, alpha: 1))
+        context.fill(CGRect(x: s * 0.34, y: s * 0.63, width: s * 0.12, height: s * 0.025))
+        context.fill(CGRect(x: s * 0.54, y: s * 0.63, width: s * 0.12, height: s * 0.025))
+        return context.makeImage()
+    }
+
+    private static func fmtPoint(_ point: CGPoint) -> String {
+        String(format: "(%.2f, %.2f)", point.x, point.y)
+    }
+
+    /// Flat gray skin with fine grain and two dark spots, one in the top-left
+    /// quadrant and one in the bottom-right, drawn in CG (bottom-left) space.
+    private static func makeTwoSpotFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setFillColor(CGColor(red: 128 / 255, green: 128 / 255, blue: 128 / 255, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<(size * size / 8) {
+            let x = Int.random(in: 0..<size, using: &generator)
+            let y = Int.random(in: 0..<size, using: &generator)
+            let v = Double.random(in: 0.35...1.0, using: &generator)
+            context.setFillColor(CGColor(red: v, green: v, blue: v, alpha: 1))
+            context.fill(CGRect(x: x, y: y, width: 1, height: 1))
+        }
+
+        context.setFillColor(CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1))
+        context.fill(CGRect(x: 55, y: 175, width: 10, height: 10))
+        context.fill(CGRect(x: 175, y: 55, width: 10, height: 10))
+        return context.makeImage()
+    }
+
+    private static func fmtCrop(_ rect: CGRect) -> String {
+        String(format: "x=%.2f y=%.2f %.2f × %.2f", rect.minX, rect.minY, rect.width, rect.height)
+    }
+
     /// «زبری» یک ناحیه: میانگین اختلاف روشنایی هر پیکسل با همسایه‌ی راست و بالایش.
     /// عدد بزرگ‌تر = بافت/جزئیات بیشتر. برای سنجش اثر صافی پوست استفاده می‌شود.
     private static func roughness(_ image: CGImage, rect: CGRect) -> Double? {
@@ -1230,6 +1923,144 @@ enum SelfCheck {
         return (Int(pointer[index]) + Int(pointer[index + 1]) + Int(pointer[index + 2])) / 3
     }
 
+    /// A Vision bounding box, normalized with a bottom-left origin, converted to
+    /// pixel bounds in a top-left bitmap.
+    private static func pixelBounds(of rect: CGRect, in image: CGImage) -> (x0: Int, y0: Int, x1: Int, y1: Int) {
+        let w = CGFloat(image.width), h = CGFloat(image.height)
+        let x0 = max(0, Int(rect.minX * w)), x1 = min(image.width, Int(rect.maxX * w))
+        let y0 = max(0, Int((1 - rect.maxY) * h)), y1 = min(image.height, Int((1 - rect.minY) * h))
+        return (x0, y0, x1, y1)
+    }
+
+    /// Fraction of sampled pixels a mask covers inside a bounding box.
+    private static func maskCoverage(_ mask: CGImage, normalized rect: CGRect) -> Double {
+        guard let data = mask.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return -1 }
+        let bpp = max(1, mask.bitsPerPixel / 8), bpr = mask.bytesPerRow
+        let count = CFDataGetLength(data)
+        let b = pixelBounds(of: rect, in: mask)
+        var covered = 0, total = 0
+        var y = b.y0
+        while y < b.y1 {
+            var x = b.x0
+            while x < b.x1 {
+                let index = y * bpr + x * bpp
+                if index + 2 < count {
+                    if (Int(pointer[index]) + Int(pointer[index + 1]) + Int(pointer[index + 2])) / 3 > 60 {
+                        covered += 1
+                    }
+                    total += 1
+                }
+                x += 2
+            }
+            y += 2
+        }
+        return total > 0 ? Double(covered) / Double(total) : -1
+    }
+
+    /// Centre of a normalized rect, in the same bottom-left coordinates the
+    /// face geometry uses.
+    private static func mid(_ rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.midX, y: rect.midY)
+    }
+
+    /// Red, green and blue of one pixel of an 8-bit RGBA bitmap. Row 0 is the
+    /// top of the picture, so a normalized bottom-left point needs flipping.
+    private static func pixel(_ image: CGImage, x: Int, y: Int) -> (r: Int, g: Int, b: Int)? {
+        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return nil }
+        let bytesPerPixel = max(1, image.bitsPerPixel / 8)
+        guard x >= 0, y >= 0, x < image.width, y < image.height else { return nil }
+        let index = y * image.bytesPerRow + x * bytesPerPixel
+        guard index + 2 < CFDataGetLength(data) else { return nil }
+        return (Int(pointer[index]), Int(pointer[index + 1]), Int(pointer[index + 2]))
+    }
+
+    private static func pixel(_ image: CGImage, normalized point: CGPoint) -> (r: Int, g: Int, b: Int)? {
+        let x = Int((point.x * CGFloat(image.width)).rounded())
+        let y = Int(((1 - point.y) * CGFloat(image.height)).rounded())
+        return pixel(image, x: x, y: y)
+    }
+
+    private static func luminance(_ image: CGImage, normalizedAt point: CGPoint) -> Int? {
+        guard let rgb = pixel(image, normalized: point) else { return nil }
+        return (rgb.r + rgb.g + rgb.b) / 3
+    }
+
+    /// Channel change at a single point, for "did this spill onto that region".
+    /// An unreadable pixel reports a large delta so a test cannot pass on nil.
+    private static func sampleDelta(_ a: CGImage, _ b: CGImage, at point: CGPoint) -> Double {
+        guard let p = pixel(a, normalized: point), let q = pixel(b, normalized: point) else { return 999 }
+        return Double(abs(p.r - q.r) + abs(p.g - q.g) + abs(p.b - q.b)) / 3
+    }
+
+    /// Mean absolute difference over all three channels inside a normalized box.
+    /// Luminance alone hides a hue shift: rose and berry differ mostly in blue.
+    private static func meanColorDifference(_ a: CGImage, _ b: CGImage, normalized rect: CGRect) -> Double {
+        guard a.width == b.width, a.height == b.height else { return -1 }
+        let bounds = pixelBounds(of: rect, in: a)
+        var total = 0.0, samples = 0.0
+        var y = bounds.y0
+        while y < bounds.y1 {
+            var x = bounds.x0
+            while x < bounds.x1 {
+                if let p = pixel(a, x: x, y: y), let q = pixel(b, x: x, y: y) {
+                    total += Double(abs(p.r - q.r) + abs(p.g - q.g) + abs(p.b - q.b)) / 3
+                    samples += 1
+                }
+                x += 2
+            }
+            y += 2
+        }
+        return samples > 0 ? total / samples : -1
+    }
+
+    private static func regionMeanLuminance(_ image: CGImage, normalized rect: CGRect) -> Double {
+        guard let value = meanChannels(image, normalized: rect) else { return -1 }
+        return Double(value.r + value.g + value.b) / 3
+    }
+
+    private static func meanChannels(_ image: CGImage, normalized rect: CGRect) -> (r: Int, g: Int, b: Int)? {
+        let bounds = pixelBounds(of: rect, in: image)
+        var red = 0.0, green = 0.0, blue = 0.0, samples = 0.0
+        var y = bounds.y0
+        while y < bounds.y1 {
+            var x = bounds.x0
+            while x < bounds.x1 {
+                if let rgb = pixel(image, x: x, y: y) {
+                    red += Double(rgb.r); green += Double(rgb.g); blue += Double(rgb.b)
+                    samples += 1
+                }
+                x += 2
+            }
+            y += 2
+        }
+        guard samples > 0 else { return nil }
+        return (Int(red / samples), Int(green / samples), Int(blue / samples))
+    }
+
+    /// Mean absolute luminance change inside a bounding box, on a grid.
+    private static func regionDifference(_ a: CGImage, _ b: CGImage, normalized rect: CGRect) -> Double {
+        guard a.width == b.width, a.height == b.height,
+              let da = a.dataProvider?.data, let pa = CFDataGetBytePtr(da),
+              let db = b.dataProvider?.data, let pb = CFDataGetBytePtr(db) else { return -1 }
+        let bpp = max(1, a.bitsPerPixel / 8), bpr = a.bytesPerRow
+        let bounds = pixelBounds(of: rect, in: a)
+        var total = 0.0, samples = 0.0
+        var y = bounds.y0
+        while y < bounds.y1 {
+            var x = bounds.x0
+            while x < bounds.x1 {
+                let i = y * bpr + x * bpp
+                let la = (Int(pa[i]) + Int(pa[i + 1]) + Int(pa[i + 2])) / 3
+                let lb = (Int(pb[i]) + Int(pb[i + 1]) + Int(pb[i + 2])) / 3
+                total += Double(abs(la - lb))
+                samples += 1
+                x += 2
+            }
+            y += 2
+        }
+        return samples > 0 ? total / samples : -1
+    }
+
     /// Mean absolute per-pixel luminance difference, sampled on a grid.
     private static func meanAbsoluteDifference(_ a: CGImage, _ b: CGImage) -> Double? {
         guard a.width == b.width, a.height == b.height else { return nil }
@@ -1272,6 +2103,21 @@ enum SelfCheck {
         }
         guard samples > 0 else { return nil }
         return (total / samples * 10).rounded() / 10
+    }
+
+    /// Top half bright, bottom half dark. In CG drawing coordinates y = 0 is
+    /// the bottom, matching Core Image.
+    private static func makeCropFixture(width: Int, height: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let w = CGFloat(width), h = CGFloat(height)
+        context.setFillColor(CGColor(red: 0.86, green: 0.86, blue: 0.86, alpha: 1))
+        context.fill(CGRect(x: 0, y: h / 2, width: w, height: h / 2))
+        context.setFillColor(CGColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: w, height: h / 2))
+        return context.makeImage()
     }
 
     private static func makeGrayImage(size: Int, spotCenter: CGPoint, spotSize: Int) -> CGImage? {
