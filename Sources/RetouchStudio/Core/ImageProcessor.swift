@@ -585,6 +585,10 @@ final class ImageProcessor {
         let shortSide = min(extent.width, extent.height)
         let scale = max(0.5, min(3.0, shortSide / 1400))
 
+        // Levels first: exposure and contrast are tuned around the endpoints, so
+        // stretching them afterwards would move the anchors the analysis used.
+        image = LookEngine.applyLevels(image, black: a.blackLevel, white: a.whiteLevel)
+
         if a.exposure != 0 {
             image = image.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: 0.30 * a.exposure / 100])
         }

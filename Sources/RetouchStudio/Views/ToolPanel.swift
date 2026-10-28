@@ -81,15 +81,34 @@ struct ToolPanel: View {
     // MARK: - Auto Color
 
     private var autoColorCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             CardHeader(title: model.s.autoColorLight,
                        subtitle: model.s.autoColorLightScope,
                        icon: "camera.filters",
                        tint: Theme.accent)
 
-            SecondaryButton(title: "Apply Auto Color",
-                            icon: "camera.filters",
-                            enabled: model.hasImage && !model.isBusy) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) {
+                    Text(model.s.autoStrength.uppercased())
+                        .font(Theme.Font.section)
+                        .tracking(0.6)
+                        .foregroundStyle(Theme.muted)
+                    Spacer(minLength: 6)
+                    Text("\(Int(model.autoColorStrength.rounded()))%")
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.text)
+                        .contentTransition(.numericText())
+                        .animation(Motion.snappy, value: model.autoColorStrength)
+                }
+
+                BipolarSlider(value: $model.autoColorStrength,
+                              range: 0...100,
+                              tint: Theme.accent)
+            }
+
+            FilledButton(title: "Generate",
+                         icon: "camera.filters",
+                         enabled: model.hasImage && !model.isBusy) {
                 model.autoColorLight()
             }
             .help(model.s.autoColorLightHelp)

@@ -37,7 +37,7 @@ struct L10n {
     var autoColorLight: String { "Auto Color & Light" }
     var autoRetouch: String { "Auto Retouch" }
     var autoColorLightHelp: String {
-        "Sets exposure, contrast, color, warmth and clarity. Retouch sliders are left untouched. (⇧⌘L)"
+        "Measures the photo's own tonal range, then sets levels, exposure, contrast, color, warmth and clarity. Retouch sliders are left untouched. (⇧⌘L)"
     }
     var autoRetouchHelp: String {
         "Sets skin, blemish, teeth and eye tools. Color and light sliders are left untouched. (⇧⌘R)"
@@ -65,6 +65,8 @@ struct L10n {
     var eyeSharpen: String { "Eye Sharpen" }
     var exposure: String { "Exposure" }
     var contrast: String { "Contrast" }
+    var blacks: String { "Blacks" }
+    var whites: String { "Whites" }
     var saturation: String { "Saturation" }
     var vibrance: String { "Vibrance" }
     var warmth: String { "Warmth" }

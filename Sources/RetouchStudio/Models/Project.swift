@@ -21,6 +21,10 @@ struct RetouchProject: Codable {
     var exportFormat: String
     var exportQuality: Double
     var autoRetouchStrength: Double
+    /// Strength for Auto Color & Light. Projects written before it existed
+    /// decode as `nil` and the editor falls back to applying the analysis
+    /// exactly as measured.
+    var autoColorStrength: Double? = nil
     /// Normalized top-left crop applied to the original photo, if any. Projects
     /// written before crop existed decode as `nil`.
     var crop: CGRect? = nil

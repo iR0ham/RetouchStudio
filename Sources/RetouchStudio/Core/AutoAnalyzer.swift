@@ -311,38 +311,171 @@ enum AutoAnalyzer {
 
     // MARK: - خودکار ۱: رنگ و نور
 
-    /// تنظیمات «رنگ و نور» را از روی آماره‌های خود تصویر حساب می‌کند.
-    /// هیچ فیلد مربوط به پوست/چهره را دست نمی‌زند.
-    static func autoColorLight(_ buffer: PixelBuffer) -> Adjustments {
-        let s = stats(buffer)
-        var a = Adjustments()
+    /// What the tonality of the picture actually is, measured where the subject
+    /// sits rather than where the frame happens to be brightest.
+    struct TonalReadout {
+        var black: Double = 0          // 0.5th percentile of the subject histogram
+        var white: Double = 1          // 99.5th percentile
+        var median: Double = 0.5
+        var interQuartile: Double = 0  // 25th to 75th: the slope through the mid-tones
+        var saturation: Double = 0
+        /// Mean channels of the near-neutral mid-tones — the reference a grey
+        /// world balance needs. `neutralShare` says whether there were enough.
+        var neutral = SIMD3<Double>(repeating: 0)
+        var neutralShare: Double = 0
+        var detail: Double = 0
+        var shadowClip: Double = 0     // share of pixels already sitting on the floor
+        var highlightClip: Double = 0
+    }
 
-        // Exposure: bring the median toward 0.5, but only part of the way so
-        // very dark or very bright photos are not destroyed.
-        // Scale: 100 units = 0.30 EV.
-        if s.medianLuminance > 0.001 {
-            let evNeeded = log2(0.5 / max(0.02, s.medianLuminance))
-            a.exposure = clamp(evNeeded / 0.30 * 100 * 0.65, -45, 45)
+    /// Samples the frame with a soft weight toward the middle: the subject of a
+    /// portrait is there, and a bright sky or a black wall at the edge is not
+    /// what the exposure was set for.
+    static func readTones(_ buffer: PixelBuffer) -> TonalReadout {
+        var readout = TonalReadout()
+        let stepX = max(1, buffer.width / 256)
+        let stepY = max(1, buffer.height / 256)
+
+        var histogram = [Double](repeating: 0, count: 256)
+        var weightTotal = 0.0
+        var saturation = 0.0, detail = 0.0, detailSamples = 0.0
+        var clippedShadows = 0.0, clippedHighlights = 0.0
+        var neutral = SIMD3<Double>(repeating: 0), neutralWeight = 0.0
+
+        var y = 0
+        while y < buffer.height {
+            let ny = (Double(y) + 0.5) / Double(buffer.height)
+            var x = 0
+            while x < buffer.width {
+                let nx = (Double(x) + 0.5) / Double(buffer.width)
+                // 1 at the centre, 0.3 in the corners.
+                let d = (nx - 0.5) * (nx - 0.5) + (ny - 0.5) * (ny - 0.5)
+                let weight = 1 - 0.7 * min(1, d / 0.5)
+
+                let (r, g, b) = buffer.rgb(x: x, y: y)
+                let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                histogram[min(255, max(0, Int(luma * 255)))] += weight
+                weightTotal += weight
+                if luma < 0.008 { clippedShadows += weight }
+                if luma > 0.992 { clippedHighlights += weight }
+
+                let maxChannel = max(r, max(g, b))
+                let minChannel = min(r, min(g, b))
+                let sat = maxChannel > 0.0001 ? (maxChannel - minChannel) / maxChannel : 0
+                saturation += sat * weight
+
+                // Grey-world on the near-neutral mid-tones only. Skin, foliage
+                // and sky are chromatic by nature, and averaging them in is what
+                // pulls a whole frame toward orange or blue.
+                if luma > 0.22 && luma < 0.9 && sat < 0.16 {
+                    neutral += SIMD3(r, g, b) * weight
+                    neutralWeight += weight
+                }
+
+                if x + stepX < buffer.width {
+                    detail += abs(luma - buffer.luminance(x: x + stepX, y: y)) * weight
+                    detailSamples += weight
+                }
+                x += stepX
+            }
+            y += stepY
         }
 
-        // کنتراست: انحراف معیار کم = تصویر تخت = کنتراست بیشتر لازم دارد.
-        a.contrast = clamp((0.21 - s.contrastSigma) * 380, -45, 55)
+        guard weightTotal > 0 else { return readout }
+        readout.black = weightedPercentile(histogram, fraction: 0.005, total: weightTotal)
+        readout.white = weightedPercentile(histogram, fraction: 0.995, total: weightTotal)
+        readout.median = weightedPercentile(histogram, fraction: 0.50, total: weightTotal)
+        readout.interQuartile = weightedPercentile(histogram, fraction: 0.75, total: weightTotal)
+            - weightedPercentile(histogram, fraction: 0.25, total: weightTotal)
+        readout.saturation = saturation / weightTotal
+        readout.detail = detailSamples > 0 ? detail / detailSamples : 0
+        readout.shadowClip = clippedShadows / weightTotal
+        readout.highlightClip = clippedHighlights / weightTotal
+        if neutralWeight > 0 {
+            readout.neutral = neutral / neutralWeight
+            readout.neutralShare = neutralWeight / weightTotal
+        }
+        return readout
+    }
 
-        // اشباع رنگ: رنگ‌پریده‌ها را تقویت کن.
-        a.saturation = clamp((0.34 - s.meanSaturation) * 190, -40, 55)
+    /// تنظیمات «رنگ و نور» را از روی خوانش بالا حساب می‌کند.
+    /// هیچ فیلد مربوط به پوست/چهره را دست نمی‌زند.
+    static func autoColorLight(_ buffer: PixelBuffer) -> Adjustments {
+        let t = readTones(buffer)
+        var a = Adjustments()
 
-        // شادابی: همیشه کمی، بدون اغراق.
-        a.vibrance = clamp((0.34 - s.meanSaturation) * 90 + 6, 0, 35)
+        // 1) Endpoints. A faded picture is one whose darkest and brightest
+        //    pixels stop short of the ends of the range, so the fix is to move
+        //    the ends to meet them. Pulling the median toward mid-grey — what
+        //    this function used to do — lifts the blacks instead and makes the
+        //    fade worse. The levels pass that applies this only touches the two
+        //    ends, so recovering a bright wall cannot brighten a face. The
+        //    stretch backs off wherever the frame is already clipped, because
+        //    there is nothing left to recover there.
+        let black = min(0.30, max(0, t.black))
+        let white = max(0.70, min(1, t.white))
+        let roomAtBottom = t.shadowClip < 0.01
+        let roomAtTop = t.highlightClip < 0.01
+        if roomAtBottom, black > 0.03 { a.blacks = clamp(black / 0.30 * 100, 0, 100) }
+        if roomAtTop, white < 0.97 { a.whites = clamp((1 - white) / 0.30 * 100, 0, 100) }
 
-        // گرمی رنگ: اگر آبی از قرمز بیشتر باشد عکس سرد است.
-        a.warmth = clamp((s.meanBlue - s.meanRed) * 170, -40, 40)
+        // 2) Mid-tone slope. The endpoints set the range; this sets how steep
+        //    the picture is through the middle, and it is deliberately
+        //    one-directional — flattening a frame automatically is a taste call.
+        a.contrast = clamp((0.17 - t.interQuartile) * 220, 0, 26)
 
-        // شفافیت: عکس‌های نرم کمی وضوح می‌خواهند، عکس‌های پرجزئیات نه.
-        a.clarity = clamp((0.045 - s.detail) * 700, -10, 30)
+        // 3) Exposure, and only outside a dead band. A frame whose mid-tones
+        //    already sit in the comfortable range is left exactly where the
+        //    photographer put it; a high-key or low-key picture is an intention,
+        //    not an error, and dragging it to grey is the failure this whole
+        //    function used to have. Underexposure is corrected harder than
+        //    overexposure because it is almost never on purpose.
+        let lowerBand = 0.32, upperBand = 0.62
+        if t.median < lowerBand {
+            a.exposure = clamp((lowerBand - t.median) * 90, 0, 30)
+        } else if t.median > upperBand {
+            a.exposure = -clamp((t.median - upperBand) * 45, 0, 14)
+        }
 
-        // وینیت دست نمی‌خورد؛ سلیقه‌ای است.
+        // 4) White balance from the near-neutral mid-tones. Needs at least two
+        //    percent of the frame to be genuinely grey; a saturated scene has no
+        //    neutral reference, and inventing one is worse than not balancing.
+        if t.neutralShare > 0.02, t.neutral.x > 0.02, t.neutral.z > 0.02 {
+            // Positive warmth takes a blue cast out — checked against the
+            // filter, not assumed.
+            a.warmth = clamp(log(t.neutral.z / t.neutral.x) * 130, -20, 20)
+        }
+
+        // 5) Colour. Vibrance raises the dull colours and leaves the strong ones
+        //    alone, which is what keeps skin from going orange. Saturation only
+        //    ever comes down, and only from a garish frame.
+        a.vibrance = clamp((0.30 - t.saturation) * 70 + 4, 0, 22)
+        a.saturation = t.saturation > 0.62 ? clamp((0.62 - t.saturation) * 60, -18, 0) : 0
+
+        // 6) A soft frame gets a little local contrast back; a detailed one is
+        //    left as it is.
+        a.clarity = t.detail < 0.012 ? clamp((0.012 - t.detail) * 900, 0, 12) : 0
+
+        // وینیت سلیقه‌ای است؛ دست نمی‌خورد.
         a.vignette = 0
-        return a
+
+        // «همین الان متوازن است» یک جواب واقعی است. وقتی همهٔ اسلایدرها دو-سه
+        // واحد تکان می‌خورند، نتیجه فقط جابه‌جا شدن بی‌دلیلِ عکس است.
+        let movement = abs(a.exposure) + abs(a.contrast) + abs(a.blacks) + abs(a.whites)
+            + abs(a.saturation) + abs(a.vibrance) + abs(a.warmth) + abs(a.clarity)
+        return movement < 12 ? Adjustments() : a
+    }
+
+    private static func weightedPercentile(_ histogram: [Double], fraction: Double,
+                                           total: Double) -> Double {
+        guard total > 0 else { return 0 }
+        let target = (total - 1) * fraction
+        var cumulative = 0.0
+        for (index, weight) in histogram.enumerated() {
+            cumulative += weight
+            if cumulative > target { return Double(index) / 255.0 }
+        }
+        return 1
     }
 
     // MARK: - خودکار ۲: رتوش چهره

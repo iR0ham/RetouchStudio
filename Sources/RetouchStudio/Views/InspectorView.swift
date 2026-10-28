@@ -236,6 +236,12 @@ struct InspectorView: View {
             ParameterRow(title: model.s.contrast,
                          value: model.binding(for: \.contrast),
                          onReset: { model.resetEffect(\.contrast) })
+            ParameterRow(title: model.s.blacks,
+                         value: model.binding(for: \.blacks),
+                         onReset: { model.resetEffect(\.blacks) })
+            ParameterRow(title: model.s.whites,
+                         value: model.binding(for: \.whites),
+                         onReset: { model.resetEffect(\.whites) })
             ParameterRow(title: model.s.saturation,
                          value: model.binding(for: \.saturation),
                          onReset: { model.resetEffect(\.saturation) })

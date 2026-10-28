@@ -41,6 +41,8 @@ enum SelfCheck {
         passed = checkSyntheticPortrait(outDirectory: outDirectory) && passed
         print("-- auto color/light vs auto retouch separation --")
         passed = checkAutoSeparation() && passed
+        print("-- auto color/light reads the tonal range --")
+        passed = checkAutoColorLevels() && passed
         print("-- mask convention (opaque grayscale) --")
         passed = checkMaskConvention() && passed
         print("-- blemish gate separates skin from spots --")
@@ -482,7 +484,30 @@ enum SelfCheck {
                 everyFace = false
             }
         }
-        return wrote && everyFace && shieldClear
+        // The real complaint about the old auto was that pressing it faded the
+        // photo, and a fade is measurable: the tonal spread narrows and the black
+        // floor rises. Both are checked on the actual picture.
+        var autoHoldsUp = true
+        if let buffer = AutoAnalyzer.analysisBuffer(source),
+           let beforeImage = processor.context.createCGImage(source, from: previewExtent),
+           let before = tonalSpread(beforeImage) {
+            let patch = AutoAnalyzer.autoColorLight(buffer)
+            if let afterRender = processor.context.createCGImage(
+                    processor.process(source, adjustments: patch, masks: nil), from: previewExtent),
+               let after = tonalSpread(afterRender) {
+                let narrowed = (before.high - before.low) - (after.high - after.low)
+                let liftedFloor = after.low - before.low
+                autoHoldsUp = narrowed < 8 && liftedFloor < 6
+                print("  \(autoHoldsUp ? "✓" : "✗") Auto Color on a real photo keeps the tonal range: "
+                    + "spread \(String(format: "%.0f", before.high - before.low)) → \(String(format: "%.0f", after.high - after.low)), "
+                    + "floor \(String(format: "%.0f", before.low)) → \(String(format: "%.0f", after.low))")
+                print("     applied: exposure=\(fmt(patch.exposure)) contrast=\(fmt(patch.contrast)) "
+                    + "blacks=\(fmt(patch.blacks)) whites=\(fmt(patch.whites)) warmth=\(fmt(patch.warmth)) "
+                    + "vibrance=\(fmt(patch.vibrance)) saturation=\(fmt(patch.saturation)) clarity=\(fmt(patch.clarity))")
+            }
+        }
+
+        return wrote && everyFace && shieldClear && autoHoldsUp
     }
 
     // MARK: - ۵) خودکار رنگ/نور و رتوش باید کاملاً جدا باشند
@@ -531,18 +556,20 @@ enum SelfCheck {
             || colorPatch.eyeBrighten != 0 || colorPatch.eyeSharpen != 0
         // «خودکار رتوش» نباید هیچ فیلد رنگ/نوری را تغییر دهد.
         let retouchTouchesColor = retouchPatch.exposure != 0 || retouchPatch.contrast != 0
+            || retouchPatch.blacks != 0 || retouchPatch.whites != 0
             || retouchPatch.saturation != 0 || retouchPatch.vibrance != 0
             || retouchPatch.warmth != 0 || retouchPatch.clarity != 0
             || retouchPatch.vignette != 0
 
         // و هر کدام باید چیزی را واقعاً تنظیم کند.
         let colorIsUseful = colorPatch.exposure != 0 || colorPatch.contrast != 0
+            || colorPatch.blacks != 0 || colorPatch.whites != 0
             || colorPatch.saturation != 0 || colorPatch.vibrance != 0
             || colorPatch.warmth != 0 || colorPatch.clarity != 0
         let retouchIsUseful = retouchPatch.smooth != 0 && retouchPatch.eyeBrighten != 0
 
         print("  \(!colorTouchesRetouch ? "✓" : "✗") Auto Color & Light did not touch retouch fields")
-        print("     color/light → exposure=\(fmt(colorPatch.exposure)) contrast=\(fmt(colorPatch.contrast)) saturation=\(fmt(colorPatch.saturation)) vibrance=\(fmt(colorPatch.vibrance)) warmth=\(fmt(colorPatch.warmth)) clarity=\(fmt(colorPatch.clarity))")
+        print("     color/light → exposure=\(fmt(colorPatch.exposure)) contrast=\(fmt(colorPatch.contrast)) blacks=\(fmt(colorPatch.blacks)) whites=\(fmt(colorPatch.whites)) saturation=\(fmt(colorPatch.saturation)) vibrance=\(fmt(colorPatch.vibrance)) warmth=\(fmt(colorPatch.warmth)) clarity=\(fmt(colorPatch.clarity))")
         print("  \(!retouchTouchesColor ? "✓" : "✗") Auto Retouch did not touch color/light fields")
         print("     retouch → smooth=\(fmt(retouchPatch.smooth)) blemish=\(fmt(retouchPatch.blemish)) skinBrighten=\(fmt(retouchPatch.skinBrighten)) teeth=\(fmt(retouchPatch.teethWhiten)) eyeBrighten=\(fmt(retouchPatch.eyeBrighten)) eyeSharpen=\(fmt(retouchPatch.eyeSharpen))")
         print("  \(colorIsUseful ? "✓" : "✗") Auto Color & Light produced meaningful values")
@@ -570,6 +597,153 @@ enum SelfCheck {
     }
 
     private static func fmt(_ value: Double) -> String { String(format: "%.0f", value) }
+
+    /// A vertical ramp whose tones are squeezed between `low` and `high`, with a
+    /// little colour so the analysis reads a photograph rather than a test chart.
+    private static func makeTonalFixture(size: Int, low: Double, high: Double) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        for y in 0..<size {
+            let t = CGFloat(y) / CGFloat(size - 1)
+            let v = CGFloat(low) + CGFloat(high - low) * t
+            context.setFillColor(CGColor(red: min(1, v + 0.03), green: v,
+                                         blue: max(0, v - 0.02), alpha: 1))
+            context.fill(CGRect(x: 0, y: y, width: size, height: 1))
+        }
+        return context.makeImage()
+    }
+
+    /// The 0.5th, 50th and 99.5th percentiles of the frame's luminance — how far
+    /// the picture actually reaches toward black and toward white, and where its
+    /// mid-tones sit.
+    private static func tonalSpread(_ image: CGImage) -> (low: Double, mid: Double, high: Double)? {
+        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return nil }
+        let bpp = max(1, image.bitsPerPixel / 8), bpr = image.bytesPerRow
+        var histogram = [Int](repeating: 0, count: 256)
+        var samples = 0
+        var y = 0
+        while y < image.height {
+            var x = 0
+            while x < image.width {
+                let i = y * bpr + x * bpp
+                if i + 2 < CFDataGetLength(data) {
+                    let luma = (Int(pointer[i]) * 77 + Int(pointer[i + 1]) * 151 + Int(pointer[i + 2]) * 28) / 256
+                    histogram[min(255, max(0, luma))] += 1
+                    samples += 1
+                }
+                x += 2
+            }
+            y += 2
+        }
+        guard samples > 100 else { return nil }
+        func edge(_ fraction: Double) -> Double {
+            let target = Double(samples) * fraction
+            var running = 0.0
+            for (index, count) in histogram.enumerated() {
+                running += Double(count)
+                if running >= target { return Double(index) }
+            }
+            return 255
+        }
+        return (edge(0.005), edge(0.50), edge(0.995))
+    }
+
+    /// Auto Color & Light has to behave like an assistant, not like a fade: it
+    /// reads where the picture's own endpoints are and stretches toward them, it
+    /// does nothing where there is nothing to recover, and it is a no-op at zero.
+    private static func checkAutoColorLevels() -> Bool {
+        var passed = true
+        let processor = ImageProcessor.shared
+        let size = 128
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        func render(_ image: CIImage) -> CGImage? { processor.context.createCGImage(image, from: extent) }
+        func delta(_ a: CGImage, _ b: CGImage) -> Double { meanAbsoluteDifference(a, b) ?? -1 }
+
+        // 1) Levels at zero must be exactly the input. Everything downstream is
+        //    anchored on this, including the auto's own no-op path.
+        guard let faded = makeTonalFixture(size: size, low: 0.25, high: 0.75),
+              let neutral = makeTonalFixture(size: size, low: 0, high: 1) else {
+            print("  ✗ could not build the tonal fixtures")
+            return false
+        }
+        let fadedSource = CIImage(cgImage: faded)
+        let neutralSource = CIImage(cgImage: neutral)
+        let identity = delta(render(fadedSource) ?? faded,
+                             render(LookEngine.applyLevels(fadedSource, black: 0, white: 1)) ?? faded)
+        let throughPipeline = delta(render(fadedSource) ?? faded,
+                                    render(processor.process(fadedSource, adjustments: .zero, masks: nil)) ?? faded)
+        let noopOK = identity == 0 && throughPipeline == 0
+        print("  \(noopOK ? "✓" : "✗") levels at zero change nothing: kernel Δ=\(String(format: "%.2f", identity)) pipeline Δ=\(String(format: "%.2f", throughPipeline))")
+        passed = noopOK && passed
+
+        // 2) A faded frame is one whose darkest and brightest pixels stop short of
+        //    the ends. The auto has to close that gap, not widen it.
+        guard let fadedBuffer = AutoAnalyzer.analysisBuffer(fadedSource),
+              let neutralBuffer = AutoAnalyzer.analysisBuffer(neutralSource) else {
+            print("  ✗ could not build analysis buffers")
+            return false
+        }
+        let patch = AutoAnalyzer.autoColorLight(fadedBuffer)
+        guard let before = tonalSpread(render(fadedSource) ?? faded),
+              let afterImage = render(processor.process(fadedSource, adjustments: patch, masks: nil)),
+              let after = tonalSpread(afterImage) else {
+            print("  ✗ could not measure the faded repair")
+            return false
+        }
+        let spreadBefore = before.high - before.low, spreadAfter = after.high - after.low
+        let repairOK = patch.blacks > 0 && patch.whites > 0
+            && after.low < before.low && after.high > before.high
+            && spreadAfter > spreadBefore + 60
+        print("  \(repairOK ? "✓" : "✗") faded frame gets its endpoints back: blacks=\(fmt(patch.blacks)) whites=\(fmt(patch.whites)), spread \(String(format: "%.0f", spreadBefore)) → \(String(format: "%.0f", spreadAfter))")
+        print("     measured endpoints: \(String(format: "%.0f–%.0f", before.low, before.high)) → \(String(format: "%.0f–%.0f", after.low, after.high)) (expect wider)")
+        passed = repairOK && passed
+
+        //    Repairing the ends must not move the middle. A levels pass that
+        //    brightens the whole ramp is the wash-out this auto used to produce,
+        //    and the mid-tone percentile is where you see it.
+        let midMoved = abs(after.mid - before.mid)
+        let pivotOK = midMoved <= 8
+        print("  \(pivotOK ? "✓" : "✗") mid-tones hold their place: median \(String(format: "%.0f", before.mid)) → \(String(format: "%.0f", after.mid)) (expect ≤ 8 apart)")
+        passed = pivotOK && passed
+
+        //    The old auto pulled the median all the way to mid-grey, which is what
+        //    produced the fade the owner complained about. The new one is capped
+        //    at ±18 and a frame that only needs a small correction gets a small
+        //    one, so the lever must stay well inside that cap.
+        let exposureOK = abs(patch.exposure) <= 10
+        print("  \(exposureOK ? "✓" : "✗") exposure correction stays modest: \(fmt(patch.exposure)) (expect ≤ 10)")
+        passed = exposureOK && passed
+
+        // 3) Full-range frame: nothing to recover at either end, so the auto must
+        //    say so rather than dig the shadows out further.
+        let fullPatch = AutoAnalyzer.autoColorLight(neutralBuffer)
+        let restraintOK = fullPatch.blacks == 0 && fullPatch.whites == 0
+        print("  \(restraintOK ? "✓" : "✗") full-range frame gets no levels nudge: blacks=\(fmt(fullPatch.blacks)) whites=\(fmt(fullPatch.whites))")
+        passed = restraintOK && passed
+
+        // 4) Strength scales the whole decision together and touches nothing else.
+        let half = patch.scaledColorLight(by: 50)
+        let scaleOK = abs(half.blacks - patch.blacks * 0.5) < 0.001
+            && abs(half.whites - patch.whites * 0.5) < 0.001
+            && abs(half.exposure - patch.exposure * 0.5) < 0.001
+            && half.vignette == patch.vignette
+        let none = patch.scaledColorLight(by: 0)
+        let zeroOK = none.colorLightOnly == Adjustments().colorLightOnly
+        // Applying it must leave the retouch sliders exactly where they were.
+        var base = Adjustments()
+        base.smooth = 55
+        base.look = .nightStock
+        let applied = base.applyingColorLight(patch)
+        let isolationOK = applied.smooth == 55 && applied.look == .nightStock
+            && applied.blacks == patch.blacks && applied.whites == patch.whites
+        let scalingOK = scaleOK && zeroOK && isolationOK
+        print("  \(scalingOK ? "✓" : "✗") strength scales levels, zero is a no-op, retouch survives")
+        passed = scalingOK && passed
+
+        return passed
+    }
 
     // MARK: - ۵) رتوش خودکار باید فقط داخل چهره اثر بگذارد
 
@@ -1363,6 +1537,8 @@ enum SelfCheck {
                      HealSpot(center: CGPoint(x: 0.8, y: 0.15), radius: 0.035)]
         var adjustments = Adjustments()
         adjustments.smooth = 42
+        adjustments.blacks = 28
+        adjustments.whites = 44
         adjustments.look = .nightStock
         adjustments.lookStrength = 65
         adjustments.grain = 30
@@ -1376,6 +1552,7 @@ enum SelfCheck {
                                      exportFormat: "jpeg",
                                      exportQuality: 0.9,
                                      autoRetouchStrength: 55,
+                                     autoColorStrength: 65,
                                      crop: crop,
                                      healSpots: spots)
         guard let data = try? JSONEncoder().encode(project),
@@ -1385,17 +1562,27 @@ enum SelfCheck {
         }
         let roundTrip = decoded.crop == crop && decoded.adjustments == adjustments
             && decoded.healSpots == spots
+            && decoded.autoColorStrength == 65
 
         // Projects written before crop existed have no `crop` key at all.
         var legacyObject = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         legacyObject.removeValue(forKey: "crop")
         legacyObject.removeValue(forKey: "healSpots")
+        legacyObject.removeValue(forKey: "autoColorStrength")
+        if var old = legacyObject["adjustments"] as? [String: Any] {
+            old.removeValue(forKey: "blacks")
+            old.removeValue(forKey: "whites")
+            legacyObject["adjustments"] = old
+        }
         let legacyData = try? JSONSerialization.data(withJSONObject: legacyObject)
         let legacy = legacyData.flatMap { try? JSONDecoder().decode(RetouchProject.self, from: $0) }
-        let legacyOK = legacy?.crop == nil && legacy?.healSpots == nil && legacy?.adjustments == adjustments
+        let legacyOK = legacy?.crop == nil && legacy?.healSpots == nil
+            && legacy?.autoColorStrength == nil
+            && legacy?.adjustments.blacks == 0 && legacy?.adjustments.whites == 0
+            && legacy?.adjustments.smooth == 42
 
         print("  \(roundTrip ? "✓" : "✗") crop, stamps and sliders survive a project round-trip")
-        print("  \(legacyOK ? "✓" : "✗") a project without a crop key still opens")
+        print("  \(legacyOK ? "✓" : "✗") a project without a crop or levels key still opens")
         return roundTrip && legacyOK
     }
 

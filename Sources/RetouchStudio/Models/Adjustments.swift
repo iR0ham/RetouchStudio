@@ -39,6 +39,11 @@ struct Adjustments: Equatable, Codable {
     // MARK: - Color and light (global)
     var exposure: Double = 0
     var contrast: Double = 0
+    /// Input level mapped to black. Positive digs the shadows out — the cure
+    /// for a faded frame — and negative lets them glow.
+    var blacks: Double = 0
+    /// Input level mapped to white. Positive lifts the highlights.
+    var whites: Double = 0
     var saturation: Double = 0
     var vibrance: Double = 0
     var warmth: Double = 0
@@ -58,6 +63,20 @@ struct Adjustments: Equatable, Codable {
         get { FilmLook.named(lookID) }
         set { lookID = newValue.rawValue }
     }
+
+    // MARK: Levels
+
+    /// The input values the Blacks/Whites sliders map to black and white, in
+    /// display-referred light. ±100 moves an endpoint by 0.30 — far enough to
+    /// pull a genuinely faded frame back to the ends of the range, and safe to
+    /// ask for because `LookEngine.applyLevels` spends that move on the shadows
+    /// and highlights only, never on the mid-tones in between.
+    ///
+    /// A black level above zero digs the shadows out; below zero it lets them
+    /// glow, which is how a matte fade is made. A white level below one lifts the
+    /// highlights, above one compresses them.
+    var blackLevel: Double { 0.30 * blacks / 100 }
+    var whiteLevel: Double { 1 - 0.30 * whites / 100 }
 
     // MARK: - Makeup (colour cosmetics)
     //
@@ -122,6 +141,8 @@ struct Adjustments: Equatable, Codable {
         var a = Adjustments()
         a.exposure = exposure
         a.contrast = contrast
+        a.blacks = blacks
+        a.whites = whites
         a.saturation = saturation
         a.vibrance = vibrance
         a.warmth = warmth
@@ -186,6 +207,8 @@ struct Adjustments: Equatable, Codable {
         var result = self
         result.exposure = patch.exposure
         result.contrast = patch.contrast
+        result.blacks = patch.blacks
+        result.whites = patch.whites
         result.saturation = patch.saturation
         result.vibrance = patch.vibrance
         result.warmth = patch.warmth
@@ -228,6 +251,22 @@ struct Adjustments: Equatable, Codable {
         return result
     }
 
+    /// Scales an auto-generated color/light patch. Every field in this group is
+    /// an effect, so all of them move together with the strength.
+    func scaledColorLight(by percent: Double) -> Adjustments {
+        let factor = min(1, max(0, percent / 100))
+        var result = self
+        result.exposure = exposure * factor
+        result.contrast = contrast * factor
+        result.blacks = blacks * factor
+        result.whites = whites * factor
+        result.saturation = saturation * factor
+        result.vibrance = vibrance * factor
+        result.warmth = warmth * factor
+        result.clarity = clarity * factor
+        return result
+    }
+
     /// Copy with ONLY the geometry fields taken from `patch`.
     func applyingReshape(_ patch: Adjustments) -> Adjustments {
         var result = self
@@ -265,6 +304,7 @@ extension Adjustments {
         case eyeSize, noseSize, noseTip, lipSize, cheekSize, jawWidth, chinLength
         case faceWidth, faceLength
         case exposure, contrast, saturation, vibrance, warmth, clarity, vignette
+        case blacks, whites
         case lookID, lookStrength, grain
         case lipTint, lipShadeID, blush, blushShadeID, browDefine
     }
@@ -298,6 +338,8 @@ extension Adjustments {
         faceLength = amount(.faceLength)
         exposure = amount(.exposure)
         contrast = amount(.contrast)
+        blacks = amount(.blacks)
+        whites = amount(.whites)
         saturation = amount(.saturation)
         vibrance = amount(.vibrance)
         warmth = amount(.warmth)

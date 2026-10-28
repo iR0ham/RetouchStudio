@@ -8,6 +8,49 @@ enum LookEngine {
 
     static let cubeDimension = 32
 
+    // MARK: - Levels
+
+    /// Sends the picture's own black and white endpoints to 0 and 1 *without
+    /// moving the mid-tones*.
+    ///
+    /// A plain linear stretch — the textbook histogram move — is what makes an
+    /// auto tone look faded: recovering a highlight at 0.86 brightens a face at
+    /// 0.50 by the same ratio. So the correction is applied only where the
+    /// luminance actually sits, in the band below 0.48 and the band above 0.52,
+    /// normalised so that the measured endpoint still lands exactly on 0 and 1
+    /// whenever it is inside the band it belongs to. The flat core in between
+    /// keeps skin and clothing where the photographer put them.
+    ///
+    /// A kernel rather than `CIColorMatrix` because Core Image works in linear
+    /// light while the endpoints come off a histogram of *displayed* pixels. The
+    /// encode/apply/decode below is the same convention the pixel gates in
+    /// `MaskBuilder` use, so a black point of 0.06 means the same thing to the
+    /// analysis that asked for it and to the renderer that applies it.
+    static func applyLevels(_ image: CIImage, black: Double, white: Double) -> CIImage {
+        let stretched = abs(black) > 0.001 || abs(white - 1) > 0.001
+        guard stretched, let kernel = levelsKernel else { return image }
+        return kernel.apply(extent: image.extent, arguments: [image, black, white])?
+            .cropped(to: image.extent) ?? image
+    }
+
+    private static let levelsKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 toneLevels(__sample s, float black, float white)
+        {
+            vec3 c = pow(clamp(s.rgb, 0.0, 1.0), vec3(0.4545));
+            float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            float shadowW = 1.0 - smoothstep(0.0, 0.48, l);
+            float highlightW = smoothstep(0.52, 1.0, l);
+            float shadowK = max(0.30, 1.0 - smoothstep(0.0, 0.48, black));
+            float highlightK = max(0.30, smoothstep(0.52, 1.0, white));
+            float delta = -black * shadowW / shadowK + (1.0 - white) * highlightW / highlightK;
+            c = clamp(c + delta, 0.0, 1.0);
+            return vec4(pow(c, vec3(2.2)), 1.0);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
+
     // MARK: - Colour cube
 
     private static var cache: [String: Data] = [:]

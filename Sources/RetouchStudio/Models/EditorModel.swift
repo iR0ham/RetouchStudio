@@ -17,6 +17,9 @@ final class EditorModel: ObservableObject {
     /// How strongly Auto Retouch's derived values are applied. 100 applies the
     /// analysis as measured; lower values scale every effect down together.
     @Published var autoRetouchStrength: Double = 70
+    /// How strongly Auto Color & Light's derived values are applied. The auto
+    /// measures the photo; this decides how much of that measurement to use.
+    @Published var autoColorStrength: Double = 100
 
     // Export
     @Published var showExportSheet = false
@@ -446,6 +449,7 @@ final class EditorModel: ObservableObject {
             exportFormat = ExportFormat(rawValue: project.exportFormat) ?? .jpeg
             exportQuality = project.exportQuality
             autoRetouchStrength = project.autoRetouchStrength
+            autoColorStrength = project.autoColorStrength ?? 100
             adjustments = project.adjustments
             appliedCrop = project.crop
         } else {
@@ -785,6 +789,7 @@ final class EditorModel: ObservableObject {
         let generation = self.generation
         isBusy = true
         status = s.analyzingColor
+        let strength = self.autoColorStrength
         Task { [weak self] in
             let patch = await Task.detached(priority: .userInitiated) { () -> Adjustments? in
                 guard let buffer = AutoAnalyzer.analysisBuffer(source) else { return nil }
@@ -797,9 +802,10 @@ final class EditorModel: ObservableObject {
                 return
             }
             // Only the color/light fields are replaced; the retouch and reshape
-            // sliders are carried over untouched.
+            // sliders are carried over untouched. The strength slider scales the
+            // derived values together.
             self.commitAdjustments()
-            self.adjustments = self.adjustments.applyingColorLight(patch)
+            self.adjustments = self.adjustments.applyingColorLight(patch.scaledColorLight(by: strength))
             self.commitAdjustments()
             self.status = self.s.autoColorApplied
         }
@@ -957,6 +963,7 @@ final class EditorModel: ObservableObject {
                                      exportFormat: exportFormat.rawValue,
                                      exportQuality: exportQuality,
                                      autoRetouchStrength: autoRetouchStrength,
+                                     autoColorStrength: autoColorStrength,
                                      crop: appliedCrop,
                                      healSpots: healSpots.isEmpty ? nil : healSpots)
         do {
