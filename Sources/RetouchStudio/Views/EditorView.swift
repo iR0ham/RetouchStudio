@@ -44,8 +44,7 @@ struct ExportSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 10) {
-                Image(systemName: "arrow.down.to.line.compact")
-                    .font(.system(size: 13, weight: .semibold))
+                Icon(name: "arrow.down.to.line.compact", size: 16, emphasised: true)
                     .foregroundStyle(Theme.accent)
                 Text(model.s.exportSection)
                     .font(.system(size: 15, weight: .semibold))

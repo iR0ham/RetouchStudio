@@ -170,8 +170,7 @@ struct ToolPanel: View {
                     model.resetAll()
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 9, weight: .semibold))
+                        Icon(name: "arrow.counterclockwise", size: 11.5, emphasised: true)
                         Text(model.s.reset)
                             .font(.system(size: 11, weight: .medium))
                     }

@@ -332,8 +332,7 @@ private struct PanelRow<Content: View>: View {
 
                     if let reset {
                         Button(action: reset) {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 10, weight: .semibold))
+                            Icon(name: "arrow.counterclockwise", size: 13, emphasised: true)
                                 .foregroundStyle(Theme.faint)
                                 .frame(width: 20, height: 20)
                                 .contentShape(Rectangle())
@@ -344,8 +343,7 @@ private struct PanelRow<Content: View>: View {
                         .allowsHitTesting(isModified)
                     }
 
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10.5, weight: .semibold))
+                    Icon(name: "chevron.down", size: 13.5, emphasised: true)
                         .foregroundStyle(isOpen ? Theme.accent : Theme.faint)
                         .rotationEffect(.degrees(isOpen ? 180 : 0))
                         .animation(Motion.smooth, value: isOpen)

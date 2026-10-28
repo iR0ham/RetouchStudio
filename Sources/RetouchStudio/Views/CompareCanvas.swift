@@ -235,8 +235,7 @@ struct CompareCanvas: View {
                     .frame(width: 32, height: 32)
                     .overlay(Circle().strokeBorder(Theme.accent.opacity(0.85), lineWidth: 1))
                     .shadow(color: .black.opacity(0.45), radius: 7, y: 2)
-                Image(systemName: "arrow.left.and.right")
-                    .font(.system(size: 10, weight: .bold))
+                Icon(name: "arrow.left.and.right", size: 13, emphasised: true)
                     .foregroundStyle(Theme.accentBright)
             }
             // Only the knob is grabbable. A full-height hit strip would swallow
@@ -383,8 +382,7 @@ struct CompareCanvas: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
+                Icon(name: icon, size: 14)
                 if let label {
                     Text(label)
                         .font(.system(size: 11))
@@ -484,8 +482,7 @@ struct DropZone: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 44, weight: .light))
+            Icon(name: "photo.on.rectangle.angled", size: 54)
                 .foregroundStyle(Theme.faint)
 
             VStack(spacing: 5) {
@@ -529,10 +526,9 @@ struct DropZone: View {
 
     private func featureLine(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 9) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
+            Icon(name: icon, size: 14)
                 .foregroundStyle(Theme.accent.opacity(0.85))
-                .frame(width: 14)
+                .frame(width: 16)
             Text(text)
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.muted)

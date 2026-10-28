@@ -64,8 +64,7 @@ struct TopBar: View {
                         .matchedGeometryEffect(id: "activeTool", in: pill)
                 }
 
-                Image(systemName: mode.icon)
-                    .font(.system(size: 15, weight: active ? .semibold : .regular))
+                Icon(name: mode.icon, size: 19, emphasised: active)
                     .foregroundStyle(active ? Theme.background : Theme.faint)
                     .scaleEffect(active ? 1.05 : 1)
             }
@@ -116,8 +115,7 @@ struct TopBar: View {
                            active: Bool = false,
                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 12.5, weight: .semibold))
+            Icon(name: icon, size: 16, emphasised: true)
                 .foregroundStyle(!enabled ? Theme.faint.opacity(0.5)
                                    : (active ? Theme.accent : Theme.muted))
                 .frame(width: 32, height: 32)
@@ -137,8 +135,7 @@ struct TopBar: View {
             model.presentExportSheet()
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "arrow.down.to.line.compact")
-                    .font(.system(size: 11, weight: .bold))
+                Icon(name: "arrow.down.to.line.compact", size: 14, emphasised: true)
                 Text(model.s.export)
                     .font(.system(size: 12.5, weight: .semibold))
             }

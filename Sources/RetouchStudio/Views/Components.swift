@@ -26,8 +26,7 @@ struct CardHeader: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(tint.opacity(0.14))
                         .frame(width: 28, height: 28)
-                    Image(systemName: icon)
-                        .font(.system(size: 12, weight: .semibold))
+                    Icon(name: icon, size: 15, emphasised: true)
                         .foregroundStyle(tint)
                 }
             }
@@ -64,8 +63,7 @@ struct SectionHeader: View {
             Spacer(minLength: 4)
             if let reset {
                 Button(action: reset) {
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.system(size: 9.5, weight: .semibold))
+                    Icon(name: "arrow.counterclockwise", size: 12, emphasised: true)
                         .foregroundStyle(Theme.faint)
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
@@ -209,8 +207,7 @@ struct ParameterRow: View {
 
                 if isHovering, let onReset {
                     Button(action: onReset) {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 9, weight: .semibold))
+                        Icon(name: "arrow.counterclockwise", size: 11.5, emphasised: true)
                             .foregroundStyle(Theme.faint)
                     }
                     .buttonStyle(PressableButtonStyle(dip: 0.9))
@@ -261,8 +258,7 @@ struct FilledButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
+                Icon(name: icon, size: 15, emphasised: true)
                 Text(title)
                     .font(Theme.Font.button)
             }
@@ -309,8 +305,7 @@ struct SecondaryButton: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
+                    Icon(name: icon, size: 14, emphasised: true)
                 }
                 Text(title)
                     .font(Theme.Font.button)
@@ -377,8 +372,7 @@ struct ShadeChip: View {
                 )
                 .overlay(alignment: .bottomTrailing) {
                     if isActive {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 11, weight: .semibold))
+                        Icon(name: "checkmark.circle.fill", size: 13.5, emphasised: true)
                             .foregroundStyle(Theme.bone)
                             .background(Circle().fill(Color.black.opacity(0.45)))
                             .padding(3)
@@ -408,8 +402,7 @@ struct StatusChip: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: icon)
-                .font(.system(size: 9, weight: .bold))
+            Icon(name: icon, size: 12, emphasised: true)
             Text(text)
                 .font(.system(size: 10.5, weight: .medium))
                 .lineLimit(1)
