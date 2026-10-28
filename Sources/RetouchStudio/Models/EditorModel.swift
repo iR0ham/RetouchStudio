@@ -262,27 +262,51 @@ final class EditorModel: ObservableObject {
         commitAdjustments()
     }
 
-    /// Picks the lip colour and switches the effect on with it. The already
-    /// chosen shade still counts while the amount is zero, since that tap is
+    /// Picks a makeup colour and switches that region on with it. The already
+    /// chosen colour still counts while the amount is zero, since that tap is
     /// the only way to turn the default on; otherwise it would be dead.
-    func setLipShade(_ shade: MakeupShade) {
-        guard adjustments.lipShade != shade || adjustments.lipTint == 0 else { return }
+    func chooseMakeupShade(_ shade: MakeupShade) {
+        let path = shade.region.colorPath
+        let amountPath = shade.region.amountPath
+        guard adjustments[keyPath: path] != shade.color
+                || adjustments[keyPath: amountPath] == 0 else { return }
         commitAdjustments()
-        adjustments.lipShade = shade
-        if adjustments.lipTint == 0 {
-            adjustments.lipTint = MakeupEngine.defaultLipStrength
+        adjustments[keyPath: path] = shade.color
+        if adjustments[keyPath: amountPath] == 0 {
+            adjustments[keyPath: amountPath] = shade.region.defaultAmount
         }
         commitAdjustments()
     }
 
-    func setBlushShade(_ shade: MakeupShade) {
-        guard adjustments.blushShade != shade || adjustments.blush == 0 else { return }
-        commitAdjustments()
-        adjustments.blushShade = shade
-        if adjustments.blush == 0 {
-            adjustments.blush = MakeupEngine.defaultBlushStrength
+    /// A colour from the picker or the hue / saturation sliders. It enables the
+    /// region the same way a swatch does, so the change is always visible.
+    func setMakeupColor(_ region: MakeupRegion, _ color: MakeupColor) {
+        guard adjustments[keyPath: region.colorPath] != color else { return }
+        adjustments[keyPath: region.colorPath] = color
+        if adjustments[keyPath: region.amountPath] == 0 {
+            adjustments[keyPath: region.amountPath] = region.defaultAmount
         }
-        commitAdjustments()
+    }
+
+    func makeupColor(_ region: MakeupRegion) -> MakeupColor {
+        adjustments[keyPath: region.colorPath]
+    }
+
+    func makeupColorBinding(_ region: MakeupRegion) -> Binding<MakeupColor> {
+        Binding(get: { self.makeupColor(region) },
+                set: { self.setMakeupColor(region, $0) })
+    }
+
+    /// Sliders work in whole units, so hue reads 0...360 and saturation 0...100
+    /// while the stored colour keeps full precision.
+    func makeupHueBinding(_ region: MakeupRegion) -> Binding<Double> {
+        Binding(get: { self.makeupColor(region).hue },
+                set: { self.setMakeupColor(region, self.makeupColor(region).with(hue: $0)) })
+    }
+
+    func makeupSaturationBinding(_ region: MakeupRegion) -> Binding<Double> {
+        Binding(get: { self.makeupColor(region).saturation * 100 },
+                set: { self.setMakeupColor(region, self.makeupColor(region).with(saturation: $0 / 100)) })
     }
 
     /// UI copy. The app is English-only.
@@ -294,6 +318,12 @@ final class EditorModel: ObservableObject {
     @Published var panOffset: CGSize = .zero
     @Published private(set) var canvasSize: CGSize = .zero
     @Published var toolMode: ToolMode = .skin
+
+    // Makeup panel state. The family is what the photo's own skin measured,
+    // until the owner picks another one — the palette should open on the
+    // colours mixed for this face, not on a fixed default.
+    @Published var makeupRegion: MakeupRegion = .lips
+    @Published var makeupFamily: MakeupFamily = .medium
 
     private let processor = ImageProcessor.shared
     private let previewMaxDimension: CGFloat = 1800
@@ -431,6 +461,12 @@ final class EditorModel: ObservableObject {
         sourceMetadata = result.metadata
         faces = result.faces
         faceCount = result.faces.count
+        if let face = result.faces.first,
+           let luma = AutoAnalyzer.cheekLuminance(result.originalPreview, face: face) {
+            makeupFamily = MakeupFamily.of(skinLuminance: luma)
+        } else {
+            makeupFamily = .medium
+        }
         originalImage = NSImage(cgImage: result.originalPreview,
                                size: NSSize(width: result.originalPreview.width, height: result.originalPreview.height))
         previewImage = NSImage(cgImage: result.preview,

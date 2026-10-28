@@ -441,18 +441,19 @@ struct PresetTile: View {
     }
 }
 
-/// A cosmetic shade: the colour itself carries the meaning, so it gets a swatch
+/// A cosmetic colour: the colour itself carries the meaning, so it gets a swatch
 /// rather than a word. Same height and corner as PresetChip so the two read as
 /// one control family.
-struct ShadeChip: View {
-    let shade: MakeupShade
+struct SwatchChip: View {
+    let color: MakeupColor
+    let title: String
     let isActive: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(shade.swatch)
+                .fill(color.color)
                 .frame(height: 30)
                 .overlay(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -472,7 +473,7 @@ struct ShadeChip: View {
         }
         .buttonStyle(PressableButtonStyle(dip: 0.92))
         .frame(height: 30)
-        .help(shade.title)
+        .help(title)
         .animation(Motion.snappy, value: isActive)
     }
 }

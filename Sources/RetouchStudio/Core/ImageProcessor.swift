@@ -58,6 +58,8 @@ struct MaskSet {
     var forehead: CIImage?
     var nose: CIImage?
     var skinTexture: CIImage?   // skin, softer edge, for texture work
+    var lids: CIImage?          // lid skin above each eye, for eyeshadow
+    var liners: CIImage?        // narrow band along the upper lash line
 }
 
 /// Where the manual healing brush stamped, ready for a single repair pass.
@@ -225,6 +227,8 @@ final class ImageProcessor {
         var underEyeShapes: [MaskShape] = []
         var foreheadShapes: [MaskShape] = []
         var noseShapes: [MaskShape] = []
+        var lidShapes: [MaskShape] = []
+        var lashLineShapes: [MaskShape] = []
 
         var scleraParts: [CIImage] = []
         var irisParts: [CIImage] = []
@@ -262,6 +266,8 @@ final class ImageProcessor {
             for rect in face.eyeShieldRects {
                 shieldShapes.append(MaskShape(rect: rect, cornerRadius: 0.5))
             }
+            lidShapes.append(contentsOf: face.eyelidRects.map { MaskShape(ellipse: $0) })
+            lashLineShapes.append(contentsOf: face.lashLineRects.map { MaskShape(rect: $0, cornerRadius: 0.5) })
             if face.lipPolygon.count >= 3 {
                 shieldShapes.append(MaskShape(points: face.lipPolygon))
                 lipShapes.append(MaskShape(points: face.lipPolygon))
@@ -361,6 +367,17 @@ final class ImageProcessor {
         let brows = browGeometry.map { grown($0, by: max(1.2, 0.0025 * shortSide), feather: browFeather) }
         let cheeks = MaskBuilder.makeMask(extent: extent, shapes: cheekShapes, feather: softFeather)
 
+        // Lids are soft like a powder, and the brow hair is taken out of them so
+        // eyeshadow never turns into a second eyebrow. The liner band is the
+        // opposite: a narrow, hard-edged line that follows the lashes.
+        var lids = MaskBuilder.makeMask(extent: extent, shapes: lidShapes,
+                                        feather: max(2.5, 0.006 * shortSide))
+        if let browMask = brows, let lidMask = lids {
+            lids = MaskBuilder.subtract(browMask, from: lidMask)
+        }
+        let linerFeather = max(1.5, 0.002 * shortSide)
+        let liners = MaskBuilder.makeMask(extent: extent, shapes: lashLineShapes, feather: linerFeather)
+
         // Everything the skin work must not touch: the eye and lip bands, plus
         // the brow hair itself. Subtracted from the *finished* masks, so the
         // silhouette's own feather can no longer bleed smoothing into the hole.
@@ -391,7 +408,9 @@ final class ImageProcessor {
             underEyes: shielded(MaskBuilder.makeMask(extent: extent, shapes: underEyeShapes, feather: softFeather)),
             forehead: MaskBuilder.makeMask(extent: extent, shapes: foreheadShapes, feather: softFeather),
             nose: MaskBuilder.makeMask(extent: extent, shapes: noseShapes, feather: softFeather),
-            skinTexture: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: softFeather))
+            skinTexture: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: softFeather)),
+            lids: lids,
+            liners: liners
         )
     }
 
@@ -553,17 +572,25 @@ final class ImageProcessor {
         // 3b) Makeup, after the skin work: smoothing first would dilute the
         //     colour and blur its edge, and a flush laid on finished skin keeps
         //     both. Still ahead of the warp, so it travels with the features.
+        if a.eyeshadow > 0, let lidMask = masks?.lids {
+            image = MakeupEngine.applyShadow(image, strength: a.eyeshadow,
+                                             mask: lidMask, color: a.shadowColor)
+        }
+        if a.eyeliner > 0, let linerMask = masks?.liners {
+            image = MakeupEngine.applyLiner(image, strength: a.eyeliner,
+                                            mask: linerMask, color: a.linerColor)
+        }
         if a.lipTint > 0, let lipMask = masks?.lips {
             image = MakeupEngine.tintLips(image, strength: a.lipTint,
-                                          mask: lipMask, shade: a.lipShade)
+                                          mask: lipMask, color: a.lipColor)
         }
         if a.blush > 0, let cheekMask = masks?.cheeks {
             image = MakeupEngine.applyBlush(image, strength: a.blush,
-                                            mask: cheekMask, shade: a.blushShade)
+                                            mask: cheekMask, color: a.blushColor)
         }
         if a.browDefine > 0, let browMask = masks?.brows {
             image = MakeupEngine.defineBrows(image, strength: a.browDefine,
-                                             mask: browMask, scale: scale)
+                                             mask: browMask, color: a.browColor, scale: scale)
         }
 
         // 4) Geometry after the local edits: the warp then carries the

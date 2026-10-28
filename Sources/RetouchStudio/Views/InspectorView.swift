@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The inspector is one card of collapsible rows, the way the reference stacks
@@ -241,56 +242,85 @@ struct InspectorView: View {
     }
 
     private var makeupContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            shadeGroup("Lips", model.adjustments.lipShade, model.setLipShade,
-                       title: "Color", key: \.lipTint)
-            shadeGroup("Cheeks", model.adjustments.blushShade, model.setBlushShade,
-                       title: "Flush", key: \.blush)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("BROWS")
-                    .font(Theme.Font.section)
-                    .tracking(0.6)
-                    .foregroundStyle(Theme.faint)
-                    .padding(.top, 2)
-                ParameterRow(title: "Define",
-                             value: model.binding(for: \.browDefine),
-                             range: 0...100,
-                             onReset: { model.resetEffect(\.browDefine) })
-            }
-
-            SectionNote(text: model.faceCount > 0
-                ? "Cosmetics keep the shading underneath them, so lips, cheeks and brows stay three-dimensional."
-                : "No face has been detected, so there is nothing for makeup to color.")
-        }
-    }
-
-    private func shadeGroup(_ heading: String,
-                            _ selected: MakeupShade,
-                            _ pick: @escaping (MakeupShade) -> Void,
-                            title: String,
-                            key: WritableKeyPath<Adjustments, Double>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(heading.uppercased())
-                .font(Theme.Font.section)
-                .tracking(0.6)
-                .foregroundStyle(Theme.faint)
-
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4),
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
                       spacing: 6) {
-                ForEach(MakeupShade.allCases) { shade in
-                    ShadeChip(shade: shade, isActive: selected == shade) {
-                        pick(shade)
+                ForEach(MakeupRegion.allCases) { region in
+                    PresetChip(title: region.title, isActive: model.makeupRegion == region) {
+                        model.makeupRegion = region
                     }
                 }
             }
 
-            ParameterRow(title: title,
-                         value: model.binding(for: key),
+            // Lip and cheek shades are mixed per skin tone. The row opens on the
+            // family the photo's own cheek skin measured, and any family can be
+            // chosen by hand.
+            if model.makeupRegion.hasFamilies {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 5),
+                          spacing: 4) {
+                    ForEach(MakeupFamily.allCases) { family in
+                        PresetChip(title: family.title, isActive: model.makeupFamily == family) {
+                            model.makeupFamily = family
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                GroupLabel(text: model.s.makeupColor)
+                Spacer(minLength: 6)
+                ColorPicker(model.s.makeupCustomColor,
+                            selection: pickerBinding,
+                            supportsOpacity: false)
+                    .labelsHidden()
+                    .help(model.s.pickColorHelp)
+            }
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4),
+                      spacing: 6) {
+                ForEach(swatches) { shade in
+                    SwatchChip(color: shade.color,
+                               title: shade.title,
+                               isActive: model.makeupColor(model.makeupRegion) == shade.color) {
+                        model.chooseMakeupShade(shade)
+                    }
+                }
+            }
+
+            ParameterRow(title: model.s.hue,
+                         value: model.makeupHueBinding(model.makeupRegion),
+                         range: 0...360)
+            ParameterRow(title: model.s.saturation,
+                         value: model.makeupSaturationBinding(model.makeupRegion),
+                         range: 0...100)
+            ParameterRow(title: model.s.opacity,
+                         value: model.binding(for: model.makeupRegion.amountPath),
                          range: 0...100,
-                         onReset: { model.resetEffect(key) })
-                .padding(.top, 4)
+                         onReset: { model.resetEffect(model.makeupRegion.amountPath) })
+
+            SectionNote(text: model.faceCount > 0 ? model.s.makeupNote : model.s.makeupNoFace)
         }
+    }
+
+    /// The swatches on offer for the region that is open.
+    private var swatches: [MakeupShade] {
+        let region = model.makeupRegion
+        return MakeupShade.shades(region, family: region.hasFamilies ? model.makeupFamily : nil)
+    }
+
+    /// What the colour well shows and writes. The picker speaks `Color`; the
+    /// model stores the same colour as HSV, because that is what the hue and
+    /// saturation sliders edit.
+    private var pickerBinding: Binding<Color> {
+        Binding(
+            get: { model.makeupColor(model.makeupRegion).color },
+            set: { newValue in
+                guard let ns = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                model.setMakeupColor(model.makeupRegion, MakeupColor(
+                    hue: Double(ns.hueComponent) * 360,
+                    saturation: Double(ns.saturationComponent),
+                    value: Double(ns.brightnessComponent)))
+            })
     }
 
     private var colorContent: some View {

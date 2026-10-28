@@ -74,6 +74,45 @@ struct FaceGeometry {
         return grownBox(box, side: 0.14, along: 0.60, against: 0.22)
     }
 
+    /// Lids: the skin between the top of the eye opening and the brow above it.
+    ///
+    /// Vision traces the palpebral opening only, so everything above it is lid.
+    /// Stopping short of the brow keeps shadow off the hair, and the margin
+    /// scales with the eye so a small face in a wide frame behaves the same as
+    /// a close-up.
+    var eyelidRects: [CGRect] {
+        eyePolygons.compactMap { eye in
+            let box = Self.boundingBox(of: eye)
+            guard box.width > 0.001, box.height > 0.0005 else { return nil }
+            let browBottom = eyebrowPolygons
+                .map { Self.boundingBox(of: $0) }
+                .filter { abs($0.midX - box.midX) < box.width * 2.5 }
+                .map { $0.minY }
+                .min()
+            let gap = max((browBottom ?? (box.maxY + box.height * 0.75)) - box.maxY,
+                          box.height * 0.30)
+            let inset = gap * 0.16
+            return CGRect(x: box.minX - box.width * 0.10,
+                          y: box.maxY + inset * 0.30,
+                          width: box.width * 1.20,
+                          height: max(gap - inset * 1.30, box.height * 0.20))
+        }
+    }
+
+    /// The band an eyeliner pencil follows: the top edge of the opening, where
+    /// the lashes leave the lid. It straddles the outline only slightly, so the
+    /// line does not eat into the eye.
+    var lashLineRects: [CGRect] {
+        eyePolygons.compactMap { eye in
+            let box = Self.boundingBox(of: eye)
+            guard box.width > 0.001, box.height > 0.0002 else { return nil }
+            return CGRect(x: box.minX - box.width * 0.04,
+                          y: box.maxY - box.height * 0.04,
+                          width: box.width * 1.08,
+                          height: max(box.height * 0.20, 0.0015))
+        }
+    }
+
     /// Lips keep their own texture and their outline is already the outer edge,
     /// so the margin is small and even.
     var lipShieldRect: CGRect? {

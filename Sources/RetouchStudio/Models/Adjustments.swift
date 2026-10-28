@@ -80,24 +80,21 @@ struct Adjustments: Equatable, Codable {
 
     // MARK: - Makeup (colour cosmetics)
     //
-    // The shade identifiers default per region: an empty or unknown value reads
-    // as the shade that region starts with, so a project saved before makeup
-    // existed still shows a sensible swatch.
+    // Every region owns its colour and its amount, so a lip and a cheek can be
+    // different colours and the two eye tools get their own. The colours are
+    // full HSV values rather than palette identifiers: the picker and the hue /
+    // saturation sliders edit them directly, and a project saved by the older,
+    // palette-only build is migrated from its shade identifier on decode.
     var lipTint: Double = 0
-    var lipShadeID: String = ""
+    var lipColor: MakeupColor = MakeupShade.rose.color
     var blush: Double = 0
-    var blushShadeID: String = ""
+    var blushColor: MakeupColor = MakeupShade.cheekPeach.color
     var browDefine: Double = 0
-
-    var lipShade: MakeupShade {
-        get { MakeupShade(rawValue: lipShadeID) ?? .rose }
-        set { lipShadeID = newValue.rawValue }
-    }
-
-    var blushShade: MakeupShade {
-        get { MakeupShade(rawValue: blushShadeID) ?? .peach }
-        set { blushShadeID = newValue.rawValue }
-    }
+    var browColor: MakeupColor = MakeupShade.taupeBrow.color
+    var eyeshadow: Double = 0
+    var shadowColor: MakeupColor = MakeupShade.taupeShadow.color
+    var eyeliner: Double = 0
+    var linerColor: MakeupColor = MakeupShade.inkLiner.color
 
     static let zero = Adjustments()
 
@@ -167,14 +164,19 @@ struct Adjustments: Equatable, Codable {
 
     var hasLook: Bool { lookOnly != .zero }
 
-    /// The makeup half: lips, cheeks, brows.
+    /// The makeup half: lips, cheeks, brows and the two eye pigments.
     var makeupOnly: Adjustments {
         var a = Adjustments()
         a.lipTint = lipTint
-        a.lipShadeID = lipShadeID
+        a.lipColor = lipColor
         a.blush = blush
-        a.blushShadeID = blushShadeID
+        a.blushColor = blushColor
         a.browDefine = browDefine
+        a.browColor = browColor
+        a.eyeshadow = eyeshadow
+        a.shadowColor = shadowColor
+        a.eyeliner = eyeliner
+        a.linerColor = linerColor
         return a
     }
 
@@ -186,10 +188,15 @@ struct Adjustments: Equatable, Codable {
     func applyingMakeup(_ patch: Adjustments) -> Adjustments {
         var result = self
         result.lipTint = patch.lipTint
-        result.lipShadeID = patch.lipShadeID
+        result.lipColor = patch.lipColor
         result.blush = patch.blush
-        result.blushShadeID = patch.blushShadeID
+        result.blushColor = patch.blushColor
         result.browDefine = patch.browDefine
+        result.browColor = patch.browColor
+        result.eyeshadow = patch.eyeshadow
+        result.shadowColor = patch.shadowColor
+        result.eyeliner = patch.eyeliner
+        result.linerColor = patch.linerColor
         return result
     }
 
@@ -306,7 +313,10 @@ extension Adjustments {
         case exposure, contrast, saturation, vibrance, warmth, clarity, vignette
         case blacks, whites
         case lookID, lookStrength, grain
-        case lipTint, lipShadeID, blush, blushShadeID, browDefine
+        case lipTint, lipColor, blush, blushColor, browDefine, browColor
+        case eyeshadow, shadowColor, eyeliner, linerColor
+        // Written by the palette-only builds; read to migrate old projects.
+        case lipShadeID, blushShadeID
     }
 
     init(from decoder: Decoder) throws {
@@ -316,6 +326,17 @@ extension Adjustments {
         }
         func text(_ key: CodingKeys) -> String {
             (try? c.decodeIfPresent(String.self, forKey: key)) ?? ""
+        }
+        /// A colour key, with the old shade identifier as the fallback: a file
+        /// written before the picker existed names a palette entry instead.
+        func color(_ key: CodingKeys, legacy: CodingKeys? = nil, fallback: MakeupColor) -> MakeupColor {
+            if let stored = (try? c.decodeIfPresent(MakeupColor.self, forKey: key)) ?? nil {
+                return stored
+            }
+            if let legacy, let shade = MakeupShade(rawValue: text(legacy)) {
+                return shade.color
+            }
+            return fallback
         }
         smooth = amount(.smooth)
         blemish = amount(.blemish)
@@ -349,10 +370,44 @@ extension Adjustments {
         lookStrength = amount(.lookStrength)
         grain = amount(.grain)
         lipTint = amount(.lipTint)
-        lipShadeID = text(.lipShadeID)
+        lipColor = color(.lipColor, legacy: .lipShadeID, fallback: MakeupShade.rose.color)
         blush = amount(.blush)
-        blushShadeID = text(.blushShadeID)
+        blushColor = color(.blushColor, legacy: .blushShadeID, fallback: MakeupShade.cheekPeach.color)
         browDefine = amount(.browDefine)
+        browColor = color(.browColor, fallback: MakeupShade.taupeBrow.color)
+        eyeshadow = amount(.eyeshadow)
+        shadowColor = color(.shadowColor, fallback: MakeupShade.taupeShadow.color)
+        eyeliner = amount(.eyeliner)
+        linerColor = color(.linerColor, fallback: MakeupShade.inkLiner.color)
+    }
+
+    /// Written by hand because the legacy shade identifiers are decode-only:
+    /// they have no stored property left to encode.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        let amounts: [(CodingKeys, Double)] = [
+            (.smooth, smooth), (.blemish, blemish), (.wrinkle, wrinkle),
+            (.skinToneEvens, skinToneEvens), (.darkCircles, darkCircles),
+            (.skinBrighten, skinBrighten), (.texturePreserve, texturePreserve),
+            (.teethWhiten, teethWhiten), (.eyeBrighten, eyeBrighten),
+            (.eyeSharpen, eyeSharpen),
+            (.eyeSize, eyeSize), (.noseSize, noseSize), (.noseTip, noseTip),
+            (.lipSize, lipSize), (.cheekSize, cheekSize), (.jawWidth, jawWidth),
+            (.chinLength, chinLength), (.faceWidth, faceWidth), (.faceLength, faceLength),
+            (.exposure, exposure), (.contrast, contrast), (.blacks, blacks),
+            (.whites, whites), (.saturation, saturation), (.vibrance, vibrance),
+            (.warmth, warmth), (.clarity, clarity), (.vignette, vignette),
+            (.lookStrength, lookStrength), (.grain, grain),
+            (.lipTint, lipTint), (.blush, blush), (.browDefine, browDefine),
+            (.eyeshadow, eyeshadow), (.eyeliner, eyeliner),
+        ]
+        for (key, value) in amounts { try c.encode(value, forKey: key) }
+        try c.encode(lookID, forKey: .lookID)
+        try c.encode(lipColor, forKey: .lipColor)
+        try c.encode(blushColor, forKey: .blushColor)
+        try c.encode(browColor, forKey: .browColor)
+        try c.encode(shadowColor, forKey: .shadowColor)
+        try c.encode(linerColor, forKey: .linerColor)
     }
 }
 
@@ -458,7 +513,9 @@ struct Preset: Identifiable, Equatable {
             darkCircles: 30, texturePreserve: 62,
             teethWhiten: 34, eyeBrighten: 22, eyeSharpen: 28,
             eyeSize: 14, lipSize: 12, cheekSize: 8,
-            exposure: 6, contrast: 10, vibrance: 14, warmth: 6, clarity: 10, vignette: 10)),
+            exposure: 6, contrast: 10, vibrance: 14, warmth: 6, clarity: 10, vignette: 10,
+            eyeshadow: 22, shadowColor: MakeupShade.champagneShadow.color,
+            eyeliner: 14)),
         Preset(id: "studio", title: "Studio", group: .beauty, adjustments: Adjustments(
             smooth: 55, blemish: 62, wrinkle: 44, skinToneEvens: 46,
             darkCircles: 38, texturePreserve: 52,
@@ -479,7 +536,8 @@ struct Preset: Identifiable, Equatable {
             teethWhiten: 28, eyeBrighten: 24, eyeSharpen: 24,
             eyeSize: 10, lipSize: 8,
             exposure: 4, contrast: 8, whites: 10, vibrance: 10, warmth: 4,
-            clarity: 8, lipTint: 16, lipShadeID: MakeupShade.rose.rawValue)),
+            clarity: 8, lipTint: 16, lipColor: MakeupShade.rose.color,
+            eyeshadow: 14, shadowColor: MakeupShade.taupeShadow.color)),
         Preset(id: "bridal", title: "Bridal", group: .beauty, adjustments: Adjustments(
             smooth: 46, blemish: 48, wrinkle: 32, skinToneEvens: 40,
             darkCircles: 34, skinBrighten: 24, texturePreserve: 58,
@@ -487,8 +545,8 @@ struct Preset: Identifiable, Equatable {
             eyeSize: 8, cheekSize: 6,
             exposure: 7, contrast: 4, whites: 20, saturation: -4,
             vibrance: 8, warmth: 3, clarity: 6, vignette: 6,
-            lipTint: 14, lipShadeID: MakeupShade.peach.rawValue,
-            blush: 16, blushShadeID: MakeupShade.peach.rawValue)),
+            lipTint: 14, lipColor: MakeupShade.peach.color,
+            blush: 16, blushColor: MakeupShade.cheekPeach.color)),
         Preset(id: "sculpt", title: "Sculpt", group: .beauty, adjustments: Adjustments(
             smooth: 26, blemish: 30, skinToneEvens: 18, texturePreserve: 76,
             eyeSize: 8, cheekSize: -10, jawWidth: -18, chinLength: 6,
@@ -563,38 +621,40 @@ struct Preset: Identifiable, Equatable {
             smooth: 20, blemish: 22, skinToneEvens: 16, skinBrighten: 12,
             texturePreserve: 78, eyeBrighten: 10, eyeSharpen: 12,
             contrast: 4, vibrance: 6, warmth: 8,
-            lipTint: 48, lipShadeID: MakeupShade.rose.rawValue,
-            blush: 30, blushShadeID: MakeupShade.rose.rawValue)),
+            lipTint: 48, lipColor: MakeupShade.rose.color,
+            blush: 30, blushColor: MakeupShade.cheekRoseLight.color)),
         Preset(id: "coral", title: "Coral", group: .makeup, adjustments: Adjustments(
             smooth: 18, blemish: 24, skinToneEvens: 18, skinBrighten: 14,
             texturePreserve: 74, teethWhiten: 22, eyeBrighten: 12,
             exposure: 3, vibrance: 12, warmth: 10,
-            lipTint: 54, lipShadeID: MakeupShade.coral.rawValue,
-            blush: 34, blushShadeID: MakeupShade.coral.rawValue)),
+            lipTint: 54, lipColor: MakeupShade.coral.color,
+            blush: 34, blushColor: MakeupShade.cheekCoral.color)),
         Preset(id: "berry", title: "Berry", group: .makeup, adjustments: Adjustments(
             smooth: 24, blemish: 28, skinToneEvens: 20, texturePreserve: 74,
             teethWhiten: 26, eyeBrighten: 12, eyeSharpen: 10,
             contrast: 8, blacks: 10, saturation: 4,
-            lipTint: 38, lipShadeID: MakeupShade.berry.rawValue,
-            blush: 14, blushShadeID: MakeupShade.berry.rawValue)),
+            lipTint: 38, lipColor: MakeupShade.berry.color,
+            blush: 14, blushColor: MakeupShade.cheekBerry.color)),
         Preset(id: "redcarpet", title: "Red Carpet", group: .makeup, adjustments: Adjustments(
             smooth: 40, blemish: 46, wrinkle: 28, skinToneEvens: 38,
             darkCircles: 28, texturePreserve: 60,
             teethWhiten: 42, eyeBrighten: 22, eyeSharpen: 24, eyeSize: 10,
             contrast: 12, blacks: 14, saturation: 6, vibrance: 8, warmth: 4,
             clarity: 8, vignette: 12,
-            lipTint: 48, lipShadeID: MakeupShade.berry.rawValue,
-            blush: 12, blushShadeID: MakeupShade.rose.rawValue, browDefine: 18)),
+            lipTint: 48, lipColor: MakeupShade.berry.color,
+            blush: 12, blushColor: MakeupShade.cheekRoseLight.color, browDefine: 18,
+            eyeshadow: 26, shadowColor: MakeupShade.plumShadow.color,
+            eyeliner: 22, linerColor: MakeupShade.inkLiner.color)),
         Preset(id: "nude", title: "No-Makeup", group: .makeup, adjustments: Adjustments(
             smooth: 12, blemish: 34, wrinkle: 8, skinToneEvens: 12,
             darkCircles: 26, texturePreserve: 94,
             teethWhiten: 16, eyeBrighten: 14, eyeSharpen: 18,
             exposure: 4, vibrance: 8, warmth: 4,
-            lipTint: 26, lipShadeID: MakeupShade.peach.rawValue,
-            blush: 18, blushShadeID: MakeupShade.peach.rawValue, browDefine: 28)),
+            lipTint: 26, lipColor: MakeupShade.peach.color,
+            blush: 18, blushColor: MakeupShade.cheekPeach.color, browDefine: 28)),
         Preset(id: "brows", title: "Defined", group: .makeup, adjustments: Adjustments(
             smooth: 18, blemish: 24, skinToneEvens: 14, texturePreserve: 84,
             eyeBrighten: 14, eyeSharpen: 22, contrast: 8, clarity: 10,
-            lipTint: 8, lipShadeID: MakeupShade.peach.rawValue, browDefine: 42)),
+            lipTint: 8, lipColor: MakeupShade.peach.color, browDefine: 42)),
     ]
 }

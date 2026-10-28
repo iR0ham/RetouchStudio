@@ -95,9 +95,22 @@ struct L10n {
         "Shapes facial features only."
     }
     var resetGroupHelp: String { "Reset this section" }
-    /// Makeup is one group spread over three headings, so its glyph spells out
+    /// Makeup is one group spread over five regions, so its glyph spells out
     /// what it actually clears.
-    var resetMakeupHelp: String { "Reset lips, cheeks and brows" }
+    var resetMakeupHelp: String { "Reset lips, cheeks, eyes and brows" }
+
+    // Makeup
+    var makeupColor: String { "Color" }
+    var makeupCustomColor: String { "Custom" }
+    var pickColorHelp: String { "Pick any color" }
+    var hue: String { "Hue" }
+    var opacity: String { "Opacity" }
+    var makeupNote: String {
+        "Cosmetics keep the shading underneath them, so lips, cheeks and eyes stay three-dimensional."
+    }
+    var makeupNoFace: String {
+        "No face has been detected, so there is nothing for makeup to color."
+    }
     var undoHelp: String { "Undo (⌘Z)" }
     var redoHelp: String { "Redo (⇧⌘Z)" }
     var undoMenu: String { "Undo" }

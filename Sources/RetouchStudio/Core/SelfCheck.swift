@@ -415,6 +415,7 @@ enum SelfCheck {
             ("eyeSharpen", \.eyeSharpen), ("vignette", \.vignette),
             ("lookStrength", \.lookStrength), ("grain", \.grain),
             ("lipTint", \.lipTint), ("blush", \.blush), ("browDefine", \.browDefine),
+            ("eyeshadow", \.eyeshadow), ("eyeliner", \.eyeliner),
         ]
         let twoSided: [(String, KeyPath<Adjustments, Double>)] = [
             ("eyeSize", \.eyeSize), ("noseSize", \.noseSize), ("noseTip", \.noseTip),
@@ -440,10 +441,6 @@ enum SelfCheck {
             if !preset.adjustments.lookID.isEmpty,
                FilmLook.named(preset.adjustments.lookID) == .none || preset.adjustments.lookStrength <= 0 {
                 offScale.append("\(preset.id).look")
-            }
-            for shade in [preset.adjustments.lipShadeID, preset.adjustments.blushShadeID]
-            where !shade.isEmpty && MakeupShade(rawValue: shade) == nil {
-                offScale.append("\(preset.id).shade")
             }
         }
         print("  \(offScale.isEmpty ? "✓" : "✗") every value is inside its own slider")
@@ -1702,9 +1699,11 @@ enum SelfCheck {
         adjustments.lookStrength = 65
         adjustments.grain = 30
         adjustments.lipTint = 60
-        adjustments.lipShade = .berry
+        adjustments.lipColor = MakeupShade.berry.color
         adjustments.blush = 35
         adjustments.browDefine = 50
+        adjustments.eyeshadow = 25
+        adjustments.eyeliner = 15
 
         let project = RetouchProject(imagePath: "/tmp/photo.jpg",
                                      adjustments: adjustments,
@@ -2077,11 +2076,23 @@ enum SelfCheck {
         print("  \(coverageOK ? "✓" : "✗") masks cover their features (brow, cheek coverage: \(coverageText))")
         passed = coverageOK && passed
 
+        // The eye regions are thin bands, so they are measured on their own
+        // scale: a lid is a strip of skin, and a lash line is a line.
+        let lidRect = face.eyelidRects.first ?? .zero
+        let lashRect = face.lashLineRects.first ?? .zero
+        let lidCoverage = masks.lids.flatMap { processor.renderCGImage($0, scale: 1) }
+            .map { maskCoverage($0, normalized: lidRect) } ?? -1
+        let lashCoverage = masks.liners.flatMap { processor.renderCGImage($0, scale: 1) }
+            .map { maskCoverage($0, normalized: lashRect) } ?? -1
+        let eyeMasksOK = lidCoverage > 0.45 && lashCoverage > 0.25
+        print("  \(eyeMasksOK ? "✓" : "✗") eyelid and lash-line masks (coverage: \(String(format: "%.2f", lidCoverage)), \(String(format: "%.2f", lashCoverage)))")
+        passed = eyeMasksOK && passed
+
         // 2) Untouched, makeup is nothing at all.
-        let idle = output(Adjustments(lipShadeID: "berry"))
+        let idle = output(Adjustments(lipColor: MakeupShade.berry.color))
         let idleDelta = meanColorDifference(baseline, idle, normalized: CGRect(x: 0, y: 0, width: 1, height: 1))
         let idleOK = idleDelta == 0
-        print("  \(idleOK ? "✓" : "✗") a shade with no amount changes nothing: Δ=\(String(format: "%.2f", idleDelta))")
+        print("  \(idleOK ? "✓" : "✗") a colour with no amount changes nothing: Δ=\(String(format: "%.2f", idleDelta))")
         passed = idleOK && passed
 
         // 3) Lip colour lands on the lips and nowhere else, and grows with the
@@ -2134,14 +2145,36 @@ enum SelfCheck {
         print("  \(browOK ? "✓" : "✗") brows darken: −\(String(format: "%.1f", browLift)) levels inside, Δ=\(String(format: "%.1f", browFar)) on the forehead")
         passed = browOK && passed
 
-        // 7) The shades have to be different colours, not one colour at
+        // 7) Eyeshadow colours the lid band and stops there.
+        var shadow = Adjustments()
+        shadow.eyeshadow = 100
+        shadow.shadowColor = MakeupShade.plumShadow.color
+        let shadowResult = output(shadow)
+        let lidDelta = meanColorDifference(baseline, shadowResult, normalized: lidRect)
+        let shadowLips = sampleDelta(baseline, shadowResult, at: face.lipRect.map(mid) ?? .zero)
+        let shadowOK = lidDelta > 2 && shadowLips <= 1
+        print("  \(shadowOK ? "✓" : "✗") eyeshadow on the lid: Δ=\(String(format: "%.1f", lidDelta)); lips \(String(format: "%.1f", shadowLips))")
+        passed = shadowOK && passed
+
+        // 8) Eyeliner darkens the lash line and nothing else.
+        var liner = Adjustments()
+        liner.eyeliner = 100
+        let linerResult = output(liner)
+        let lashDrop = regionMeanLuminance(baseline, normalized: lashRect)
+            - regionMeanLuminance(linerResult, normalized: lashRect)
+        let linerFar = sampleDelta(baseline, linerResult, at: mid(face.foreheadRect))
+        let linerOK = lashDrop > 1 && linerFar <= 1
+        print("  \(linerOK ? "✓" : "✗") eyeliner darkens the lash line: −\(String(format: "%.1f", lashDrop)) levels inside, Δ=\(String(format: "%.1f", linerFar)) on the forehead")
+        passed = linerOK && passed
+
+        // 9) The colours have to be different colours, not one colour at
         //    different strengths. Rose is redder than berry, which carries blue.
         var berry = Adjustments()
         berry.lipTint = 100
-        berry.lipShade = .berry
+        berry.lipColor = MakeupShade.berry.color
         var rose = Adjustments()
         rose.lipTint = 100
-        rose.lipShade = .rose
+        rose.lipColor = MakeupShade.rose.color
         let roseRed = redMinusBlue(rose, face: face, from: output)
         let berryRed = redMinusBlue(berry, face: face, from: output)
         let shadeOK = roseRed != nil && berryRed != nil
@@ -2149,33 +2182,77 @@ enum SelfCheck {
         print("  \(shadeOK ? "✓" : "✗") rose vs berry on the lips: red−blue \(String(format: "%.1f", roseRed ?? -999)) vs \(String(format: "%.1f", berryRed ?? -999))")
         passed = shadeOK && passed
 
-        // 8) Makeup is its own group: clearing it keeps everything else, and
-        //    clearing the others keeps it.
+        // 10) Hue and saturation are real controls, not decoration: the same
+        //     amount with a different hue has to render a different lip.
+        var warm = Adjustments()
+        warm.lipTint = 100
+        warm.lipColor = MakeupColor(hue: 30, saturation: 0.7, value: 0.8)
+        var cool = Adjustments()
+        cool.lipTint = 100
+        cool.lipColor = MakeupColor(hue: 210, saturation: 0.7, value: 0.8)
+        let warmRed = redMinusBlue(warm, face: face, from: output) ?? 0
+        let coolRed = redMinusBlue(cool, face: face, from: output) ?? 0
+        var grey = Adjustments()
+        grey.lipTint = 100
+        grey.lipColor = MakeupColor(hue: 30, saturation: 0, value: 0.8)
+        let greyRed = redMinusBlue(grey, face: face, from: output) ?? 999
+        // The blend always keeps a little of the lip's own colour, so a grey
+        // pigment still reads slightly warm — it must be far less warm than a
+        // fully saturated one, not neutral to the last digit.
+        let hueOK = warmRed > coolRed + 10 && greyRed < warmRed - 20
+        print("  \(hueOK ? "✓" : "✗") hue and saturation move the lip: red−blue \(String(format: "%.1f", warmRed)) warm, \(String(format: "%.1f", coolRed)) cool, \(String(format: "%.1f", greyRed)) at zero saturation")
+        passed = hueOK && passed
+
+        // 11) The catalogue itself: every region stocked, every family stocked,
+        //     no duplicate identifiers or colours.
+        let ids = Set(MakeupShade.all.map(\.id))
+        let colours = Set(MakeupShade.all.map { "\($0.color.hue)/\($0.color.saturation)/\($0.color.value)" })
+        let familiesStocked = MakeupFamily.allCases.allSatisfy {
+            MakeupShade.shades(.lips, family: $0).count >= 3
+                && MakeupShade.shades(.cheeks, family: $0).count >= 3
+        }
+        let regionsStocked = MakeupRegion.allCases.allSatisfy { MakeupShade.shades($0).count >= 4 }
+        let paletteOK = ids.count == MakeupShade.all.count
+            && colours.count == MakeupShade.all.count
+            && familiesStocked && regionsStocked
+        print("  \(paletteOK ? "✓" : "✗") palette: \(MakeupShade.all.count) shades, every family and region stocked, no duplicates")
+        passed = paletteOK && passed
+
+        // 12) Makeup is its own group: clearing it keeps everything else, and
+        //     clearing the others keeps it.
         var mixed = Adjustments(smooth: 40, exposure: 20)
         mixed.look = .warmGold
         mixed.lookStrength = 80
         mixed.lipTint = 60
         mixed.browDefine = 30
+        mixed.eyeliner = 20
         let makeupCleared = mixed.applyingMakeup(Adjustments().makeupOnly)
         let othersCleared = mixed.applyingRetouch(Adjustments().retouchOnly)
             .applyingColorLight(Adjustments().colorLightOnly)
             .applyingLook(Adjustments().lookOnly)
         let groupOK = makeupCleared.lipTint == 0 && makeupCleared.browDefine == 0
+            && makeupCleared.eyeliner == 0
             && makeupCleared.smooth == 40 && makeupCleared.exposure == 20
             && makeupCleared.lookStrength == 80
             && othersCleared.lipTint == 60 && othersCleared.browDefine == 30
+            && othersCleared.eyeliner == 20
             && othersCleared.smooth == 0 && othersCleared.lookStrength == 0
         print("  \(groupOK ? "✓" : "✗") makeup resets as one group, alone")
         passed = groupOK && passed
 
-        // 9) A project file from before makeup has no makeup keys at all.
-        let legacyJSON = "{\"smooth\": 30.0, \"blemish\": 12.0}"
+        // 13) A project file from before the picker names a shade instead of a
+        //     colour, and has no eye makeup at all.
+        let legacyJSON = """
+        {"smooth": 30.0, "blemish": 12.0, "lipShadeID": "berry", "blushShadeID": "rose"}
+        """
         let legacy = legacyJSON.data(using: .utf8).flatMap {
             try? JSONDecoder().decode(Adjustments.self, from: $0)
         }
         let legacyOK = legacy?.lipTint == 0 && legacy?.blush == 0 && legacy?.browDefine == 0
-            && legacy?.lipShade == .rose && legacy?.blushShade == .peach
-        print("  \(legacyOK ? "✓" : "✗") adjustments without makeup keys decode, with default shades")
+            && legacy?.eyeshadow == 0 && legacy?.eyeliner == 0
+            && legacy?.lipColor == MakeupShade.berry.color
+            && legacy?.blushColor == MakeupShade.rose.color
+        print("  \(legacyOK ? "✓" : "✗") a project with shade names migrates to colours")
         passed = legacyOK && passed
 
         return passed

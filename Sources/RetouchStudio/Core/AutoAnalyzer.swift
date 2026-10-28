@@ -532,6 +532,43 @@ enum AutoAnalyzer {
         return a
     }
 
+    // MARK: - Skin tone
+
+    /// Mean luminance of bare cheek skin, used to open the makeup palette on
+    /// the colour family mixed for this face.
+    ///
+    /// The blush rects sit on cheek, away from lips, eyes and hair, and both
+    /// sides are averaged so a light coming from one direction does not decide
+    /// the family. Reads the same 8-bit sRGB pixels the palettes were written
+    /// against.
+    static func cheekLuminance(_ image: CGImage, face: FaceGeometry) -> Double? {
+        guard let buffer = PixelBuffer(cgImage: image) else { return nil }
+        var sum = 0.0
+        var samples = 0.0
+        for rect in [face.leftBlushRect, face.rightBlushRect] {
+            // Face geometry is bottom-left; the bitmap starts at the top row.
+            let x0 = Int((rect.minX * CGFloat(buffer.width)).rounded())
+            let x1 = Int((rect.maxX * CGFloat(buffer.width)).rounded())
+            let y0 = Int(((1 - rect.maxY) * CGFloat(buffer.height)).rounded())
+            let y1 = Int(((1 - rect.minY) * CGFloat(buffer.height)).rounded())
+            guard x1 > x0, y1 > y0 else { continue }
+            let stepX = max(1, (x1 - x0) / 12)
+            let stepY = max(1, (y1 - y0) / 12)
+            var y = max(0, y0)
+            while y < min(buffer.height, y1) {
+                var x = max(0, x0)
+                while x < min(buffer.width, x1) {
+                    sum += buffer.luminance(x: x, y: y)
+                    samples += 1
+                    x += stepX
+                }
+                y += stepY
+            }
+        }
+        guard samples >= 20 else { return nil }
+        return sum / samples
+    }
+
     private static func clamp(_ value: Double, _ low: Double, _ high: Double) -> Double {
         min(high, max(low, value))
     }
