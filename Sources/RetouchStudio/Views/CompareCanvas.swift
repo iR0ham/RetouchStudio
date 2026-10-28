@@ -157,14 +157,26 @@ struct CompareCanvas: View {
 
                     compareHandle(displayed: displayed, canvas: canvas, center: center)
 
+                    // The tags hug whichever corners of the photo are actually
+                    // visible. While zoomed the sheet is larger than the stage,
+                    // so its own corners sit off-screen and the tags would go
+                    // with them.
+                    let visibleLeft = max(0, center.x - displayed.width / 2)
+                    let visibleTop = max(0, center.y - displayed.height / 2)
+                    let visibleRight = min(canvas.width, center.x + displayed.width / 2)
+                    let visibleBottom = min(canvas.height, center.y + displayed.height / 2)
+
                     HStack(spacing: 0) {
                         compareBadge(model.s.before, highlighted: false)
                         Spacer(minLength: 0)
                         compareBadge(model.s.after, highlighted: true)
                     }
                     .padding(10)
-                    .frame(width: displayed.width, height: displayed.height, alignment: .top)
-                    .position(center)
+                    .frame(width: max(0, visibleRight - visibleLeft),
+                           height: max(0, visibleBottom - visibleTop),
+                           alignment: .top)
+                    .position(x: (visibleLeft + visibleRight) / 2,
+                              y: (visibleTop + visibleBottom) / 2)
                     .allowsHitTesting(false)
                 }
 

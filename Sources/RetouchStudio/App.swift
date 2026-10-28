@@ -121,7 +121,11 @@ private struct WindowBridge: NSViewRepresentable {
         window.styleMask.insert(.fullSizeContentView)
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = NSColor(Theme.background)
-        window.isMovableByWindowBackground = true
+        // Window-background dragging has to stay off: it takes the mouse-down
+        // before SwiftUI's canvas gestures see it, so panning and the
+        // before/after handle stop responding. The titlebar strip above the
+        // toolbar still moves the window.
+        window.isMovableByWindowBackground = false
         window.titlebarSeparatorStyle = .none
     }
 
