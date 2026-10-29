@@ -69,14 +69,7 @@ enum FilmLook: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .none: return "None"
-        case .warmGold: return "Warm Gold"
-        case .portraitFilm: return "Portrait"
-        case .nightStock: return "Night Stock"
-        case .crossProcess: return "Cross Process"
-        case .fadedMatte: return "Faded Matte"
-        }
+        L10n.current.lookTitle(self)
     }
 
     var grade: LookGrade {

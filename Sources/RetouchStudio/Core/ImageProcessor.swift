@@ -60,13 +60,40 @@ struct MaskSet {
     var skinTexture: CIImage?   // skin, softer edge, for texture work
     var lids: CIImage?          // lid skin above each eye, for eyeshadow
     var liners: CIImage?        // narrow band along the upper lash line
+    var hair: CIImage?          // crown and side hair, for dye and shine
+    var contours: CIImage?      // cheekbone-to-jaw hollows, for contour makeup
+    /// Subject silhouette from Vision. Built lazily the first time a Body or
+    /// Background control moves, because segmentation is the one expensive
+    /// analysis a fresh photo does not need.
+    var person: CIImage? = nil
+    /// Joints from Vision's body-pose pass, carried with the same lazy analysis
+    /// as the silhouette. Nil on a portrait where only the face is in frame.
+    var pose: BodyPose? = nil
+
+    /// A set that carries only the person mask. Body and Background work on
+    /// photos with no face at all, where `buildMasks` returns nil but the
+    /// pipeline still has to receive the silhouette.
+    static func personOnly(_ person: CIImage, pose: BodyPose? = nil) -> MaskSet {
+        MaskSet(skin: nil, face: nil, eyes: nil, leftEye: nil, rightEye: nil,
+                sclera: nil, iris: nil, lashes: nil, eyeDetail: nil, lips: nil,
+                teeth: nil, brows: nil, cheeks: nil, underEyes: nil, forehead: nil,
+                nose: nil, skinTexture: nil, lids: nil, liners: nil, hair: nil,
+                contours: nil, person: person, pose: pose)
+    }
 }
 
-/// Where the manual healing brush stamped, ready for a single repair pass.
+/// Where the healing brush stamped, grouped into repairs. Each pass carries the
+/// stamps of one size class, because the repair kernel is sized by the stamp:
+/// one pass sized for the largest stamp would over-smooth every small one and
+/// take its donor texture from too far away.
 struct SpotHealing {
-    var mask: CIImage
-    /// Repair radius in pixels of the image this mask was built for.
-    var radius: CGFloat
+    struct Pass {
+        var mask: CIImage
+        /// Repair radius in pixels of the image this mask was built for.
+        var radius: CGFloat
+    }
+
+    var passes: [Pass]
 }
 
 struct LoadResult {
@@ -229,6 +256,9 @@ final class ImageProcessor {
         var noseShapes: [MaskShape] = []
         var lidShapes: [MaskShape] = []
         var lashLineShapes: [MaskShape] = []
+        var hairShapes: [MaskShape] = []
+        var hairSideShapes: [MaskShape] = []
+        var contourShapes: [MaskShape] = []
 
         var scleraParts: [CIImage] = []
         var irisParts: [CIImage] = []
@@ -267,7 +297,13 @@ final class ImageProcessor {
                 shieldShapes.append(MaskShape(rect: rect, cornerRadius: 0.5))
             }
             lidShapes.append(contentsOf: face.eyelidRects.map { MaskShape(ellipse: $0) })
-            lashLineShapes.append(contentsOf: face.lashLineRects.map { MaskShape(rect: $0, cornerRadius: 0.5) })
+            // The liner follows the traced upper lid when the outline is rich
+            // enough; the level rectangle is only a fallback.
+            if face.lashLinePolygons.count == face.eyePolygons.count {
+                lashLineShapes.append(contentsOf: face.lashLinePolygons.map { MaskShape(points: $0) })
+            } else {
+                lashLineShapes.append(contentsOf: face.lashLineRects.map { MaskShape(rect: $0, cornerRadius: 0.5) })
+            }
             if face.lipPolygon.count >= 3 {
                 shieldShapes.append(MaskShape(points: face.lipPolygon))
                 lipShapes.append(MaskShape(points: face.lipPolygon))
@@ -279,6 +315,10 @@ final class ImageProcessor {
             }
             cheekShapes.append(MaskShape(ellipse: face.leftBlushRect))
             cheekShapes.append(MaskShape(ellipse: face.rightBlushRect))
+
+            hairShapes.append(MaskShape(rect: face.hairRect, cornerRadius: 0.42))
+            hairSideShapes.append(contentsOf: face.hairSideRects.map { MaskShape(ellipse: $0) })
+            contourShapes.append(contentsOf: face.contourPolygons.map { MaskShape(points: $0) })
 
             // Whitening a closed mouth would lighten lips, not teeth, so the
             // mask only exists when teeth were measured as visible. The shape
@@ -296,13 +336,17 @@ final class ImageProcessor {
 
             // Per-eye splits. The geometric shapes are only approximate; the
             // gates decide the real boundary from the pixels.
-            for eye in face.eyePolygons {
-                let box = FaceGeometry.boundingBox(of: eye)
+            let eyes: [(outline: [CGPoint], pupil: [CGPoint])] = [
+                (face.leftEye, face.leftPupil),
+                (face.rightEye, face.rightPupil)
+            ]
+            for eye in eyes {
+                let box = FaceGeometry.boundingBox(of: eye.outline)
                 guard box.width > 0.004, box.height > 0.002 else { continue }
 
                 let scleraGeometry = MaskBuilder.makeMask(
                     extent: extent,
-                    shapes: [MaskShape(points: FaceGeometry.scaled(eye, by: 0.88))],
+                    shapes: [MaskShape(points: FaceGeometry.scaled(eye.outline, by: 0.88))],
                     feather: tightFeather)
                 if let part = gatedMask(geometry: scleraGeometry, image: image,
                                         lumaMin: face.eyeScleraLuminance,
@@ -310,10 +354,8 @@ final class ImageProcessor {
                     scleraParts.append(part)
                 }
 
-                let irisRect = CGRect(x: box.midX - box.width * 0.32,
-                                      y: box.midY - box.height * 0.44,
-                                      width: box.width * 0.64,
-                                      height: box.height * 0.88)
+                let irisRect = FaceGeometry.irisRect(eye: eye.outline, pupil: eye.pupil)
+                if irisRect.isNull { continue }
                 let irisGeometry = MaskBuilder.makeMask(
                     extent: extent,
                     shapes: [MaskShape(ellipse: irisRect)],
@@ -328,7 +370,7 @@ final class ImageProcessor {
                 let lashGeometry = MaskBuilder.makeMask(
                     extent: extent,
                     shapes: [
-                        MaskShape(points: FaceGeometry.scaled(eye, by: 1.06)),
+                        MaskShape(points: FaceGeometry.scaled(eye.outline, by: 1.06)),
                         MaskShape(mode: .erase, ellipse: irisRect.insetBy(dx: irisRect.width * 0.18,
                                                                           dy: irisRect.height * 0.10))
                     ],
@@ -378,6 +420,29 @@ final class ImageProcessor {
         let linerFeather = max(1.5, 0.002 * shortSide)
         let liners = MaskBuilder.makeMask(extent: extent, shapes: lashLineShapes, feather: linerFeather)
 
+        // Hair is a colour target, so it gets a soft edge. The pixel gate keeps
+        // a bright wall out of the band; the person mask (when Body, Background
+        // or Hair has loaded one) finishes the job in the pipeline.
+        let faceSilhouette = MaskBuilder.makeMask(extent: extent, shapes: faceShapes, feather: feather)
+        let hairTop = MaskBuilder.makeMask(extent: extent, shapes: hairShapes, feather: softFeather)
+        // The side panels sit where hair falls past the ears — and where the
+        // cheek is. Skin is inside the same luma gate as brown hair, so the
+        // face silhouette is cut out of the side panels only; the head band
+        // above the hairline must keep its pixels.
+        var hairSides = MaskBuilder.makeMask(extent: extent, shapes: hairSideShapes, feather: softFeather)
+        if let faceSilhouette, let sides = hairSides {
+            hairSides = MaskBuilder.subtract(faceSilhouette, from: sides)
+        }
+        var hairGeometry = hairTop
+        if let sides = hairSides {
+            hairGeometry = hairTop.map { MaskBuilder.union($0, sides) } ?? sides
+        }
+        let hair = gatedMask(geometry: hairGeometry, image: image,
+                             lumaMin: 0, lumaMax: 0.82, saturationMax: 1)
+
+        let contours = MaskBuilder.makeMask(extent: extent, shapes: contourShapes,
+                                            feather: softFeather)
+
         // Everything the skin work must not touch: the eye and lip bands, plus
         // the brow hair itself. Subtracted from the *finished* masks, so the
         // silhouette's own feather can no longer bleed smoothing into the hole.
@@ -393,7 +458,7 @@ final class ImageProcessor {
 
         return MaskSet(
             skin: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: feather)),
-            face: MaskBuilder.makeMask(extent: extent, shapes: faceShapes, feather: feather),
+            face: faceSilhouette,
             eyes: MaskBuilder.makeMask(extent: extent, shapes: eyeShapes, feather: tightFeather),
             leftEye: MaskBuilder.makeMask(extent: extent, shapes: leftEyeShapes, feather: tightFeather),
             rightEye: MaskBuilder.makeMask(extent: extent, shapes: rightEyeShapes, feather: tightFeather),
@@ -410,7 +475,9 @@ final class ImageProcessor {
             nose: MaskBuilder.makeMask(extent: extent, shapes: noseShapes, feather: softFeather),
             skinTexture: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: softFeather)),
             lids: lids,
-            liners: liners
+            liners: liners,
+            hair: hair,
+            contours: contours
         )
     }
 
@@ -470,18 +537,120 @@ final class ImageProcessor {
         return Double(pixel[0]) / 255.0
     }
 
+    // MARK: - Detail analysis
+
+    /// A face-centred crop at (near) its own resolution, for the blemish finder.
+    /// The 512 px analysis buffer is the right size for global statistics but
+    /// too coarse to tell an acne spot from a JPEG block: in a full-body photo
+    /// a face is about 90 px wide there.
+    ///
+    /// `maxDimension` keeps the crop affordable. Past a few hundred pixels of
+    /// face, a larger render adds no information about a blemish, only cost.
+    func faceCrop(for face: FaceGeometry,
+                  in source: CIImage,
+                  skinMask: CIImage?,
+                  maxDimension: CGFloat = 420) -> SmartAnalyzer.FaceCrop? {
+        let extent = source.extent
+        let box = face.boundingBox
+        let margin: CGFloat = 0.14
+        let raw = CGRect(x: (box.minX - box.width * margin) * extent.width,
+                         y: (box.minY - box.height * margin) * extent.height,
+                         width: box.width * (1 + 2 * margin) * extent.width,
+                         height: box.height * (1 + 2 * margin) * extent.height)
+            .integral
+            .intersection(extent)
+        guard raw.width >= 24, raw.height >= 24 else { return nil }
+
+        let scale = min(1, maxDimension / max(raw.width, raw.height))
+        let width = max(1, Int((raw.width * scale).rounded()))
+        let height = max(1, Int((raw.height * scale).rounded()))
+        let target = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+
+        func prepared(_ image: CIImage) -> CIImage {
+            image.cropped(to: raw)
+                .transformed(by: CGAffineTransform(translationX: -raw.minX, y: -raw.minY))
+                .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                .cropped(to: target)
+        }
+
+        guard let rendered = renderCGImage(prepared(source), scale: 1),
+              let buffer = PixelBuffer(cgImage: rendered) else { return nil }
+
+        let skin = skinMask.flatMap { mask -> PixelBuffer? in
+            guard let cg = renderCGImage(prepared(mask), scale: 1) else { return nil }
+            return PixelBuffer(cgImage: cg)
+        }
+
+        // FaceGeometry is bottom-left normalized; the crop buffer is top-left
+        // pixels. One conversion serves the face box and every exclusion.
+        func toBuffer(_ rect: CGRect) -> CGRect {
+            CGRect(x: (rect.minX * extent.width - raw.minX) * scale,
+                   y: (raw.maxY - rect.maxY * extent.height) * scale,
+                   width: rect.width * extent.width * scale,
+                   height: rect.height * extent.height * scale)
+        }
+
+        let frame = CGRect(x: raw.minX / extent.width,
+                           y: (extent.height - raw.maxY) / extent.height,
+                           width: raw.width / extent.width,
+                           height: raw.height / extent.height)
+
+        return SmartAnalyzer.FaceCrop(
+            buffer: buffer,
+            skin: skin,
+            faceRect: toBuffer(box),
+            faceBox: box,
+            exclusions: SmartAnalyzer.exclusionRects(for: face).map(toBuffer),
+            frame: frame,
+            workingSize: extent.size,
+            image: rendered)
+    }
+
     // MARK: - Processing
 
-    /// Builds the one-pass mask for the manual healing brush. Stamps arrive in
-    /// the coordinates of the image being processed, so a crop or a different
+    /// Builds the mask passes for the healing brush. Stamps arrive in the
+    /// coordinates of the image being processed, so a crop or a different
     /// working resolution needs a fresh mask.
     func spotsMask(extent: CGRect, spots: [HealSpot]) -> SpotHealing? {
         guard !spots.isEmpty else { return nil }
         let shortSide = min(extent.width, extent.height)
-        guard let mask = MaskBuilder.makeMask(extent: extent,
-                                              shapes: HealGeometry.shapes(for: spots),
-                                              feather: max(2, 0.004 * shortSide)) else { return nil }
-        return SpotHealing(mask: mask, radius: max(2, HealGeometry.largestRadius(spots) * shortSide))
+        guard shortSide >= 1 else { return nil }
+
+        // The repair kernel only has to be wide enough for the stamps it
+        // serves. Sorting big to small and starting a new class when a stamp is
+        // less than half the current size keeps a small blemish from inheriting
+        // the smear of a large stamp. Four classes is plenty for a real photo.
+        let sorted = spots.sorted { $0.radius > $1.radius }
+        var anchors: [CGFloat] = []
+        for spot in sorted where anchors.count < 4 {
+            if anchors.contains(where: { spot.radius >= $0 * 0.5 }) { continue }
+            anchors.append(spot.radius)
+        }
+        guard !anchors.isEmpty else { return nil }
+
+        var buckets = [[HealSpot]](repeating: [], count: anchors.count)
+        for spot in sorted {
+            let index = anchors.indices.min {
+                abs(log(Double(spot.radius / anchors[$0])))
+                    < abs(log(Double(spot.radius / anchors[$1])))
+            } ?? 0
+            buckets[index].append(spot)
+        }
+
+        let passes: [SpotHealing.Pass] = buckets.compactMap { bucket in
+            guard let largest = bucket.map(\.radius).max() else { return nil }
+            let radius = max(1.5, largest * shortSide)
+            // The mask edge is feathered inside the stamp instead of with the
+            // image-wide default: a 3 px stamp must not bleed 7 px into clean
+            // skin around it.
+            let feather = max(1.2, min(0.004 * shortSide, radius * 0.35))
+            guard let mask = MaskBuilder.makeMask(extent: extent,
+                                                  shapes: HealGeometry.shapes(for: bucket),
+                                                  feather: feather) else { return nil }
+            return SpotHealing.Pass(mask: mask, radius: radius)
+        }
+        guard !passes.isEmpty else { return nil }
+        return SpotHealing(passes: passes)
     }
 
     func process(_ source: CIImage,
@@ -500,7 +669,9 @@ final class ImageProcessor {
         //    what the automatic skin passes should then work over, and it is
         //    not limited to the face masks because the user can stamp anywhere.
         if let spots {
-            image = SkinEngine.healSpots(image, mask: spots.mask, radius: spots.radius)
+            for pass in spots.passes {
+                image = SkinEngine.healSpots(image, mask: pass.mask, radius: pass.radius)
+            }
         }
 
         // 1) Local retouch runs first, while the masks still line up with the
@@ -549,6 +720,29 @@ final class ImageProcessor {
             if a.skinBrighten != 0 {
                 image = SkinEngine.brightenSkin(image, strength: a.skinBrighten, mask: skinMask)
             }
+            if a.skinFinish != 0 {
+                image = SkinEngine.applySkinFinish(image, strength: a.skinFinish,
+                                                   mask: skinMask, scale: scale)
+            }
+            if a.shine > 0 {
+                image = SkinEngine.reduceShine(image, strength: a.shine,
+                                               mask: skinMask, scale: scale)
+            }
+        }
+
+        // 1b) Body skin. Uses the person mask rather than face landmarks, so a
+        //     full-length portrait is treated as a body rather than a face with
+        //     a lot of background around it.
+        if (a.bodySmooth > 0 || a.bodyTone != 0), let person = masks?.person {
+            let bodyMask = SceneEngine.bodySkinMask(person: person, image: image)
+            if a.bodySmooth > 0 {
+                image = SkinEngine.smoothSkin(image, strength: a.bodySmooth,
+                                              texturePreserve: max(a.texturePreserve, 65),
+                                              mask: bodyMask, scale: scale)
+            }
+            if a.bodyTone != 0 {
+                image = SkinEngine.brightenSkin(image, strength: a.bodyTone, mask: bodyMask)
+            }
         }
 
         // 2) Under-eye correction.
@@ -568,6 +762,13 @@ final class ImageProcessor {
             image = SkinEngine.sharpenEyeDetail(image, strength: a.eyeSharpen,
                                                 mask: detailMask, scale: scale)
         }
+        if a.irisEnhance > 0, let irisMask = masks?.iris {
+            image = SkinEngine.enhanceIris(image, strength: a.irisEnhance,
+                                           mask: irisMask, scale: scale)
+        }
+        if a.lashDarken > 0, let lashMask = masks?.lashes {
+            image = SkinEngine.darkenLashes(image, strength: a.lashDarken, mask: lashMask)
+        }
 
         // 3b) Makeup, after the skin work: smoothing first would dilute the
         //     colour and blur its edge, and a flush laid on finished skin keeps
@@ -584,6 +785,10 @@ final class ImageProcessor {
             image = MakeupEngine.tintLips(image, strength: a.lipTint,
                                           mask: lipMask, color: a.lipColor)
         }
+        if a.lipGloss > 0, let lipMask = masks?.lips {
+            image = MakeupEngine.addGloss(image, strength: a.lipGloss,
+                                          mask: lipMask, scale: scale)
+        }
         if a.blush > 0, let cheekMask = masks?.cheeks {
             image = MakeupEngine.applyBlush(image, strength: a.blush,
                                             mask: cheekMask, color: a.blushColor)
@@ -592,18 +797,86 @@ final class ImageProcessor {
             image = MakeupEngine.defineBrows(image, strength: a.browDefine,
                                              mask: browMask, color: a.browColor, scale: scale)
         }
+        if a.contour > 0, let contourMask = masks?.contours {
+            image = MakeupEngine.applyContour(image, strength: a.contour,
+                                              mask: contourMask, color: a.contourColor)
+        }
+        if a.hairColor > 0 || a.hairShine > 0, let hairGeometry = masks?.hair {
+            // The head band is geometric; the subject silhouette trims it so a
+            // wall, curtain or sky behind the head cannot be dyed.
+            let hairMask = masks?.person.map { MaskBuilder.intersect(hairGeometry, $0) }
+                ?? hairGeometry
+            if a.hairColor > 0 {
+                image = MakeupEngine.dyeHair(image, strength: a.hairColor,
+                                             mask: hairMask, color: a.hairTint)
+            }
+            if a.hairShine > 0 {
+                image = MakeupEngine.addHairShine(image, strength: a.hairShine,
+                                                  mask: hairMask, scale: scale)
+            }
+        }
 
         // 4) Geometry after the local edits: the warp then carries the
         //    retouched pixels with the features, and every mask stays aligned.
+        //
+        //    Feature moves run first with only the brows held back; silhouette
+        //    moves run second with the eyes, lips and brows held back, so a
+        //    slimmer jaw never drags the mouth sideways.
         if a.hasReshape, !faces.isEmpty {
             let controls = faces.flatMap { FeatureReshaper.controls(for: $0, adjustments: a) }
-            image = FeatureReshaper.apply(image, controls: controls)
+            let featureMoves = controls.filter { !$0.protectFeatures }
+            let shapeMoves = controls.filter { $0.protectFeatures }
+            if !featureMoves.isEmpty {
+                image = FeatureReshaper.apply(image, controls: featureMoves,
+                                              protection: masks?.brows)
+            }
+            if !shapeMoves.isEmpty {
+                image = FeatureReshaper.apply(image, controls: shapeMoves,
+                                              protection: featureProtection(masks))
+            }
+        }
+        if a.bodySlim != 0, let person = masks?.person {
+            image = FeatureReshaper.applyBodySlim(image, mask: person, amount: a.bodySlim)
+        }
+        // Pose shaping runs after the overall slim: the landmarks describe the
+        // body as it was, and the displacements are small enough that the
+        // order is visually identical — but this way the waist band follows
+        // the subject's own hips and shoulders rather than the frame centre.
+        if a.bodyWaist != 0 || a.bodyArms != 0 || a.bodyLegs != 0,
+           let pose = masks?.pose, let person = masks?.person {
+            let bodyControls = FeatureReshaper.bodyControls(for: pose, adjustments: a,
+                                                            extent: extent)
+            image = FeatureReshaper.applyBodyShape(image, controls: bodyControls, mask: person)
         }
 
         // 5) Global color and light.
         image = applyGlobal(image, a)
 
+        // 6) Background last: everything in front of it has already been
+        //    retouched, so the falloff never blurs work that was meant to stay
+        //    sharp on the subject.
+        if (a.backgroundBlur != 0 || a.backgroundTone != 0 || a.backgroundSaturation != 0),
+           let person = masks?.person {
+            image = SceneEngine.applyBackground(image, person: person,
+                                                blur: a.backgroundBlur,
+                                                tone: a.backgroundTone,
+                                                saturation: a.backgroundSaturation,
+                                                scale: scale)
+        }
+
         return image.cropped(to: extent)
+    }
+
+    /// Eyes, lips and brows as one mask, used to hold the features in place
+    /// while the face around them is reshaped.
+    private func featureProtection(_ masks: MaskSet?) -> CIImage? {
+        guard let masks else { return nil }
+        let parts = [masks.eyes, masks.lips, masks.brows].compactMap { $0 }
+        guard var combined = parts.first else { return nil }
+        for part in parts.dropFirst() {
+            combined = MaskBuilder.union(combined, part)
+        }
+        return combined
     }
 
     private func applyGlobal(_ source: CIImage, _ a: Adjustments) -> CIImage {
@@ -635,11 +908,36 @@ final class ImageProcessor {
                 "inputTargetNeutral": CIVector(x: 6500 - 1500 * amount, y: 6 * amount)
             ])
         }
+        // The curve shapes the tonal balance the sliders above just set; HSL
+        // then goes after the split tone so a targeted band is the last colour
+        // decision, not something the global warm/cool pass can undo.
+        if a.curveShadows != 0 || a.curveMidtones != 0 || a.curveHighlights != 0 {
+            image = LookEngine.applyToneCurve(image,
+                                              shadows: a.curveShadows,
+                                              midtones: a.curveMidtones,
+                                              highlights: a.curveHighlights)
+        }
+        if a.splitTone != 0 {
+            image = LookEngine.applySplitTone(image, strength: a.splitTone)
+        }
+        let hslActive = a.hslHue.contains { $0 != 0 }
+            || a.hslSaturation.contains { $0 != 0 }
+            || a.hslLuminance.contains { $0 != 0 }
+        if hslActive {
+            image = LookEngine.applyHSL(image,
+                                        hue: a.hslHue,
+                                        saturation: a.hslSaturation,
+                                        luminance: a.hslLuminance)
+        }
         if a.clarity > 0 {
-            image = image.applyingFilter("CIUnsharpMask", parameters: [
+            // Luminance-only: sharpening the colour channels is what puts
+            // orange/cyan fringes on high-contrast edges such as lashes and
+            // jewellery.
+            let sharpened = image.applyingFilter("CIUnsharpMask", parameters: [
                 kCIInputRadiusKey: max(1.5, shortSide * 0.004),
                 kCIInputIntensityKey: 0.75 * a.clarity / 100
             ])
+            image = SkinEngine.keepLuminance(sharpened, over: image)
         } else if a.clarity < 0 {
             image = image.applyingFilter("CIGaussianBlur", parameters: [
                 kCIInputRadiusKey: max(0.5, shortSide * 0.0015 * (-a.clarity / 100) * scale)

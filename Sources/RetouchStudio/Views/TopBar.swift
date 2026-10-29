@@ -91,7 +91,7 @@ struct TopBar: View {
             }
 
             Text(model.hasImage ? model.imageName : model.s.noImageOpen)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(Theme.Font.face(size: 11.5, weight: .medium))
                 .foregroundStyle(model.hasImage ? Theme.muted : Theme.faint)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -137,7 +137,7 @@ struct TopBar: View {
             HStack(spacing: 6) {
                 Icon(name: "arrow.down.to.line.compact", size: 14, emphasised: true)
                 Text(model.s.export)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(Theme.Font.face(size: 12.5, weight: .semibold))
             }
             .foregroundStyle(Theme.accentInk)
             .padding(.horizontal, 16)

@@ -96,6 +96,73 @@ struct Adjustments: Equatable, Codable {
     var eyeliner: Double = 0
     var linerColor: MakeupColor = MakeupShade.inkLiner.color
 
+    // MARK: - Skin finish and detail
+    //
+    // Kept apart from the smoothing group: these decide how the finished skin
+    // *reads* — matte or dewy, shiny or calm — and how much structure the eye
+    // and lash keep. All are appended after the original fields so a project
+    // written before they existed decodes to "no change".
+    var skinFinish: Double = 0      // -100 matte ... +100 glow
+    var shine: Double = 0           // 0...100, calms specular on the skin
+    var irisEnhance: Double = 0     // 0...100, local contrast inside the iris
+    var lashDarken: Double = 0      // 0...100
+    var lipGloss: Double = 0        // 0...100
+    var splitTone: Double = 0       // 0...100, cool shadows / warm highlights
+
+    // MARK: - Body and background
+    //
+    // These run from the on-device person mask rather than from face landmarks,
+    // so they work on a full-length portrait where the face is only a small
+    // part of the frame.
+    var bodySmooth: Double = 0          // 0...100
+    var bodyTone: Double = 0            // -100...100
+    var bodySlim: Double = 0            // -100...100, positive narrows
+    var backgroundBlur: Double = 0      // 0...100
+    var backgroundTone: Double = 0      // -100...100
+    var backgroundSaturation: Double = 0 // -100...100
+
+    // MARK: - Pose-driven body shaping
+    //
+    // Appended after the silhouette controls so a project written before the
+    // pose joints existed still decodes to "no change". Positive narrows, the
+    // same direction as Body Slim.
+    var bodyWaist: Double = 0           // -100...100
+    var bodyArms: Double = 0            // -100...100
+    var bodyLegs: Double = 0            // -100...100
+
+    // MARK: - Hair
+    //
+    // Hair is makeup in the cosmetic sense — a pigment over its own shading —
+    // but it is driven by the head band rather than a face landmark.
+    var hairColor: Double = 0           // 0...100
+    var hairTint: MakeupColor = MakeupShade.hairEspresso.color
+    var hairShine: Double = 0           // 0...100
+
+    // MARK: - Contour
+    //
+    // Sculpting shade under the cheekbone and along the jaw. It lives with the
+    // cosmetics because it is the same operation: a colour laid over shading.
+    var contour: Double = 0             // 0...100
+    var contourColor: MakeupColor = MakeupShade.contourSoft.color
+
+    // MARK: - Tone curve
+    //
+    // Three anchors rather than an editable spline. A curve is judged at the
+    // shadows, the mid-tones and the highlights; the engine interpolates
+    // smoothly between them on luminance, so colour is untouched.
+    var curveShadows: Double = 0        // -100...100
+    var curveMidtones: Double = 0       // -100...100
+    var curveHighlights: Double = 0     // -100...100
+
+    // MARK: - HSL
+    //
+    // Per-hue-band adjustment, indexed by `HSLBand`. Arrays rather than 24
+    // stored properties: the bands are a fixed list, and the sliders edit one
+    // component of one band at a time.
+    var hslHue: [Double] = Array(repeating: 0, count: HSLBand.allCases.count)
+    var hslSaturation: [Double] = Array(repeating: 0, count: HSLBand.allCases.count)
+    var hslLuminance: [Double] = Array(repeating: 0, count: HSLBand.allCases.count)
+
     static let zero = Adjustments()
 
     var isIdentity: Bool { self == .zero }
@@ -115,6 +182,10 @@ struct Adjustments: Equatable, Codable {
         a.teethWhiten = teethWhiten
         a.eyeBrighten = eyeBrighten
         a.eyeSharpen = eyeSharpen
+        a.skinFinish = skinFinish
+        a.shine = shine
+        a.irisEnhance = irisEnhance
+        a.lashDarken = lashDarken
         return a
     }
 
@@ -145,6 +216,13 @@ struct Adjustments: Equatable, Codable {
         a.warmth = warmth
         a.clarity = clarity
         a.vignette = vignette
+        a.splitTone = splitTone
+        a.curveShadows = curveShadows
+        a.curveMidtones = curveMidtones
+        a.curveHighlights = curveHighlights
+        a.hslHue = hslHue
+        a.hslSaturation = hslSaturation
+        a.hslLuminance = hslLuminance
         return a
     }
 
@@ -177,7 +255,42 @@ struct Adjustments: Equatable, Codable {
         a.shadowColor = shadowColor
         a.eyeliner = eyeliner
         a.linerColor = linerColor
+        a.lipGloss = lipGloss
+        a.hairColor = hairColor
+        a.hairTint = hairTint
+        a.hairShine = hairShine
+        a.contour = contour
+        a.contourColor = contourColor
         return a
+    }
+
+    /// The body half. These are the only controls that need the person mask.
+    var bodyOnly: Adjustments {
+        var a = Adjustments()
+        a.bodySmooth = bodySmooth
+        a.bodyTone = bodyTone
+        a.bodySlim = bodySlim
+        a.bodyWaist = bodyWaist
+        a.bodyArms = bodyArms
+        a.bodyLegs = bodyLegs
+        return a
+    }
+
+    /// The background half.
+    var backgroundOnly: Adjustments {
+        var a = Adjustments()
+        a.backgroundBlur = backgroundBlur
+        a.backgroundTone = backgroundTone
+        a.backgroundSaturation = backgroundSaturation
+        return a
+    }
+
+    /// True when a control needs the person mask, so the mask is only built
+    /// when one of these tools is actually in use. Hair needs it too: the head
+    /// band would otherwise tint a wall behind the subject.
+    var usesPersonTools: Bool {
+        bodyOnly != .zero || backgroundOnly != .zero
+            || hairColor != 0 || hairShine != 0
     }
 
     var hasMakeup: Bool { makeupOnly != .zero }
@@ -197,6 +310,12 @@ struct Adjustments: Equatable, Codable {
         result.shadowColor = patch.shadowColor
         result.eyeliner = patch.eyeliner
         result.linerColor = patch.linerColor
+        result.lipGloss = patch.lipGloss
+        result.hairColor = patch.hairColor
+        result.hairTint = patch.hairTint
+        result.hairShine = patch.hairShine
+        result.contour = patch.contour
+        result.contourColor = patch.contourColor
         return result
     }
 
@@ -221,6 +340,13 @@ struct Adjustments: Equatable, Codable {
         result.warmth = patch.warmth
         result.clarity = patch.clarity
         result.vignette = patch.vignette
+        result.splitTone = patch.splitTone
+        result.curveShadows = patch.curveShadows
+        result.curveMidtones = patch.curveMidtones
+        result.curveHighlights = patch.curveHighlights
+        result.hslHue = patch.hslHue
+        result.hslSaturation = patch.hslSaturation
+        result.hslLuminance = patch.hslLuminance
         return result
     }
 
@@ -237,6 +363,10 @@ struct Adjustments: Equatable, Codable {
         result.teethWhiten = patch.teethWhiten
         result.eyeBrighten = patch.eyeBrighten
         result.eyeSharpen = patch.eyeSharpen
+        result.skinFinish = patch.skinFinish
+        result.shine = patch.shine
+        result.irisEnhance = patch.irisEnhance
+        result.lashDarken = patch.lashDarken
         return result
     }
 
@@ -255,6 +385,10 @@ struct Adjustments: Equatable, Codable {
         result.teethWhiten = teethWhiten * factor
         result.eyeBrighten = eyeBrighten * factor
         result.eyeSharpen = eyeSharpen * factor
+        result.skinFinish = skinFinish * factor
+        result.shine = shine * factor
+        result.irisEnhance = irisEnhance * factor
+        result.lashDarken = lashDarken * factor
         return result
     }
 
@@ -271,6 +405,13 @@ struct Adjustments: Equatable, Codable {
         result.vibrance = vibrance * factor
         result.warmth = warmth * factor
         result.clarity = clarity * factor
+        result.splitTone = splitTone * factor
+        result.curveShadows = curveShadows * factor
+        result.curveMidtones = curveMidtones * factor
+        result.curveHighlights = curveHighlights * factor
+        result.hslHue = hslHue.map { $0 * factor }
+        result.hslSaturation = hslSaturation.map { $0 * factor }
+        result.hslLuminance = hslLuminance.map { $0 * factor }
         return result
     }
 
@@ -288,12 +429,89 @@ struct Adjustments: Equatable, Codable {
         result.faceLength = patch.faceLength
         return result
     }
+
+    /// Copy with ONLY the body fields taken from `patch`.
+    func applyingBody(_ patch: Adjustments) -> Adjustments {
+        var result = self
+        result.bodySmooth = patch.bodySmooth
+        result.bodyTone = patch.bodyTone
+        result.bodySlim = patch.bodySlim
+        result.bodyWaist = patch.bodyWaist
+        result.bodyArms = patch.bodyArms
+        result.bodyLegs = patch.bodyLegs
+        return result
+    }
+
+    /// Copy with ONLY the background fields taken from `patch`.
+    func applyingBackground(_ patch: Adjustments) -> Adjustments {
+        var result = self
+        result.backgroundBlur = patch.backgroundBlur
+        result.backgroundTone = patch.backgroundTone
+        result.backgroundSaturation = patch.backgroundSaturation
+        return result
+    }
 }
 
-/// The three independent tool groups. Used for per-group reset and to keep the
-/// two Auto actions honest about what they touch.
+/// The eight hue bands the HSL tool edits. Centres are degrees on the colour
+/// wheel; the half-width is how far the band reaches before its neighbour takes
+/// over, chosen so reds and skin stay narrow while greens get room.
+enum HSLBand: Int, CaseIterable, Identifiable, Codable {
+    case red, orange, yellow, green, cyan, blue, purple, magenta
+
+    var id: Int { rawValue }
+
+    var title: String {
+        L10n.current.hueBandTitle(self)
+    }
+
+    /// Centre of the band in degrees.
+    var centerHue: Double {
+        switch self {
+        case .red: return 0
+        case .orange: return 30
+        case .yellow: return 60
+        case .green: return 120
+        case .cyan: return 180
+        case .blue: return 240
+        case .purple: return 285
+        case .magenta: return 320
+        }
+    }
+
+    /// Half-width of the smooth window in degrees. The windows overlap, and the
+    /// engine normalises by their sum, so a colour sitting between two bands
+    /// receives a share of both instead of a hard step.
+    var halfWidth: Double {
+        switch self {
+        case .red, .magenta: return 26
+        case .orange: return 24
+        case .yellow: return 30
+        case .green: return 44
+        case .cyan: return 34
+        case .blue: return 44
+        case .purple: return 30
+        }
+    }
+
+    /// A band's self-check fixture colour, in 8-bit sRGB.
+    var sampleColor: (r: Double, g: Double, b: Double) {
+        switch self {
+        case .red: return (0.78, 0.12, 0.10)
+        case .orange: return (0.86, 0.44, 0.10)
+        case .yellow: return (0.86, 0.80, 0.12)
+        case .green: return (0.16, 0.62, 0.20)
+        case .cyan: return (0.10, 0.62, 0.66)
+        case .blue: return (0.12, 0.24, 0.78)
+        case .purple: return (0.44, 0.18, 0.66)
+        case .magenta: return (0.72, 0.12, 0.58)
+        }
+    }
+}
+
+/// The independent tool groups. Used for per-group reset and to keep the two
+/// Auto actions honest about what they touch.
 enum AdjustmentGroup: String, CaseIterable, Identifiable {
-    case skin, reshape, makeup, colorLight, look
+    case skin, reshape, makeup, colorLight, look, body, background
     var id: String { rawValue }
 }
 
@@ -315,6 +533,14 @@ extension Adjustments {
         case lookID, lookStrength, grain
         case lipTint, lipColor, blush, blushColor, browDefine, browColor
         case eyeshadow, shadowColor, eyeliner, linerColor
+        case skinFinish, shine, irisEnhance, lashDarken, lipGloss, splitTone
+        case bodySmooth, bodyTone, bodySlim
+        case backgroundBlur, backgroundTone, backgroundSaturation
+        case bodyWaist, bodyArms, bodyLegs
+        case hairColor, hairTint, hairShine
+        case contour, contourColor
+        case curveShadows, curveMidtones, curveHighlights
+        case hslHue, hslSaturation, hslLuminance
         // Written by the palette-only builds; read to migrate old projects.
         case lipShadeID, blushShadeID
     }
@@ -326,6 +552,16 @@ extension Adjustments {
         }
         func text(_ key: CodingKeys) -> String {
             (try? c.decodeIfPresent(String.self, forKey: key)) ?? ""
+        }
+        /// A per-band array, padded or trimmed to the current band count so a
+        /// file written by a build with a different band list still decodes.
+        func bands(_ key: CodingKeys) -> [Double] {
+            let count = HSLBand.allCases.count
+            var values = ((try? c.decodeIfPresent([Double].self, forKey: key)) ?? nil) ?? []
+            if values.count < count {
+                values += Array(repeating: 0, count: count - values.count)
+            }
+            return values.prefix(count).map { min(100, max(-100, $0)) }
         }
         /// A colour key, with the old shade identifier as the fallback: a file
         /// written before the picker existed names a palette entry instead.
@@ -379,6 +615,32 @@ extension Adjustments {
         shadowColor = color(.shadowColor, fallback: MakeupShade.taupeShadow.color)
         eyeliner = amount(.eyeliner)
         linerColor = color(.linerColor, fallback: MakeupShade.inkLiner.color)
+        skinFinish = amount(.skinFinish)
+        shine = amount(.shine)
+        irisEnhance = amount(.irisEnhance)
+        lashDarken = amount(.lashDarken)
+        lipGloss = amount(.lipGloss)
+        splitTone = amount(.splitTone)
+        bodySmooth = amount(.bodySmooth)
+        bodyTone = amount(.bodyTone)
+        bodySlim = amount(.bodySlim)
+        bodyWaist = amount(.bodyWaist)
+        bodyArms = amount(.bodyArms)
+        bodyLegs = amount(.bodyLegs)
+        hairColor = amount(.hairColor)
+        hairTint = color(.hairTint, fallback: MakeupShade.hairEspresso.color)
+        hairShine = amount(.hairShine)
+        contour = amount(.contour)
+        contourColor = color(.contourColor, fallback: MakeupShade.contourSoft.color)
+        curveShadows = amount(.curveShadows)
+        curveMidtones = amount(.curveMidtones)
+        curveHighlights = amount(.curveHighlights)
+        hslHue = bands(.hslHue)
+        hslSaturation = bands(.hslSaturation)
+        hslLuminance = bands(.hslLuminance)
+        backgroundBlur = amount(.backgroundBlur)
+        backgroundTone = amount(.backgroundTone)
+        backgroundSaturation = amount(.backgroundSaturation)
     }
 
     /// Written by hand because the legacy shade identifiers are decode-only:
@@ -399,7 +661,18 @@ extension Adjustments {
             (.warmth, warmth), (.clarity, clarity), (.vignette, vignette),
             (.lookStrength, lookStrength), (.grain, grain),
             (.lipTint, lipTint), (.blush, blush), (.browDefine, browDefine),
-            (.eyeshadow, eyeshadow), (.eyeliner, eyeliner),
+            (.eyeshadow, eyeshadow), (.eyeliner, eyeliner), (.lipGloss, lipGloss),
+            (.skinFinish, skinFinish), (.shine, shine),
+            (.irisEnhance, irisEnhance), (.lashDarken, lashDarken),
+            (.splitTone, splitTone),
+            (.bodySmooth, bodySmooth), (.bodyTone, bodyTone), (.bodySlim, bodySlim),
+            (.bodyWaist, bodyWaist), (.bodyArms, bodyArms), (.bodyLegs, bodyLegs),
+            (.hairColor, hairColor), (.hairShine, hairShine),
+            (.contour, contour),
+            (.curveShadows, curveShadows), (.curveMidtones, curveMidtones),
+            (.curveHighlights, curveHighlights),
+            (.backgroundBlur, backgroundBlur), (.backgroundTone, backgroundTone),
+            (.backgroundSaturation, backgroundSaturation),
         ]
         for (key, value) in amounts { try c.encode(value, forKey: key) }
         try c.encode(lookID, forKey: .lookID)
@@ -408,6 +681,11 @@ extension Adjustments {
         try c.encode(browColor, forKey: .browColor)
         try c.encode(shadowColor, forKey: .shadowColor)
         try c.encode(linerColor, forKey: .linerColor)
+        try c.encode(hairTint, forKey: .hairTint)
+        try c.encode(contourColor, forKey: .contourColor)
+        try c.encode(hslHue, forKey: .hslHue)
+        try c.encode(hslSaturation, forKey: .hslSaturation)
+        try c.encode(hslLuminance, forKey: .hslLuminance)
     }
 }
 
@@ -419,25 +697,34 @@ enum PresetGroup: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .everyday: return "Everyday"
-        case .skin: return "Skin"
-        case .beauty: return "Beauty"
-        case .color: return "Color"
-        case .film: return "Film"
-        case .makeup: return "Makeup"
-        }
+        L10n.current.presetGroupTitle(self)
     }
 }
 
+/// The identity of a built-in look. The raw values are what a project file
+/// stores, so they never change; the name for each one lives in the string
+/// table.
+enum PresetID: String, CaseIterable {
+    case natural, clean, fresh, minimal, softlight
+    case airbrush, texture, matte, glow, eventone, bronze, porcelain
+    case glamour, studio, editorial, beauty, bridal, sculpt, male
+    case warmsun, cool, vibrant, muted, pastel, punchy, fade, noir, monosoft
+    case golden, portra, cinema, faded, cross, kodachrome
+    case rose, coral, berry, redcarpet, nude, brows
+}
+
 struct Preset: Identifiable, Equatable {
-    let id: String
-    let title: String
+    let id: PresetID
     let group: PresetGroup
     let adjustments: Adjustments
 
+    var title: String { L10n.current.presetTitle(id) }
+
     static func inGroup(_ group: PresetGroup) -> [Preset] { all.filter { $0.group == group } }
-    static func with(id: String) -> Preset? { all.first { $0.id == id } }
+    static func with(id: String) -> Preset? {
+        guard let id = PresetID(rawValue: id) else { return nil }
+        return all.first { $0.id == id }
+    }
 
     /// The library. Every entry is a starting point a photographer would
     /// actually reach for, and each one leaves at least one group alone so
@@ -448,58 +735,58 @@ struct Preset: Identifiable, Equatable {
     static let all: [Preset] = [
         // MARK: Everyday — small, defensible corrections
 
-        Preset(id: "natural", title: "Natural", group: .everyday, adjustments: Adjustments(
+        Preset(id: .natural, group: .everyday, adjustments: Adjustments(
             smooth: 22, blemish: 30, wrinkle: 18, skinToneEvens: 20,
             darkCircles: 16, texturePreserve: 78,
             teethWhiten: 12, eyeBrighten: 10, eyeSharpen: 14,
             exposure: 3, contrast: 5, vibrance: 8, warmth: 4, clarity: 6)),
-        Preset(id: "clean", title: "Clean", group: .everyday, adjustments: Adjustments(
+        Preset(id: .clean, group: .everyday, adjustments: Adjustments(
             smooth: 16, blemish: 46, wrinkle: 12, skinToneEvens: 18,
             darkCircles: 24, texturePreserve: 86,
             teethWhiten: 16, eyeBrighten: 8,
             contrast: 6, blacks: 10, vibrance: 6, clarity: 8)),
-        Preset(id: "fresh", title: "Fresh", group: .everyday, adjustments: Adjustments(
+        Preset(id: .fresh, group: .everyday, adjustments: Adjustments(
             smooth: 18, blemish: 24, skinToneEvens: 22, darkCircles: 34,
             skinBrighten: 14, texturePreserve: 82,
             teethWhiten: 20, eyeBrighten: 18, eyeSharpen: 16,
             exposure: 6, whites: 10, vibrance: 12, warmth: 5, clarity: 4)),
-        Preset(id: "minimal", title: "Barely There", group: .everyday, adjustments: Adjustments(
+        Preset(id: .minimal, group: .everyday, adjustments: Adjustments(
             blemish: 38, wrinkle: 6, darkCircles: 22, texturePreserve: 100,
             eyeSharpen: 8, contrast: 2, vibrance: 2)),
-        Preset(id: "softlight", title: "Soft Light", group: .everyday, adjustments: Adjustments(
+        Preset(id: .softlight, group: .everyday, adjustments: Adjustments(
             smooth: 26, blemish: 18, skinToneEvens: 14, texturePreserve: 72,
             eyeBrighten: 8, exposure: 7, contrast: -6, whites: 14,
             saturation: -4, vibrance: 6, warmth: 6)),
 
         // MARK: Skin — what the smoothing itself should feel like
 
-        Preset(id: "airbrush", title: "Airbrush", group: .skin, adjustments: Adjustments(
+        Preset(id: .airbrush, group: .skin, adjustments: Adjustments(
             smooth: 62, blemish: 70, wrinkle: 52, skinToneEvens: 56,
             darkCircles: 44, skinBrighten: 18, texturePreserve: 38,
             teethWhiten: 30, eyeBrighten: 18,
             exposure: 3, contrast: 8, vibrance: 8, clarity: 6)),
-        Preset(id: "texture", title: "Kept Texture", group: .skin, adjustments: Adjustments(
+        Preset(id: .texture, group: .skin, adjustments: Adjustments(
             smooth: 6, blemish: 26, wrinkle: 10, skinToneEvens: 10,
             texturePreserve: 100, eyeSharpen: 20,
             contrast: 10, blacks: 14, clarity: 22)),
-        Preset(id: "matte", title: "Matte", group: .skin, adjustments: Adjustments(
+        Preset(id: .matte, group: .skin, adjustments: Adjustments(
             smooth: 44, blemish: 40, skinToneEvens: 34,
             texturePreserve: 58, contrast: 12, blacks: 24, whites: -10,
             saturation: -6, vibrance: -4, clarity: 18)),
-        Preset(id: "glow", title: "Dewy Glow", group: .skin, adjustments: Adjustments(
+        Preset(id: .glow, group: .skin, adjustments: Adjustments(
             smooth: 34, blemish: 30, skinToneEvens: 28, darkCircles: 26,
             skinBrighten: 34, texturePreserve: 66,
             teethWhiten: 22, eyeBrighten: 20, eyeSharpen: 12,
             exposure: 5, whites: 18, vibrance: 10, warmth: 6)),
-        Preset(id: "eventone", title: "Even Tone", group: .skin, adjustments: Adjustments(
+        Preset(id: .eventone, group: .skin, adjustments: Adjustments(
             smooth: 28, blemish: 44, skinToneEvens: 62, darkCircles: 46,
             skinBrighten: 12, texturePreserve: 70,
             contrast: 4, vibrance: 6, warmth: 3, clarity: 4)),
-        Preset(id: "bronze", title: "Bronze", group: .skin, adjustments: Adjustments(
+        Preset(id: .bronze, group: .skin, adjustments: Adjustments(
             smooth: 30, blemish: 26, skinToneEvens: 22, texturePreserve: 64,
             teethWhiten: 14, exposure: 2, contrast: 8, saturation: 6,
             vibrance: 10, warmth: 24, clarity: 10, vignette: 8)),
-        Preset(id: "porcelain", title: "Porcelain", group: .skin, adjustments: Adjustments(
+        Preset(id: .porcelain, group: .skin, adjustments: Adjustments(
             smooth: 54, blemish: 52, wrinkle: 40, skinToneEvens: 48,
             darkCircles: 38, skinBrighten: 30, texturePreserve: 48,
             teethWhiten: 26, eyeBrighten: 16,
@@ -508,7 +795,7 @@ struct Preset: Identifiable, Equatable {
 
         // MARK: Beauty — full portraits, several groups at once
 
-        Preset(id: "glamour", title: "Glamour", group: .beauty, adjustments: Adjustments(
+        Preset(id: .glamour, group: .beauty, adjustments: Adjustments(
             smooth: 42, blemish: 50, wrinkle: 34, skinToneEvens: 36,
             darkCircles: 30, texturePreserve: 62,
             teethWhiten: 34, eyeBrighten: 22, eyeSharpen: 28,
@@ -516,21 +803,21 @@ struct Preset: Identifiable, Equatable {
             exposure: 6, contrast: 10, vibrance: 14, warmth: 6, clarity: 10, vignette: 10,
             eyeshadow: 22, shadowColor: MakeupShade.champagneShadow.color,
             eyeliner: 14)),
-        Preset(id: "studio", title: "Studio", group: .beauty, adjustments: Adjustments(
+        Preset(id: .studio, group: .beauty, adjustments: Adjustments(
             smooth: 55, blemish: 62, wrinkle: 44, skinToneEvens: 46,
             darkCircles: 38, texturePreserve: 52,
             teethWhiten: 44, eyeBrighten: 30, eyeSharpen: 38,
             eyeSize: 18, lipSize: 10, cheekSize: 14, jawWidth: -16, chinLength: 8,
             faceWidth: -8,
             exposure: 4, contrast: 16, vibrance: 10, warmth: 8, clarity: 16, vignette: 16)),
-        Preset(id: "editorial", title: "Editorial", group: .beauty, adjustments: Adjustments(
+        Preset(id: .editorial, group: .beauty, adjustments: Adjustments(
             smooth: 12, blemish: 16, wrinkle: 24, skinToneEvens: 14,
             darkCircles: 20, texturePreserve: 92,
             teethWhiten: 6, eyeBrighten: 8, eyeSharpen: 26,
             cheekSize: -8, jawWidth: -20, chinLength: 10, faceWidth: -12,
             contrast: 20, blacks: 18, saturation: -10, vibrance: -4,
             warmth: -6, clarity: 24, vignette: 16)),
-        Preset(id: "beauty", title: "Beauty", group: .beauty, adjustments: Adjustments(
+        Preset(id: .beauty, group: .beauty, adjustments: Adjustments(
             smooth: 38, blemish: 44, wrinkle: 26, skinToneEvens: 32,
             darkCircles: 30, skinBrighten: 16, texturePreserve: 66,
             teethWhiten: 28, eyeBrighten: 24, eyeSharpen: 24,
@@ -538,7 +825,7 @@ struct Preset: Identifiable, Equatable {
             exposure: 4, contrast: 8, whites: 10, vibrance: 10, warmth: 4,
             clarity: 8, lipTint: 16, lipColor: MakeupShade.rose.color,
             eyeshadow: 14, shadowColor: MakeupShade.taupeShadow.color)),
-        Preset(id: "bridal", title: "Bridal", group: .beauty, adjustments: Adjustments(
+        Preset(id: .bridal, group: .beauty, adjustments: Adjustments(
             smooth: 46, blemish: 48, wrinkle: 32, skinToneEvens: 40,
             darkCircles: 34, skinBrighten: 24, texturePreserve: 58,
             teethWhiten: 38, eyeBrighten: 20, eyeSharpen: 18,
@@ -547,12 +834,12 @@ struct Preset: Identifiable, Equatable {
             vibrance: 8, warmth: 3, clarity: 6, vignette: 6,
             lipTint: 14, lipColor: MakeupShade.peach.color,
             blush: 16, blushColor: MakeupShade.cheekPeach.color)),
-        Preset(id: "sculpt", title: "Sculpt", group: .beauty, adjustments: Adjustments(
+        Preset(id: .sculpt, group: .beauty, adjustments: Adjustments(
             smooth: 26, blemish: 30, skinToneEvens: 18, texturePreserve: 76,
             eyeSize: 8, cheekSize: -10, jawWidth: -18, chinLength: 6,
             faceWidth: -12, faceLength: 6,
             contrast: 14, blacks: 16, clarity: 20, vignette: 12)),
-        Preset(id: "male", title: "Masculine", group: .beauty, adjustments: Adjustments(
+        Preset(id: .male, group: .beauty, adjustments: Adjustments(
             smooth: 14, blemish: 38, wrinkle: 10, skinToneEvens: 12,
             texturePreserve: 94, eyeBrighten: 8, eyeSharpen: 14,
             jawWidth: -8, chinLength: 6, faceWidth: -6,
@@ -560,82 +847,82 @@ struct Preset: Identifiable, Equatable {
 
         // MARK: Colour — the whole frame, no skin work
 
-        Preset(id: "warmsun", title: "Warm Sun", group: .color, adjustments: Adjustments(
+        Preset(id: .warmsun, group: .color, adjustments: Adjustments(
             exposure: 4, contrast: 6, whites: 10, vibrance: 12,
             warmth: 24, clarity: 4)),
-        Preset(id: "cool", title: "Cool Tone", group: .color, adjustments: Adjustments(
+        Preset(id: .cool, group: .color, adjustments: Adjustments(
             exposure: 2, contrast: 8, blacks: 10, saturation: -4,
             warmth: -22, clarity: 6)),
-        Preset(id: "vibrant", title: "Vibrant", group: .color, adjustments: Adjustments(
+        Preset(id: .vibrant, group: .color, adjustments: Adjustments(
             exposure: 2, contrast: 12, blacks: 12, whites: 12,
             saturation: 8, vibrance: 24, clarity: 8)),
-        Preset(id: "muted", title: "Muted", group: .color, adjustments: Adjustments(
+        Preset(id: .muted, group: .color, adjustments: Adjustments(
             contrast: 4, blacks: 12, saturation: -18, vibrance: -8,
             warmth: -3, clarity: 6)),
-        Preset(id: "pastel", title: "Pastel", group: .color, adjustments: Adjustments(
+        Preset(id: .pastel, group: .color, adjustments: Adjustments(
             exposure: 9, contrast: -8, whites: 16, saturation: -12,
             vibrance: 4, warmth: 4)),
-        Preset(id: "punchy", title: "Punchy", group: .color, adjustments: Adjustments(
+        Preset(id: .punchy, group: .color, adjustments: Adjustments(
             contrast: 26, blacks: 24, whites: 20, saturation: 4,
             vibrance: 12, clarity: 16)),
-        Preset(id: "fade", title: "Matte Fade", group: .color, adjustments: Adjustments(
+        Preset(id: .fade, group: .color, adjustments: Adjustments(
             exposure: 5, contrast: -12, blacks: -34, whites: -14,
             saturation: -8, vibrance: -4, warmth: 6)),
-        Preset(id: "noir", title: "Noir", group: .color, adjustments: Adjustments(
+        Preset(id: .noir, group: .color, adjustments: Adjustments(
             exposure: -4, contrast: 30, blacks: 26, saturation: -100,
             clarity: 22, vignette: 26)),
-        Preset(id: "monosoft", title: "Soft Mono", group: .color, adjustments: Adjustments(
+        Preset(id: .monosoft, group: .color, adjustments: Adjustments(
             exposure: 5, contrast: 8, blacks: -16, whites: 10,
             saturation: -100, clarity: 6, grain: 26)),
 
         // MARK: Film — grade and grain, lightly supported by skin work
 
-        Preset(id: "golden", title: "Golden Hour", group: .film, adjustments: Adjustments(
+        Preset(id: .golden, group: .film, adjustments: Adjustments(
             smooth: 18, blemish: 20, skinBrighten: 10, texturePreserve: 80,
             exposure: 4, contrast: 6, whites: 12, vibrance: 10, warmth: 16,
             lookID: FilmLook.warmGold.rawValue, lookStrength: 55, grain: 10)),
-        Preset(id: "portra", title: "Portrait Film", group: .film, adjustments: Adjustments(
+        Preset(id: .portra, group: .film, adjustments: Adjustments(
             smooth: 22, blemish: 24, skinToneEvens: 16, texturePreserve: 84,
             exposure: 3, contrast: 4, whites: 8, saturation: -4, warmth: 6,
             lookID: FilmLook.portraitFilm.rawValue, lookStrength: 62, grain: 18)),
-        Preset(id: "cinema", title: "Cinematic", group: .film, adjustments: Adjustments(
+        Preset(id: .cinema, group: .film, adjustments: Adjustments(
             smooth: 16, blemish: 18, texturePreserve: 86, eyeSharpen: 12,
             contrast: 14, blacks: 16, warmth: -8, clarity: 8, vignette: 18,
             lookID: FilmLook.nightStock.rawValue, lookStrength: 45, grain: 14)),
-        Preset(id: "faded", title: "Faded Print", group: .film, adjustments: Adjustments(
+        Preset(id: .faded, group: .film, adjustments: Adjustments(
             smooth: 14, texturePreserve: 88, exposure: 4, contrast: -6,
             blacks: -28, saturation: -6, warmth: 4,
             lookID: FilmLook.fadedMatte.rawValue, lookStrength: 65, grain: 22)),
-        Preset(id: "cross", title: "Cross Process", group: .film, adjustments: Adjustments(
+        Preset(id: .cross, group: .film, adjustments: Adjustments(
             smooth: 10, texturePreserve: 90, contrast: 18, blacks: 14,
             saturation: 6, clarity: 10,
             lookID: FilmLook.crossProcess.rawValue, lookStrength: 45, grain: 12)),
-        Preset(id: "kodachrome", title: "Vintage Slide", group: .film, adjustments: Adjustments(
+        Preset(id: .kodachrome, group: .film, adjustments: Adjustments(
             smooth: 12, texturePreserve: 86, exposure: 2, contrast: 16,
             blacks: 18, saturation: 10, vibrance: 8, warmth: 10, clarity: 10,
             lookID: FilmLook.warmGold.rawValue, lookStrength: 38, grain: 20)),
 
         // MARK: Makeup — cosmetics, with the skin work kept minimal
 
-        Preset(id: "rose", title: "Rose", group: .makeup, adjustments: Adjustments(
+        Preset(id: .rose, group: .makeup, adjustments: Adjustments(
             smooth: 20, blemish: 22, skinToneEvens: 16, skinBrighten: 12,
             texturePreserve: 78, eyeBrighten: 10, eyeSharpen: 12,
             contrast: 4, vibrance: 6, warmth: 8,
             lipTint: 48, lipColor: MakeupShade.rose.color,
             blush: 30, blushColor: MakeupShade.cheekRoseLight.color)),
-        Preset(id: "coral", title: "Coral", group: .makeup, adjustments: Adjustments(
+        Preset(id: .coral, group: .makeup, adjustments: Adjustments(
             smooth: 18, blemish: 24, skinToneEvens: 18, skinBrighten: 14,
             texturePreserve: 74, teethWhiten: 22, eyeBrighten: 12,
             exposure: 3, vibrance: 12, warmth: 10,
             lipTint: 54, lipColor: MakeupShade.coral.color,
             blush: 34, blushColor: MakeupShade.cheekCoral.color)),
-        Preset(id: "berry", title: "Berry", group: .makeup, adjustments: Adjustments(
+        Preset(id: .berry, group: .makeup, adjustments: Adjustments(
             smooth: 24, blemish: 28, skinToneEvens: 20, texturePreserve: 74,
             teethWhiten: 26, eyeBrighten: 12, eyeSharpen: 10,
             contrast: 8, blacks: 10, saturation: 4,
             lipTint: 38, lipColor: MakeupShade.berry.color,
             blush: 14, blushColor: MakeupShade.cheekBerry.color)),
-        Preset(id: "redcarpet", title: "Red Carpet", group: .makeup, adjustments: Adjustments(
+        Preset(id: .redcarpet, group: .makeup, adjustments: Adjustments(
             smooth: 40, blemish: 46, wrinkle: 28, skinToneEvens: 38,
             darkCircles: 28, texturePreserve: 60,
             teethWhiten: 42, eyeBrighten: 22, eyeSharpen: 24, eyeSize: 10,
@@ -645,14 +932,14 @@ struct Preset: Identifiable, Equatable {
             blush: 12, blushColor: MakeupShade.cheekRoseLight.color, browDefine: 18,
             eyeshadow: 26, shadowColor: MakeupShade.plumShadow.color,
             eyeliner: 22, linerColor: MakeupShade.inkLiner.color)),
-        Preset(id: "nude", title: "No-Makeup", group: .makeup, adjustments: Adjustments(
+        Preset(id: .nude, group: .makeup, adjustments: Adjustments(
             smooth: 12, blemish: 34, wrinkle: 8, skinToneEvens: 12,
             darkCircles: 26, texturePreserve: 94,
             teethWhiten: 16, eyeBrighten: 14, eyeSharpen: 18,
             exposure: 4, vibrance: 8, warmth: 4,
             lipTint: 26, lipColor: MakeupShade.peach.color,
             blush: 18, blushColor: MakeupShade.cheekPeach.color, browDefine: 28)),
-        Preset(id: "brows", title: "Defined", group: .makeup, adjustments: Adjustments(
+        Preset(id: .brows, group: .makeup, adjustments: Adjustments(
             smooth: 18, blemish: 24, skinToneEvens: 14, texturePreserve: 84,
             eyeBrighten: 14, eyeSharpen: 22, contrast: 8, clarity: 10,
             lipTint: 8, lipColor: MakeupShade.peach.color, browDefine: 42)),

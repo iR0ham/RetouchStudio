@@ -287,7 +287,7 @@ struct CompareCanvas: View {
 
     private func compareBadge(_ title: String, highlighted: Bool) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 9, weight: .semibold))
+            .font(Theme.Font.face(size: 9, weight: .semibold))
             .tracking(0.6)
             .foregroundStyle(highlighted ? Theme.accentBright : Theme.bone.opacity(0.80))
             .padding(.horizontal, 7)
@@ -316,14 +316,14 @@ struct CompareCanvas: View {
             }
 
             Text(model.status)
-                .font(.system(size: 10.5))
+                .font(Theme.Font.face(size: 10.5))
                 .foregroundStyle(Theme.muted)
                 .lineLimit(1)
 
             if !model.imageInfo.isEmpty && model.canvasSize.width > 980 {
                 Text("·").foregroundStyle(Theme.faint)
                 Text(model.imageInfo)
-                    .font(.system(size: 10.5))
+                    .font(Theme.Font.face(size: 10.5))
                     .foregroundStyle(Theme.faint)
                     .lineLimit(1)
             }
@@ -355,8 +355,8 @@ struct CompareCanvas: View {
                 model.zoomOut()
             }
 
-            Text(model.zoom > 1.0001 ? "\(Int((model.zoom * 100).rounded()))%" : model.s.fit)
-                .font(.system(size: 11, weight: .medium))
+            Text(model.zoom > 1.0001 ? Digits.percent(Int((model.zoom * 100).rounded())) : model.s.fit)
+                .font(Theme.Font.face(size: 11, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(model.zoom > 1.0001 ? Theme.accentBright : Theme.muted)
                 .frame(minWidth: 38, minHeight: 28)
@@ -408,7 +408,7 @@ struct CompareCanvas: View {
                 Icon(name: icon, size: 14)
                 if let label {
                     Text(label)
-                        .font(.system(size: 11))
+                        .font(Theme.Font.face(size: 11))
                         .lineLimit(1)
                         .fixedSize()
                 }
@@ -510,10 +510,10 @@ struct DropZone: View {
 
             VStack(spacing: 5) {
                 Text(model.s.dropTitle)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(Theme.Font.face(size: 17, weight: .semibold))
                     .foregroundStyle(Theme.text)
                 Text(model.s.dropSubtitle)
-                    .font(.system(size: 11.5))
+                    .font(Theme.Font.face(size: 11.5))
                     .foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
             }
@@ -553,7 +553,7 @@ struct DropZone: View {
                 .foregroundStyle(Theme.accent.opacity(0.85))
                 .frame(width: 16)
             Text(text)
-                .font(.system(size: 11))
+                .font(Theme.Font.face(size: 11))
                 .foregroundStyle(Theme.muted)
         }
     }

@@ -84,13 +84,7 @@ enum MakeupFamily: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .fair: return "Fair"
-        case .light: return "Light"
-        case .medium: return "Medium"
-        case .tan: return "Tan"
-        case .deep: return "Deep"
-        }
+        L10n.current.makeupFamilyTitle(self)
     }
 
     /// Which family a measured skin luminance belongs to. Thresholds sit on
@@ -111,23 +105,17 @@ enum MakeupFamily: String, CaseIterable, Identifiable, Codable {
 /// One cosmetic region. Each carries its own colour and its own amount, so the
 /// tools no longer share a single palette entry.
 enum MakeupRegion: String, CaseIterable, Identifiable, Codable {
-    case lips, cheeks, shadow, liner, brows
+    case lips, cheeks, contour, shadow, liner, brows, hair
 
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .lips: return "Lips"
-        case .cheeks: return "Cheeks"
-        case .shadow: return "Shadow"
-        case .liner: return "Liner"
-        case .brows: return "Brows"
-        }
+        L10n.current.makeupRegionTitle(self)
     }
 
-    /// Lip and cheek shades are mixed per skin tone; shadow, liner and brow
-    /// colours are pigment laid on hair or skin around the eye and work the
-    /// same on every tone.
+    /// Lip and cheek shades are mixed per skin tone; contour, shadow, liner and
+    /// brow colours are pigment laid on skin or hair and work the same on every
+    /// tone, as do hair dyes (the amount carries the difference).
     var hasFamilies: Bool { self == .lips || self == .cheeks }
 
     /// How much of the colour a tap on a swatch applies, in slider units.
@@ -135,9 +123,11 @@ enum MakeupRegion: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .lips: return 55
         case .cheeks: return 40
+        case .contour: return 35
         case .shadow: return 35
         case .liner: return 45
         case .brows: return 45
+        case .hair: return 50
         }
     }
 
@@ -145,9 +135,11 @@ enum MakeupRegion: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .lips: return \.lipColor
         case .cheeks: return \.blushColor
+        case .contour: return \.contourColor
         case .shadow: return \.shadowColor
         case .liner: return \.linerColor
         case .brows: return \.browColor
+        case .hair: return \.hairTint
         }
     }
 
@@ -155,9 +147,11 @@ enum MakeupRegion: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .lips: return \.lipTint
         case .cheeks: return \.blush
+        case .contour: return \.contour
         case .shadow: return \.eyeshadow
         case .liner: return \.eyeliner
         case .brows: return \.browDefine
+        case .hair: return \.hairColor
         }
     }
 }
@@ -324,6 +318,34 @@ struct MakeupShade: Identifiable, Hashable {
     static let espressoBrow = MakeupShade(id: "brow-espresso", title: "Espresso", region: .brows,
                                           color: MakeupColor(hue: 20, saturation: 0.35, value: 0.24))
 
+    // MARK: - Contour
+
+    /// The default sculpting shade: a desaturated taupe that darkens the
+    /// hollow under the cheekbone without reading as dirt on the skin.
+    static let contourSoft = MakeupShade(id: "contour-soft", title: "Soft", region: .contour,
+                                         color: MakeupColor(hue: 26, saturation: 0.24, value: 0.52))
+    static let contourNeutral = MakeupShade(id: "contour-neutral", title: "Neutral", region: .contour,
+                                            color: MakeupColor(hue: 30, saturation: 0.16, value: 0.44))
+    static let contourWarm = MakeupShade(id: "contour-warm", title: "Warm", region: .contour,
+                                         color: MakeupColor(hue: 20, saturation: 0.34, value: 0.48))
+    static let contourDeep = MakeupShade(id: "contour-deep", title: "Deep", region: .contour,
+                                         color: MakeupColor(hue: 22, saturation: 0.30, value: 0.30))
+
+    // MARK: - Hair
+
+    /// The default hair pigment: a neutral dark brown, which deepens almost
+    /// every natural hair colour without shifting it.
+    static let hairEspresso = MakeupShade(id: "hair-espresso", title: "Espresso", region: .hair,
+                                          color: MakeupColor(hue: 22, saturation: 0.34, value: 0.24))
+    static let hairSoftBlack = MakeupShade(id: "hair-softblack", title: "Soft Black", region: .hair,
+                                           color: MakeupColor(hue: 230, saturation: 0.08, value: 0.12))
+    static let hairChestnut = MakeupShade(id: "hair-chestnut", title: "Chestnut", region: .hair,
+                                          color: MakeupColor(hue: 16, saturation: 0.48, value: 0.38))
+    static let hairAuburn = MakeupShade(id: "hair-auburn", title: "Auburn", region: .hair,
+                                        color: MakeupColor(hue: 6, saturation: 0.58, value: 0.40))
+    static let hairCaramel = MakeupShade(id: "hair-caramel", title: "Caramel", region: .hair,
+                                         color: MakeupColor(hue: 30, saturation: 0.46, value: 0.60))
+
     /// The whole catalogue, in the order the inspector shows it.
     static let all: [MakeupShade] = [
         petal, peach, softRose, rose,
@@ -338,11 +360,15 @@ struct MakeupShade: Identifiable, Hashable {
         cheekApricotTan, cheekRosewood, cheekBrick,
         cheekCopper, cheekBerry, cheekRuby,
 
+        contourSoft, contourNeutral, contourWarm, contourDeep,
+
         champagneShadow, taupeShadow, bronzeShadow,
         roseGoldShadow, plumShadow, slateShadow,
 
         inkLiner, espressoLiner, navyLiner, plumLiner,
 
         ashBrow, taupeBrow, warmBrow, espressoBrow,
+
+        hairEspresso, hairSoftBlack, hairChestnut, hairAuburn, hairCaramel,
     ]
 }

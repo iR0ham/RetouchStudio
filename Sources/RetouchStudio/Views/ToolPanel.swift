@@ -19,8 +19,7 @@ struct ToolPanel: View {
                         .transition(.asymmetric(insertion: cardInsertion, removal: .opacity))
                 }
 
-                autoRetouchCard
-                autoColorCard
+                smartCard
                 statusCard
             }
             .padding(.vertical, 2)
@@ -38,83 +37,89 @@ struct ToolPanel: View {
             .combined(with: .scale(scale: 0.97, anchor: .top))
     }
 
-    // MARK: - Auto Retouch
+    // MARK: - Smart Analyze
 
-    private var autoRetouchCard: some View {
+    /// The one generative entry. The two strength dials say how much of the
+    /// measurement to apply; Analyze reads the photo and shows what it found
+    /// before anything changes. The per-tool Generate buttons this card
+    /// replaced applied the same measurements blind.
+    private var smartCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CardHeader(title: model.s.autoRetouch,
-                       subtitle: model.s.autoRetouchScope,
-                       icon: "wand.and.stars",
+            CardHeader(title: model.s.smartAnalyze,
+                       subtitle: model.s.smartSubtitle,
+                       icon: "sparkles",
                        tint: Theme.sky)
 
-            VStack(alignment: .leading, spacing: 0) {
+            strengthRow(title: model.s.autoRetouch,
+                        value: model.autoRetouchStrength,
+                        binding: $model.autoRetouchStrength,
+                        tint: Theme.sky,
+                        help: model.s.autoRetouchHelp)
+            strengthRow(title: model.s.autoColorLight,
+                        value: model.autoColorStrength,
+                        binding: $model.autoColorStrength,
+                        tint: Theme.accent,
+                        help: model.s.autoColorLightHelp)
+
+            if let report = model.smartReport {
                 HStack(spacing: 6) {
-                    Text(model.s.autoStrength.uppercased())
-                        .font(Theme.Font.section)
-                        .tracking(0.6)
+                    Icon(name: "checkmark.circle.fill", size: 12, emphasised: true)
+                        .foregroundStyle(Theme.positive)
+                    Text(model.s.smartSummary(model.smartFindingCount, report.faces.count))
+                        .font(Theme.Font.face(size: 10.5))
                         .foregroundStyle(Theme.muted)
-                    Spacer(minLength: 6)
-                    Text("\(Int(model.autoRetouchStrength.rounded()))%")
-                        .font(Theme.Font.value)
-                        .foregroundStyle(Theme.text)
-                        .contentTransition(.numericText())
-                        .animation(Motion.snappy, value: model.autoRetouchStrength)
                 }
-
-                BipolarSlider(value: $model.autoRetouchStrength,
-                              range: 0...100,
-                              tint: Theme.sky)
+                .transition(.opacity)
+            } else if model.hasImage && model.faceCount == 0 {
+                Text(model.s.smartNoFace)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            FilledButton(title: "Generate",
-                         icon: "wand.and.stars",
+            FilledButton(title: model.s.smartAction,
+                         icon: "sparkles",
                          tone: .sky,
-                         enabled: model.hasImage && !model.isBusy) {
-                model.autoRetouch()
+                         enabled: model.canSmartAnalyze) {
+                model.smartAnalyze()
             }
-            .help(model.s.autoRetouchHelp)
+            .help(model.s.smartHelp)
+
+            if model.smartReport != nil {
+                SecondaryButton(title: model.s.smartReview,
+                                icon: "rectangle.split.2x1") {
+                    model.showSmartSheet = true
+                }
+            }
         }
         .padding(16)
         .background(CardBackground())
+        .animation(Motion.smooth, value: model.smartReport != nil)
     }
 
-    // MARK: - Auto Color
-
-    private var autoColorCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            CardHeader(title: model.s.autoColorLight,
-                       subtitle: model.s.autoColorLightScope,
-                       icon: "camera.filters",
-                       tint: Theme.accent)
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 6) {
-                    Text(model.s.autoStrength.uppercased())
-                        .font(Theme.Font.section)
-                        .tracking(0.6)
-                        .foregroundStyle(Theme.muted)
-                    Spacer(minLength: 6)
-                    Text("\(Int(model.autoColorStrength.rounded()))%")
-                        .font(Theme.Font.value)
-                        .foregroundStyle(Theme.text)
-                        .contentTransition(.numericText())
-                        .animation(Motion.snappy, value: model.autoColorStrength)
-                }
-
-                BipolarSlider(value: $model.autoColorStrength,
-                              range: 0...100,
-                              tint: Theme.accent)
+    private func strengthRow(title: String,
+                             value: Double,
+                             binding: Binding<Double>,
+                             tint: Color,
+                             help: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(title.uppercased())
+                    .font(Theme.Font.section)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.muted)
+                Spacer(minLength: 6)
+                Text(Digits.percent(Int(value.rounded())))
+                    .font(Theme.Font.value)
+                    .foregroundStyle(Theme.text)
+                    .contentTransition(.numericText())
+                    .animation(Motion.snappy, value: value)
             }
-
-            FilledButton(title: "Generate",
-                         icon: "camera.filters",
-                         enabled: model.hasImage && !model.isBusy) {
-                model.autoColorLight()
-            }
-            .help(model.s.autoColorLightHelp)
+            BipolarSlider(value: binding,
+                          range: 0...100,
+                          tint: tint)
         }
-        .padding(16)
-        .background(CardBackground())
+        .help(help)
     }
 
     // MARK: - Status
@@ -140,7 +145,7 @@ struct ToolPanel: View {
             }
 
             Text(detail)
-                .font(.system(size: 10.5))
+                .font(Theme.Font.face(size: 10.5))
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .animation(Motion.smooth, value: detail)
@@ -158,7 +163,7 @@ struct ToolPanel: View {
                     model.openImage()
                 } label: {
                     Text(model.s.open)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(Theme.Font.face(size: 11, weight: .medium))
                         .foregroundStyle(Theme.muted)
                 }
                 .buttonStyle(PressableButtonStyle(dip: 0.94))
@@ -172,7 +177,7 @@ struct ToolPanel: View {
                     HStack(spacing: 4) {
                         Icon(name: "arrow.counterclockwise", size: 11.5, emphasised: true)
                         Text(model.s.reset)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(Theme.Font.face(size: 11, weight: .medium))
                     }
                     .foregroundStyle(model.hasImage && !model.adjustments.isIdentity
                                      ? Theme.warning : Theme.faint.opacity(0.7))
@@ -196,18 +201,18 @@ private struct HealCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CardHeader(title: "Healing Brush",
+            CardHeader(title: model.s.healingBrush,
                        subtitle: model.s.healSubtitle,
                        icon: "bandage",
                        tint: Theme.accent)
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
-                    Text("Size")
+                    Text(model.s.brushSize)
                         .font(Theme.Font.label)
                         .foregroundStyle(Theme.text)
                     Spacer(minLength: 6)
-                    Text("\(model.healBrushPixels) px")
+                    Text("\(Digits.num(model.healBrushPixels)) px")
                         .font(Theme.Font.value)
                         .foregroundStyle(Theme.text)
                         .contentTransition(.numericText())
@@ -217,18 +222,18 @@ private struct HealCard: View {
             }
 
             HStack {
-                Text("Stamps")
+                Text(model.s.stamps)
                     .font(Theme.Font.label)
                     .foregroundStyle(Theme.text)
                 Spacer(minLength: 6)
-                Text("\(model.healSpots.count)")
+                Text(Digits.num(model.healSpots.count))
                     .font(Theme.Font.value)
                     .foregroundStyle(model.healSpots.isEmpty ? Theme.faint : Theme.accent)
                     .contentTransition(.numericText())
                     .animation(Motion.snappy, value: model.healSpots.count)
             }
 
-            SecondaryButton(title: "Clear Stamps",
+            SecondaryButton(title: model.s.clearStamps,
                             icon: "xmark.circle",
                             enabled: model.canClearHealSpots) {
                 model.clearHealSpots()
@@ -246,13 +251,13 @@ private struct CropCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CardHeader(title: "Crop",
-                       subtitle: "Drag the frame on the photo",
+            CardHeader(title: model.s.cropTool,
+                       subtitle: model.s.cropToolSubtitle,
                        icon: "crop",
                        tint: Theme.accent)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("ASPECT")
+                Text(model.s.cropAspectLabel)
                     .font(Theme.Font.section)
                     .tracking(0.6)
                     .foregroundStyle(Theme.muted)
@@ -269,19 +274,19 @@ private struct CropCard: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                infoRow("Crop size",
-                        "\(Int(model.cropDraftPixelSize.width)) × \(Int(model.cropDraftPixelSize.height)) px")
-                infoRow("Working size",
-                        "\(Int(model.workingPixelSize.width)) × \(Int(model.workingPixelSize.height)) px")
+                infoRow(model.s.cropSize,
+                        "\(Digits.num(Int(model.cropDraftPixelSize.width))) × \(Digits.num(Int(model.cropDraftPixelSize.height))) px")
+                infoRow(model.s.workingSize,
+                        "\(Digits.num(Int(model.workingPixelSize.width))) × \(Digits.num(Int(model.workingPixelSize.height))) px")
             }
 
             VStack(spacing: 8) {
-                FilledButton(title: "Apply Crop",
+                FilledButton(title: model.s.applyCrop,
                              icon: "crop",
                              enabled: model.canApplyCrop) {
                     model.applyCrop()
                 }
-                SecondaryButton(title: "Reset Crop",
+                SecondaryButton(title: model.s.resetCrop,
                                 icon: "arrow.counterclockwise",
                                 enabled: model.canResetCrop) {
                     model.resetCrop()

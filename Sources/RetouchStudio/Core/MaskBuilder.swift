@@ -169,7 +169,10 @@ enum MaskBuilder {
     }()
 
     static func union(_ a: CIImage, _ b: CIImage) -> CIImage {
-        a.applyingFilter("CIAdditionCompositing", parameters: [
+        // Max, not addition: these masks are opaque grayscale, and adding two
+        // pieces of one region pushes the alpha past 1. Downstream a multiply
+        // blend then unpremultiplies by that alpha and the union turns black.
+        a.applyingFilter("CIMaximumCompositing", parameters: [
             kCIInputBackgroundImageKey: b
         ]).cropped(to: a.extent)
     }
@@ -198,7 +201,8 @@ enum MaskBuilder {
     private static let colorGateKernel: CIColorKernel? = {
         let source = """
         kernel vec4 colorGate(__sample s, float lumaMin, float lumaMax,
-                              float satMax, float softness)
+                              float satMin, float satMax, float softness,
+                              float cbMin, float cbMax, float crMin, float crMax)
         {
             // Kernels sample the linear working space, but every threshold fed
             // here was measured on 8-bit pixels (AutoAnalyzer) and matches what
@@ -214,8 +218,23 @@ enum MaskBuilder {
 
             float lower = smoothstep(lumaMin - softness, lumaMin + softness, luma);
             float upper = 1.0 - smoothstep(lumaMax - softness, lumaMax + softness, luma);
+            // A floor of 0 must mean "no floor": smoothstep centered on zero
+            // would halve the grey and white pixels the eye and enamel gates
+            // are built from.
+            float satFloor = satMin > 0.0001
+                ? smoothstep(satMin - softness, satMin + softness, sat)
+                : 1.0;
             float color = 1.0 - smoothstep(satMax - 0.06, satMax + 0.06, sat);
-            float v = lower * upper * color;
+
+            // The classic YCbCr skin box, shifted so 0 is the grey axis.
+            float cb = -0.168736 * c.r - 0.331264 * c.g + 0.5 * c.b;
+            float cr = 0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b;
+            float cbBand = smoothstep(cbMin - softness, cbMin + softness, cb)
+                         * (1.0 - smoothstep(cbMax - softness, cbMax + softness, cb));
+            float crBand = smoothstep(crMin - softness, crMin + softness, cr)
+                         * (1.0 - smoothstep(crMax - softness, crMax + softness, cr));
+
+            float v = lower * upper * satFloor * color * cbBand * crBand;
             return vec4(v, v, v, 1.0);
         }
         """
@@ -224,16 +243,28 @@ enum MaskBuilder {
 
     static var isColorGateAvailable: Bool { colorGateKernel != nil }
 
-    /// White where the pixel luminance/saturation fall inside the band.
-    /// `lumaMax` 1 and `saturationMax` 1 leave that half of the test open.
+    /// White where the pixel falls inside a luminance, saturation and hue box.
+    ///
+    /// Luma and saturation alone cannot describe "skin": black cloth, grey
+    /// cloth and beige cloth all sit inside a generous luma/sat band. The hue
+    /// half is a YCbCr colour box (offsets so 0 is the grey axis), which every
+    /// skin tone passes and neutral or strongly coloured fabric fails.
+    /// `cbRange`/`crRange` default to fully open; `saturationMin` excludes
+    /// neutrals that a `saturationMax`-only test lets through.
     static func colorGate(_ image: CIImage,
                           lumaMin: Double,
                           lumaMax: Double = 1,
                           saturationMax: Double = 1,
-                          softness: Double = 0.03) -> CIImage? {
+                          saturationMin: Double = 0,
+                          softness: Double = 0.03,
+                          cbRange: ClosedRange<Double>? = nil,
+                          crRange: ClosedRange<Double>? = nil) -> CIImage? {
         guard let kernel = colorGateKernel else { return nil }
+        let cb = cbRange ?? -1.0...1.0
+        let cr = crRange ?? -1.0...1.0
         let gate = kernel.apply(extent: image.extent, arguments: [
-            image, lumaMin, lumaMax, saturationMax, softness
+            image, lumaMin, lumaMax, saturationMin, saturationMax, softness,
+            cb.lowerBound, cb.upperBound, cr.lowerBound, cr.upperBound
         ])
         return gate?.cropped(to: image.extent)
     }

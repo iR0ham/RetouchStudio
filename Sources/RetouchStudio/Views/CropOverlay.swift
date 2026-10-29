@@ -100,8 +100,8 @@ struct CropOverlay: View {
         let below = frame.maxY + 18
         let y = below <= displayed.height - 10 ? below : max(frame.minY - 18, 14)
 
-        return Text("\(Int(size.width)) × \(Int(size.height))")
-            .font(.system(size: 10, weight: .medium))
+        return Text("\(Digits.num(Int(size.width))) × \(Digits.num(Int(size.height)))")
+            .font(Theme.Font.face(size: 10, weight: .medium))
             .monospacedDigit()
             .foregroundStyle(Theme.bone)
             .padding(.horizontal, 7)

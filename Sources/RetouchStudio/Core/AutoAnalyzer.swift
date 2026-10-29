@@ -261,18 +261,21 @@ enum AutoAnalyzer {
     static func annotateEyes(faces: [FaceGeometry], buffer: PixelBuffer) -> [FaceGeometry] {
         faces.map { face in
             var annotated = face
-            if let split = eyeLuminanceSplit(buffer: buffer, face: face) {
-                annotated.eyeScleraLuminance = split
+            if let eye = eyeLuminance(buffer: buffer, face: face) {
+                annotated.eyeScleraLuminance = eye.split
+                annotated.eyeScleraLevel = eye.level
                 annotated.hasUsableEyes = true
             }
             return annotated
         }
     }
 
-    /// 30th percentile of luminance inside the inner half of each eye opening,
-    /// nudged up slightly so iris pixels stay below it. Returns nil when the
-    /// eyes are closed or too small to measure.
-    static func eyeLuminanceSplit(buffer: PixelBuffer, face: FaceGeometry) -> Double? {
+    /// The 30th percentile of luminance inside the inner half of each eye
+    /// opening, nudged up so iris pixels stay below it, plus the 70th
+    /// percentile — the sclera itself, which decides whether brightening has
+    /// anything left to add. Returns nil when the eyes are closed or too small
+    /// to measure.
+    static func eyeLuminance(buffer: PixelBuffer, face: FaceGeometry) -> (split: Double, level: Double)? {
         var histogram = [Int](repeating: 0, count: 256)
         var samples = 0
 
@@ -306,7 +309,9 @@ enum AutoAnalyzer {
 
         guard samples >= 24 else { return nil }
         let low = percentile(histogram, fraction: 0.30, total: samples)
-        return min(0.82, max(0.30, low + 0.04))
+        let high = percentile(histogram, fraction: 0.70, total: samples)
+        return (split: min(0.82, max(0.30, low + 0.04)),
+                level: min(1, max(0, high)))
     }
 
     // MARK: - خودکار ۱: رنگ و نور
@@ -476,60 +481,6 @@ enum AutoAnalyzer {
             if cumulative > target { return Double(index) / 255.0 }
         }
         return 1
-    }
-
-    // MARK: - خودکار ۲: رتوش چهره
-
-    /// Derives skin, eye and teeth values from the detected face. `skinMask`
-    /// must be the *skin* mask (face minus eyes, brows and lips), not the whole
-    /// face silhouette: lashes, lips and hair are not skin and would otherwise
-    /// skew the texture and brightness measurements. No color/light field is
-    /// touched.
-    static func autoRetouch(_ buffer: PixelBuffer,
-                            skinMask: PixelBuffer?,
-                            faces: [FaceGeometry],
-                            globalMedianLuminance: Double) -> Adjustments {
-        var a = Adjustments()
-        guard !faces.isEmpty else { return a }
-
-        // An eye outline alone is not enough: a face seen from behind, an eye
-        // closed, or an eye too small to measure all still report landmarks.
-        // Eye work is gated on the same pixel measurement that sets the sclera
-        // split, so it only ever runs where there is a real eye to brighten.
-        let hasEyes = faces.contains { $0.hasUsableEyes }
-        let hasVisibleTeeth = faces.contains { $0.hasVisibleTeeth }
-
-        let roughness = skinRoughness(buffer, mask: skinMask) ?? 0.012
-
-        // Smoothing from measured skin roughness, capped low: heavy smoothing is
-        // the main reason retouches look plastic, so the automatic value stays
-        // conservative and always keeps a high texture-preserve setting.
-        a.smooth = clamp((roughness - 0.004) * 2200, 10, 34)
-        a.texturePreserve = clamp(92 - a.smooth * 0.6, 58, 92)
-
-        // Spots: milder than smoothing, since a median already removes the
-        // obvious ones and over-doing it erases freckles.
-        a.blemish = clamp((roughness - 0.003) * 1700, 8, 42)
-
-        // Wrinkles: present mainly in older or higher-detail skin.
-        a.wrinkle = clamp((roughness - 0.005) * 900, 0, 28)
-
-        // Tone evening and dark circles: presence-based, better safe than
-        // blotchy.
-        a.skinToneEvens = clamp(18 + (roughness - 0.008) * 900, 10, 34)
-        a.darkCircles = clamp(14 + (roughness - 0.008) * 700, 8, 30)
-
-        // Brightness: only lift if the face is darker than the frame (backlit).
-        if let skinMedian = skinMedianLuminance(buffer, mask: skinMask) {
-            a.skinBrighten = clamp((globalMedianLuminance - skinMedian) * 200, -16, 20)
-        }
-
-        // Whitening is meaningless when the mouth is closed: the teeth mask
-        // would cover the lips instead, so it is gated on visible teeth.
-        a.teethWhiten = hasVisibleTeeth ? 16 : 0
-        a.eyeBrighten = hasEyes ? 12 : 0
-        a.eyeSharpen = hasEyes ? 16 : 0
-        return a
     }
 
     // MARK: - Skin tone

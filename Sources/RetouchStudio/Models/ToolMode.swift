@@ -11,37 +11,24 @@ enum ToolMode: String, CaseIterable, Identifiable {
     case color
     case look
     case crop
+    case body
+    case background
 
     var id: String { rawValue }
 
     /// Presets only carry skin, geometry and colour values, so the tools they
     /// leave untouched hide the strip instead of showing a dead control.
-    var showsPresets: Bool { self != .crop && self != .look && self != .makeup }
+    var showsPresets: Bool {
+        self != .crop && self != .look && self != .makeup
+            && self != .body && self != .background
+    }
 
     var title: String {
-        switch self {
-        case .skin: return "Skin"
-        case .heal: return "Healing"
-        case .reshape: return "Reshape"
-        case .detail: return "Eyes & Teeth"
-        case .makeup: return "Makeup"
-        case .color: return "Color & Light"
-        case .look: return "Looks"
-        case .crop: return "Crop"
-        }
+        L10n.current.toolTitle(self)
     }
 
     var subtitle: String {
-        switch self {
-        case .skin: return "Texture, tone and blemishes"
-        case .heal: return "Stamp out blemishes by hand"
-        case .reshape: return "Shape facial features"
-        case .detail: return "Whiten teeth and brighten eyes"
-        case .makeup: return "Lips, cheeks and brows"
-        case .color: return "Exposure, color and light"
-        case .look: return "Film grades and grain"
-        case .crop: return "Reframe the photo"
-        }
+        L10n.current.toolSubtitle(self)
     }
 
     var icon: String {
@@ -54,6 +41,8 @@ enum ToolMode: String, CaseIterable, Identifiable {
         case .color: return "camera.filters"
         case .look: return "film"
         case .crop: return "crop"
+        case .body: return "figure.stand"
+        case .background: return "person.and.background.dotted"
         }
     }
 }

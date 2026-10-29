@@ -71,6 +71,8 @@ struct InspectorView: View {
         case .makeup: makeupContent
         case .color: colorContent
         case .looks: looksContent
+        case .body: bodyContent
+        case .background: backgroundContent
         }
     }
 
@@ -87,7 +89,7 @@ struct InspectorView: View {
                 HStack(spacing: 6) {
                     TextField(model.s.lookNamePrompt, text: $lookName)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(Theme.Font.face(size: 11))
                         .padding(.horizontal, 8)
                         .frame(height: 26)
                         .background(
@@ -97,7 +99,7 @@ struct InspectorView: View {
                         .onSubmit(saveLook)
                     Button(action: saveLook) {
                         Text(model.s.saveLook)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(Theme.Font.face(size: 11, weight: .semibold))
                             .padding(.horizontal, 10)
                             .frame(height: 26)
                             .background(
@@ -112,7 +114,7 @@ struct InspectorView: View {
 
                 if model.userPresets.isEmpty {
                     Text(model.s.noLooksYet)
-                        .font(.system(size: 10))
+                        .font(Theme.Font.face(size: 10))
                         .foregroundStyle(Theme.faint)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -136,7 +138,7 @@ struct InspectorView: View {
                     LazyVGrid(columns: presetColumns, spacing: 6) {
                         ForEach(Preset.inGroup(group)) { preset in
                             PresetTile(title: preset.title,
-                                       thumb: model.presetThumbs[preset.id],
+                                       thumb: model.presetThumbs[preset.id.rawValue],
                                        isActive: model.isActive(preset)) {
                                 model.apply(preset)
                             }
@@ -184,6 +186,13 @@ struct InspectorView: View {
                          value: model.binding(for: \.skinBrighten),
                          range: 0...100,
                          onReset: { model.resetEffect(\.skinBrighten) })
+            ParameterRow(title: model.s.skinFinish,
+                         value: model.binding(for: \.skinFinish),
+                         onReset: { model.resetEffect(\.skinFinish) })
+            ParameterRow(title: model.s.shine,
+                         value: model.binding(for: \.shine),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.shine) })
         }
     }
 
@@ -234,6 +243,14 @@ struct InspectorView: View {
                          value: model.binding(for: \.eyeSharpen),
                          range: 0...100,
                          onReset: { model.resetEffect(\.eyeSharpen) })
+            ParameterRow(title: model.s.irisEnhance,
+                         value: model.binding(for: \.irisEnhance),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.irisEnhance) })
+            ParameterRow(title: model.s.lashDarken,
+                         value: model.binding(for: \.lashDarken),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.lashDarken) })
 
             if model.hasImage, model.faceCount > 0, !model.hasVisibleTeeth {
                 SectionNote(text: model.s.teethNotVisible)
@@ -298,6 +315,19 @@ struct InspectorView: View {
                          range: 0...100,
                          onReset: { model.resetEffect(model.makeupRegion.amountPath) })
 
+            if model.makeupRegion == .lips {
+                ParameterRow(title: model.s.lipGloss,
+                             value: model.binding(for: \.lipGloss),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.lipGloss) })
+            }
+            if model.makeupRegion == .hair {
+                ParameterRow(title: model.s.hairShine,
+                             value: model.binding(for: \.hairShine),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.hairShine) })
+            }
+
             SectionNote(text: model.faceCount > 0 ? model.s.makeupNote : model.s.makeupNoFace)
         }
     }
@@ -349,10 +379,38 @@ struct InspectorView: View {
             ParameterRow(title: model.s.clarity,
                          value: model.binding(for: \.clarity),
                          onReset: { model.resetEffect(\.clarity) })
+            ParameterRow(title: model.s.splitTone,
+                         value: model.binding(for: \.splitTone),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.splitTone) })
             ParameterRow(title: model.s.vignette,
                          value: model.binding(for: \.vignette),
                          range: 0...100,
                          onReset: { model.resetEffect(\.vignette) })
+
+            CurveEditor(model: model)
+
+            GroupLabel(text: model.s.hsl)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4),
+                      spacing: 4) {
+                ForEach(HSLBand.allCases) { band in
+                    PresetChip(title: band.title, isActive: model.hslBand == band) {
+                        model.hslBand = band
+                    }
+                }
+            }
+
+            ParameterRow(title: model.s.hue,
+                         value: model.hslBinding(model.hslBand, \.hslHue),
+                         onReset: { model.resetHSLBand(model.hslBand) })
+            ParameterRow(title: model.s.saturation,
+                         value: model.hslBinding(model.hslBand, \.hslSaturation),
+                         onReset: { model.resetHSLBand(model.hslBand) })
+            ParameterRow(title: model.s.luminance,
+                         value: model.hslBinding(model.hslBand, \.hslLuminance),
+                         onReset: { model.resetHSLBand(model.hslBand) })
+
+            SectionNote(text: model.s.hslNote)
         }
     }
 
@@ -368,17 +426,219 @@ struct InspectorView: View {
                 }
             }
 
-            ParameterRow(title: "Strength",
+            ParameterRow(title: model.s.lookStrength,
                          value: model.binding(for: \.lookStrength),
                          range: 0...100,
                          onReset: { model.resetEffect(\.lookStrength) })
-            ParameterRow(title: "Grain",
+            ParameterRow(title: model.s.grain,
                          value: model.binding(for: \.grain),
                          range: 0...100,
                          onReset: { model.resetEffect(\.grain) })
 
-            SectionNote(text: "A grade is applied to the whole photo after Color & Light, so it reshapes the balance you already set.")
+            SectionNote(text: model.s.lookNote)
         }
+    }
+
+    private var bodyContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ParameterRow(title: model.s.bodySmoothing,
+                         value: model.binding(for: \.bodySmooth),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.bodySmooth) })
+            ParameterRow(title: model.s.bodyBrightness,
+                         value: model.binding(for: \.bodyTone),
+                         onReset: { model.resetEffect(\.bodyTone) })
+            ParameterRow(title: model.s.bodySlim,
+                         value: model.binding(for: \.bodySlim),
+                         onReset: { model.resetEffect(\.bodySlim) })
+            ParameterRow(title: model.s.bodyWaist,
+                         value: model.binding(for: \.bodyWaist),
+                         onReset: { model.resetEffect(\.bodyWaist) })
+            ParameterRow(title: model.s.bodyArms,
+                         value: model.binding(for: \.bodyArms),
+                         onReset: { model.resetEffect(\.bodyArms) })
+            ParameterRow(title: model.s.bodyLegs,
+                         value: model.binding(for: \.bodyLegs),
+                         onReset: { model.resetEffect(\.bodyLegs) })
+            subjectNote(scope: model.s.bodyScope)
+            poseNote
+        }
+    }
+
+    /// Waist, arms and legs need joints as well as a silhouette. Say which
+    /// group Vision is still missing instead of leaving the sliders looking
+    /// broken.
+    @ViewBuilder
+    private var poseNote: some View {
+        switch model.subjectState {
+        case .unknown, .detecting:
+            SectionNote(text: model.s.poseScope)
+        case .unavailable:
+            EmptyView()
+        case .available:
+            if !model.hasBodyPose {
+                SectionNote(text: model.s.poseMissing)
+            } else if model.bodyPoseGaps.isEmpty {
+                SectionNote(text: model.s.poseScope)
+            } else {
+                ForEach(Array(model.bodyPoseGaps.enumerated()), id: \.offset) { _, gap in
+                    SectionNote(text: gap)
+                }
+            }
+        }
+    }
+
+    private var backgroundContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ParameterRow(title: model.s.backgroundBlur,
+                         value: model.binding(for: \.backgroundBlur),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.backgroundBlur) })
+            ParameterRow(title: model.s.backgroundTone,
+                         value: model.binding(for: \.backgroundTone),
+                         onReset: { model.resetEffect(\.backgroundTone) })
+            ParameterRow(title: model.s.backgroundSaturation,
+                         value: model.binding(for: \.backgroundSaturation),
+                         onReset: { model.resetEffect(\.backgroundSaturation) })
+            subjectNote(scope: model.s.backgroundScope)
+        }
+    }
+
+    /// The two scene tools need a subject. Say so instead of leaving the
+    /// sliders looking broken while Vision answers, or when it finds nobody.
+    @ViewBuilder
+    private func subjectNote(scope: String) -> some View {
+        switch model.subjectState {
+        case .detecting:
+            SectionNote(text: model.s.subjectDetecting)
+        case .unavailable:
+            SectionNote(text: model.s.subjectMissing)
+        case .unknown, .available:
+            SectionNote(text: scope)
+        }
+    }
+}
+
+// MARK: - Tone curve
+
+/// A compact three-point curve. The three handles are shadows, mid-tones and
+/// highlights; dragging one lifts or lowers that band, and the drawn line is the
+/// exact luminance response the kernel applies, so the graph never lies about
+/// what the photo will do.
+private struct CurveEditor: View {
+    @ObservedObject var model: EditorModel
+
+    private let handleXs: [Double] = [0.15, 0.5, 0.85]
+
+    private var values: [Double] {
+        [model.adjustments.curveShadows,
+         model.adjustments.curveMidtones,
+         model.adjustments.curveHighlights]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                GroupLabel(text: model.s.toneCurve)
+                Spacer(minLength: 6)
+                Button {
+                    model.resetEffects([\.curveShadows, \.curveMidtones, \.curveHighlights])
+                } label: {
+                    Icon(name: "arrow.counterclockwise", size: 11.5, emphasised: true)
+                        .foregroundStyle(Theme.faint)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableButtonStyle(dip: 0.88))
+                .disabled(values.allSatisfy { $0 == 0 })
+                .opacity(values.allSatisfy { $0 == 0 } ? 0.35 : 1)
+                .help(model.s.resetGroupHelp)
+            }
+
+            GeometryReader { geo in
+                let size = geo.size
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Theme.inset)
+
+                    gridPath(size)
+                        .stroke(Theme.faint.opacity(0.14), lineWidth: 0.5)
+
+                    curvePath(size)
+                        .stroke(Theme.accent,
+                                style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+
+                    ForEach(0..<3, id: \.self) { index in
+                        handle(index, size: size)
+                    }
+                }
+            }
+            .frame(height: 92)
+
+            SectionNote(text: model.s.curveNote)
+        }
+    }
+
+    private func handle(_ index: Int, size: CGSize) -> some View {
+        let y = 0.5 + values[index] / 100 * 0.35
+        return Circle()
+            .fill(Theme.accent)
+            .overlay(Circle().stroke(Theme.inset, lineWidth: 1.5))
+            .frame(width: 10, height: 10)
+            .position(x: handleXs[index] * size.width,
+                      y: (1 - y) * size.height)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        let unit = 1 - drag.location.y / max(size.height, 1)
+                        let raw = (unit - 0.5) / 0.35 * 100
+                        setValue(index, min(100, max(-100, raw)))
+                    }
+            )
+    }
+
+    private func setValue(_ index: Int, _ value: Double) {
+        switch index {
+        case 0: model.adjustments.curveShadows = value
+        case 1: model.adjustments.curveMidtones = value
+        default: model.adjustments.curveHighlights = value
+        }
+    }
+
+    /// The same Gaussian-band arithmetic the kernel runs, on display values.
+    private func curveValue(_ x: Double) -> Double {
+        let s = values[0] / 100
+        let m = values[1] / 100
+        let h = values[2] / 100
+        let wS = exp(-pow((x - 0.14) / 0.18, 2))
+        let wM = exp(-pow((x - 0.50) / 0.20, 2))
+        let wH = exp(-pow((x - 0.86) / 0.18, 2))
+        let delta = 0.26 * s * wS + 0.22 * m * wM + 0.26 * h * wH
+        return min(1, max(0, x + delta))
+    }
+
+    private func curvePath(_ size: CGSize) -> Path {
+        var path = Path()
+        let samples = 48
+        for i in 0...samples {
+            let x = Double(i) / Double(samples)
+            let point = CGPoint(x: x * size.width,
+                                y: (1 - curveValue(x)) * size.height)
+            if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
+        return path
+    }
+
+    private func gridPath(_ size: CGSize) -> Path {
+        var path = Path()
+        for i in 1..<4 {
+            let fraction = CGFloat(i) / 4
+            path.move(to: CGPoint(x: fraction * size.width, y: 0))
+            path.addLine(to: CGPoint(x: fraction * size.width, y: size.height))
+            path.move(to: CGPoint(x: 0, y: fraction * size.height))
+            path.addLine(to: CGPoint(x: size.width, y: fraction * size.height))
+        }
+        return path
     }
 }
 
@@ -402,10 +662,12 @@ private struct PanelRow<Content: View>: View {
         case .nothing: return nil
         case .skin: return { model.resetGroup(.skin) }
         case .shape: return { model.resetGroup(.reshape) }
-        case .eyes: return { model.resetEffects([\.teethWhiten, \.eyeBrighten, \.eyeSharpen]) }
+        case .eyes: return { model.resetEffects([\.teethWhiten, \.eyeBrighten, \.eyeSharpen, \.irisEnhance, \.lashDarken]) }
         case .makeup: return { model.resetGroup(.makeup) }
         case .color: return { model.resetGroup(.colorLight) }
         case .looks: return { model.resetGroup(.look) }
+        case .body: return { model.resetGroup(.body) }
+        case .background: return { model.resetGroup(.background) }
         }
     }
 
@@ -420,7 +682,7 @@ private struct PanelRow<Content: View>: View {
                         .animation(Motion.snappy, value: isModified)
 
                     Text(panel.title)
-                        .font(.system(size: 13, weight: isOpen ? .semibold : .medium))
+                        .font(Theme.Font.face(size: 13, weight: isOpen ? .semibold : .medium))
                         .foregroundStyle(isOpen || hovering ? Theme.text : Theme.muted)
 
                     Spacer(minLength: 8)
@@ -497,19 +759,13 @@ enum Panel: String, CaseIterable, Identifiable {
     case makeup
     case color
     case looks
+    case body
+    case background
 
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .presets: return "Presets"
-        case .skin: return "Skin"
-        case .shape: return "Shape"
-        case .eyes: return "Eyes & Teeth"
-        case .makeup: return "Makeup"
-        case .color: return "Color & Light"
-        case .looks: return "Looks"
-        }
+        L10n.current.panelTitle(self)
     }
 
     /// The tool whose canvas behaviour this row drives, if any.
@@ -522,6 +778,8 @@ enum Panel: String, CaseIterable, Identifiable {
         case .makeup: return .makeup
         case .color: return .color
         case .looks: return .look
+        case .body: return .body
+        case .background: return .background
         }
     }
 
@@ -541,11 +799,13 @@ enum Panel: String, CaseIterable, Identifiable {
         case .makeup: return .makeup
         case .color: return .color
         case .looks: return .looks
+        case .body: return .body
+        case .background: return .background
         }
     }
 
     var resetHelp: String? {
-        self == .makeup ? L10n.shared.resetMakeupHelp : nil
+        self == .makeup ? L10n.current.resetMakeupHelp : nil
     }
 
     func isModified(_ a: Adjustments) -> Bool {
@@ -554,16 +814,21 @@ enum Panel: String, CaseIterable, Identifiable {
         case .skin:
             return a.smooth != 0 || a.texturePreserve != 0 || a.blemish != 0 || a.wrinkle != 0
                 || a.skinToneEvens != 0 || a.darkCircles != 0 || a.skinBrighten != 0
+                || a.skinFinish != 0 || a.shine != 0
         case .shape: return a.reshapeOnly != .zero
-        case .eyes: return a.teethWhiten != 0 || a.eyeBrighten != 0 || a.eyeSharpen != 0
+        case .eyes:
+            return a.teethWhiten != 0 || a.eyeBrighten != 0 || a.eyeSharpen != 0
+                || a.irisEnhance != 0 || a.lashDarken != 0
         case .makeup: return a.hasMakeup
         case .color: return a.colorLightOnly != .zero
         case .looks: return a.hasLook || a.grain != 0
+        case .body: return a.bodyOnly != .zero
+        case .background: return a.backgroundOnly != .zero
         }
     }
 }
 
 /// The group a row's reset glyph clears.
 enum PanelReset {
-    case nothing, skin, shape, eyes, makeup, color, looks
+    case nothing, skin, shape, eyes, makeup, color, looks, body, background
 }

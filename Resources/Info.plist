@@ -19,13 +19,24 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0</string>
+	<string>2.1</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.photography</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Roham. All rights reserved.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Fonts/Vazirmatn-Regular.ttf</string>
+		<string>Fonts/Vazirmatn-Medium.ttf</string>
+		<string>Fonts/Vazirmatn-SemiBold.ttf</string>
+		<string>Fonts/Vazirmatn-Bold.ttf</string>
+	</array>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

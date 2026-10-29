@@ -264,13 +264,26 @@ enum SkinEngine {
     /// Adds the donor's high-frequency band onto the clean colour. Both
     /// operands are opaque, so premultiplied sampling is exact; the signed
     /// difference needs a kernel because CIColorMatrix clamps.
+    ///
+    /// Two guards live in the kernel, both learned from a damaged portrait:
+    ///
+    ///  * only luminance is transplanted. Chroma in the detail band is almost
+    ///    all sensor noise, and carrying a neighbour's colour into the patch is
+    ///    what produced the rainbow fringes around a healed spot;
+    ///  * a donor that does not resemble the patch — because the offset landed
+    ///    on hair, a lens or a shadow — contributes no texture at all, instead
+    ///    of smearing that structure across the stamp.
     private static let healKernel: CIColorKernel? = {
         let source = """
         kernel vec4 transplantTexture(__sample clean, __sample donor,
                                       __sample donorClean, float texture)
         {
-            vec3 detail = donor.rgb - donorClean.rgb;
-            return vec4(clean.rgb + detail * texture, clean.a);
+            float detail = dot(donor.rgb - donorClean.rgb,
+                               vec3(0.2126, 0.7152, 0.0722));
+            float gap = length(donorClean.rgb - clean.rgb);
+            float similar = 1.0 - smoothstep(0.06, 0.20, gap);
+            vec3 repaired = clean.rgb + detail * texture * similar;
+            return vec4(clamp(repaired, 0.0, 1.0), clean.a);
         }
         """
         return CIColorKernel(source: source)
@@ -381,9 +394,13 @@ enum SkinEngine {
         return blend(flattened, over: image, mask: mask, strength: amount * 0.6)
     }
 
-    /// Lightens and warms the under-eye area to reduce dark circles.
-    /// Works on a dedicated under-eye mask, and mostly on luminance so the
-    /// area does not turn into a bright patch.
+    /// Lightens the under-eye area without turning it into a flat grey patch.
+    ///
+    /// The earlier version lifted shadows and warmed the whole band, which made
+    /// a dark circle lighter but also erased the skin tone that surrounds it.
+    /// This kernel works in display light: the lift is strongest where the band
+    /// is actually dark and fades out over the cheek, the blue cast is pulled
+    /// toward the surrounding warmth, and no chroma is replaced wholesale.
     static func correctDarkCircles(_ image: CIImage,
                                    strength: Double,
                                    mask: CIImage,
@@ -392,24 +409,38 @@ enum SkinEngine {
         guard amount > 0.001 else { return image }
         let extent = image.extent
 
-        // Lift shadows specifically, which is what a dark circle is.
-        let lifted = image.applyingFilter("CIHighlightShadowAdjust", parameters: [
-            "inputShadowAmount": 0.55 * amount,
-            "inputHighlightAmount": 1.0,
-            "inputRadius": max(2, 6.0 * scale)
-        ]).cropped(to: extent)
-
-        // A touch of warmth and slight desaturation of the bluish cast.
-        let warmed = lifted.applyingFilter("CITemperatureAndTint", parameters: [
-            "inputNeutral": CIVector(x: 6500, y: 0),
-            "inputTargetNeutral": CIVector(x: 6500 - 420 * amount, y: 4 * amount)
-        ]).applyingFilter("CIColorControls", parameters: [
-            kCIInputSaturationKey: 1 - 0.12 * amount,
-            kCIInputBrightnessKey: 0.015 * amount
-        ])
-
-        return blend(warmed, over: image, mask: mask, strength: amount * 0.9)
+        guard let kernel = underEyeKernel,
+              let repaired = kernel.apply(extent: extent, arguments: [image, amount]) else {
+            // Fallback: the previous filter chain, kept so a renderer without
+            // the kernel still lifts the area instead of doing nothing.
+            let lifted = image.applyingFilter("CIHighlightShadowAdjust", parameters: [
+                "inputShadowAmount": 0.55 * amount,
+                "inputHighlightAmount": 1.0,
+                "inputRadius": max(2, 6.0 * scale)
+            ]).cropped(to: extent)
+            return blend(lifted, over: image, mask: mask, strength: amount * 0.9)
+        }
+        return blend(repaired.cropped(to: extent), over: image, mask: mask, strength: amount * 0.95)
     }
+
+    private static let underEyeKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 liftUnderEye(__sample s, float amount)
+        {
+            vec3 c = pow(clamp(s.rgb, 0.0, 1.0), vec3(0.4545));
+            float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            // Screen-like lift, strongest in the shadow the circle actually is.
+            float lift = amount * 0.24 * (1.0 - smoothstep(0.18, 0.68, l));
+            c += vec3(lift) * (1.0 - c);
+            // Pull the blue cast toward the warmth of the cheek around it.
+            float neutral = (c.r + c.g) * 0.5;
+            c.b = mix(c.b, min(c.b, neutral * 1.04), 0.38 * amount);
+            c.r = min(1.0, c.r + 0.012 * amount);
+            return vec4(pow(clamp(c, 0.0, 1.0), vec3(2.2)), s.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
 
     static func brightenSkin(_ image: CIImage,
                              strength: Double,
@@ -454,6 +485,10 @@ enum SkinEngine {
 
     /// Sharpens iris and lash detail. Kept off the sclera, which has little
     /// detail but plenty of noise and red veins to amplify.
+    ///
+    /// Only the luminance band is sharpened: unsharp masking the colour
+    /// channels is what puts a cyan/orange fringe on every lash edge, because
+    /// the three channels are sharpened at slightly different amplitudes.
     static func sharpenEyeDetail(_ image: CIImage,
                                  strength: Double,
                                  mask: CIImage,
@@ -465,25 +500,183 @@ enum SkinEngine {
             kCIInputRadiusKey: max(0.8, 0.9 * scale),
             kCIInputIntensityKey: 0.95 * amount
         ])
-        return blend(sharpened.cropped(to: image.extent), over: image, mask: mask,
+        let lumaOnly = keepLuminance(sharpened, over: image)
+        return blend(lumaOnly.cropped(to: image.extent), over: image, mask: mask,
                      strength: amount)
     }
 
-    /// Whitens teeth: removes yellow, lifts brightness slightly, and keeps the
-    /// natural shadow at the gum line by working on the teeth mask only.
+    /// Rebuilds a sharpened image from the original's colour plus the
+    /// sharpened luminance, so edge contrast rises without the colour channels
+    /// moving out of register.
+    static func keepLuminance(_ sharpened: CIImage, over original: CIImage) -> CIImage {
+        guard let kernel = luminanceKernel,
+              let result = kernel.apply(extent: original.extent,
+                                        arguments: [sharpened, original]) else {
+            return sharpened
+        }
+        return result.cropped(to: original.extent)
+    }
+
+    private static let luminanceKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 keepLuminance(__sample sharp, __sample base)
+        {
+            vec3 detail = sharp.rgb - base.rgb;
+            float d = dot(detail, vec3(0.2126, 0.7152, 0.0722));
+            return vec4(clamp(base.rgb + vec3(d), 0.0, 1.0), base.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
+
+    /// Whitens teeth: removes the yellow cast that enamel actually carries,
+    /// then lifts the enamel gently. A plain desaturation — the old approach —
+    /// turns every tooth grey and also flattens the gum line, because it treats
+    /// a warm highlight and a yellow stain as the same thing.
     static func whitenTeeth(_ image: CIImage,
                             strength: Double,
                             mask: CIImage) -> CIImage {
         let amount = min(1, max(0, strength / 100))
         guard amount > 0.001 else { return image }
 
-        let whitened = image.applyingFilter("CIColorControls", parameters: [
-            kCIInputSaturationKey: 1 - 0.75 * amount,
-            kCIInputBrightnessKey: 0.05 * amount,
-            kCIInputContrastKey: 1 + 0.10 * amount
-        ])
+        guard let kernel = teethKernel,
+              let whitened = kernel.apply(extent: image.extent, arguments: [image, amount]) else {
+            // Fallback only if the kernel could not be compiled.
+            let fallback = image.applyingFilter("CIColorControls", parameters: [
+                kCIInputSaturationKey: 1 - 0.6 * amount,
+                kCIInputBrightnessKey: 0.05 * amount,
+                kCIInputContrastKey: 1 + 0.06 * amount
+            ])
+            return blend(fallback.cropped(to: image.extent), over: image, mask: mask,
+                         strength: amount * 0.95)
+        }
         return blend(whitened.cropped(to: image.extent), over: image, mask: mask,
                      strength: amount * 0.95)
+    }
+
+    private static let teethKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 whitenTeeth(__sample s, float amount)
+        {
+            vec3 c = pow(clamp(s.rgb, 0.0, 1.0), vec3(0.4545));
+            // Yellow is the gap between the *darker* of the red/green pair and
+            // blue. Enamel (yellow) scores high; pink gum has a low green and
+            // scores zero, so the gum line cannot be washed out with the teeth.
+            float yellow = clamp(min(c.r, c.g) - c.b, 0.0, 1.0);
+            yellow = smoothstep(0.02, 0.20, yellow) * amount;
+            float targetB = min(c.r, c.g) * 0.97;
+            c.b = mix(c.b, max(c.b, targetB), yellow);
+            float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            c = mix(c, vec3(l), 0.20 * yellow);
+            // Lift the enamel and leave the specular highlight alone, so the
+            // tooth keeps its roundness instead of becoming a white slab.
+            float lift = 0.10 * yellow * (1.0 - smoothstep(0.72, 1.0, l));
+            c += vec3(lift) * (1.0 - l);
+            return vec4(pow(clamp(c, 0.0, 1.0), vec3(2.2)), s.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
+
+    // MARK: - Skin finish
+
+    /// Matte or glow. Both are judged on the finished skin, so they run after
+    /// smoothing and never replace its texture.
+    ///
+    /// Negative values compress the speculars and cool the saturation a little
+    /// (matte); positive values screen a soft, blurred highlight back over the
+    /// skin (glow), which is the optical behaviour of a dewy finish rather than
+    /// a flat brightness lift.
+    static func applySkinFinish(_ image: CIImage,
+                                strength: Double,
+                                mask: CIImage,
+                                scale: CGFloat) -> CIImage {
+        let amount = min(1, max(-1, strength / 100))
+        guard abs(amount) > 0.001 else { return image }
+        let extent = image.extent
+
+        if amount < 0 {
+            let m = -amount
+            let matte = image.applyingFilter("CIHighlightShadowAdjust", parameters: [
+                "inputShadowAmount": 0.16 * m,
+                "inputHighlightAmount": 1 - 0.42 * m,
+                "inputRadius": max(2, 5.0 * scale)
+            ]).applyingFilter("CIColorControls", parameters: [
+                kCIInputSaturationKey: 1 - 0.10 * m,
+                kCIInputBrightnessKey: 0.008 * m
+            ])
+            return blend(matte.cropped(to: extent), over: image, mask: mask, strength: m)
+        }
+
+        let lifted = image.applyingFilter("CIColorControls", parameters: [
+            kCIInputBrightnessKey: 0.055 * amount,
+            kCIInputSaturationKey: 1 + 0.05 * amount
+        ])
+        let glow = lifted.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(3, 7.0 * scale)])
+            .cropped(to: extent)
+        let bloomed = image.applyingFilter("CIScreenBlendMode", parameters: [
+            kCIInputBackgroundImageKey: glow
+        ]).cropped(to: extent)
+        return blend(bloomed, over: image, mask: mask, strength: amount * 0.55)
+    }
+
+    /// Calms oily highlights on the skin without dulling the whole face.
+    /// Only the highlight end of the range is compressed, and the change is
+    /// confined to the skin mask, so speculars on hair and jewellery stay.
+    static func reduceShine(_ image: CIImage,
+                            strength: Double,
+                            mask: CIImage,
+                            scale: CGFloat) -> CIImage {
+        let amount = min(1, max(0, strength / 100))
+        guard amount > 0.001 else { return image }
+        let calmed = image.applyingFilter("CIHighlightShadowAdjust", parameters: [
+            "inputShadowAmount": 0.0,
+            "inputHighlightAmount": 1 - 0.55 * amount,
+            "inputRadius": max(2, 9.0 * scale)
+        ]).applyingFilter("CIColorControls", parameters: [
+            kCIInputSaturationKey: 1 - 0.06 * amount
+        ])
+        return blend(calmed.cropped(to: image.extent), over: image, mask: mask,
+                     strength: amount)
+    }
+
+    /// Local contrast and a little colour depth inside the iris. The sclera is
+    /// deliberately excluded: sharpening it amplifies veins and noise.
+    static func enhanceIris(_ image: CIImage,
+                            strength: Double,
+                            mask: CIImage,
+                            scale: CGFloat) -> CIImage {
+        let amount = min(1, max(0, strength / 100))
+        guard amount > 0.001 else { return image }
+        let sharpened = image.applyingFilter("CIUnsharpMask", parameters: [
+            kCIInputRadiusKey: max(0.8, 1.2 * scale),
+            kCIInputIntensityKey: 1.05 * amount
+        ])
+        let lumaOnly = keepLuminance(sharpened, over: image)
+        let deepened = lumaOnly.applyingFilter("CIColorControls", parameters: [
+            kCIInputSaturationKey: 1 + 0.16 * amount,
+            kCIInputContrastKey: 1 + 0.06 * amount
+        ])
+        return blend(deepened.cropped(to: image.extent), over: image, mask: mask,
+                     strength: amount * 0.9)
+    }
+
+    /// Deepens the lash line. The lash mask is already dark hair, so a small
+    /// brightness and contrast move is enough; anything stronger reads as a
+    /// drawn line.
+    static func darkenLashes(_ image: CIImage,
+                             strength: Double,
+                             mask: CIImage) -> CIImage {
+        let amount = min(1, max(0, strength / 100))
+        guard amount > 0.001 else { return image }
+        let darkened = image.applyingFilter("CIColorControls", parameters: [
+            kCIInputBrightnessKey: -0.10 * amount,
+            kCIInputSaturationKey: 1 - 0.10 * amount,
+            kCIInputContrastKey: 1 + 0.14 * amount
+        ])
+        return blend(darkened.cropped(to: image.extent), over: image, mask: mask,
+                     strength: amount * 0.9)
     }
 
     // MARK: - Helpers

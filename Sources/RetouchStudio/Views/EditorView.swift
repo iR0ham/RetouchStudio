@@ -24,6 +24,9 @@ struct EditorView: View {
         .sheet(isPresented: $model.showExportSheet) {
             ExportSheet(model: model)
         }
+        .sheet(isPresented: $model.showSmartSheet) {
+            SmartAnalyzeSheet(model: model)
+        }
         .onChange(of: model.adjustments) { _, _ in
             model.schedulePreview()
         }
@@ -32,7 +35,9 @@ struct EditorView: View {
                 model.beginCrop()
             }
         }
-        .onAppear { model.refreshDefaultStatus() }
+        .onAppear {
+            model.refreshDefaultStatus()
+        }
     }
 }
 
@@ -47,7 +52,7 @@ struct ExportSheet: View {
                 Icon(name: "arrow.down.to.line.compact", size: 16, emphasised: true)
                     .foregroundStyle(Theme.accent)
                 Text(model.s.exportSection)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(Theme.Font.face(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.text)
                 Spacer()
             }
@@ -68,7 +73,7 @@ struct ExportSheet: View {
                             .tracking(0.6)
                             .foregroundStyle(Theme.faint)
                         Spacer()
-                        Text("\(Int((model.exportQuality * 100).rounded()))%")
+                        Text(Digits.percent(Int((model.exportQuality * 100).rounded())))
                             .font(Theme.Font.value)
                             .foregroundStyle(Theme.text)
                             .contentTransition(.numericText())
@@ -96,7 +101,7 @@ struct ExportSheet: View {
                     model.showExportSheet = false
                 } label: {
                     Text(model.s.cancel)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(Theme.Font.face(size: 12.5, weight: .medium))
                         .foregroundStyle(Theme.muted)
                         .frame(height: 36)
                         .padding(.horizontal, 16)
@@ -142,7 +147,7 @@ struct ExportSheet: View {
                     model.exportFormat = format
                 } label: {
                     Text(format.title)
-                        .font(.system(size: 11.5, weight: active ? .semibold : .regular))
+                        .font(Theme.Font.face(size: 11.5, weight: active ? .semibold : .regular))
                         .foregroundStyle(active ? Theme.accentInk : Theme.muted)
                         .frame(maxWidth: .infinity)
                         .frame(height: 28)

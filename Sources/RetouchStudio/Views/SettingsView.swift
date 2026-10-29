@@ -1,0 +1,241 @@
+import SwiftUI
+
+/// Preferences that survive a restart. Each control writes straight into the
+/// open document *and* the saved defaults, so a change is visible immediately
+/// and still there tomorrow.
+struct SettingsView: View {
+    @ObservedObject var model: EditorModel
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 22) {
+                languageSection
+                autoSection
+                exportSection
+                toolsSection
+                recoverySection
+                footer
+            }
+            .padding(22)
+        }
+        .frame(width: 470, height: 560)
+        .background(Theme.background)
+        .preferredColorScheme(.dark)
+    }
+
+    // MARK: - Language
+
+    private var languageSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(model.s.settingsLanguage)
+
+            HStack(spacing: 2) {
+                ForEach(AppLanguage.allCases, id: \.self) { language in
+                    let active = model.language == language
+                    Button {
+                        model.language = language
+                    } label: {
+                        Text(language.title)
+                            .font(Theme.Font.face(size: 11.5, weight: active ? .semibold : .regular))
+                            .foregroundStyle(active ? Theme.accentInk : Theme.muted)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(active ? Theme.accent : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle(dip: 0.96))
+                }
+            }
+            .padding(3)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.panel)
+            )
+        }
+    }
+
+    // MARK: - Auto
+
+    private var autoSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(model.s.settingsAuto)
+            Text(model.s.settingsAutoNote)
+                .font(Theme.Font.caption)
+                .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+
+            percentRow(model.s.autoRetouch,
+                       value: $model.autoRetouchStrength,
+                       tint: Theme.sky)
+            percentRow(model.s.autoColorLight,
+                       value: $model.autoColorStrength,
+                       tint: Theme.accent)
+        }
+    }
+
+    // MARK: - Export
+
+    private var exportSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(model.s.settingsExport)
+
+            HStack(spacing: 2) {
+                ForEach(ExportFormat.allCases) { format in
+                    let active = model.exportFormat == format
+                    Button {
+                        model.exportFormat = format
+                    } label: {
+                        Text(format.title)
+                            .font(Theme.Font.face(size: 11.5, weight: active ? .semibold : .regular))
+                            .foregroundStyle(active ? Theme.accentInk : Theme.muted)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(active ? Theme.accent : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle(dip: 0.96))
+                }
+            }
+            .padding(3)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.panel)
+            )
+
+            if model.exportFormat.supportsQuality {
+                percentRow(model.s.quality,
+                           value: Binding(get: { model.exportQuality * 100 },
+                                          set: { model.exportQuality = $0 / 100 }),
+                           tint: Theme.accent)
+            }
+        }
+    }
+
+    // MARK: - Tools
+
+    private var toolsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(model.s.settingsTools)
+
+            row(model.s.settingsBrush,
+                detail: "\(model.healBrushPixels) px") {
+                BipolarSlider(value: $model.healBrushPercent, range: 0.4...6, step: 0.2)
+            }
+
+            HStack(spacing: 12) {
+                Text(model.s.settingsFaceOverlay)
+                    .font(Theme.Font.face(size: 12.5))
+                    .foregroundStyle(Theme.text)
+                Spacer(minLength: 8)
+                Toggle("", isOn: $model.showFaceOverlay)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(Theme.accent)
+                    .accessibilityLabel(model.s.settingsFaceOverlay)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    // MARK: - Recovery
+
+    private var recoverySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(model.s.settingsRecovery)
+
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.s.settingsRecoveryToggle)
+                        .font(Theme.Font.face(size: 12.5))
+                        .foregroundStyle(Theme.text)
+                    Text(model.s.settingsRecoveryNote)
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: $settings.recoveryEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(Theme.accent)
+                    .accessibilityLabel(model.s.settingsRecoveryToggle)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Text(model.s.settingsResetNote)
+                .font(Theme.Font.face(size: 10.5))
+                .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button {
+                model.resetPreferences()
+            } label: {
+                Text(model.s.settingsReset)
+                    .font(Theme.Font.face(size: 11.5, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                    .frame(height: 30)
+                    .padding(.horizontal, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                            .fill(Theme.inset)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle(dip: 0.95))
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: - Pieces
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.Font.section)
+            .tracking(0.6)
+            .foregroundStyle(Theme.faint)
+    }
+
+    private func percentRow(_ title: String, value: Binding<Double>, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(Theme.text)
+                Spacer(minLength: 6)
+                Text(Digits.percent(Int(value.wrappedValue.rounded())))
+                    .font(Theme.Font.value)
+                    .foregroundStyle(Theme.text)
+                    .contentTransition(.numericText())
+                    .animation(Motion.snappy, value: value.wrappedValue)
+            }
+            BipolarSlider(value: value, range: 0...100, tint: tint)
+        }
+    }
+
+    private func row<Content: View>(_ title: String,
+                                    detail: String,
+                                    @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(Theme.text)
+                Spacer(minLength: 6)
+                Text(detail)
+                    .font(Theme.Font.value)
+                    .foregroundStyle(Theme.muted)
+            }
+            content()
+        }
+    }
+}

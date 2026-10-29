@@ -63,6 +63,16 @@ else
   echo "  ! warning: Resources/AppIcon.icns missing; building without an icon."
 fi
 
+# Vazir, the Persian typeface. Registered through UIAppFonts in Info.plist.
+if [ -d Resources/Fonts ]; then
+  mkdir -p "$APP_BUNDLE/Contents/Resources/Fonts"
+  cp Resources/Fonts/*.ttf "$APP_BUNDLE/Contents/Resources/Fonts/"
+  # The SIL Open Font License travels with the fonts it covers.
+  [ -f Resources/Fonts/OFL.txt ] && cp Resources/Fonts/OFL.txt "$APP_BUNDLE/Contents/Resources/Fonts/"
+else
+  echo "  ! warning: Resources/Fonts missing; Persian text will fall back to the system font."
+fi
+
 # امضای ad-hoc تا مک بدون هشدار بازش کند
 codesign --force --sign - "$APP_BUNDLE" >/dev/null 2>&1 || echo "  (بدون امضا ادامه می‌دهیم)"
 

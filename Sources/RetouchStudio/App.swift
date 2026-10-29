@@ -19,6 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let pendingURL {
             self.pendingURL = nil
             model.requestOpen(url: pendingURL)
+            return
+        }
+        // After the window is on screen, so the alert has something to be modal
+        // against. A plain launch is the one place recovery belongs: the owner
+        // asked for the last session back, not for a new photo.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak model] in
+            model?.offerRecoveryIfNeeded()
         }
     }
 
@@ -46,7 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Termination caused by the window teardown above, not by the user.
         if restoringWindow { return .terminateCancel }
         guard let model, model.hasUnsavedChanges else { return .terminateNow }
-        return model.confirmDiscardIfNeeded() ? .terminateNow : .terminateCancel
+        guard model.confirmDiscardIfNeeded() else { return .terminateCancel }
+        // The owner chose to discard, so the next launch must not offer the
+        // recovery copy back.
+        model.discardUnsavedChanges()
+        return .terminateNow
     }
 }
 
@@ -171,6 +182,28 @@ struct RetouchStudioApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1320, height: 860)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button(model.s.aboutTitle) { InfoWindows.shared.showAbout() }
+                Divider()
+                Menu(model.s.languageMenu) {
+                    ForEach(AppLanguage.allCases, id: \.self) { language in
+                        Button {
+                            model.language = language
+                        } label: {
+                            if model.language == language {
+                                Label(language.title, systemImage: "checkmark")
+                            } else {
+                                Text(language.title)
+                            }
+                        }
+                    }
+                }
+            }
+            CommandGroup(replacing: .help) {
+                // macOS reserves ⌘? for the Help menu's own search field, so
+                // this item is reachable from the menu only.
+                Button(model.s.helpTitle) { InfoWindows.shared.showHelp() }
+            }
             CommandGroup(replacing: .undoRedo) {
                 Button(model.s.undoMenu) { model.undo() }
                     .keyboardShortcut("z")
@@ -184,6 +217,17 @@ struct RetouchStudioApp: App {
                     .keyboardShortcut("o")
                 Button(model.s.openProjectMenu) { model.openProject() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                Menu(model.s.openRecentMenu) {
+                    if model.recents.entries.isEmpty {
+                        Text(model.s.openRecentEmpty)
+                    } else {
+                        ForEach(model.recents.entries) { entry in
+                            Button(entry.name) { model.openRecent(entry) }
+                        }
+                        Divider()
+                        Button(model.s.clearRecentMenu) { model.recents.clear() }
+                    }
+                }
             }
             CommandGroup(after: .newItem) {
                 // A single Window scene does not ship the standard Close item.
@@ -206,12 +250,9 @@ struct RetouchStudioApp: App {
                     .disabled(!model.hasImage || model.isBusy)
             }
             CommandMenu(model.s.retouchMenu) {
-                Button(model.s.autoColorMenu) { model.autoColorLight() }
-                    .keyboardShortcut("l", modifiers: [.command, .shift])
-                    .disabled(!model.hasImage || model.isBusy)
-                Button(model.s.autoRetouchMenu) { model.autoRetouch() }
-                    .keyboardShortcut("r", modifiers: [.command, .shift])
-                    .disabled(!model.hasImage || model.isBusy)
+                Button(model.s.smartAnalyze) { model.smartAnalyze() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                    .disabled(!model.canSmartAnalyze)
                 Divider()
                 Button(model.s.resetMenu) { model.resetAll() }
                     .keyboardShortcut("r")
@@ -231,6 +272,11 @@ struct RetouchStudioApp: App {
                     .keyboardShortcut("0")
                     .disabled(!model.hasImage || model.zoom <= 1.0001)
             }
+        }
+
+        // ⌘, — the standard preferences window, using the app's own shell.
+        Settings {
+            SettingsView(model: model)
         }
     }
 }

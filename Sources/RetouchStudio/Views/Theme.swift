@@ -87,12 +87,33 @@ enum Theme {
     }
 
     enum Font {
-        static let panelTitle = SwiftUI.Font.system(size: 15, weight: .semibold)
-        static let section = SwiftUI.Font.system(size: 10.5, weight: .semibold)
-        static let label = SwiftUI.Font.system(size: 12, weight: .regular)
-        static let caption = SwiftUI.Font.system(size: 11, weight: .regular)
-        static let value = SwiftUI.Font.system(size: 11, weight: .medium, design: .monospaced)
-        static let button = SwiftUI.Font.system(size: 12.5, weight: .semibold)
+        /// Every face the app draws with. Persian switches to Vazir, the
+        /// typeface the owner asked for; English keeps the system face.
+        static func face(size: CGFloat, weight: SwiftUI.Font.Weight = .regular) -> SwiftUI.Font {
+            guard AppLanguage.current == .persian else {
+                return .system(size: size, weight: weight)
+            }
+            return .custom(vazirName(for: weight), size: size)
+        }
+
+        static var panelTitle: SwiftUI.Font { face(size: 15, weight: .semibold) }
+        static var section: SwiftUI.Font { face(size: 10.5, weight: .semibold) }
+        static var label: SwiftUI.Font { face(size: 12) }
+        static var caption: SwiftUI.Font { face(size: 11) }
+        /// Numbers stay monospaced in both languages: they are read as a
+        /// column, not as words.
+        static var value: SwiftUI.Font { .system(size: 11, weight: .medium, design: .monospaced) }
+        static var button: SwiftUI.Font { face(size: 12.5, weight: .semibold) }
+
+        /// The PostScript names of the Vazir faces bundled in Resources/Fonts.
+        private static func vazirName(for weight: SwiftUI.Font.Weight) -> String {
+            switch weight {
+            case .bold: return "Vazirmatn-Bold"
+            case .semibold: return "Vazirmatn-SemiBold"
+            case .medium: return "Vazirmatn-Medium"
+            default: return "Vazirmatn-Regular"
+            }
+        }
     }
 }
 

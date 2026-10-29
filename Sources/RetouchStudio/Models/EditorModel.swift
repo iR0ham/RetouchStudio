@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreGraphics
 import CoreImage
 import SwiftUI
@@ -7,33 +8,53 @@ import UniformTypeIdentifiers
 @MainActor
 final class EditorModel: ObservableObject {
 
+    /// Preferences that outlive a photo, and the files under Open Recent.
+    let settings = AppSettings.shared
+    let recents = RecentStore.shared
+
     // Adjustments
     @Published var adjustments = Adjustments() {
         didSet { adjustmentsChanged() }
     }
     @Published var compareEnabled = true
-    @Published var comparePosition: Double = 0.45
-    @Published var showFaceOverlay = false
+    @Published var comparePosition: Double = 0.45 {
+        didSet { settings.comparePosition = comparePosition }
+    }
+    @Published var showFaceOverlay = false {
+        didSet { settings.showFaceOverlay = showFaceOverlay }
+    }
     /// How strongly Auto Retouch's derived values are applied. 100 applies the
     /// analysis as measured; lower values scale every effect down together.
-    @Published var autoRetouchStrength: Double = 70
+    @Published var autoRetouchStrength: Double = 70 {
+        didSet { settings.autoRetouchStrength = autoRetouchStrength }
+    }
     /// How strongly Auto Color & Light's derived values are applied. The auto
     /// measures the photo; this decides how much of that measurement to use.
-    @Published var autoColorStrength: Double = 100
+    @Published var autoColorStrength: Double = 100 {
+        didSet { settings.autoColorStrength = autoColorStrength }
+    }
+    /// The language of the interface. Published so every view redraws the
+    /// moment it changes.
+    @Published var language: AppLanguage = AppLanguage.current {
+        didSet { settings.language = language }
+    }
 
     // Export
     @Published var showExportSheet = false
-    @Published var exportFormat: ExportFormat = .jpeg
-    @Published var exportQuality: Double = 0.92
+    @Published var exportFormat: ExportFormat = .jpeg {
+        didSet { settings.exportFormat = exportFormat.rawValue }
+    }
+    @Published var exportQuality: Double = 0.92 {
+        didSet { settings.exportQuality = exportQuality }
+    }
 
     // State
     @Published private(set) var originalImage: NSImage?
     @Published private(set) var previewImage: NSImage?
     @Published private(set) var faces: [FaceGeometry] = []
     @Published private(set) var isBusy = false
-    @Published private(set) var status = ""
+    @Published private(set) var statusToken: StatusToken = .none
     @Published private(set) var imageName = ""
-    @Published private(set) var imageInfo = ""
     @Published private(set) var imageURL: URL?
     @Published private(set) var hasImage = false
     @Published private(set) var faceCount = 0
@@ -55,7 +76,20 @@ final class EditorModel: ObservableObject {
     }
     /// Brush diameter as a percentage of the short side, so one setting covers
     /// every photo size and the stamp means the same thing on preview and export.
-    @Published var healBrushPercent: Double = 1.6
+    @Published var healBrushPercent: Double = 1.6 {
+        didSet { settings.healBrushPercent = healBrushPercent }
+    }
+
+    // Smart Analyze
+    /// What the last analysis measured. Nil until a photo has been read, and
+    /// cleared whenever a different photo is loaded.
+    @Published private(set) var smartReport: SmartAnalyzer.Report?
+    @Published private(set) var isAnalyzingSmart = false
+    @Published var showSmartSheet = false
+    /// Which groups of the suggestion the owner wants applied.
+    @Published var smartApplyRetouch = true
+    @Published var smartApplyColorLight = true
+    @Published var smartApplyHealSpots = true
 
     /// Pixel size of the working (possibly cropped) image, used for aspect math
     /// and the crop size readout.
@@ -63,6 +97,25 @@ final class EditorModel: ObservableObject {
     /// True when the sliders differ from the state that was loaded or last
     /// exported, which is what the discard prompt is about.
     @Published private(set) var hasUnsavedChanges = false
+    /// Whether the subject silhouette that Body and Background need has been
+    /// built. `unknown` means no such control has been touched yet, so the
+    /// expensive segmentation has not run.
+    @Published private(set) var subjectState: SubjectMaskState = .unknown
+    /// True when Vision found a body pose with usable hips or shoulders, so the
+    /// waist, arm and leg sliders have joints to work around.
+    @Published private(set) var hasBodyPose = false
+
+    /// Which pose-driven groups lack their joints on this photo, in words for
+    /// the inspector. A pose can exist and still miss the pairs a slider needs;
+    /// saying so beats leaving that slider looking broken.
+    var bodyPoseGaps: [String] {
+        guard let pose = masksPreview?.pose else { return [] }
+        var gaps: [String] = []
+        if !pose.hasWaistJoints { gaps.append(s.poseMissingWaist) }
+        if !pose.hasArmJoints { gaps.append(s.poseMissingArms) }
+        if !pose.hasLegJoints { gaps.append(s.poseMissingLegs) }
+        return gaps
+    }
 
     // MARK: - Undo / redo
 
@@ -153,7 +206,7 @@ final class EditorModel: ObservableObject {
     /// that change no longer existed. Fall back to the neutral face status.
     private func refreshStatusAfterHistoryChange() {
         guard hasImage else { return }
-        status = faceCount == 0 ? s.noFaceColorOnly : s.facesDetected(faceCount)
+        statusToken = faceCount == 0 ? .noFaceColorOnly : .facesDetected(faceCount)
     }
 
     private func updateUndoFlags() {
@@ -179,6 +232,7 @@ final class EditorModel: ObservableObject {
     private func updateCleanState() {
         hasUnsavedChanges = hasImage
             && (currentState != cleanState || appliedCrop != cleanCrop)
+        scheduleAutosave()
     }
 
     /// Undo history belongs to one photo. Carrying it across a load would let
@@ -211,8 +265,8 @@ final class EditorModel: ObservableObject {
         commitAdjustments()
     }
 
-    /// Zeroes a whole group (skin, reshape, makeup, color/light or look) while
-    /// leaving the other groups exactly as they were.
+    /// Zeroes a whole group (skin, reshape, makeup, color/light, look, body or
+    /// background) while leaving the other groups exactly as they were.
     func resetGroup(_ group: AdjustmentGroup) {
         guard !adjustments.isIdentity else { return }
         commitAdjustments()
@@ -224,26 +278,50 @@ final class EditorModel: ObservableObject {
                        .applyingMakeup(adjustments.makeupOnly)
                        .applyingColorLight(adjustments.colorLightOnly)
                        .applyingLook(adjustments.lookOnly)
+                       .applyingBody(adjustments.bodyOnly)
+                       .applyingBackground(adjustments.backgroundOnly)
         case .reshape:
             next = next.applyingRetouch(adjustments.retouchOnly)
                        .applyingMakeup(adjustments.makeupOnly)
                        .applyingColorLight(adjustments.colorLightOnly)
                        .applyingLook(adjustments.lookOnly)
+                       .applyingBody(adjustments.bodyOnly)
+                       .applyingBackground(adjustments.backgroundOnly)
         case .makeup:
             next = next.applyingRetouch(adjustments.retouchOnly)
                        .applyingReshape(adjustments.reshapeOnly)
                        .applyingColorLight(adjustments.colorLightOnly)
                        .applyingLook(adjustments.lookOnly)
+                       .applyingBody(adjustments.bodyOnly)
+                       .applyingBackground(adjustments.backgroundOnly)
         case .colorLight:
             next = next.applyingRetouch(adjustments.retouchOnly)
                        .applyingReshape(adjustments.reshapeOnly)
                        .applyingMakeup(adjustments.makeupOnly)
                        .applyingLook(adjustments.lookOnly)
+                       .applyingBody(adjustments.bodyOnly)
+                       .applyingBackground(adjustments.backgroundOnly)
         case .look:
             next = next.applyingRetouch(adjustments.retouchOnly)
                        .applyingReshape(adjustments.reshapeOnly)
                        .applyingColorLight(adjustments.colorLightOnly)
                        .applyingMakeup(adjustments.makeupOnly)
+                       .applyingBody(adjustments.bodyOnly)
+                       .applyingBackground(adjustments.backgroundOnly)
+        case .body:
+            next = next.applyingRetouch(adjustments.retouchOnly)
+                       .applyingReshape(adjustments.reshapeOnly)
+                       .applyingMakeup(adjustments.makeupOnly)
+                       .applyingColorLight(adjustments.colorLightOnly)
+                       .applyingLook(adjustments.lookOnly)
+                       .applyingBackground(adjustments.backgroundOnly)
+        case .background:
+            next = next.applyingRetouch(adjustments.retouchOnly)
+                       .applyingReshape(adjustments.reshapeOnly)
+                       .applyingMakeup(adjustments.makeupOnly)
+                       .applyingColorLight(adjustments.colorLightOnly)
+                       .applyingLook(adjustments.lookOnly)
+                       .applyingBody(adjustments.bodyOnly)
         }
         adjustments = next
         commitAdjustments()
@@ -309,8 +387,43 @@ final class EditorModel: ObservableObject {
                 set: { self.setMakeupColor(region, self.makeupColor(region).with(saturation: $0 / 100)) })
     }
 
-    /// UI copy. The app is English-only.
-    let s = L10n.shared
+    /// The HSL tool edits one band at a time; the picker lives in the panel and
+    /// the sliders read the arrays through this binding.
+    @Published var hslBand: HSLBand = .red
+
+    func hslBinding(_ band: HSLBand,
+                    _ component: WritableKeyPath<Adjustments, [Double]>) -> Binding<Double> {
+        Binding(
+            get: {
+                let values = self.adjustments[keyPath: component]
+                return band.rawValue < values.count ? values[band.rawValue] : 0
+            },
+            set: { value in
+                var values = self.adjustments[keyPath: component]
+                guard band.rawValue < values.count else { return }
+                values[band.rawValue] = value
+                self.adjustments[keyPath: component] = values
+            })
+    }
+
+    /// Clears one hue band in all three components as a single undo step.
+    func resetHSLBand(_ band: HSLBand) {
+        let index = band.rawValue
+        guard adjustments.hslHue[index] != 0
+                || adjustments.hslSaturation[index] != 0
+                || adjustments.hslLuminance[index] != 0 else { return }
+        commitAdjustments()
+        adjustments.hslHue[index] = 0
+        adjustments.hslSaturation[index] = 0
+        adjustments.hslLuminance[index] = 0
+        commitAdjustments()
+    }
+
+    /// UI copy. The app speaks English or Persian, and the table follows the
+    /// language the owner picked.
+    var s: L10n {
+        language == .persian ? PersianL10n.table : L10n.shared
+    }
     @Published private(set) var previewSize = CGSize(width: 1, height: 1)
 
     // Canvas view state. zoom == 1 means the image is fitted to the window.
@@ -330,7 +443,7 @@ final class EditorModel: ObservableObject {
 
     /// Restores the neutral status shown when no image is open.
     func refreshDefaultStatus() {
-        if !hasImage { status = s.dropHint }
+        if !hasImage { statusToken = .dropHint }
     }
 
     private var sourceFull: CIImage?
@@ -348,8 +461,32 @@ final class EditorModel: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private var thumbTask: Task<Void, Never>?
     private var batchTask: Task<Void, Never>?
+    private var autosaveTask: Task<Void, Never>?
+    private var recentsObserver: AnyCancellable?
+    private var smartGeneration = 0
+    private var offeredRecovery = false
     private var batchGeneration = 0
     private var generation = 0
+    /// Invalidates an in-flight segmentation when the photo or crop changes.
+    private var personGeneration = 0
+
+    init() {
+        // Defaults come from the saved preferences, so a restart opens with the
+        // strengths and export choices the owner left behind.
+        autoRetouchStrength = settings.autoRetouchStrength
+        autoColorStrength = settings.autoColorStrength
+        exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
+        exportQuality = settings.exportQuality
+        healBrushPercent = settings.healBrushPercent
+        showFaceOverlay = settings.showFaceOverlay
+        comparePosition = settings.comparePosition
+
+        // The Open Recent menu is built from this model's body, so a change in
+        // the list has to reach the scene as well.
+        recentsObserver = recents.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in self?.objectWillChange.send() }
+        }
+    }
 
     // MARK: - Input
 
@@ -358,7 +495,7 @@ final class EditorModel: ObservableObject {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Choose a photo to retouch"
+        panel.message = s.choosePhotoToRetouch
         guard panel.runModal() == .OK, let url = panel.url else { return }
         // Ask only once a replacement is actually chosen, not before the panel.
         guard confirmDiscardIfNeeded() else { return }
@@ -367,6 +504,10 @@ final class EditorModel: ObservableObject {
 
     /// Entry point for drag-and-drop and for Finder / Open With.
     func requestLoad(url: URL) {
+        // Choosing a photo answers the launch question, so the recovery copy
+        // stays on disk for the next plain launch instead of interrupting this
+        // one (and is never silently deleted).
+        offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
         load(url: url)
     }
@@ -427,7 +568,7 @@ final class EditorModel: ObservableObject {
         let generation = self.generation
 
         isBusy = true
-        status = s.readingImage
+        statusToken = .readingImage
         imageName = url.lastPathComponent
 
         let processor = self.processor
@@ -442,7 +583,7 @@ final class EditorModel: ObservableObject {
             guard let self, self.generation == generation else { return }
             guard let result else {
                 self.isBusy = false
-                self.status = self.s.couldNotRead
+                self.statusToken = .couldNotRead
                 return
             }
             self.apply(result, restoring: project, projectURL: projectURL)
@@ -461,6 +602,10 @@ final class EditorModel: ObservableObject {
         sourceMetadata = result.metadata
         faces = result.faces
         faceCount = result.faces.count
+        // A new set of pixels means the old silhouette no longer describes it.
+        personGeneration += 1
+        subjectState = .unknown
+        hasBodyPose = false
         if let face = result.faces.first,
            let luma = AutoAnalyzer.cheekLuminance(result.originalPreview, face: face) {
             makeupFamily = MakeupFamily.of(skinLuminance: luma)
@@ -473,7 +618,6 @@ final class EditorModel: ObservableObject {
                               size: NSSize(width: result.preview.width, height: result.preview.height))
         previewSize = CGSize(width: result.preview.width, height: result.preview.height)
         workingPixelSize = result.pixelSize
-        imageInfo = "\(Int(result.pixelSize.width)) × \(Int(result.pixelSize.height)) px"
         imageName = result.fileName
         imageURL = result.url
         cropDraft = CropGeometry.full
@@ -508,20 +652,38 @@ final class EditorModel: ObservableObject {
         cropAspect = .free
         cleanState = currentState
         cleanCrop = appliedCrop
-        comparePosition = 0.45
+        comparePosition = settings.comparePosition
         resetHistory()
+        // A crash copy lives nowhere else, so it must still count as unsaved:
+        // closing the window has to warn and the recovery file has to stay.
+        // This runs after resetHistory, which re-baselines the clean state.
+        if project != nil, projectURL == nil {
+            cleanState = EditState()
+            cleanCrop = nil
+            updateCleanState()
+        }
         resetView()
         isBusy = false
+        // The report belongs to the photo that was just replaced.
+        smartGeneration += 1
+        smartReport = nil
+        isAnalyzingSmart = false
+        showSmartSheet = false
+        if let projectURL {
+            recents.add(projectURL, isProject: true)
+        } else {
+            recents.add(result.url, isProject: false)
+        }
         // The preview from the load has no stamps in it, so repaint when there
         // are any to draw.
         if !healSpots.isEmpty { schedulePreview() }
 
         if project != nil {
-            status = s.projectOpened
+            statusToken = .projectOpened
         } else if result.faces.isEmpty {
-            status = s.noFaceColorOnly
+            statusToken = .noFaceColorOnly
         } else {
-            status = s.facesDetected(result.faces.count)
+            statusToken = .facesDetected(result.faces.count)
         }
     }
 
@@ -590,7 +752,7 @@ final class EditorModel: ObservableObject {
         let url = imageURL
 
         isBusy = true
-        status = s.applyingCrop
+        statusToken = .applyingCrop
 
         loadTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
@@ -600,7 +762,7 @@ final class EditorModel: ObservableObject {
             guard let self, self.generation == generation else { return }
             guard let result else {
                 self.isBusy = false
-                self.status = self.s.couldNotRead
+                self.statusToken = .couldNotRead
                 return
             }
             self.install(result)
@@ -610,7 +772,7 @@ final class EditorModel: ObservableObject {
             if !self.healSpots.isEmpty { self.schedulePreview() }
             self.updateCleanState()
             self.isBusy = false
-            self.status = crop == nil ? self.s.cropReset : self.s.cropApplied
+            self.statusToken = crop == nil ? .cropReset : .cropApplied
         }
     }
 
@@ -649,19 +811,19 @@ final class EditorModel: ObservableObject {
             hypot($0.spot.center.x - clamped.x, $0.spot.center.y - clamped.y) <= $0.spot.radius
         }) {
             healSpots.remove(at: hit.index)
-            status = healSpots.isEmpty ? s.healCleared : s.healStampRemoved
+            statusToken = healSpots.isEmpty ? .healCleared : .healStampRemoved
             return
         }
         let center = HealGeometry.originalCenter(clamped, crop: appliedCrop)
         let radius = HealGeometry.originalRadius(healBrushRadius, crop: appliedCrop)
         healSpots.append(HealSpot(center: center, radius: radius))
-        status = s.healStampAdded(healSpots.count)
+        statusToken = .healStampAdded(healSpots.count)
     }
 
     func clearHealSpots() {
         guard !healSpots.isEmpty else { return }
         healSpots.removeAll()
-        status = s.healCleared
+        statusToken = .healCleared
     }
 
     /// Rebuilds the healing masks for the current stamps, at both the working
@@ -765,8 +927,49 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Preview
 
+    /// Builds the subject silhouette the first time a Body or Background
+    /// control moves. A portrait load never pays for segmentation unless one of
+    /// those tools is actually used, and the answer is kept for this photo
+    /// until the pixels change.
+    private func ensurePersonMask() {
+        guard adjustments.usesPersonTools, let source = sourcePreview else { return }
+        if masksPreview?.person != nil {
+            subjectState = .available
+            return
+        }
+        guard subjectState != .detecting, subjectState != .unavailable else { return }
+
+        subjectState = .detecting
+        personGeneration += 1
+        let token = personGeneration
+        Task { [weak self] in
+            let analysis = await Task.detached(priority: .userInitiated) {
+                PersonAnalyzer.analysis(for: source)
+            }.value
+
+            guard let self, self.personGeneration == token else { return }
+            guard let analysis else {
+                self.subjectState = .unavailable
+                self.hasBodyPose = false
+                return
+            }
+            if self.masksPreview == nil {
+                self.masksPreview = .personOnly(analysis.mask, pose: analysis.pose)
+            } else {
+                self.masksPreview?.person = analysis.mask
+                self.masksPreview?.pose = analysis.pose
+            }
+            self.subjectState = .available
+            self.hasBodyPose = analysis.pose != nil
+            // The first render ran without the silhouette, so it has to be
+            // painted again now that Body and Background have their mask.
+            self.schedulePreview()
+        }
+    }
+
     func schedulePreview() {
         guard let source = sourcePreview else { return }
+        if adjustments.usesPersonTools { ensurePersonMask() }
         renderTask?.cancel()
         generation += 1
         let generation = self.generation
@@ -803,7 +1006,7 @@ final class EditorModel: ObservableObject {
     func resetAll() {
         commitAdjustments()
         adjustments = .zero
-        comparePosition = 0.45
+        comparePosition = settings.comparePosition
         commitAdjustments()
     }
 
@@ -840,7 +1043,7 @@ final class EditorModel: ObservableObject {
         userPresets.removeAll { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }
         userPresets.append(UserPreset(name: name, adjustments: adjustments))
         UserPresetStore.save(userPresets)
-        status = "\(s.presetSaved): \(name)"
+        statusToken = .presetSaved(name)
         buildPresetThumbs()
     }
 
@@ -865,7 +1068,7 @@ final class EditorModel: ObservableObject {
         let colorSpace = sourceColorSpace
         let processor = self.processor
         let entries: [(id: String, adjustments: Adjustments)] =
-            Preset.all.map { ($0.id, $0.adjustments) }
+            Preset.all.map { ($0.id.rawValue, $0.adjustments) }
             + userPresets.map { ($0.id, $0.adjustments) }
 
         thumbTask = Task { [weak self] in
@@ -923,82 +1126,214 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Auto
 
-    /// "Auto Color & Light": derives only the color/light fields from the image
-    /// itself. Skin, teeth and eye adjustments are left exactly as they were.
-    func autoColorLight() {
-        guard let source = sourcePreview else { return }
-        generation += 1
-        let generation = self.generation
-        isBusy = true
-        status = s.analyzingColor
-        let strength = self.autoColorStrength
-        Task { [weak self] in
-            let patch = await Task.detached(priority: .userInitiated) { () -> Adjustments? in
-                guard let buffer = AutoAnalyzer.analysisBuffer(source) else { return nil }
-                return AutoAnalyzer.autoColorLight(buffer)
-            }.value
-            guard let self, self.generation == generation else { return }
-            self.isBusy = false
-            guard let patch else {
-                self.status = self.s.autoColorFailed
-                return
-            }
-            // Only the color/light fields are replaced; the retouch and reshape
-            // sliders are carried over untouched. The strength slider scales the
-            // derived values together.
-            self.commitAdjustments()
-            self.adjustments = self.adjustments.applyingColorLight(patch.scaledColorLight(by: strength))
-            self.commitAdjustments()
-            self.status = self.s.autoColorApplied
-        }
-    }
-
-    /// "Auto Retouch": derives only the skin/eye/teeth fields. Color and light
-    /// settings are left exactly as they were.
-    func autoRetouch() {
-        guard let source = sourcePreview else { return }
-        guard !faces.isEmpty else {
-            status = s.autoRetouchNeedsFace
-            return
-        }
-        generation += 1
-        let generation = self.generation
-        isBusy = true
-        status = s.analyzingSkin
-        let faces = self.faces
-        let skinMask = self.masksPreview?.skin
-        let strength = self.autoRetouchStrength
-        Task { [weak self] in
-            let patch = await Task.detached(priority: .userInitiated) { () -> Adjustments? in
-                guard let buffer = AutoAnalyzer.analysisBuffer(source) else { return nil }
-                let overall = AutoAnalyzer.stats(buffer).medianLuminance
-                let maskBuffer = skinMask.flatMap { AutoAnalyzer.analysisBuffer($0) }
-                return AutoAnalyzer.autoRetouch(buffer,
-                                                skinMask: maskBuffer,
-                                                faces: faces,
-                                                globalMedianLuminance: overall)
-            }.value
-            guard let self, self.generation == generation else { return }
-            self.isBusy = false
-            guard let patch else {
-                self.status = self.s.autoRetouchFailed
-                return
-            }
-            // Only the retouch fields are replaced; geometry and color/light
-            // are carried over untouched. The strength slider scales the
-            // derived values together.
-            self.commitAdjustments()
-            self.adjustments = self.adjustments.applyingRetouch(patch.scaledRetouch(by: strength))
-            self.commitAdjustments()
-            self.status = self.s.autoRetouchApplied
-        }
+    /// The measured suggestion, in words, for the status line: what the
+    /// analyzer decided to do, and therefore what it found. Smart Analyze is
+    /// the one generative entry; the per-tool Generate buttons this once
+    /// reported for applied the same measurements without ever showing them.
+    func retouchReadout(_ a: Adjustments, spots: Int) -> [String] {
+        var parts: [String] = []
+        if a.smooth >= 16 { parts.append(s.autoSaidSmoothing) }
+        else if a.smooth >= 6 { parts.append(s.autoSaidLightSmoothing) }
+        if a.blemish > 0 { parts.append(s.autoSaidBlemishes(max(1, spots))) }
+        if a.wrinkle >= 4 { parts.append(s.autoSaidLines) }
+        if a.darkCircles >= 8 { parts.append(s.autoSaidDarkCircles) }
+        if a.skinToneEvens >= 10 { parts.append(s.autoSaidTone) }
+        if a.skinBrighten >= 3 { parts.append(s.autoSaidBrighter) }
+        if a.teethWhiten > 0 { parts.append(s.autoSaidTeeth) }
+        if a.eyeBrighten > 0 { parts.append(s.autoSaidEyes) }
+        return parts
     }
 
     /// True when at least one detected face actually shows teeth. The teeth
     /// mask only exists in that case, so the UI can explain the skip.
     var hasVisibleTeeth: Bool { faces.contains { $0.hasVisibleTeeth } }
 
+    // MARK: - Smart Analyze
+
+    var canSmartAnalyze: Bool { hasImage && !isBusy && !isAnalyzingSmart }
+
+    /// Reads the photo and *shows* what it found before changing anything. The
+    /// report is a measurement: which face has blemishes, whether the under-eye
+    /// area is darker than the cheek, how strong the lines are, and what the
+    /// color/light numbers come out as. Nothing moves until `applySmartReport`.
+    func smartAnalyze() {
+        guard let source = sourcePreview, !isAnalyzingSmart else { return }
+        smartGeneration += 1
+        let token = smartGeneration
+        isAnalyzingSmart = true
+        isBusy = true
+        statusToken = .analyzingSmart
+        let faces = self.faces
+        let skinMask = masksPreview?.skin
+        let processor = ImageProcessor.shared
+
+        Task { [weak self] in
+            let report = await Task.detached(priority: .userInitiated) { () -> SmartAnalyzer.Report? in
+                guard let buffer = AutoAnalyzer.analysisBuffer(source) else { return nil }
+                let maskBuffer = skinMask.flatMap { AutoAnalyzer.analysisBuffer($0) }
+                // Blemishes are read from a face-sized crop: the 512 px buffer
+                // cannot tell a spot from a compression block on a small face.
+                let crops = faces.map {
+                    processor.faceCrop(for: $0, in: source, skinMask: skinMask)
+                }
+                return SmartAnalyzer.analyze(buffer: buffer, skinMask: maskBuffer,
+                                             faces: faces, crops: crops)
+            }.value
+            guard let self, self.smartGeneration == token else { return }
+            self.isAnalyzingSmart = false
+            self.isBusy = false
+            guard let report else {
+                self.statusToken = .smartFailed
+                return
+            }
+            self.smartReport = report
+            self.smartApplyRetouch = true
+            self.smartApplyColorLight = true
+            self.smartApplyHealSpots = !report.spots.isEmpty
+            self.showSmartSheet = true
+            self.statusToken = .smartReady
+        }
+    }
+
+    /// Applies the checked parts of the last report as one undo step. The
+    /// strength sliders decide how much of each patch is used, so Smart
+    /// Analyze never applies more than the owner's own setting.
+    func applySmartReport() {
+        guard let report = smartReport else { return }
+        commitAdjustments()
+        var next = adjustments
+        var appliedRetouch = Adjustments()
+        if smartApplyRetouch {
+            appliedRetouch = report.retouch.scaledRetouch(by: autoRetouchStrength)
+            next = next.applyingRetouch(appliedRetouch)
+        }
+        if smartApplyColorLight {
+            next = next.applyingColorLight(report.colorLight.scaledColorLight(by: autoColorStrength))
+        }
+        adjustments = next
+        if smartApplyHealSpots {
+            addSuggestedHealSpots(report.spots)
+        }
+        commitAdjustments()
+        showSmartSheet = false
+        // The status line names what the measurements became, in the same words
+        // the report used — an apply that found nothing to fix says so.
+        let words = retouchReadout(appliedRetouch, spots: report.spots.count)
+        statusToken = words.isEmpty ? .smartApplied : .smartAppliedReport(words)
+    }
+
+    /// Converts the analyzer's working-coordinate spots into stamps against the
+    /// original photo, skipping any the owner already healed by hand.
+    private func addSuggestedHealSpots(_ spots: [SmartAnalyzer.Spot]) {
+        let existing = HealGeometry.workingSpots(healSpots, crop: appliedCrop)
+        var addedWorking: [HealSpot] = []
+        var added: [HealSpot] = []
+        for spot in spots {
+            let working = HealSpot(center: spot.center, radius: spot.radius)
+            let covered = (existing + addedWorking).contains {
+                hypot($0.center.x - working.center.x, $0.center.y - working.center.y)
+                    <= max($0.radius, working.radius)
+            }
+            guard !covered else { continue }
+            addedWorking.append(working)
+            added.append(HealSpot(
+                center: HealGeometry.originalCenter(spot.center, crop: appliedCrop),
+                radius: HealGeometry.originalRadius(spot.radius, crop: appliedCrop)))
+        }
+        guard !added.isEmpty else { return }
+        healSpots.append(contentsOf: added)
+    }
+
+    /// How many findings a report holds, for the card's one-line summary.
+    var smartFindingCount: Int {
+        guard let report = smartReport else { return 0 }
+        return report.faces.reduce(report.photoFindings.count) { $0 + $1.findings.count }
+    }
+
+    // MARK: - Preferences
+
+    /// Copies edited preferences back into the open document, so the Settings
+    /// window changes what is on screen right away.
+    func refreshPreferences() {
+        autoRetouchStrength = settings.autoRetouchStrength
+        autoColorStrength = settings.autoColorStrength
+        exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
+        exportQuality = settings.exportQuality
+        healBrushPercent = settings.healBrushPercent
+        showFaceOverlay = settings.showFaceOverlay
+        language = settings.language
+    }
+
+    func resetPreferences() {
+        settings.resetToDefaults()
+        refreshPreferences()
+        statusToken = .settingsReset
+    }
+
+    func openRecent(_ entry: RecentEntry) {
+        guard entry.exists else {
+            recents.remove(entry)
+            statusToken = .recentMissing(entry.name)
+            return
+        }
+        requestOpen(url: entry.url)
+    }
+
+    // MARK: - Recovery
+
+    /// Writes a recovery copy while the photo has unsaved work. Debounced, so a
+    /// slider drag touches the disk once instead of on every tick.
+    private func scheduleAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        guard settings.recoveryEnabled else { return }
+        guard hasImage, hasUnsavedChanges, let project = makeProject() else {
+            RecoveryStore.clear(ifSourcePath: imageURL?.path)
+            return
+        }
+        autosaveTask = Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            _ = RecoveryStore.write(project)
+        }
+    }
+
+    /// Asks once, at launch, whether to reopen the edit a crash left behind.
+    func offerRecoveryIfNeeded() {
+        guard !offeredRecovery, !hasImage, settings.recoveryEnabled else { return }
+        offeredRecovery = true
+        guard let project = RecoveryStore.read() else { return }
+        let source = URL(fileURLWithPath: project.imagePath)
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            RecoveryStore.clear()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = s.recoveryTitle
+        alert.informativeText = s.recoveryMessage(source.lastPathComponent)
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: s.recoveryRestore)
+        let discard = alert.addButton(withTitle: s.recoveryDiscard)
+        discard.hasDestructiveAction = true
+        discard.keyEquivalent = ""
+        if alert.runModal() == .alertFirstButtonReturn {
+            load(url: source, restoring: project)
+        } else {
+            RecoveryStore.clear()
+        }
+    }
+
     // MARK: - Status text
+
+    /// What just happened, in the language that is in force now.
+    var status: String { s.statusText(statusToken) }
+
+    /// The pixel size of the photo that is open, in the digits of the current
+    /// language.
+    var imageInfo: String {
+        guard workingPixelSize.width > 0, workingPixelSize.height > 0 else { return "" }
+        return "\(Digits.num(Int(workingPixelSize.width))) × \(Digits.num(Int(workingPixelSize.height))) px"
+    }
 
     var windowTitle: String {
         guard hasImage, !imageName.isEmpty else { return s.appName }
@@ -1031,7 +1366,7 @@ final class EditorModel: ObservableObject {
         panel.nameFieldStringValue = suggestedFileName()
         panel.allowedContentTypes = [exportFormat.utType]
         panel.canCreateDirectories = true
-        panel.message = "Choose where to save the retouched image"
+        panel.message = s.chooseExportLocation
         guard panel.runModal() == .OK, let url = panel.url else { return }
         export(to: url)
     }
@@ -1051,12 +1386,23 @@ final class EditorModel: ObservableObject {
         let exportedCrop = appliedCrop
 
         isBusy = true
-        status = s.renderingExport
+        statusToken = .renderingExport
 
         Task { [weak self] in
             let success = await Task.detached(priority: .userInitiated) { () -> Bool in
+                var fullMasks = masks
+                if adjustments.usesPersonTools, fullMasks?.person == nil {
+                    if let analysis = PersonAnalyzer.analysis(for: source) {
+                        fullMasks = fullMasks.map { set in
+                            var copy = set
+                            copy.person = analysis.mask
+                            copy.pose = analysis.pose
+                            return copy
+                        } ?? MaskSet.personOnly(analysis.mask, pose: analysis.pose)
+                    }
+                }
                 let processed = processor.process(source, adjustments: adjustments,
-                                                  masks: masks, faces: faces, spots: spots)
+                                                  masks: fullMasks, faces: faces, spots: spots)
                 return processor.write(processed, to: url, format: format,
                                        quality: quality, colorSpace: colorSpace,
                                        metadata: metadata)
@@ -1066,12 +1412,12 @@ final class EditorModel: ObservableObject {
             self.isBusy = false
             if success {
                 self.showExportSheet = false
-                self.status = self.s.saved(url.lastPathComponent)
+                self.statusToken = .saved(url.lastPathComponent)
                 self.cleanState = exportedState
                 self.cleanCrop = exportedCrop
                 self.updateCleanState()
             } else {
-                self.status = self.s.exportFailed
+                self.statusToken = .exportFailed
             }
         }
     }
@@ -1098,29 +1444,36 @@ final class EditorModel: ObservableObject {
         writeProject(to: url)
     }
 
+    /// The open document as it would be written to disk. Shared by Save Project
+    /// and by the crash-recovery copy, so the two can never drift apart.
+    private func makeProject() -> RetouchProject? {
+        guard let imageURL else { return nil }
+        return RetouchProject(imagePath: imageURL.path,
+                              adjustments: adjustments,
+                              exportFormat: exportFormat.rawValue,
+                              exportQuality: exportQuality,
+                              autoRetouchStrength: autoRetouchStrength,
+                              autoColorStrength: autoColorStrength,
+                              crop: appliedCrop,
+                              healSpots: healSpots.isEmpty ? nil : healSpots)
+    }
+
     private func writeProject(to url: URL) {
-        guard let imageURL else { return }
-        let project = RetouchProject(imagePath: imageURL.path,
-                                     adjustments: adjustments,
-                                     exportFormat: exportFormat.rawValue,
-                                     exportQuality: exportQuality,
-                                     autoRetouchStrength: autoRetouchStrength,
-                                     autoColorStrength: autoColorStrength,
-                                     crop: appliedCrop,
-                                     healSpots: healSpots.isEmpty ? nil : healSpots)
+        guard let project = makeProject() else { return }
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(project).write(to: url, options: .atomic)
             projectURL = url
+            recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
             // protect until the next change.
             cleanState = currentState
             cleanCrop = appliedCrop
             updateCleanState()
-            status = s.projectSaved(url.lastPathComponent)
+            statusToken = .projectSaved(url.lastPathComponent)
         } catch {
-            status = s.projectSaveFailed
+            statusToken = .projectSaveFailed
         }
     }
 
@@ -1137,17 +1490,18 @@ final class EditorModel: ObservableObject {
     /// Opening a project replaces the current photo, so it shares the discard
     /// guard with normal loading.
     func openProject(at url: URL) {
+        offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
         do {
             let project = try JSONDecoder().decode(RetouchProject.self, from: Data(contentsOf: url))
             let source = URL(fileURLWithPath: project.imagePath)
             guard FileManager.default.fileExists(atPath: source.path) else {
-                status = s.projectPhotoMissing
+                statusToken = .projectPhotoMissing
                 return
             }
             load(url: source, restoring: project, projectURL: url)
         } catch {
-            status = s.projectOpenFailed
+            statusToken = .projectOpenFailed
         }
     }
 
@@ -1188,13 +1542,13 @@ final class EditorModel: ObservableObject {
         let previewMaxDimension = self.previewMaxDimension
 
         isBusy = true
-        status = s.batchStarting
+        statusToken = .batchStarting
 
         batchTask = Task { [weak self] in
             var saved = 0
             for (index, url) in urls.enumerated() {
                 if Task.isCancelled { break }
-                self?.status = self?.s.batchProgress(index + 1, urls.count) ?? ""
+                self?.statusToken = .batchProgress(index + 1, urls.count)
 
                 let success = await Task.detached(priority: .userInitiated) { () -> Bool in
                     guard let result = processor.load(from: url,
@@ -1202,9 +1556,19 @@ final class EditorModel: ObservableObject {
                                                       crop: crop) else {
                         return false
                     }
+                    var masks = result.masksFull
+                    if adjustments.usesPersonTools, masks?.person == nil,
+                       let analysis = PersonAnalyzer.analysis(for: result.sourceFull) {
+                        masks = masks.map { set in
+                            var copy = set
+                            copy.person = analysis.mask
+                            copy.pose = analysis.pose
+                            return copy
+                        } ?? MaskSet.personOnly(analysis.mask, pose: analysis.pose)
+                    }
                     let processed = processor.process(result.sourceFull,
                                                       adjustments: adjustments,
-                                                      masks: result.masksFull,
+                                                      masks: masks,
                                                       faces: result.faces)
                     let base = url.deletingPathExtension().lastPathComponent
                     var out = folder.appendingPathComponent("\(base)-retouched.\(format.fileExtension)")
@@ -1224,7 +1588,16 @@ final class EditorModel: ObservableObject {
             guard let self, self.batchGeneration == batch else { return }
             self.batchTask = nil
             self.isBusy = false
-            self.status = self.s.batchFinished(saved, urls.count)
+            self.statusToken = .batchFinished(saved, urls.count)
         }
     }
+}
+
+/// State of the subject silhouette Body and Background rely on.
+enum SubjectMaskState {
+    case unknown
+    case detecting
+    case available
+    /// Vision found no subject; the two scene tools have nothing to separate.
+    case unavailable
 }

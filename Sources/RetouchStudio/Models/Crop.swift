@@ -13,13 +13,7 @@ enum CropAspect: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .free: return "Free"
-        case .original: return "Original"
-        case .square: return "1:1"
-        case .portrait: return "4:5"
-        case .wide: return "16:9"
-        }
+        L10n.current.cropAspectTitle(self)
     }
 
     /// Target width ÷ height in pixels. `nil` leaves both edges free.

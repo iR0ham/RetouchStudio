@@ -39,7 +39,7 @@ struct Icon: View {
             .accessibilityLabel(Text(name))
         } else {
             Image(systemName: name)
-                .font(.system(size: size * 0.8, weight: emphasised ? .semibold : .regular))
+                .font(Theme.Font.face(size: size * 0.8, weight: emphasised ? .semibold : .regular))
         }
     }
 

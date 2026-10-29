@@ -41,6 +41,8 @@ enum SelfCheck {
         passed = checkSyntheticPortrait(outDirectory: outDirectory) && passed
         print("-- auto color/light vs auto retouch separation --")
         passed = checkAutoSeparation() && passed
+        print("-- auto retouch follows the skin it measures --")
+        passed = checkAutoRetouchAdapts() && passed
         print("-- auto color/light reads the tonal range --")
         passed = checkAutoColorLevels() && passed
         print("-- mask convention (opaque grayscale) --")
@@ -65,13 +67,30 @@ enum SelfCheck {
         passed = checkCropGeometry() && passed
         passed = checkCropLoad(outDirectory: outDirectory) && passed
         passed = checkProjectRoundTrip() && passed
+        passed = checkExtendedCodec() && passed
         passed = checkCropProjectFlow(outDirectory: outDirectory) && passed
         print("-- manual healing brush --")
         passed = checkManualHealing() && passed
+        print("-- smart analyze reads spots, keeps groups apart --")
+        passed = checkSmartAnalyzer() && passed
         print("-- looks: colour cube and grain --")
         passed = checkLooksAndGrain() && passed
         print("-- makeup: lips, cheeks and brows --")
         passed = checkMakeup() && passed
+        print("-- hair dye, shine and contour masks --")
+        passed = checkHairAndContour() && passed
+        print("-- split tone and luminance-only detail --")
+        passed = checkToneAndDetailAccuracy() && passed
+        print("-- tone curve and HSL target their bands --")
+        passed = checkToneCurveAndHSL() && passed
+        print("-- teeth whitening targets yellow enamel --")
+        passed = checkYellowTeeth() && passed
+        print("-- body and background follow the person mask --")
+        passed = checkSceneTools() && passed
+        print("-- pose-aware body shaping --")
+        passed = checkPoseShaping() && passed
+        print("-- reshape holds protected features in place --")
+        passed = checkReshapeProtection() && passed
         print("-- preset library --")
         passed = checkPresetLibrary() && passed
         if let facePath {
@@ -387,7 +406,7 @@ enum SelfCheck {
         }
         ok = wellStocked && ok
 
-        for (label, values) in [("id", Preset.all.map(\.id)),
+        for (label, values) in [("id", Preset.all.map { $0.id.rawValue }),
                                 ("name", Preset.all.map(\.title))] {
             let repeats = Set(values).count != values.count
             print("  \(repeats ? "✗" : "✓") every \(label) is unique")
@@ -679,21 +698,7 @@ enum SelfCheck {
             return false
         }
 
-        var face = FaceGeometry.synthetic(
-            boundingBox: CGRect(x: 0.28, y: 0.42, width: 0.44, height: 0.42),
-            faceContour: [CGPoint(x: 0.30, y: 0.44), CGPoint(x: 0.70, y: 0.44),
-                          CGPoint(x: 0.74, y: 0.62), CGPoint(x: 0.70, y: 0.82),
-                          CGPoint(x: 0.30, y: 0.82), CGPoint(x: 0.26, y: 0.62)],
-            leftEye: [CGPoint(x: 0.38, y: 0.63), CGPoint(x: 0.46, y: 0.63),
-                           CGPoint(x: 0.46, y: 0.67), CGPoint(x: 0.38, y: 0.67)],
-            rightEye: [],
-            leftEyebrow: [], rightEyebrow: [],
-            outerLips: [CGPoint(x: 0.44, y: 0.50), CGPoint(x: 0.56, y: 0.50),
-                         CGPoint(x: 0.56, y: 0.535), CGPoint(x: 0.44, y: 0.535)],
-            innerLips: [], nose: [])
-        // The production load path always measures the eyes before Auto Retouch
-        // runs; a hand-built fixture has to say so too.
-        face.hasUsableEyes = true
+        let face = syntheticFace()
 
         let extent = src.extent
         let processor = ImageProcessor.shared
@@ -701,10 +706,9 @@ enum SelfCheck {
         let maskBuffer = masks?.skin.flatMap { AutoAnalyzer.analysisBuffer($0) }
 
         let colorPatch = AutoAnalyzer.autoColorLight(buffer)
-        let retouchPatch = AutoAnalyzer.autoRetouch(buffer,
-                                                    skinMask: maskBuffer,
-                                                    faces: [face],
-                                                    globalMedianLuminance: AutoAnalyzer.stats(buffer).medianLuminance)
+        let retouchPatch = SmartAnalyzer.analyze(buffer: buffer,
+                                                 skinMask: maskBuffer,
+                                                 faces: [face]).retouch
 
         // «خودکار رنگ و نور» نباید هیچ فیلد رتوشی را تغییر دهد.
         let colorTouchesRetouch = colorPatch.smooth != 0 || colorPatch.blemish != 0
@@ -750,6 +754,52 @@ enum SelfCheck {
 
         return !colorTouchesRetouch && !retouchTouchesColor && colorIsUseful && retouchIsUseful
             && colorSurvived && bothPresent && reverseOK
+    }
+
+    // MARK: - ۵-ب) خودکار باید به هر عکس جواب بدهد، نه یک عدد ثابت
+
+    /// The failure this replaces: one roughness number, read off the whole
+    /// frame, produced the same suggestion for every photo in the corpus — and
+    /// the same amount of it, at the cap. Two portraits that differ only in
+    /// their skin have to come out different, and neither may be darkened.
+    ///
+    /// The suggestion is taken through the same face crop the app builds,
+    /// because that is where the measurement now happens: on the 512 px
+    /// analysis buffer a pore is a third of a pixel and disappears.
+    private static func checkAutoRetouchAdapts() -> Bool {
+        func suggestion(grain: Bool, blemishes: Bool) -> Adjustments? {
+            guard let cg = makeSyntheticPortrait(width: 700, height: 950,
+                                                 grain: grain, blemishes: blemishes) else { return nil }
+            let source = CIImage(cgImage: cg)
+            let face = syntheticFace()
+            guard let buffer = AutoAnalyzer.analysisBuffer(source),
+                  let crop = ImageProcessor.shared.faceCrop(for: face, in: source, skinMask: nil) else { return nil }
+            return SmartAnalyzer.analyze(buffer: buffer, skinMask: nil,
+                                         faces: [face], crops: [crop]).retouch
+        }
+
+        guard let clean = suggestion(grain: false, blemishes: false),
+              let textured = suggestion(grain: true, blemishes: true) else {
+            print("  ✗ could not analyse the synthetic portraits")
+            return false
+        }
+        print("     clean skin → smooth=\(fmt(clean.smooth)) texture=\(fmt(clean.texturePreserve)) "
+            + "blemish=\(fmt(clean.blemish)) wrinkle=\(fmt(clean.wrinkle)) bright=\(fmt(clean.skinBrighten))")
+        print("     grained skin → smooth=\(fmt(textured.smooth)) texture=\(fmt(textured.texturePreserve)) "
+            + "blemish=\(fmt(textured.blemish)) wrinkle=\(fmt(textured.wrinkle)) bright=\(fmt(textured.skinBrighten))")
+
+        let adapts = textured.smooth > clean.smooth + 5
+        let gentleOnClean = clean.smooth <= 10
+        let neverDarkens = clean.skinBrighten >= 0 && textured.skinBrighten >= 0
+        let textureFollows = textured.texturePreserve <= clean.texturePreserve
+        let capped = textured.smooth <= 26 && textured.wrinkle <= 16 && textured.darkCircles <= 24
+
+        print("  \(adapts ? "✓" : "✗") Auto Retouch reads the skin, not a constant")
+        print("  \(gentleOnClean ? "✓" : "✗") clean skin gets a light hand (smooth ≤ 10)")
+        print("  \(neverDarkens ? "✓" : "✗") Auto Retouch never takes light away from skin")
+        print("  \(textureFollows ? "✓" : "✗") more smoothing keeps less texture")
+        print("  \(capped ? "✓" : "✗") every suggestion stays inside its cap")
+        return adapts && gentleOnClean && neverDarkens && textureFollows && capped
     }
 
     private static func fmt(_ value: Double) -> String { String(format: "%.0f", value) }
@@ -932,10 +982,11 @@ enum SelfCheck {
             print("  ✗ could not build analysis buffers")
             return false
         }
-        let patch = AutoAnalyzer.autoRetouch(buffer,
-                                             skinMask: maskBuffer,
-                                             faces: faces,
-                                             globalMedianLuminance: AutoAnalyzer.stats(buffer).medianLuminance)
+        let crops = faces.map { processor.faceCrop(for: $0, in: source, skinMask: skinMask) }
+        let patch = SmartAnalyzer.analyze(buffer: buffer,
+                                          skinMask: maskBuffer,
+                                          faces: faces,
+                                          crops: crops).retouch
         print("  • patch: smooth=\(fmt(patch.smooth)) blemish=\(fmt(patch.blemish)) skinBrighten=\(fmt(patch.skinBrighten)) eyes=\(fmt(patch.eyeBrighten))")
 
         guard let before = processor.renderCGImage(source, scale: 1),
@@ -988,13 +1039,24 @@ enum SelfCheck {
         let outsideMean = outsideDelta / outsideCount
         let ratio = outsideMean / max(insideMean, 1e-6)
 
-        // Only skin is measured here (eyes and lips are outside the mask), so
-        // the expected delta is small; 0.5 still proves a real change while
-        // staying above the untouched background by more than an order of
-        // magnitude.
-        let faceChanged = insideMean > 0.5
+        // Only skin is measured here (eyes and lips are outside the mask), so a
+        // real edit shows up as a small number. What counts as real now depends
+        // on what the analyzer asked for: on a face whose own measurements say
+        // it is already clean, a visible difference *is* the bug this whole
+        // rewrite set out to fix.
+        //
+        // Blemish and under-eye work are deliberately not in the sum. A healed
+        // spot moves a couple of hundred pixels and the under-eye band sits
+        // partly outside the skin mask this mean is taken over, so neither can
+        // show up in it however strong the suggestion is. Both have their own
+        // pixel tests elsewhere (`checkHealing`, `checkSmartAnalyzer`).
+        let asksForWork = patch.smooth + patch.wrinkle + patch.skinToneEvens
+            + patch.skinBrighten > 20
+        let faceChanged = asksForWork ? insideMean > 0.25 : insideMean < 1.2
         let backgroundIntact = ratio < 0.25
-        print("  \(faceChanged ? "✓" : "✗") face region changed: mean |Δ| = \(String(format: "%.2f", insideMean)) (\(Int(insideCount)) px)")
+        print("  \(faceChanged ? "✓" : "✗") \(asksForWork ? "face region changed" : "clean skin left alone"): "
+            + "mean |Δ| = \(String(format: "%.2f", insideMean)) (\(Int(insideCount)) px, "
+            + "expect \(asksForWork ? "> 0.25" : "< 1.2"))")
         print("  \(backgroundIntact ? "✓" : "✗") background nearly untouched: mean |Δ| = \(String(format: "%.2f", outsideMean)) (\(Int(outsideCount)) px), ratio = \(String(format: "%.3f", ratio)) (expect < 0.25)")
         return faceChanged && backgroundIntact
     }
@@ -1818,7 +1880,8 @@ enum SelfCheck {
         // of that and must not move.
         let stamp = HealSpot(center: CGPoint(x: 0.25, y: 0.25), radius: 0.04)
         guard let healing = processor.spotsMask(extent: image.extent, spots: [stamp]),
-              let maskImage = processor.renderCGImage(healing.mask, scale: 1),
+              let pass = healing.passes.first,
+              let maskImage = processor.renderCGImage(pass.mask, scale: 1),
               let healedCG = processor.renderCGImage(
                   processor.process(image, adjustments: .zero, masks: nil, spots: healing),
                   scale: 1) else {
@@ -1865,7 +1928,148 @@ enum SelfCheck {
         let droppedOK = HealGeometry.workingSpots([outside], crop: crop).isEmpty
         print("  \(droppedOK ? "✓" : "✗") a stamp outside the crop leaves the frame")
 
-        return maskOK && clearedOK && untouchedOK && textureOK && roundTripOK && droppedOK
+        // A small stamp must not inherit the repair width of a large one:
+        // that is what turns a pinprick into a smeared patch. Stamps are
+        // grouped by size and each group runs at its own radius.
+        let mixed = [stamp, HealSpot(center: CGPoint(x: 0.75, y: 0.75), radius: 0.008)]
+        let mixedRadii = processor.spotsMask(extent: image.extent, spots: mixed)?
+            .passes.map(\.radius).sorted() ?? []
+        let radiiOK = mixedRadii.count == 2 && mixedRadii[1] >= mixedRadii[0] * 2
+        print("  \(radiiOK ? "✓" : "✗") stamps keep their own radius (passes: \(mixedRadii.map { fmt(Double($0)) }.joined(separator: ", ")))")
+
+        return maskOK && clearedOK && untouchedOK && textureOK && roundTripOK
+            && droppedOK && radiiOK
+    }
+
+    // MARK: - Smart Analyze
+
+    /// The report is only useful if three things hold: it finds the blemishes
+    /// that are really there, it does not invent them on smooth skin, and it
+    /// keeps retouch values out of the color/light patch (and the other way
+    /// around), since each group has its own toggle.
+    private static func checkSmartAnalyzer() -> Bool {
+        let size = 240
+        // Blemishes belong on the cheeks, clear of the eye lens and the lip
+        // shield, so the fixture puts them there and expects them back.
+        let spotsAt = [CGRect(x: 55, y: 103, width: 10, height: 10),
+                       CGRect(x: 175, y: 103, width: 10, height: 10)]
+        guard let base = makeMarkedFixture(size: size, marks: spotsAt),
+              let buffer = AutoAnalyzer.analysisBuffer(CIImage(cgImage: base)) else {
+            print("  ✗ could not build the smart fixture")
+            return false
+        }
+
+        func quad(_ r: CGRect) -> [CGPoint] {
+            [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+             CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+        }
+        let box = CGRect(x: 0.08, y: 0.08, width: 0.84, height: 0.84)
+        let face = FaceGeometry.synthetic(
+            boundingBox: box,
+            faceContour: quad(box),
+            leftEye: quad(CGRect(x: 0.28, y: 0.58, width: 0.16, height: 0.10)),
+            rightEye: quad(CGRect(x: 0.56, y: 0.58, width: 0.16, height: 0.10)),
+            outerLips: quad(CGRect(x: 0.42, y: 0.30, width: 0.16, height: 0.08)))
+
+        // The two discs sit at top-left normalized (0.25, 0.55) and
+        // (0.75, 0.55).
+        let spots = SmartAnalyzer.detectSpots(in: buffer, mask: nil, near: face)
+        func found(_ point: CGPoint) -> Bool {
+            spots.contains { hypot($0.center.x - point.x, $0.center.y - point.y) < 0.06 }
+        }
+        let foundA = found(CGPoint(x: 0.25, y: 0.55))
+        let foundB = found(CGPoint(x: 0.75, y: 0.55))
+        // Grain must not be offered as a blemish: the fixture holds two spots,
+        // so anything beyond a couple of extras is a false positive.
+        let quiet = spots.count <= 4
+        print("  \(foundA && foundB ? "✓" : "✗") both blemishes located: \(spots.count) spot(s) reported")
+        print("  \(quiet ? "✓" : "✗") grain is not offered as blemishes (expect ≤ 4)")
+
+        // A dark disc on the eye or the lips is structure, not pigment: the
+        // report must leave both alone even though they match a spot's shape.
+        // The coordinates land on the left eye opening and on the lower lip.
+        let guardedAt = [CGRect(x: 81, y: 146, width: 10, height: 10),
+                         CGRect(x: 115, y: 77, width: 10, height: 10)]
+        guard let guarded = makeMarkedFixture(size: size, marks: guardedAt),
+              let guardedBuffer = AutoAnalyzer.analysisBuffer(CIImage(cgImage: guarded)) else {
+            print("  ✗ could not build the guarded fixture")
+            return false
+        }
+        let guardedSpots = SmartAnalyzer.detectSpots(in: guardedBuffer, mask: nil, near: face)
+        let guardedOK = guardedSpots.isEmpty
+        print("  \(guardedOK ? "✓" : "✗") spots on the eye and lips are ignored (\(guardedSpots.count) reported)")
+
+        // A small face in a large frame. The discs are nine pixels wide with
+        // a 144 px face, so the detector has to size its scales to the face,
+        // not to the photo, or it finds nothing at all.
+        let smallSize = 720
+        let smallBox = CGRect(x: 0.40, y: 0.40, width: 0.20, height: 0.20)
+        let smallFace = FaceGeometry.synthetic(
+            boundingBox: smallBox,
+            faceContour: quad(smallBox),
+            leftEye: quad(CGRect(x: 0.425, y: 0.535, width: 0.030, height: 0.015)),
+            rightEye: quad(CGRect(x: 0.545, y: 0.535, width: 0.030, height: 0.015)),
+            outerLips: quad(CGRect(x: 0.475, y: 0.440, width: 0.050, height: 0.015)),
+            nose: quad(CGRect(x: 0.485, y: 0.470, width: 0.030, height: 0.075)))
+        // Cheeks at top-left normalized (0.46, 0.49) and (0.54, 0.49).
+        let smallSpots = [CGRect(x: 327, y: 363, width: 9, height: 9),
+                          CGRect(x: 384, y: 363, width: 9, height: 9)]
+        guard let smallBase = makeMarkedFixture(size: smallSize, marks: smallSpots),
+              let smallBuffer = AutoAnalyzer.analysisBuffer(CIImage(cgImage: smallBase)) else {
+            print("  ✗ could not build the small-face fixture")
+            return false
+        }
+        let smallSpotsReported = SmartAnalyzer.detectSpots(
+            in: smallBuffer, mask: nil, near: smallFace)
+        func near(_ reported: [SmartAnalyzer.Spot], _ point: CGPoint) -> Bool {
+            reported.contains { hypot($0.center.x - point.x, $0.center.y - point.y) < 0.02 }
+        }
+        let smallOK = near(smallSpotsReported, CGPoint(x: 0.46, y: 0.49))
+            && near(smallSpotsReported, CGPoint(x: 0.54, y: 0.49))
+        print("  \(smallOK ? "✓" : "✗") a small face still reads its blemishes (\(smallSpotsReported.count) reported)")
+
+        // Structure on the same small face: a frame across the eyes, a disc
+        // on the nose tip and a strand of hair over the forehead. None of
+        // them is pigment, so the report has to stay empty.
+        let structureMarks = [
+            CGRect(x: 288, y: 387, width: 144, height: 3),   // frame
+            CGRect(x: 357, y: 375, width: 6, height: 6),     // nose tip
+            CGRect(x: 344, y: 400, width: 2, height: 24)     // hair
+        ]
+        guard let structure = makeMarkedFixture(size: smallSize, marks: structureMarks),
+              let structureBuffer = AutoAnalyzer.analysisBuffer(CIImage(cgImage: structure)) else {
+            print("  ✗ could not build the structure fixture")
+            return false
+        }
+        let structureSpots = SmartAnalyzer.detectSpots(
+            in: structureBuffer, mask: nil, near: smallFace)
+        let structureOK = structureSpots.isEmpty
+        print("  \(structureOK ? "✓" : "✗") frame, nose and hair are not offered (\(structureSpots.count) reported)")
+
+        let report = SmartAnalyzer.analyze(buffer: buffer, skinMask: nil, faces: [face])
+        let findingsOK = report.faces.count == 1 && !report.faces[0].findings.isEmpty
+        print("  \(findingsOK ? "✓" : "✗") one face read with findings (\(report.faces.first?.findings.count ?? 0))")
+
+        // Each patch must carry only its own group.
+        let retouchClean = report.retouch.exposure == 0 && report.retouch.contrast == 0
+            && report.retouch.warmth == 0 && report.retouch.clarity == 0
+        let colorClean = report.colorLight.smooth == 0 && report.colorLight.blemish == 0
+            && report.colorLight.wrinkle == 0
+        print("  \(retouchClean ? "✓" : "✗") retouch patch leaves color/light alone")
+        print("  \(colorClean ? "✓" : "✗") color patch leaves retouch alone")
+
+        // Smooth skin must not produce suggestions.
+        guard let clean = makeTonalFixture(size: size, low: 0.35, high: 0.75),
+              let cleanBuffer = AutoAnalyzer.analysisBuffer(CIImage(cgImage: clean)) else {
+            print("  ✗ could not build the clean fixture")
+            return false
+        }
+        let cleanSpots = SmartAnalyzer.detectSpots(in: cleanBuffer, mask: nil, near: face)
+        let noFalsePositives = cleanSpots.isEmpty
+        print("  \(noFalsePositives ? "✓" : "✗") smooth skin reports \(cleanSpots.count) spot(s) (expect 0)")
+
+        return foundA && foundB && quiet && guardedOK && smallOK && structureOK
+            && findingsOK && retouchClean && colorClean && noFalsePositives
     }
 
     // MARK: - Looks: colour cube and grain
@@ -2266,6 +2470,854 @@ enum SelfCheck {
         return Double(channels.r - channels.b)
     }
 
+    // MARK: - Tone, detail and enamel accuracy
+
+    /// The Persona-grade standards that are easy to get wrong: split toning has
+    /// to move shadows and highlights in opposite directions, and sharpening
+    /// has to raise edge contrast without touching chroma.
+    private static func checkToneAndDetailAccuracy() -> Bool {
+        var passed = true
+        let processor = ImageProcessor.shared
+
+        guard let ramp = makeRampImage(size: 256) else {
+            print("  ✗ could not build the ramp fixture")
+            return false
+        }
+        let rampCI = CIImage(cgImage: ramp)
+        guard let baseline = processor.renderCGImage(rampCI, scale: 1),
+              let toned = processor.renderCGImage(LookEngine.applySplitTone(rampCI, strength: 100), scale: 1) else {
+            print("  ✗ could not render the split-tone fixture")
+            return false
+        }
+
+        let shadowRect = CGRect(x: 0.05, y: 0.06, width: 0.20, height: 0.10)
+        let highlightRect = CGRect(x: 0.05, y: 0.84, width: 0.20, height: 0.10)
+        if let sb = meanChannels(baseline, normalized: shadowRect),
+           let sa = meanChannels(toned, normalized: shadowRect),
+           let hb = meanChannels(baseline, normalized: highlightRect),
+           let ha = meanChannels(toned, normalized: highlightRect) {
+            let coolShift = (sa.b - sa.r) - (sb.b - sb.r)
+            let warmShift = (ha.r - ha.b) - (hb.r - hb.b)
+            let splitOK = coolShift >= 3 && warmShift >= 3
+            print("  \(splitOK ? "✓" : "✗") split tone: shadows cool by \(coolShift), highlights warm by \(warmShift) levels")
+            passed = splitOK && passed
+        } else {
+            print("  ✗ could not read the split-tone samples")
+            passed = false
+        }
+
+        let splitNoop = meanAbsoluteDifference(baseline,
+                                               processor.renderCGImage(LookEngine.applySplitTone(rampCI, strength: 0), scale: 1) ?? baseline) ?? -1
+        let splitNoopOK = splitNoop == 0
+        print("  \(splitNoopOK ? "✓" : "✗") split tone at zero changes nothing: Δ=\(splitNoop)")
+        passed = splitNoopOK && passed
+
+        // Luminance-only detail. A warm step is sharpened, then the original
+        // colour is put back under the new luminance: the transition must gain
+        // contrast while the two flat fields keep their hue.
+        guard let edge = makeLumaEdgeImage(size: 256) else {
+            print("  ✗ could not build the luminance-edge fixture")
+            return false
+        }
+        let edgeCI = CIImage(cgImage: edge)
+        guard let edgeBase = processor.renderCGImage(edgeCI, scale: 1) else {
+            print("  ✗ could not render the luminance-edge fixture")
+            return false
+        }
+        let sharpened = edgeCI.applyingFilter("CIUnsharpMask", parameters: [
+            kCIInputRadiusKey: 3.0,
+            kCIInputIntensityKey: 1.0
+        ])
+        let kept = SkinEngine.keepLuminance(sharpened, over: edgeCI)
+        guard let keptImage = processor.renderCGImage(kept, scale: 1) else {
+            print("  ✗ could not render the luminance-kept result")
+            return false
+        }
+
+        let flatLeft = sampleDelta(edgeBase, keptImage, at: CGPoint(x: 0.12, y: 0.5))
+        let flatRight = sampleDelta(edgeBase, keptImage, at: CGPoint(x: 0.88, y: 0.5))
+        let flatOK = flatLeft <= 1 && flatRight <= 1
+
+        let mid = edgeBase.height / 2
+        let band = edgeBase.width / 2 - 8...edgeBase.width / 2 + 8
+        let contrastBefore = lumaRange(edgeBase, x0: band.lowerBound, x1: band.upperBound, y: mid)
+        let contrastAfter = lumaRange(keptImage, x0: band.lowerBound, x1: band.upperBound, y: mid)
+        let stepOK = contrastAfter > contrastBefore + 10
+
+        var chromaDrift: Double = 0
+        if let before = pixel(edgeBase, normalized: CGPoint(x: 0.46, y: 0.5)),
+           let after = pixel(keptImage, normalized: CGPoint(x: 0.46, y: 0.5)) {
+            chromaDrift = Double(max(abs((before.r - before.g) - (after.r - after.g)),
+                                     abs((before.g - before.b) - (after.g - after.b))))
+        } else {
+            chromaDrift = 999
+        }
+        let chromaOK = chromaDrift <= 4
+        let detailOK = flatOK && stepOK && chromaOK
+        print("  \(detailOK ? "✓" : "✗") luminance-only sharpen: edge contrast \(contrastBefore) → "
+            + "\(contrastAfter), chroma drift \(String(format: "%.0f", chromaDrift)), flat Δ "
+            + "\(String(format: "%.1f", max(flatLeft, flatRight)))")
+        passed = detailOK && passed
+
+        return passed
+    }
+
+    /// Peak-to-peak luminance across a horizontal band. A sharper edge means a
+    /// wider range within the same window, not just a steeper midpoint.
+    private static func lumaRange(_ image: CGImage, x0: Int, x1: Int, y: Int) -> Int {
+        var low = Int.max, high = Int.min
+        for x in x0...x1 {
+            guard let value = luminance(image, x: x, y: y) else { continue }
+            low = min(low, value)
+            high = max(high, value)
+        }
+        return high >= low ? high - low : 0
+    }
+
+    /// A warm step from shadow to light. The edge carries luminance only, which
+    /// is what skin texture has and what a luminance-only sharpener can raise
+    /// without inventing colour halos.
+    private static func makeLumaEdgeImage(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.38, green: 0.26, blue: 0.20, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s / 2, height: s))
+        context.setFillColor(CGColor(red: 0.80, green: 0.66, blue: 0.56, alpha: 1))
+        context.fill(CGRect(x: s / 2, y: 0, width: s / 2, height: s))
+        return context.makeImage()
+    }
+
+    /// Yellow stains must come out of the enamel; pink gum has a low green and
+    /// must not be lifted or desaturated by the same pass.
+    private static func checkYellowTeeth() -> Bool {
+        let size = 300
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        guard let fixture = makeYellowTeethImage(size: size) else {
+            print("  ✗ could not build the yellow-teeth fixture")
+            return false
+        }
+        let mouthRect = CGRect(x: 0.30, y: 0.38, width: 0.40, height: 0.20)
+        guard let mask = MaskBuilder.makeMask(extent: extent,
+                                              shapes: [MaskShape(rect: mouthRect, cornerRadius: 0.05)],
+                                              feather: 2) else {
+            print("  ✗ could not build the mouth mask")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1),
+              let whitened = processor.renderCGImage(
+                  SkinEngine.whitenTeeth(source, strength: 100, mask: mask), scale: 1) else {
+            print("  ✗ could not render the whitening pass")
+            return false
+        }
+
+        let teethRect = CGRect(x: 0.37, y: 0.42, width: 0.26, height: 0.08)
+        let gumRect = CGRect(x: 0.37, y: 0.525, width: 0.26, height: 0.035)
+        guard let teethBefore = meanChannels(baseline, normalized: teethRect),
+              let teethAfter = meanChannels(whitened, normalized: teethRect),
+              let gumBefore = meanChannels(baseline, normalized: gumRect),
+              let gumAfter = meanChannels(whitened, normalized: gumRect) else {
+            print("  ✗ could not sample the mouth regions")
+            return false
+        }
+        func yellow(_ c: (r: Int, g: Int, b: Int)) -> Int { min(c.r, c.g) - c.b }
+        let before = yellow(teethBefore)
+        let after = yellow(teethAfter)
+        let yellowOK = before >= 30 && after < before - 20
+        let gumDelta = meanColorDifference(baseline, whitened, normalized: gumRect)
+        let gumOK = gumDelta <= 2
+        let teethLumaBefore = (teethBefore.r + teethBefore.g + teethBefore.b) / 3
+        let teethLumaAfter = (teethAfter.r + teethAfter.g + teethAfter.b) / 3
+        let liftOK = teethLumaAfter > teethLumaBefore
+        let allOK = yellowOK && gumOK && liftOK
+        print("  \(allOK ? "✓" : "✗") teeth: yellow \(before) → \(after), enamel \(teethLumaBefore) → \(teethLumaAfter), gum Δ=\(String(format: "%.1f", gumDelta))")
+        return allOK
+    }
+
+    /// A mouth with yellowed enamel and a pink gum strip above it.
+    private static func makeYellowTeethImage(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+        context.setFillColor(CGColor(red: 0.30, green: 0.10, blue: 0.12, alpha: 1))
+        context.fill(CGRect(x: s * 0.30, y: s * 0.38, width: s * 0.40, height: s * 0.20))
+        context.setFillColor(CGColor(red: 0.74, green: 0.68, blue: 0.44, alpha: 1))
+        context.fill(CGRect(x: s * 0.34, y: s * 0.40, width: s * 0.32, height: s * 0.12))
+        context.setFillColor(CGColor(red: 0.72, green: 0.30, blue: 0.34, alpha: 1))
+        context.fill(CGRect(x: s * 0.34, y: s * 0.52, width: s * 0.32, height: s * 0.05))
+        return context.makeImage()
+    }
+
+    // MARK: - Body and background
+
+    /// The person mask is the contract for both scene tools: body work stays on
+    /// the subject's skin, and background work never touches the subject.
+    private static func checkSceneTools() -> Bool {
+        var passed = true
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let processor = ImageProcessor.shared
+        guard let fixture = makeSceneFixture(size: size) else {
+            print("  ✗ could not build the scene fixture")
+            return false
+        }
+        let personRect = CGRect(x: 0.30, y: 0.08, width: 0.40, height: 0.84)
+        guard let person = MaskBuilder.makeMask(extent: extent,
+                                                shapes: [MaskShape(rect: personRect, cornerRadius: 0.06)],
+                                                feather: 2) else {
+            print("  ✗ could not build the person mask")
+            return false
+        }
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else {
+            print("  ✗ could not render the scene fixture")
+            return false
+        }
+
+        let skinRect = CGRect(x: 0.38, y: 0.55, width: 0.24, height: 0.28)
+        let shirtRect = CGRect(x: 0.38, y: 0.14, width: 0.24, height: 0.14)
+        let backRect = CGRect(x: 0.02, y: 0.40, width: 0.18, height: 0.20)
+
+        // 1) Body skin = person ∩ broad skin gate.
+        let bodySkin = SceneEngine.bodySkinMask(person: person, image: source)
+        guard let bodySkinImage = processor.renderCGImage(bodySkin, scale: 1) else {
+            print("  ✗ could not render the body-skin mask")
+            return false
+        }
+        let skinCover = maskCoverage(bodySkinImage, normalized: skinRect)
+        let shirtCover = maskCoverage(bodySkinImage, normalized: shirtRect)
+        let outsideCover = maskCoverage(bodySkinImage, normalized: backRect)
+        let skinMaskOK = skinCover > 0.55 && shirtCover < 0.20 && outsideCover < 0.05
+        print("  \(skinMaskOK ? "✓" : "✗") body skin mask: skin \(String(format: "%.2f", skinCover)), "
+            + "shirt \(String(format: "%.2f", shirtCover)), background \(String(format: "%.2f", outsideCover))")
+        passed = skinMaskOK && passed
+
+        // 2) Background: blurred and graded outside, untouched inside.
+        guard let blurredImage = processor.renderCGImage(
+            SceneEngine.applyBackground(source, person: person,
+                                        blur: 100, tone: 0, saturation: 0, scale: 1), scale: 1) else {
+            print("  ✗ could not render the background pass")
+            return false
+        }
+        let backDelta = meanColorDifference(baseline, blurredImage, normalized: backRect)
+        let subjectDelta = meanColorDifference(baseline, blurredImage, normalized: skinRect)
+        let backBefore = adjacentVariation(cropped(baseline, backRect) ?? baseline)
+        let backAfter = adjacentVariation(cropped(blurredImage, backRect) ?? blurredImage)
+        let backgroundOK = backDelta > 1 && subjectDelta <= 0.5 && backAfter < backBefore * 0.7
+        print("  \(backgroundOK ? "✓" : "✗") background: texture \(String(format: "%.1f", backBefore)) → "
+            + "\(String(format: "%.1f", backAfter)), Δ \(String(format: "%.1f", backDelta)), subject Δ \(String(format: "%.2f", subjectDelta))")
+        passed = backgroundOK && passed
+
+        // 3) Body slim moves the figure but not the room.
+        guard let slimmed = processor.renderCGImage(
+            FeatureReshaper.applyBodySlim(source, mask: person, amount: 100), scale: 1) else {
+            print("  ✗ could not render the slimming pass")
+            return false
+        }
+        let seamRect = CGRect(x: 0.585, y: 0.46, width: 0.03, height: 0.18)
+        let roomRect = CGRect(x: 0.80, y: 0.40, width: 0.18, height: 0.30)
+        let seamMove = meanColorDifference(baseline, slimmed, normalized: seamRect)
+        let roomMove = meanColorDifference(baseline, slimmed, normalized: roomRect)
+
+        // Direction: the figure must get NARROWER. The first kernel multiplied
+        // by a factor below one, which samples inward and widened the subject —
+        // the seam moved but the body grew. The skin run at mid-height is the
+        // silhouette the slider claims to slim.
+        func skinRun(_ image: CGImage) -> (width: Int, centre: Double)? {
+            let row = image.height / 2
+            var first = -1, last = -1
+            for x in 0..<image.width {
+                guard let p = pixel(image, x: x, y: row),
+                      p.r > 150, p.g > 100, p.b > 80 else { continue }
+                if first < 0 { first = x }
+                last = x
+            }
+            guard first >= 0, last > first else { return nil }
+            return (last - first + 1, Double(first + last) / 2)
+        }
+        let beforeRun = skinRun(baseline)
+        let afterRun = skinRun(slimmed)
+        let slimDirectionOK: Bool
+        if let beforeRun, let afterRun {
+            slimDirectionOK = afterRun.width < beforeRun.width - 8
+                && abs(afterRun.centre - beforeRun.centre) < 6
+        } else {
+            slimDirectionOK = false
+        }
+        let slimOK = seamMove > 5 && roomMove <= 0.5 && slimDirectionOK
+        let widthText: String
+        if let beforeRun, let afterRun {
+            widthText = "figure \(beforeRun.width) → \(afterRun.width) px"
+        } else {
+            widthText = "figure unmeasurable"
+        }
+        print("  \(slimOK ? "✓" : "✗") body slim: seam Δ=\(String(format: "%.1f", seamMove)), background Δ=\(String(format: "%.2f", roomMove)), \(widthText)")
+        passed = slimOK && passed
+
+        // 3b) The subject edge cannot change character between preview and
+        //     export: the feather has to keep up with the blur at every scale.
+        let previewRadii = SceneEngine.backgroundRadii(shortSide: 1800, blur: 100, scale: 1.3)
+        let exportRadii = SceneEngine.backgroundRadii(shortSide: 1800, blur: 100, scale: 3)
+        let previewRatio = previewRadii.feather / max(previewRadii.blur, 1)
+        let exportRatio = exportRadii.feather / max(exportRadii.blur, 1)
+        let parityOK = abs(exportRatio - previewRatio) < 0.01
+            && exportRadii.feather >= exportRadii.blur
+        print("  \(parityOK ? "✓" : "✗") background radii: feather/blur "
+            + String(format: "%.2f", previewRatio) + " at preview, "
+            + String(format: "%.2f", exportRatio) + " at export")
+        passed = parityOK && passed
+
+        // 4) The real pipeline only applies these with a person mask, and does
+        //    nothing at all when there is nobody to separate.
+        var tone = Adjustments()
+        tone.bodyTone = 40
+        tone.backgroundSaturation = 60
+        let withPerson = processor.renderCGImage(
+            processor.process(source, adjustments: tone, masks: .personOnly(person)), scale: 1) ?? baseline
+        let withoutPerson = processor.renderCGImage(
+            processor.process(source, adjustments: tone, masks: nil), scale: 1) ?? baseline
+        let bodyLift = regionMeanLuminance(withPerson, normalized: skinRect)
+            - regionMeanLuminance(baseline, normalized: skinRect)
+        let shirtDelta = meanColorDifference(baseline, withPerson, normalized: shirtRect)
+        let backgroundDelta = meanColorDifference(baseline, withPerson, normalized: backRect)
+        let noPersonDelta = meanAbsoluteDifference(baseline, withoutPerson) ?? -1
+        let pipelineOK = bodyLift > 1 && shirtDelta <= 1 && backgroundDelta > 1 && noPersonDelta == 0
+        print("  \(pipelineOK ? "✓" : "✗") pipeline: body +\(String(format: "%.1f", bodyLift)) levels, "
+            + "shirt Δ=\(String(format: "%.1f", shirtDelta)), background Δ=\(String(format: "%.1f", backgroundDelta)), "
+            + "no person Δ=\(noPersonDelta)")
+        passed = pipelineOK && passed
+
+        // 5) Body, background and the face groups stay independent.
+        var mixed = Adjustments(smooth: 40, exposure: 20)
+        mixed.bodySmooth = 55
+        mixed.backgroundBlur = 60
+        let bodyOnly = mixed.bodyOnly
+        let backgroundOnly = mixed.backgroundOnly
+        let groupOK = mixed.usesPersonTools
+            && bodyOnly.bodySmooth == 55 && bodyOnly.backgroundBlur == 0
+            && backgroundOnly.backgroundBlur == 60 && backgroundOnly.bodySmooth == 0
+            && !Adjustments(smooth: 40).usesPersonTools
+        print("  \(groupOK ? "✓" : "✗") body and background are separate groups that only they need the mask")
+        return groupOK && passed
+    }
+
+    /// A striped background with a skin-coloured figure, a saturated shirt and
+    /// one dark seam inside the figure so a horizontal warp is visible. The
+    /// stripes are 5 px wide on purpose: a 2-px sampling stride stays in phase
+    /// with even widths and would report a perfectly flat background.
+    private static func makeSceneFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        for x in stride(from: 0, to: size, by: 5) {
+            let dark = (x / 5) % 2 == 0
+            context.setFillColor(dark
+                                 ? CGColor(red: 0.10, green: 0.16, blue: 0.18, alpha: 1)
+                                 : CGColor(red: 0.34, green: 0.42, blue: 0.40, alpha: 1))
+            context.fill(CGRect(x: CGFloat(x), y: 0, width: 5, height: s))
+        }
+        context.setFillColor(CGColor(red: 0.80, green: 0.66, blue: 0.57, alpha: 1))
+        context.fill(CGRect(x: s * 0.30, y: s * 0.08, width: s * 0.40, height: s * 0.84))
+        context.setFillColor(CGColor(red: 0.78, green: 0.10, blue: 0.14, alpha: 1))
+        context.fill(CGRect(x: s * 0.30, y: s * 0.08, width: s * 0.40, height: s * 0.24))
+        context.setFillColor(CGColor(red: 0.25, green: 0.18, blue: 0.15, alpha: 1))
+        context.fill(CGRect(x: s * 0.595, y: s * 0.40, width: s * 0.012, height: s * 0.30))
+        return context.makeImage()
+    }
+
+    /// An 8-bit crop of a rendered bitmap, in top-left pixel coordinates.
+    private static func cropped(_ image: CGImage, _ rect: CGRect) -> CGImage? {
+        let bounds = pixelBounds(of: rect, in: image)
+        let width = max(1, bounds.x1 - bounds.x0)
+        let height = max(1, bounds.y1 - bounds.y0)
+        return image.cropping(to: CGRect(x: bounds.x0, y: bounds.y0, width: width, height: height))
+    }
+
+    // MARK: - Tone curve and HSL
+
+    /// The band-targeted grades have to move their own band and leave the
+    /// others alone: a shadow lift that also bleaches highlights is exposure.
+    private static func checkToneCurveAndHSL() -> Bool {
+        var passed = true
+        let size = 320
+        guard let fixture = makeGradingFixture(size: size) else {
+            print("  ✗ could not build the grading fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else {
+            print("  ✗ could not render the grading fixture")
+            return false
+        }
+
+        let shadowRect = CGRect(x: 0.07, y: 0.63, width: 0.16, height: 0.20)
+        let midRect = CGRect(x: 0.40, y: 0.63, width: 0.16, height: 0.20)
+        let highRect = CGRect(x: 0.73, y: 0.63, width: 0.16, height: 0.20)
+        let redRect = CGRect(x: 0.07, y: 0.14, width: 0.20, height: 0.20)
+        let blueRect = CGRect(x: 0.73, y: 0.14, width: 0.20, height: 0.20)
+
+        let shadowBase = regionMeanLuminance(baseline, normalized: shadowRect)
+        let midBase = regionMeanLuminance(baseline, normalized: midRect)
+        let highBase = regionMeanLuminance(baseline, normalized: highRect)
+
+        // 1) A shadow lift stays in the shadows.
+        if let lifted = processor.renderCGImage(
+            LookEngine.applyToneCurve(source, shadows: 70, midtones: 0, highlights: 0), scale: 1) {
+            let shadowLift = regionMeanLuminance(lifted, normalized: shadowRect) - shadowBase
+            let midLift = regionMeanLuminance(lifted, normalized: midRect) - midBase
+            let highHold = abs(regionMeanLuminance(lifted, normalized: highRect) - highBase)
+            let ok = shadowLift > 8 && midLift < shadowLift * 0.5 && highHold <= 2
+            print("  \(ok ? "✓" : "✗") shadow lift: shadows +\(String(format: "%.1f", shadowLift)), "
+                + "mid +\(String(format: "%.1f", midLift)), highlights Δ\(String(format: "%.2f", highHold))")
+            passed = ok && passed
+        } else {
+            print("  ✗ could not render the shadow-lift pass")
+            passed = false
+        }
+
+        // 2) A highlight pull stays in the highlights.
+        if let dropped = processor.renderCGImage(
+            LookEngine.applyToneCurve(source, shadows: 0, midtones: 0, highlights: -70), scale: 1) {
+            let highDrop = highBase - regionMeanLuminance(dropped, normalized: highRect)
+            let shadowHold = abs(regionMeanLuminance(dropped, normalized: shadowRect) - shadowBase)
+            let ok = highDrop > 8 && shadowHold <= 2
+            print("  \(ok ? "✓" : "✗") highlight pull: highlights −\(String(format: "%.1f", highDrop)), "
+                + "shadows Δ\(String(format: "%.2f", shadowHold))")
+            passed = ok && passed
+        } else {
+            print("  ✗ could not render the highlight-pull pass")
+            passed = false
+        }
+
+        // 3) HSL red saturation leaves the blue patch alone.
+        let count = HSLBand.allCases.count
+        let neutral = Array(repeating: 0.0, count: count)
+        var redSat = neutral
+        redSat[HSLBand.red.rawValue] = -100
+        if let desaturated = processor.renderCGImage(
+            LookEngine.applyHSL(source, hue: neutral, saturation: redSat, luminance: neutral), scale: 1),
+           let before = meanChannels(baseline, normalized: redRect),
+           let after = meanChannels(desaturated, normalized: redRect) {
+            let chromaDrop = Double(before.r - before.g) - Double(after.r - after.g)
+            let blueDelta = meanColorDifference(baseline, desaturated, normalized: blueRect)
+            let ok = chromaDrop > 40 && blueDelta <= 3
+            print("  \(ok ? "✓" : "✗") HSL red saturation: red chroma −\(String(format: "%.0f", chromaDrop)), "
+                + "blue Δ\(String(format: "%.2f", blueDelta))")
+            passed = ok && passed
+        } else {
+            print("  ✗ could not render the HSL saturation pass")
+            passed = false
+        }
+
+        // 4) HSL blue luminance lifts the blue patch and holds the red one.
+        var blueLum = neutral
+        blueLum[HSLBand.blue.rawValue] = 100
+        if let lightened = processor.renderCGImage(
+            LookEngine.applyHSL(source, hue: neutral, saturation: neutral, luminance: blueLum), scale: 1) {
+            let blueBase = regionMeanLuminance(baseline, normalized: blueRect)
+            let blueLift = regionMeanLuminance(lightened, normalized: blueRect) - blueBase
+            let redHold = meanColorDifference(baseline, lightened, normalized: redRect)
+            let ok = blueLift > 8 && redHold <= 3
+            print("  \(ok ? "✓" : "✗") HSL blue luminance: blue +\(String(format: "%.1f", blueLift)), "
+                + "red Δ\(String(format: "%.2f", redHold))")
+            passed = ok && passed
+        } else {
+            print("  ✗ could not render the HSL luminance pass")
+            passed = false
+        }
+
+        // 5) HSL hue rotates the red band and nothing else.
+        var redHue = neutral
+        redHue[HSLBand.red.rawValue] = 100
+        if let rotated = processor.renderCGImage(
+            LookEngine.applyHSL(source, hue: redHue, saturation: neutral, luminance: neutral), scale: 1) {
+            let redMove = meanColorDifference(baseline, rotated, normalized: redRect)
+            let blueDelta = meanColorDifference(baseline, rotated, normalized: blueRect)
+            let ok = redMove > 5 && blueDelta <= 3
+            print("  \(ok ? "✓" : "✗") HSL red hue: red Δ\(String(format: "%.1f", redMove)), "
+                + "blue Δ\(String(format: "%.2f", blueDelta))")
+            passed = ok && passed
+        } else {
+            print("  ✗ could not render the HSL hue pass")
+            passed = false
+        }
+        return passed
+    }
+
+    /// Three neutral patches for the curve and a red/blue pair for HSL.
+    private static func makeGradingFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        func fill(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat,
+                  _ r: CGFloat, _ g: CGFloat, _ b: CGFloat) {
+            context.setFillColor(CGColor(red: r, green: g, blue: b, alpha: 1))
+            context.fill(CGRect(x: x * s, y: y * s, width: w * s, height: h * s))
+        }
+        fill(0, 0.55, 1.0 / 3, 0.37, 0.18, 0.18, 0.18)
+        fill(1.0 / 3, 0.55, 1.0 / 3, 0.37, 0.50, 0.50, 0.50)
+        fill(2.0 / 3, 0.55, 1.0 / 3, 0.37, 0.86, 0.86, 0.86)
+        fill(0, 0.08, 0.50, 0.37, 0.80, 0.10, 0.10)
+        fill(0.50, 0.08, 0.50, 0.37, 0.10, 0.20, 0.85)
+        return context.makeImage()
+    }
+
+    // MARK: - Hair and contour
+
+    /// Hair is dyed through its own geometry and contour through the cheek
+    /// hollows; neither may leak onto the face or the room.
+    private static func checkHairAndContour() -> Bool {
+        var passed = true
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        guard let fixture = makeHairContourFixture(size: size) else {
+            print("  ✗ could not build the hair fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let face = makeupFace()
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else {
+            print("  ✗ could not render the hair fixture")
+            return false
+        }
+        guard let masks = processor.buildMasks(extent: extent, faces: [face], image: source) else {
+            print("  ✗ could not build the hair fixture masks")
+            return false
+        }
+        guard let hairMask = masks.hair else {
+            print("  ✗ no hair mask from the fixture")
+            return false
+        }
+        guard let contourMask = masks.contours else {
+            print("  ✗ no contour mask from the fixture")
+            return false
+        }
+        guard let hairImage = processor.renderCGImage(hairMask, scale: 1),
+              let contourImage = processor.renderCGImage(contourMask, scale: 1) else {
+            print("  ✗ could not render the hair or contour masks")
+            return false
+        }
+
+        let bandRect = CGRect(x: 0.42, y: 0.75, width: 0.16, height: 0.12)
+        let sideHairRect = CGRect(x: 0.13, y: 0.36, width: 0.055, height: 0.16)
+        let cheekRect = CGRect(x: 0.225, y: 0.40, width: 0.035, height: 0.14)
+        let outsideRect = CGRect(x: 0.02, y: 0.50, width: 0.08, height: 0.15)
+        let contourRect = CGRect(x: 0.27, y: 0.43, width: 0.06, height: 0.05)
+        let centerRect = CGRect(x: 0.46, y: 0.45, width: 0.08, height: 0.10)
+
+        // 1) The side panels stop at the face silhouette, so skin is not hair.
+        let bandCover = maskCoverage(hairImage, normalized: bandRect)
+        let sideCover = maskCoverage(hairImage, normalized: sideHairRect)
+        let cheekCover = maskCoverage(hairImage, normalized: cheekRect)
+        let maskOK = bandCover > 0.8 && sideCover > 0.5 && cheekCover < 0.1
+        print("  \(maskOK ? "✓" : "✗") hair mask: band \(String(format: "%.2f", bandCover)), "
+            + "side \(String(format: "%.2f", sideCover)), cheek \(String(format: "%.2f", cheekCover))")
+        passed = maskOK && passed
+
+        // 2) Dye changes hair, not cheeks or the room.
+        var dye = Adjustments()
+        dye.hairColor = 100
+        dye.hairTint = MakeupShade.hairAuburn.color
+        let dyed = processor.renderCGImage(
+            processor.process(source, adjustments: dye, masks: masks, faces: [face]), scale: 1) ?? baseline
+        let bandDelta = meanColorDifference(baseline, dyed, normalized: bandRect)
+        let sideDelta = meanColorDifference(baseline, dyed, normalized: sideHairRect)
+        let cheekDelta = meanColorDifference(baseline, dyed, normalized: cheekRect)
+        let roomDelta = meanColorDifference(baseline, dyed, normalized: outsideRect)
+        let dyeOK = bandDelta > 5 && sideDelta > 5 && cheekDelta <= 0.5 && roomDelta <= 0.5
+        print("  \(dyeOK ? "✓" : "✗") hair dye: band Δ\(String(format: "%.1f", bandDelta)), "
+            + "side Δ\(String(format: "%.1f", sideDelta)), cheek Δ\(String(format: "%.2f", cheekDelta)), "
+            + "room Δ\(String(format: "%.2f", roomDelta))")
+        passed = dyeOK && passed
+
+        // 3) Shine lifts the hair band only.
+        var shine = Adjustments()
+        shine.hairShine = 100
+        let shiny = processor.renderCGImage(
+            processor.process(source, adjustments: shine, masks: masks, faces: [face]), scale: 1) ?? baseline
+        let bandLift = regionMeanLuminance(shiny, normalized: bandRect)
+            - regionMeanLuminance(baseline, normalized: bandRect)
+        let shineRoom = meanColorDifference(baseline, shiny, normalized: outsideRect)
+        let shineOK = bandLift > 1.5 && shineRoom <= 0.5
+        print("  \(shineOK ? "✓" : "✗") hair shine: band +\(String(format: "%.1f", bandLift)) levels, "
+            + "room Δ\(String(format: "%.2f", shineRoom))")
+        passed = shineOK && passed
+
+        // 4) Contour darkens the hollow, not the nose or the room.
+        let contourCover = maskCoverage(contourImage, normalized: contourRect)
+        let noseCover = maskCoverage(contourImage, normalized: centerRect)
+        var shade = Adjustments()
+        shade.contour = 100
+        shade.contourColor = MakeupShade.contourDeep.color
+        let contoured = processor.renderCGImage(
+            processor.process(source, adjustments: shade, masks: masks, faces: [face]), scale: 1) ?? baseline
+        let hollowDrop = regionMeanLuminance(baseline, normalized: contourRect)
+            - regionMeanLuminance(contoured, normalized: contourRect)
+        let centerHold = abs(regionMeanLuminance(contoured, normalized: centerRect)
+            - regionMeanLuminance(baseline, normalized: centerRect))
+        let contourRoom = meanColorDifference(baseline, contoured, normalized: outsideRect)
+        let contourOK = contourCover > 0.8 && noseCover < 0.05
+            && hollowDrop > 3 && centerHold <= 1 && contourRoom <= 0.5
+        print("  \(contourOK ? "✓" : "✗") contour: mask \(String(format: "%.2f", contourCover)) "
+            + "(nose \(String(format: "%.2f", noseCover))), hollow −\(String(format: "%.1f", hollowDrop)), "
+            + "centre Δ\(String(format: "%.1f", centerHold)), room Δ\(String(format: "%.2f", contourRoom))")
+        return contourOK && passed
+    }
+
+    /// Skin-toned scene with a dark hair band above the face and dark hair
+    /// panels beside it — the geometry `hairRect` and the side ellipses address.
+    private static func makeHairContourFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+        context.setFillColor(CGColor(red: 0.16, green: 0.12, blue: 0.09, alpha: 1))
+        context.fill(CGRect(x: s * 0.14, y: s * 0.668, width: s * 0.72, height: s * 0.252))
+        context.fill(CGRect(x: s * 0.10, y: s * 0.30, width: s * 0.10, height: s * 0.38))
+        context.fill(CGRect(x: s * 0.80, y: s * 0.30, width: s * 0.10, height: s * 0.38))
+        return context.makeImage()
+    }
+
+    // MARK: - Pose-aware body shaping
+
+    /// A waist control built from a pose must move the silhouette itself —
+    /// narrower for positive values, wider for negative — while the room
+    /// outside the person mask stays bit-for-bit unchanged. The first version
+    /// of this feature squeezed a patch of skin in the middle of the frame and
+    /// never touched the outline; the width measurement here is exactly what
+    /// that version could not pass.
+    private static func checkPoseShaping() -> Bool {
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        guard let fixture = makeSceneFixture(size: size) else {
+            print("  ✗ could not build the scene fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        // The mask is deliberately wider than the figure: the outline has to
+        // move inside the mask window for the measurement to see it at all.
+        guard let baseline = processor.renderCGImage(source, scale: 1),
+              let person = MaskBuilder.makeMask(
+                extent: extent,
+                shapes: [MaskShape(rect: CGRect(x: 0.24, y: 0.04, width: 0.52, height: 0.92),
+                                   cornerRadius: 0.08)],
+                feather: 2) else {
+            print("  ✗ could not prepare the pose fixture")
+            return false
+        }
+
+        func joint(_ x: CGFloat, _ y: CGFloat) -> BodyPose.Joint {
+            BodyPose.Joint(point: CGPoint(x: x, y: y), confidence: 1)
+        }
+        let pose = BodyPose(leftShoulder: joint(0.42, 0.80), rightShoulder: joint(0.58, 0.80),
+                            leftElbow: joint(0.38, 0.66), rightElbow: joint(0.62, 0.66),
+                            leftHip: joint(0.44, 0.50), rightHip: joint(0.56, 0.50),
+                            leftKnee: joint(0.45, 0.22), rightKnee: joint(0.55, 0.22))
+
+        // The waist squeeze peaks 42% of the way up the hip→shoulder axis,
+        // which on this pose is y 0.626 — that is the row the width is read
+        // from. Skin passes the red gate; the shirt and the stripes do not.
+        func skinRun(_ image: CGImage) -> (width: Int, centre: Double)? {
+            let row = Int((1 - 0.626) * CGFloat(image.height))
+            var first = -1, last = -1
+            for x in 0..<image.width {
+                guard let p = pixel(image, x: x, y: row),
+                      p.r > 150, p.g > 100, p.b > 80 else { continue }
+                if first < 0 { first = x }
+                last = x
+            }
+            guard first >= 0, last > first else { return nil }
+            return (last - first + 1, Double(first + last) / 2)
+        }
+
+        var narrow = Adjustments()
+        narrow.bodyWaist = 100
+        var widen = Adjustments()
+        widen.bodyWaist = -100
+        var limbs = Adjustments()
+        limbs.bodyArms = 60
+        limbs.bodyLegs = 60
+        let idleControls = FeatureReshaper.bodyControls(for: pose,
+                                                        adjustments: Adjustments(),
+                                                        extent: extent)
+
+        let narrowControls = FeatureReshaper.bodyControls(for: pose, adjustments: narrow,
+                                                          extent: extent)
+        guard narrowControls.count == 1,
+              let narrowed = processor.renderCGImage(
+                FeatureReshaper.applyBodyShape(source, controls: narrowControls, mask: person),
+                scale: 1),
+              let widened = processor.renderCGImage(
+                FeatureReshaper.applyBodyShape(source,
+                                               controls: FeatureReshaper.bodyControls(
+                                                    for: pose, adjustments: widen, extent: extent),
+                                               mask: person),
+                scale: 1),
+              let before = skinRun(baseline),
+              let afterNarrow = skinRun(narrowed),
+              let afterWide = skinRun(widened) else {
+            print("  ✗ could not render the waist passes")
+            return false
+        }
+
+        let roomRect = CGRect(x: 0.80, y: 0.40, width: 0.16, height: 0.20)
+        let roomMove = meanColorDifference(baseline, narrowed, normalized: roomRect)
+        let narrowOK = afterNarrow.width < before.width - 10
+            && abs(afterNarrow.centre - before.centre) < 6
+            && roomMove <= 0.5
+        let widenOK = afterWide.width > before.width + 10
+        print("  \(narrowOK ? "✓" : "✗") waist 100 narrows the silhouette "
+            + "\(before.width) → \(afterNarrow.width) px (centre moved "
+            + String(format: "%.1f", afterNarrow.centre - before.centre) + " px), "
+            + "room Δ\(String(format: "%.2f", roomMove))")
+        print("  \(widenOK ? "✓" : "✗") waist −100 widens it to \(afterWide.width) px")
+
+        let limbControls = FeatureReshaper.bodyControls(for: pose, adjustments: limbs,
+                                                        extent: extent)
+        let limbsOK = limbControls.count == 4 && idleControls.isEmpty
+        print("  \(limbsOK ? "✓" : "✗") joints drive arms and legs \(limbControls.count)/4, "
+            + "idle controls \(idleControls.count)")
+
+        // A closer person can outrank the subject in Vision's list; the pose
+        // with hips and knees is the one the body sliders can use.
+        let nearer = BodyPose(leftShoulder: joint(0.94, 0.62),
+                              rightShoulder: joint(0.76, 0.61),
+                              leftElbow: nil, rightElbow: nil,
+                              leftHip: nil, rightHip: nil,
+                              leftKnee: nil, rightKnee: nil)
+        let chosen = BodyPose.best(among: [nearer, pose])
+        let pickOK = chosen?.leftHip != nil && chosen?.rightKnee != nil
+            && nearer.isUsable && pose.usableJoints > nearer.usableJoints
+        print("  \(pickOK ? "✓" : "✗") the fuller skeleton wins over a nearer "
+            + "head-and-shoulders (\(chosen?.usableJoints ?? 0)/8 joints)")
+        return narrowOK && widenOK && limbsOK && pickOK
+    }
+
+    // MARK: - Extended adjustment codec
+
+    /// The new fields are part of the project format: they must survive a
+    /// round-trip, and an old project without them must still open.
+    private static func checkExtendedCodec() -> Bool {
+        var a = Adjustments()
+        a.bodyWaist = 35
+        a.bodyArms = -20
+        a.bodyLegs = 15
+        a.hairColor = 70
+        a.hairTint = MakeupShade.hairAuburn.color
+        a.hairShine = 40
+        a.contour = 60
+        a.contourColor = MakeupShade.contourDeep.color
+        a.curveShadows = -25
+        a.curveMidtones = 12
+        a.curveHighlights = 45
+        a.hslHue[HSLBand.blue.rawValue] = 30
+        a.hslSaturation[HSLBand.green.rawValue] = -45
+        a.hslLuminance[HSLBand.orange.rawValue] = 20
+
+        do {
+            let data = try JSONEncoder().encode(a)
+            let b = try JSONDecoder().decode(Adjustments.self, from: data)
+            let legacy = try JSONDecoder().decode(Adjustments.self, from: Data("{}".utf8))
+            let roundTrip = b.bodyWaist == 35 && b.bodyArms == -20 && b.bodyLegs == 15
+                && b.hairColor == 70 && b.hairTint == a.hairTint && b.hairShine == 40
+                && b.contour == 60 && b.contourColor == a.contourColor
+                && b.curveShadows == -25 && b.curveMidtones == 12 && b.curveHighlights == 45
+                && b.hslHue[HSLBand.blue.rawValue] == 30
+                && b.hslSaturation[HSLBand.green.rawValue] == -45
+                && b.hslLuminance[HSLBand.orange.rawValue] == 20
+            let backwards = legacy.hslHue.count == HSLBand.allCases.count
+                && legacy.hairColor == 0 && legacy.bodyWaist == 0 && legacy.curveHighlights == 0
+            print("  \(roundTrip ? "✓" : "✗") new fields survive encode/decode")
+            print("  \(backwards ? "✓" : "✗") a project without them opens with defaults")
+            return roundTrip && backwards
+        } catch {
+            print("  ✗ codec failed: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - Reshape protection
+
+    /// A silhouette warp must slide the face's outline while the eyes, lips and
+    /// brows held under the protection mask stay exactly where they were.
+    private static func checkReshapeProtection() -> Bool {
+        guard FeatureReshaper.isAvailable else {
+            print("  ✗ reshape kernel unavailable")
+            return false
+        }
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        guard let fixture = makeStripeImage(size: size) else {
+            print("  ✗ could not build the stripe fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else { return false }
+
+        let control = ReshapeControl(center: CGPoint(x: 0.5, y: 0.5),
+                                     radius: CGSize(width: 0.30, height: 0.30),
+                                     scale: CGSize(width: 0.80, height: 1.0))
+        guard let protection = MaskBuilder.makeMask(
+            extent: extent,
+            shapes: [MaskShape(rect: CGRect(x: 0.42, y: 0.42, width: 0.16, height: 0.16))],
+            feather: 1) else {
+            print("  ✗ could not build the protection mask")
+            return false
+        }
+
+        guard let open = processor.renderCGImage(FeatureReshaper.apply(source, controls: [control]), scale: 1),
+              let held = processor.renderCGImage(FeatureReshaper.apply(source, controls: [control],
+                                                                       protection: protection), scale: 1) else {
+            print("  ✗ could not render the warp passes")
+            return false
+        }
+
+        let inside = CGPoint(x: 0.56, y: 0.50)
+        let ring = CGPoint(x: 0.68, y: 0.50)
+        let heldDelta = sampleDelta(baseline, held, at: inside)
+        let openDelta = sampleDelta(baseline, open, at: inside)
+        let ringDelta = sampleDelta(baseline, held, at: ring)
+        let ok = openDelta > 2 && heldDelta <= 0.5 && ringDelta > 2
+        print("  \(ok ? "✓" : "✗") protected feature: open warp Δ=\(String(format: "%.1f", openDelta)), "
+            + "held Δ=\(String(format: "%.2f", heldDelta)); ring still moves Δ=\(String(format: "%.1f", ringDelta))")
+        return ok
+    }
+
+    /// Fine black and white vertical stripes: any horizontal warp is visible.
+    private static func makeStripeImage(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        for x in stride(from: 0, to: size, by: 4) {
+            let white = (x / 4) % 2 == 0
+            context.setFillColor(white ? CGColor(gray: 0.95, alpha: 1)
+                                       : CGColor(gray: 0.05, alpha: 1))
+            context.fill(CGRect(x: CGFloat(x), y: 0, width: 4, height: CGFloat(size)))
+        }
+        return context.makeImage()
+    }
+
+
     /// Brightness range across the lip strips, used to prove the colour keeps
     /// the shading rather than laying a flat sticker over it.
     private static func lipStripRange(_ image: CGImage, face: FaceGeometry, size: Int) -> Double {
@@ -2336,6 +3388,14 @@ enum SelfCheck {
     /// Flat gray skin with fine grain and two dark spots, one in the top-left
     /// quadrant and one in the bottom-right, drawn in CG (bottom-left) space.
     private static func makeTwoSpotFixture(size: Int) -> CGImage? {
+        makeMarkedFixture(size: size, marks: [CGRect(x: 55, y: 175, width: 10, height: 10),
+                                             CGRect(x: 175, y: 55, width: 10, height: 10)])
+    }
+
+    /// A grained grey field with dark shapes at the given CG rectangles.
+    /// The grain is the point: a detector that reports it as blemish is
+    /// broken, and a solid shape is the one thing it must find.
+    private static func makeMarkedFixture(size: Int, marks: [CGRect]) -> CGImage? {
         guard let context = CGContext(data: nil, width: size, height: size,
                                       bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
@@ -2353,8 +3413,9 @@ enum SelfCheck {
         }
 
         context.setFillColor(CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1))
-        context.fill(CGRect(x: 55, y: 175, width: 10, height: 10))
-        context.fill(CGRect(x: 175, y: 55, width: 10, height: 10))
+        for mark in marks {
+            context.fill(mark)
+        }
         return context.makeImage()
     }
 
@@ -2675,7 +3736,9 @@ enum SelfCheck {
         return context.makeImage()
     }
 
-    private static func makeSyntheticPortrait(width: Int, height: Int) -> CGImage? {
+    private static func makeSyntheticPortrait(width: Int, height: Int,
+                                              grain: Bool = true,
+                                              blemishes: Bool = true) -> CGImage? {
         guard let context = CGContext(data: nil, width: width, height: height,
                                       bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
@@ -2706,24 +3769,56 @@ enum SelfCheck {
         context.fillEllipse(in: CGRect(x: w * 0.42, y: h * 0.50, width: w * 0.16, height: h * 0.045))
 
         // چند لک و جوش
-        context.setFillColor(CGColor(red: 0.70, green: 0.36, blue: 0.34, alpha: 1))
-        let spots: [(CGFloat, CGFloat, CGFloat)] = [(0.34, 0.56, 0.018), (0.64, 0.60, 0.014),
-                                                    (0.44, 0.68, 0.012), (0.58, 0.48, 0.016),
-                                                    (0.36, 0.46, 0.013), (0.66, 0.52, 0.011)]
-        for spot in spots {
-            context.fillEllipse(in: CGRect(x: w * (spot.0 - spot.2 / 2), y: h * (spot.1 - spot.2 / 2),
-                                           width: w * spot.2, height: w * spot.2))
+        if blemishes {
+            context.setFillColor(CGColor(red: 0.70, green: 0.36, blue: 0.34, alpha: 1))
+            let spots: [(CGFloat, CGFloat, CGFloat)] = [(0.34, 0.56, 0.018), (0.64, 0.60, 0.014),
+                                                        (0.44, 0.68, 0.012), (0.58, 0.48, 0.016),
+                                                        (0.36, 0.46, 0.013), (0.66, 0.52, 0.011)]
+            for spot in spots {
+                context.fillEllipse(in: CGRect(x: w * (spot.0 - spot.2 / 2), y: h * (spot.1 - spot.2 / 2),
+                                               width: w * spot.2, height: w * spot.2))
+            }
         }
 
         // نویز ریز پوست
-        for _ in 0..<4000 {
-            let x = CGFloat.random(in: w * 0.30...w * 0.70)
-            let y = CGFloat.random(in: h * 0.42...h * 0.84)
-            let value = CGFloat.random(in: 0.72...0.95)
-            context.setFillColor(CGColor(red: value, green: value * 0.83, blue: value * 0.72, alpha: 0.35))
-            context.fill(CGRect(x: x, y: y, width: 1.6, height: 1.6))
+        if grain {
+            for _ in 0..<3000 {
+                let x = CGFloat.random(in: w * 0.30...w * 0.70)
+                let y = CGFloat.random(in: h * 0.42...h * 0.84)
+                let value = CGFloat.random(in: 0.66...0.96)
+                context.setFillColor(CGColor(red: value, green: value * 0.83, blue: value * 0.72, alpha: 0.45))
+                context.fill(CGRect(x: x, y: y, width: 2.6, height: 2.6))
+            }
         }
 
         return context.makeImage()
+    }
+
+    /// The face geometry that belongs to `makeSyntheticPortrait`. Vision cannot
+    /// see a drawn ellipse, so the automatic checks hand the analyzer the same
+    /// landmarks a real detection would have produced.
+    private static func syntheticFace() -> FaceGeometry {
+        let w: CGFloat = 0.44, h: CGFloat = 0.46
+        let box = CGRect(x: 0.28, y: 0.40, width: w, height: h)
+        var face = FaceGeometry.synthetic(
+            boundingBox: box,
+            faceContour: [CGPoint(x: 0.30, y: 0.44), CGPoint(x: 0.70, y: 0.44),
+                          CGPoint(x: 0.74, y: 0.62), CGPoint(x: 0.70, y: 0.82),
+                          CGPoint(x: 0.30, y: 0.82), CGPoint(x: 0.26, y: 0.62)],
+            leftEye: [CGPoint(x: 0.38, y: 0.63), CGPoint(x: 0.46, y: 0.63),
+                           CGPoint(x: 0.46, y: 0.67), CGPoint(x: 0.38, y: 0.67)],
+            rightEye: [CGPoint(x: 0.54, y: 0.63), CGPoint(x: 0.62, y: 0.63),
+                       CGPoint(x: 0.62, y: 0.67), CGPoint(x: 0.54, y: 0.67)],
+            leftEyebrow: [], rightEyebrow: [],
+            outerLips: [CGPoint(x: 0.44, y: 0.50), CGPoint(x: 0.56, y: 0.50),
+                         CGPoint(x: 0.56, y: 0.535), CGPoint(x: 0.44, y: 0.535)],
+            innerLips: [], nose: [])
+        // The production load path always measures the eyes before Auto Retouch
+        // runs; a hand-built fixture has to say so too. The sclera level is the
+        // 70th percentile the analyzer would have measured — dim enough that
+        // brightening has something to add.
+        face.hasUsableEyes = true
+        face.eyeScleraLevel = 0.42
+        return face
     }
 }

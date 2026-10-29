@@ -176,6 +176,95 @@ enum MakeupEngine {
         return SkinEngine.blend(pigmented, over: image, mask: mask, strength: 0.15 + 0.4 * amount)
     }
 
+    /// A gloss finish on the lips. Real gloss is a soft specular bloom, not a
+    /// white layer, so the lip's own highlight is brightened and bloomed and
+    /// then laid back over the same lip mask.
+    static func addGloss(_ image: CIImage,
+                         strength: Double,
+                         mask: CIImage,
+                         scale: CGFloat) -> CIImage {
+        let amount = clamp(strength)
+        guard amount > 0.001 else { return image }
+        let extent = image.extent
+
+        let lit = image.applyingFilter("CIColorControls", parameters: [
+            kCIInputBrightnessKey: 0.035 * amount,
+            kCIInputContrastKey: 1 + 0.10 * amount
+        ]).cropped(to: extent)
+        let bloom = lit.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(2, 5.0 * scale)])
+            .cropped(to: extent)
+        let glossy = image.applyingFilter("CIScreenBlendMode", parameters: [
+            kCIInputBackgroundImageKey: bloom
+        ]).cropped(to: extent)
+
+        return SkinEngine.blend(glossy, over: image, mask: mask, strength: amount * 0.45)
+    }
+
+    /// Sculpting shade under the cheekbone and along the jaw.
+    ///
+    /// Contour is a shadow, not a blush: soft light darkens the hollow while
+    /// keeping the skin's own shading, and the multiply leg gives it the density
+    /// a powder has. Both ride the same mask, so the band has one edge.
+    static func applyContour(_ image: CIImage,
+                             strength: Double,
+                             mask: CIImage,
+                             color: MakeupColor) -> CIImage {
+        let amount = clamp(strength)
+        let extent = image.extent
+        guard amount > 0.001,
+              let layer = shadeLayer(color, extent: extent),
+              let darkened = CIFilter(name: "CIMultiplyBlendMode", parameters: [
+                  kCIInputImageKey: layer,
+                  kCIInputBackgroundImageKey: image
+              ])?.outputImage?.cropped(to: extent)
+        else { return image }
+        let shaded = softened(darkened, color: color) ?? darkened
+        return SkinEngine.blend(shaded, over: image, mask: mask, strength: 0.12 + 0.36 * amount)
+    }
+
+    /// Hair dye: the pigment is carried on the strand's own luminance, so every
+    /// highlight and parting survives instead of flattening into a painted cap.
+    static func dyeHair(_ image: CIImage,
+                        strength: Double,
+                        mask: CIImage,
+                        color: MakeupColor) -> CIImage {
+        let amount = clamp(strength)
+        guard amount > 0.001,
+              let dyed = tinted(image, color: color, tone: 0.92)
+        else { return image }
+        return SkinEngine.blend(dyed, over: image, mask: mask, strength: 0.10 + 0.55 * amount)
+    }
+
+    /// A gloss finish on the hair. The lift is weighted by the strand's own
+    /// luminance, so highlights catch the light while shadows stay dark — a
+    /// flat white wash would read as a painted cap instead of shine.
+    static func addHairShine(_ image: CIImage,
+                             strength: Double,
+                             mask: CIImage,
+                             scale: CGFloat) -> CIImage {
+        let amount = clamp(strength)
+        guard amount > 0.001, let kernel = sheenKernel else { return image }
+        guard let lit = kernel.apply(extent: image.extent, arguments: [image, amount])?
+            .cropped(to: image.extent) else { return image }
+        return SkinEngine.blend(lit, over: image, mask: mask, strength: 0.55)
+    }
+
+    private static let sheenKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 hairSheen(__sample s, float amount)
+        {
+            vec3 c = pow(clamp(s.rgb, 0.0, 1.0), vec3(0.4545));
+            float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            // Mostly the highlights, with a faint gloss left in the shadows.
+            float w = 0.18 + 0.82 * smoothstep(0.16, 0.80, l);
+            c = clamp(c + vec3(0.20, 0.17, 0.13) * amount * w, 0.0, 1.0);
+            return vec4(pow(c, vec3(2.2)), s.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
+
     private static func clamp(_ strength: Double) -> Double {
         min(1, max(0, strength / 100))
     }

@@ -43,6 +43,12 @@ struct FaceGeometry {
     /// white. The default stays usable when eyes were not annotated.
     var eyeScleraLuminance: Double = 0.55
 
+    /// How bright the whites actually are — the 70th percentile of the eye
+    /// opening's luminance. Nil when the eyes were not annotated. Eye
+    /// brightening only fires below about 0.68; on a photo whose whites are
+    /// already bright there is nothing honest to add.
+    var eyeScleraLevel: Double?
+
     // MARK: - Derived regions
 
     var eyePolygons: [[CGPoint]] { [leftEye, rightEye].filter { $0.count >= 3 } }
@@ -111,6 +117,85 @@ struct FaceGeometry {
                           width: box.width * 1.08,
                           height: max(box.height * 0.20, 0.0015))
         }
+    }
+
+    /// The liner band traced along the actual upper lid instead of a level
+    /// rectangle: an eye that tilts up at the outer corner takes its line with
+    /// it. Falls back to `lashLineRects` when the outline is too short to trace.
+    var lashLinePolygons: [[CGPoint]] {
+        eyePolygons.compactMap { eye in
+            let polygon = Self.lashLinePolygon(for: eye)
+            return polygon.count >= 4 ? polygon : nil
+        }
+    }
+
+    /// A strip that follows the top edge of an eye outline.
+    static func lashLinePolygon(for eye: [CGPoint]) -> [CGPoint] {
+        let box = boundingBox(of: eye)
+        guard eye.count >= 3, box.width > 0.001, box.height > 0.0005 else { return [] }
+        let upper = eye.filter { $0.y >= box.midY }.sorted { $0.x < $1.x }
+        guard upper.count >= 2 else { return [] }
+        let drop = max(box.height * 0.18, 0.0015)
+        let lower = upper.reversed().map { CGPoint(x: $0.x, y: $0.y - drop) }
+        return upper + lower
+    }
+
+    /// The iris is centred on the pupil Vision reports, not on the geometric
+    /// middle of the eye opening: a gaze to one side would otherwise hand the
+    /// iris mask a patch of sclera.
+    static func irisRect(eye: [CGPoint], pupil: [CGPoint]) -> CGRect {
+        let box = boundingBox(of: eye)
+        guard box.width > 0.004, box.height > 0.002 else { return .null }
+        let center = centroid(of: pupil) ?? CGPoint(x: box.midX, y: box.midY)
+        let width = box.width * 0.64
+        let height = box.height * 0.88
+        return CGRect(x: center.x - width / 2,
+                      y: center.y - height / 2,
+                      width: width,
+                      height: height)
+    }
+
+    // MARK: - Hair and contour
+
+    /// The crown and any hair falling beside the face. It starts above the
+    /// forehead, so the skin the skin pass already owns is never dyed, and the
+    /// pipeline intersects it with the person mask so a wall behind the subject
+    /// cannot pick up the tint.
+    var hairRect: CGRect {
+        let box = boundingBox
+        return CGRect(x: box.minX - box.width * 0.10,
+                      y: box.minY + box.height * 0.78,
+                      width: box.width * 1.20,
+                      height: box.height * 0.42)
+    }
+
+    /// Side panels for hair falling past the ears.
+    var hairSideRects: [CGRect] {
+        let box = boundingBox
+        let width = box.width * 0.24
+        let height = box.height * 0.62
+        return [CGRect(x: box.minX - width * 0.55,
+                       y: box.minY + box.height * 0.18,
+                       width: width, height: height),
+                CGRect(x: box.maxX - width * 0.45,
+                       y: box.minY + box.height * 0.18,
+                       width: width, height: height)]
+    }
+
+    /// The hollows a contour shade follows: from the temple, under the
+    /// cheekbone, toward the jaw corner — a band, not a spot, because sculpting
+    /// is about the diagonal a real face has.
+    var contourPolygons: [[CGPoint]] {
+        let box = boundingBox
+        guard box.width > 0, box.height > 0 else { return [] }
+        func polygon(_ x0: CGFloat, _ x1: CGFloat, _ x2: CGFloat, _ x3: CGFloat) -> [CGPoint] {
+            [CGPoint(x: box.minX + x0 * box.width, y: box.minY + 0.60 * box.height),
+             CGPoint(x: box.minX + x1 * box.width, y: box.minY + 0.55 * box.height),
+             CGPoint(x: box.minX + x2 * box.width, y: box.minY + 0.24 * box.height),
+             CGPoint(x: box.minX + x3 * box.width, y: box.minY + 0.30 * box.height)]
+        }
+        return [polygon(0.03, 0.30, 0.26, 0.05),
+                polygon(0.97, 0.70, 0.74, 0.95)]
     }
 
     /// Lips keep their own texture and their outline is already the outer edge,

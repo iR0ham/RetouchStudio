@@ -33,11 +33,11 @@ struct CardHeader: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 14.5, weight: .semibold))
+                    .font(Theme.Font.face(size: 14.5, weight: .semibold))
                     .foregroundStyle(Theme.text)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 10.5))
+                        .font(Theme.Font.face(size: 10.5))
                         .foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -69,7 +69,7 @@ struct SectionHeader: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(PressableButtonStyle(dip: 0.9))
-                .help(resetHelp ?? "Reset this section")
+                .help(resetHelp ?? L10n.current.resetGroupHelp)
             }
         }
     }
@@ -211,11 +211,11 @@ struct ParameterRow: View {
                             .foregroundStyle(Theme.faint)
                     }
                     .buttonStyle(PressableButtonStyle(dip: 0.9))
-                    .help("Reset this slider")
+                    .help(L10n.current.resetSliderHelp)
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
 
-                Text(String(format: "%.0f", value))
+                Text(Digits.convert(String(format: "%.0f", value)))
                     .font(Theme.Font.value)
                     .foregroundStyle(isModified ? tint : Theme.faint)
                     .frame(minWidth: 26, alignment: .trailing)
@@ -337,7 +337,7 @@ struct PresetChip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                .font(Theme.Font.face(size: 11, weight: isActive ? .semibold : .regular))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
@@ -373,7 +373,7 @@ struct PresetTile: View {
     var thumb: NSImage? = nil
     let isActive: Bool
     var onDelete: (() -> Void)? = nil
-    var deleteHelp: String = "Delete this look"
+    var deleteHelp: String = L10n.current.deleteLookHelp
     let action: () -> Void
 
     @State private var hovering = false
@@ -387,7 +387,7 @@ struct PresetTile: View {
                 )
                 .overlay(alignment: .bottomLeading) {
                     Text(title)
-                        .font(.system(size: 9.5, weight: .semibold))
+                        .font(Theme.Font.face(size: 9.5, weight: .semibold))
                         .foregroundStyle(isActive ? Theme.accentBright : Theme.bone)
                         .lineLimit(1)
                         .padding(.horizontal, 5)
@@ -494,7 +494,7 @@ struct StatusChip: View {
         HStack(spacing: 5) {
             Icon(name: icon, size: 12, emphasised: true)
             Text(text)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(Theme.Font.face(size: 10.5, weight: .medium))
                 .lineLimit(1)
         }
         .padding(.vertical, 5)
@@ -514,7 +514,7 @@ struct SectionNote: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10.5))
+            .font(Theme.Font.face(size: 10.5))
             .foregroundStyle(Theme.faint)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -538,7 +538,7 @@ struct LabeledSliderRow: View {
                     .font(Theme.Font.label)
                     .foregroundStyle(Theme.text)
                 Spacer(minLength: 6)
-                Text("\(String(format: "%.0f", value))\(suffix)")
+                Text("\(Digits.convert(String(format: "%.0f", value)))\(suffix)")
                     .font(Theme.Font.value)
                     .foregroundStyle(Theme.text)
                     .contentTransition(.numericText())
