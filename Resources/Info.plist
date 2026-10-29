@@ -30,13 +30,8 @@
 	<string>© 2026 Roham. All rights reserved.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>UIAppFonts</key>
-	<array>
-		<string>Fonts/Vazirmatn-Regular.ttf</string>
-		<string>Fonts/Vazirmatn-Medium.ttf</string>
-		<string>Fonts/Vazirmatn-SemiBold.ttf</string>
-		<string>Fonts/Vazirmatn-Bold.ttf</string>
-	</array>
+	<key>ATSApplicationFontsPath</key>
+	<string>Fonts</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

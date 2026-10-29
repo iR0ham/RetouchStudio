@@ -63,7 +63,8 @@ else
   echo "  ! warning: Resources/AppIcon.icns missing; building without an icon."
 fi
 
-# Vazir, the Persian typeface. Registered through UIAppFonts in Info.plist.
+# Vazir, the typeface the whole interface is set in. macOS registers the folder
+# named by ATSApplicationFontsPath in Info.plist; UIAppFonts is ignored here.
 if [ -d Resources/Fonts ]; then
   mkdir -p "$APP_BUNDLE/Contents/Resources/Fonts"
   cp Resources/Fonts/*.ttf "$APP_BUNDLE/Contents/Resources/Fonts/"
