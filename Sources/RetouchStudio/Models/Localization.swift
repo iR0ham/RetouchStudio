@@ -362,6 +362,9 @@ class L10n {
     // MARK: - Settings, About, Help
 
     var settingsTitle: String { "Settings" }
+    /// macOS titles this window itself, in the system language. The app writes
+    /// its own so the title bar follows the switch like the rest of the text.
+    var settingsWindowTitle: String { "\(appName) \(settingsTitle)" }
     var settingsLanguage: String { "LANGUAGE" }
     var settingsAuto: String { "AUTO" }
     var settingsAutoNote: String {

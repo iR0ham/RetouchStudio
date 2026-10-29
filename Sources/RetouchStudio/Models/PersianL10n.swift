@@ -378,6 +378,7 @@ final class PersianL10n: L10n {
     // MARK: - Settings, About, Help
 
     override var settingsTitle: String { "تنظیمات" }
+    override var settingsWindowTitle: String { "\(settingsTitle) \(appName)" }
     override var settingsLanguage: String { "زبان" }
     override var settingsAuto: String { "خودکار" }
     override var settingsAutoNote: String {

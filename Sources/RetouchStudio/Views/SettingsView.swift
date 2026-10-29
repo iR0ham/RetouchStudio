@@ -21,6 +21,7 @@ struct SettingsView: View {
         }
         .frame(width: 470, height: 560)
         .background(Theme.background)
+        .background(SettingsWindowTitle(title: model.s.settingsWindowTitle))
         .preferredColorScheme(.dark)
     }
 
@@ -125,7 +126,7 @@ struct SettingsView: View {
             sectionTitle(model.s.settingsTools)
 
             row(model.s.settingsBrush,
-                detail: "\(model.healBrushPixels) px") {
+                detail: "\(Digits.num(model.healBrushPixels)) px") {
                 BipolarSlider(value: $model.healBrushPercent, range: 0.4...6, step: 0.2)
             }
 
@@ -236,6 +237,37 @@ struct SettingsView: View {
                     .foregroundStyle(Theme.muted)
             }
             content()
+        }
+    }
+}
+
+/// A SwiftUI `Settings` window is titled by the system, in the system language,
+/// so it kept saying "Settings" after the app switched to Persian. This writes
+/// the table's own wording over it, and again whenever the language changes.
+private struct SettingsWindowTitle: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> TitleView {
+        let view = TitleView()
+        view.title = title
+        return view
+    }
+
+    func updateNSView(_ view: TitleView, context: Context) {
+        view.title = title
+        view.apply()
+    }
+
+    final class TitleView: NSView {
+        var title = ""
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        func apply() {
+            window?.title = title
         }
     }
 }

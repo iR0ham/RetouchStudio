@@ -10,6 +10,10 @@ final class InfoWindows {
     static let shared = InfoWindows()
 
     private var windows: [String: NSWindow] = [:]
+    /// The language each panel was built in. The hosted content is a snapshot,
+    /// so a panel left over from the other language has to be rebuilt rather
+    /// than merely brought forward.
+    private var builtIn: [String: AppLanguage] = [:]
 
     func showAbout() {
         let s = L10n.current
@@ -30,6 +34,11 @@ final class InfoWindows {
                                size: NSSize,
                                @ViewBuilder content: () -> V) {
         if let existing = windows[id] {
+            if builtIn[id] != AppLanguage.current {
+                existing.title = title
+                existing.contentView = NSHostingView(rootView: content())
+                builtIn[id] = AppLanguage.current
+            }
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -55,6 +64,7 @@ final class InfoWindows {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         windows[id] = window
+        builtIn[id] = AppLanguage.current
     }
 }
 
