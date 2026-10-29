@@ -101,8 +101,12 @@ final class PersianL10n: L10n {
     override var shine: String { "کنترل براقی" }
     override var irisEnhance: String { "جزئیات عنبیه" }
     override var lashDarken: String { "تیرگی مژه" }
+    override var lensTint: String { "لنز رنگی" }
+    override var lensColor: String { "رنگ لنز" }
+    override var teethAlign: String { "هم‌ترازی دندان" }
     override var lipGloss: String { "براقی لب" }
     override var hairShine: String { "براقی مو" }
+    override var hairVolume: String { "حجم مو" }
     override var splitTone: String { "تون دوگانه" }
 
     // MARK: - Curve and HSL
@@ -146,6 +150,12 @@ final class PersianL10n: L10n {
     override var backgroundBlur: String { "محو پس‌زمینه" }
     override var backgroundTone: String { "تُن پس‌زمینه" }
     override var backgroundSaturation: String { "اشباع پس‌زمینه" }
+    override var backgroundFill: String { "رنگ پُر پس‌زمینه" }
+    override var backgroundFillColor: String { "رنگ پُرکننده" }
+    override var backgroundRemove: String { "حذف پس‌زمینه" }
+    override var backgroundRemoveNote: String {
+        "حذف پس‌زمینه آن را شفاف می‌کند. PNG و TIFF شفافیت را نگه می‌دارند؛ JPEG آن را روی سفید می‌نویسد."
+    }
     override var bodyScope: String {
         "سوژه‌ای را می‌خواند که Vision پیدا می‌کند، پس روی عکس‌های تمام‌قد هم کار می‌کند که چهره کوچک است."
     }
@@ -280,6 +290,34 @@ final class PersianL10n: L10n {
         count == 1 ? "مهر ترمیم اضافه شد — ⌘Z آن را برمی‌دارد." : "مهرهای ترمیم: \(Digits.num(count))."
     }
     override var healStampRemoved: String { "مهر ترمیم برداشته شد." }
+
+    // MARK: - Stickers
+
+    override var artTitle: String { "استیکرها" }
+    override var artSubtitle: String { "استیکر و طرح روی عکس بگذار" }
+    override var artShape: String { "شکل" }
+    override var artSize: String { "اندازه" }
+    override var artRotation: String { "چرخش" }
+    override var artDelete: String { "حذف استیکر" }
+    override var artClear: String { "پاک کردن همهٔ استیکرها" }
+    override var artNote: String {
+        "برای گذاشتن استیکر روی عکس کلیک کن. برای انتخاب، روی یک استیکر کلیک کن و بعد آن را بکش."
+    }
+    override var stickerRemoved: String { "استیکر برداشته شد." }
+    override var stickersCleared: String { "استیکرها پاک شدند." }
+    override func stickerAdded(_ count: Int) -> String {
+        count == 1 ? "استیکر گذاشته شد — ⌘Z آن را برمی‌دارد." : "استیکرها: \(Digits.num(count))."
+    }
+    override func stickerKindTitle(_ kind: StickerKind) -> String {
+        switch kind {
+        case .star: return "ستاره"
+        case .heart: return "قلب"
+        case .sparkle: return "درخشش"
+        case .flower: return "گل"
+        case .butterfly: return "پروانه"
+        case .lightning: return "آذرخش"
+        }
+    }
 
     // MARK: - Drop zone
 
@@ -458,6 +496,7 @@ final class PersianL10n: L10n {
         case .crop: return "برش"
         case .body: return "بدن"
         case .background: return "پس‌زمینه"
+        case .art: return artTitle
         }
     }
 
@@ -473,6 +512,7 @@ final class PersianL10n: L10n {
         case .crop: return "قاب‌بندی دوبارهٔ عکس"
         case .body: return "هموارسازی، رنگ و لاغرتر کردن"
         case .background: return "محو و رنگ‌بندی آنچه پشت سوژه است"
+        case .art: return artSubtitle
         }
     }
 
@@ -487,6 +527,7 @@ final class PersianL10n: L10n {
         case .looks: return "ظاهرها"
         case .body: return "بدن"
         case .background: return "پس‌زمینه"
+        case .art: return artTitle
         }
     }
 

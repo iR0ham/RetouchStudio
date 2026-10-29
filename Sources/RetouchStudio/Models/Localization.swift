@@ -96,8 +96,12 @@ class L10n {
     var shine: String { "Shine Control" }
     var irisEnhance: String { "Iris Detail" }
     var lashDarken: String { "Lash Depth" }
+    var lensTint: String { "Contact Lens" }
+    var lensColor: String { "Lens Color" }
+    var teethAlign: String { "Teeth Alignment" }
     var lipGloss: String { "Lip Gloss" }
     var hairShine: String { "Hair Shine" }
+    var hairVolume: String { "Hair Volume" }
     var splitTone: String { "Split Tone" }
 
     // Curve and HSL
@@ -142,6 +146,12 @@ class L10n {
     var backgroundBlur: String { "Background Blur" }
     var backgroundTone: String { "Background Tone" }
     var backgroundSaturation: String { "Background Saturation" }
+    var backgroundFill: String { "Background Fill" }
+    var backgroundFillColor: String { "Fill Color" }
+    var backgroundRemove: String { "Remove Background" }
+    var backgroundRemoveNote: String {
+        "Removal makes the background transparent. PNG and TIFF keep that; JPEG writes it onto white."
+    }
     var bodyScope: String {
         "Reads the subject Vision finds, so it works on full-length photos where the face is small."
     }
@@ -268,6 +278,33 @@ class L10n {
         count == 1 ? "Healing stamp added — ⌘Z removes it." : "Healing stamps: \(Digits.num(count))."
     }
     var healStampRemoved: String { "Healing stamp removed." }
+
+    // Stickers
+    var artTitle: String { "Stickers" }
+    var artSubtitle: String { "Place stickers and art on the photo" }
+    var artShape: String { "Shape" }
+    var artSize: String { "Size" }
+    var artRotation: String { "Rotation" }
+    var artDelete: String { "Delete Sticker" }
+    var artClear: String { "Clear All Stickers" }
+    var artNote: String {
+        "Click the photo to place a sticker. Click one to select it, then drag it into place."
+    }
+    var stickerRemoved: String { "Sticker removed." }
+    var stickersCleared: String { "Stickers cleared." }
+    func stickerAdded(_ count: Int) -> String {
+        count == 1 ? "Sticker placed — ⌘Z removes it." : "Stickers: \(Digits.num(count))."
+    }
+    func stickerKindTitle(_ kind: StickerKind) -> String {
+        switch kind {
+        case .star: return "Star"
+        case .heart: return "Heart"
+        case .sparkle: return "Sparkle"
+        case .flower: return "Flower"
+        case .butterfly: return "Butterfly"
+        case .lightning: return "Lightning"
+        }
+    }
 
     // Drop zone
     var dropTitle: String { "Drop a portrait here" }
@@ -454,6 +491,9 @@ class L10n {
         case .healCleared: return healCleared
         case .healStampRemoved: return healStampRemoved
         case .healStampAdded(let count): return healStampAdded(count)
+        case .stickerAdded(let count): return stickerAdded(count)
+        case .stickerRemoved: return stickerRemoved
+        case .stickersCleared: return stickersCleared
         case .presetSaved(let name): return "\(presetSaved): \(name)"
         case .analyzingSmart: return analyzingSmart
         case .smartFailed: return smartFailed
@@ -487,6 +527,7 @@ class L10n {
         case .crop: return "Crop"
         case .body: return "Body"
         case .background: return "Background"
+        case .art: return artTitle
         }
     }
 
@@ -502,6 +543,7 @@ class L10n {
         case .crop: return "Reframe the photo"
         case .body: return "Smooth, tone and slim the figure"
         case .background: return "Blur and grade what is behind the subject"
+        case .art: return artSubtitle
         }
     }
 
@@ -516,6 +558,7 @@ class L10n {
         case .looks: return "Looks"
         case .body: return "Body"
         case .background: return "Background"
+        case .art: return artTitle
         }
     }
 

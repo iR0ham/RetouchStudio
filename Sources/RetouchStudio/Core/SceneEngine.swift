@@ -305,4 +305,83 @@ enum SceneEngine {
 
         return SkinEngine.blend(processed, over: image, mask: feathered, strength: 1)
     }
+
+    /// Solid-colour backdrop behind the subject. The same inverse person mask
+    /// the blur uses is feathered once and scaled by the fill amount, so the
+    /// subject's edge gets the same soft transition at any strength.
+    static func fillBackground(_ image: CIImage,
+                               person: CIImage,
+                               color: MakeupColor,
+                               amount: Double) -> CIImage {
+        let strength = min(1, max(0, amount / 100))
+        guard strength > 0.001 else { return image }
+        let extent = image.extent
+        let shortSide = min(extent.width, extent.height)
+        guard shortSide > 8,
+              let layer = solidLayer(color, extent: extent)
+        else { return image }
+
+        let background = person.applyingFilter("CIColorInvert").cropped(to: extent)
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [
+                kCIInputRadiusKey: max(2, shortSide * 0.006)
+            ])
+            .cropped(to: extent)
+
+        return SkinEngine.blend(layer, over: image, mask: background, strength: strength)
+    }
+
+    /// Makes everything the subject does not occupy transparent. The person
+    /// mask is softened before it becomes alpha, so the cut-out edge is
+    /// feathered rather than a hard cut, and the extent is kept so composition
+    /// and export geometry do not change.
+    static func removeBackground(_ image: CIImage, person: CIImage) -> CIImage {
+        let extent = image.extent
+        let shortSide = min(extent.width, extent.height)
+        guard shortSide > 8 else { return image }
+
+        let alpha = person.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [
+                kCIInputRadiusKey: max(1.5, shortSide * 0.004)
+            ])
+            .cropped(to: extent)
+        let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
+            .cropped(to: extent)
+
+        return image.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: clear,
+            kCIInputMaskImageKey: alpha
+        ]).cropped(to: extent)
+    }
+
+    /// Hair volume: a radial bulge at the crown, blended through the hair band
+    /// so the face and the room behind it are untouched. The warp must be
+    /// magnified *inside* the hair mask and its boundary feathered outward, or
+    /// the new volume lands outside the mask and is blended away.
+    static func addHairVolume(_ image: CIImage,
+                              mask: CIImage,
+                              center: CGPoint,
+                              radius: CGFloat,
+                              amount: Double) -> CIImage {
+        let a = min(1, max(0, amount / 100))
+        guard a > 0.001 else { return image }
+        let extent = image.extent
+        guard let bulged = CIFilter(name: "CIBumpDistortion", parameters: [
+            kCIInputImageKey: image.clampedToExtent(),
+            kCIInputCenterKey: CIVector(x: center.x, y: center.y),
+            kCIInputRadiusKey: max(8, radius),
+            kCIInputScaleKey: 0.26 * a
+        ])?.outputImage?.cropped(to: extent) else { return image }
+        return SkinEngine.blend(bulged, over: image, mask: mask, strength: a * 0.9)
+    }
+
+    /// A flat colour in linear light, matching how Core Image composites.
+    private static func solidLayer(_ color: MakeupColor, extent: CGRect) -> CIImage? {
+        func linear(_ v: Double) -> Double {
+            v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        let c = color.rgb
+        let tint = CIColor(red: linear(c.r), green: linear(c.g), blue: linear(c.b), alpha: 1)
+        return CIImage(color: tint).cropped(to: extent)
+    }
 }

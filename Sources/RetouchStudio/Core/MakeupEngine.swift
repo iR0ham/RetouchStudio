@@ -223,6 +223,24 @@ enum MakeupEngine {
         return SkinEngine.blend(shaded, over: image, mask: mask, strength: 0.12 + 0.36 * amount)
     }
 
+    /// A coloured contact lens. The pigment is carried on the iris's own
+    /// luminance — the same rule as lipstick — so the striations, the limbal
+    /// ring and the pupil stay exactly where they were; only the hue changes.
+    /// Colours are deliberately blended below full strength, because a lens is
+    /// translucent and a hard disc of flat colour reads as a sticker over the
+    /// eye.
+    static func applyLens(_ image: CIImage,
+                          strength: Double,
+                          mask: CIImage,
+                          color: MakeupColor) -> CIImage {
+        let amount = clamp(strength)
+        guard amount > 0.001,
+              let tintedIris = tinted(image, color: color, tone: 0.88)
+        else { return image }
+        return SkinEngine.blend(tintedIris, over: image, mask: mask,
+                                strength: 0.18 + 0.55 * amount)
+    }
+
     /// Hair dye: the pigment is carried on the strand's own luminance, so every
     /// highlight and parting survives instead of flattening into a painted cap.
     static func dyeHair(_ image: CIImage,

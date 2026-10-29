@@ -578,6 +578,49 @@ enum SkinEngine {
         return CIColorKernel(source: source)
     }()
 
+    /// Closes the dark gaps between teeth. The repair is a local median of the
+    /// enamel around each pixel, so a gap borrows the brightness and hue of the
+    /// teeth on either side instead of being painted flat white; only pixels
+    /// clearly darker than that median are touched, which leaves the tooth's
+    /// own shading and the gum line alone.
+    ///
+    /// `radius` is half the enamel height in pixels: wide enough for the space
+    /// between two teeth, too narrow to reach the lips.
+    static func alignTeeth(_ image: CIImage,
+                           strength: Double,
+                           mask: CIImage,
+                           radius: CGFloat) -> CIImage {
+        let amount = min(1, max(0, strength / 100))
+        guard amount > 0.001 else { return image }
+        let extent = image.extent
+        let clean = localMedian(image, effectiveRadius: max(2, radius), extent: extent)
+        guard let kernel = toothGapKernel,
+              let filled = kernel.apply(extent: extent, arguments: [image, clean, amount])?
+                .cropped(to: extent) else { return image }
+        return blend(filled, over: image, mask: mask, strength: amount * 0.9)
+    }
+
+    private static let toothGapKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 alignTeeth(__sample s, __sample clean, float amount)
+        {
+            vec3 c = pow(clamp(s.rgb, 0.0, 1.0), vec3(0.4545));
+            vec3 m = pow(clamp(clean.rgb, 0.0, 1.0), vec3(0.4545));
+            float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            float ml = dot(m, vec3(0.2126, 0.7152, 0.0722));
+            // A gap is much darker than the enamel around it. Ordinary tooth
+            // shading that is close to the median stays exactly as it was.
+            float gap = smoothstep(0.18, 0.42, ml - l);
+            // Keep a trace of the gap's own shadow so the filled tooth still
+            // has form instead of reading as a white sticker.
+            vec3 filled = mix(m, m * 0.92, gap * 0.35);
+            c = mix(c, filled, gap * amount);
+            return vec4(pow(clamp(c, 0.0, 1.0), vec3(2.2)), s.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
+
     // MARK: - Skin finish
 
     /// Matte or glow. Both are judged on the finished skin, so they run after

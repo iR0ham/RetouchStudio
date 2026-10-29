@@ -74,6 +74,12 @@ final class EditorModel: ObservableObject {
     @Published private(set) var healSpots: [HealSpot] = [] {
         didSet { healSpotsChanged() }
     }
+    /// Stickers placed by the art tool, stored against the original photo in
+    /// the same coordinates as the healing stamps.
+    @Published private(set) var stickers: [Sticker] = [] {
+        didSet { stickersChanged() }
+    }
+    @Published var selectedSticker: UUID?
     /// Brush diameter as a percentage of the short side, so one setting covers
     /// every photo size and the stamp means the same thing on preview and export.
     @Published var healBrushPercent: Double = 1.6 {
@@ -124,6 +130,7 @@ final class EditorModel: ObservableObject {
     private struct EditState: Equatable {
         var adjustments = Adjustments()
         var healSpots: [HealSpot] = []
+        var stickers: [Sticker] = []
     }
 
     private var undoStack: [EditState] = []
@@ -137,7 +144,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var canRedo = false
 
     private var currentState: EditState {
-        EditState(adjustments: adjustments, healSpots: healSpots)
+        EditState(adjustments: adjustments, healSpots: healSpots, stickers: stickers)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -200,6 +207,8 @@ final class EditorModel: ObservableObject {
     private func restore(_ state: EditState) {
         adjustments = state.adjustments
         healSpots = state.healSpots
+        stickers = state.stickers
+        selectedSticker = nil
     }
 
     /// The pill used to keep saying "Auto Color & Light applied" after ⌘Z, when
@@ -222,6 +231,14 @@ final class EditorModel: ObservableObject {
 
     private func healSpotsChanged() {
         rebuildSpotMasks()
+        guard !isLoadingState else { return }
+        scheduleCommit()
+        updateUndoFlags()
+        updateCleanState()
+        if hasImage { schedulePreview() }
+    }
+
+    private func stickersChanged() {
         guard !isLoadingState else { return }
         scheduleCommit()
         updateUndoFlags()
@@ -646,7 +663,9 @@ final class EditorModel: ObservableObject {
         // installed without the change handling a user stamp needs.
         isLoadingState = true
         healSpots = project?.healSpots ?? []
+        stickers = project?.stickers ?? []
         isLoadingState = false
+        selectedSticker = nil
         rebuildSpotMasks()
 
         cropAspect = .free
@@ -674,9 +693,9 @@ final class EditorModel: ObservableObject {
         } else {
             recents.add(result.url, isProject: false)
         }
-        // The preview from the load has no stamps in it, so repaint when there
-        // are any to draw.
-        if !healSpots.isEmpty { schedulePreview() }
+        // The preview from the load has no stamps or stickers in it, so repaint
+        // when there are any to draw.
+        if !healSpots.isEmpty || !stickers.isEmpty { schedulePreview() }
 
         if project != nil {
             statusToken = .projectOpened
@@ -769,7 +788,7 @@ final class EditorModel: ObservableObject {
             // The stamps live in original-photo coordinates, so a new crop moves
             // them onto the new frame before the canvas repaints.
             self.rebuildSpotMasks()
-            if !self.healSpots.isEmpty { self.schedulePreview() }
+            if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
             self.updateCleanState()
             self.isBusy = false
             self.statusToken = crop == nil ? .cropReset : .cropApplied
@@ -778,7 +797,7 @@ final class EditorModel: ObservableObject {
 
     /// True when the active tool owns the pointer over the canvas, so pan,
     /// zoom and the compare handle must stand aside.
-    var toolOwnsCanvas: Bool { toolMode == .crop || toolMode == .heal }
+    var toolOwnsCanvas: Bool { toolMode == .crop || toolMode == .heal || toolMode == .art }
 
     // MARK: - Healing brush
 
@@ -832,6 +851,181 @@ final class EditorModel: ObservableObject {
         let working = HealGeometry.workingSpots(healSpots, crop: appliedCrop)
         spotsFull = sourceFull.flatMap { processor.spotsMask(extent: $0.extent, spots: working) }
         spotsPreview = sourcePreview.flatMap { processor.spotsMask(extent: $0.extent, spots: working) }
+    }
+
+    // MARK: - Art (stickers)
+
+    /// Art tool state for the next sticker, and for the selected one.
+    @Published var stickerKind: StickerKind = .star
+    @Published var stickerSize: Double = Sticker.defaultSize * 100   // % of short side
+    @Published var stickerRotation: Double = 0                       // degrees
+    @Published var stickerOpacity: Double = 100                      // %
+    @Published var stickerColor: MakeupColor = Sticker.defaultColor
+
+    var hasStickers: Bool { !stickers.isEmpty }
+
+    var canDeleteSticker: Bool { selectedSticker != nil }
+
+    /// Stickers as the canvas sees them, keeping the stored index.
+    var visibleStickers: [(index: Int, sticker: Sticker)] {
+        ArtGeometry.indexed(stickers, crop: appliedCrop)
+    }
+
+    private var selectedStickerValue: Sticker? {
+        guard let selectedSticker else { return nil }
+        return stickers.first { $0.id == selectedSticker }
+    }
+
+    /// The glyph the canvas draws for a sticker. Rotation and opacity are
+    /// applied by the view; the glyph itself is composited once per kind and
+    /// colour and cached.
+    func stickerGlyph(_ sticker: Sticker) -> NSImage? {
+        ArtRenderer.glyph(sticker)
+    }
+
+    /// One tap: select the sticker under the pointer, or place a new one.
+    func tapArt(at point: CGPoint) {
+        guard hasImage else { return }
+        let clamped = CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y)))
+        if let hit = stickerID(at: clamped) {
+            selectedSticker = hit
+            return
+        }
+        placeSticker(at: clamped)
+    }
+
+    /// The topmost sticker under a working-frame point, if any. The canvas
+    /// needs the same answer to start a drag, so it lives here rather than in
+    /// the overlay.
+    func stickerID(at point: CGPoint) -> UUID? {
+        visibleStickers.last(where: { hitSticker($0.sticker, at: point) })?.sticker.id
+    }
+
+    private func hitSticker(_ sticker: Sticker, at point: CGPoint) -> Bool {
+        let radius = max(0.015, sticker.size * 0.55)
+        return hypot(sticker.center.x - point.x, sticker.center.y - point.y) <= radius
+    }
+
+    private func placeSticker(at point: CGPoint) {
+        let sticker = Sticker(
+            kind: stickerKind,
+            center: ArtGeometry.originalCenter(point, crop: appliedCrop),
+            size: ArtGeometry.originalSize(max(2, stickerSize) / 100, crop: appliedCrop),
+            rotation: stickerRotation,
+            opacity: stickerOpacity / 100,
+            color: stickerColor)
+        stickers.append(sticker)
+        selectedSticker = sticker.id
+        statusToken = .stickerAdded(stickers.count)
+    }
+
+    func selectSticker(_ id: UUID?) {
+        selectedSticker = id
+    }
+
+    /// Live move while a sticker is dragged; the stored coordinate is the
+    /// original photo's, so a crop keeps it attached.
+    func moveSticker(_ id: UUID, to point: CGPoint) {
+        guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
+        stickers[index].center = ArtGeometry.originalCenter(
+            CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y))),
+            crop: appliedCrop)
+    }
+
+    func updateSelectedSticker(_ update: (inout Sticker) -> Void) {
+        guard let selectedSticker,
+              let index = stickers.firstIndex(where: { $0.id == selectedSticker }) else { return }
+        update(&stickers[index])
+    }
+
+    func deleteSelectedSticker() {
+        guard let selectedSticker,
+              let index = stickers.firstIndex(where: { $0.id == selectedSticker }) else { return }
+        stickers.remove(at: index)
+        self.selectedSticker = nil
+        statusToken = .stickerRemoved
+    }
+
+    func clearStickers() {
+        guard !stickers.isEmpty else { return }
+        commitAdjustments()
+        stickers.removeAll()
+        selectedSticker = nil
+        commitAdjustments()
+        statusToken = .stickersCleared
+    }
+
+    // The controls edit the selected sticker when there is one, and otherwise
+    // set what the next tap will place. That keeps one panel usable both ways.
+
+    func stickerKindBinding() -> Binding<StickerKind> {
+        Binding(get: { self.selectedStickerValue?.kind ?? self.stickerKind },
+                set: { value in
+                    self.stickerKind = value
+                    self.updateSelectedSticker { $0.kind = value }
+                })
+    }
+
+    func stickerSizeBinding() -> Binding<Double> {
+        Binding(get: { (self.selectedStickerValue?.size ?? self.stickerSize / 100) * 100 },
+                set: { value in
+                    self.stickerSize = value
+                    self.updateSelectedSticker {
+                        $0.size = ArtGeometry.originalSize(max(2, value) / 100, crop: self.appliedCrop)
+                    }
+                })
+    }
+
+    func stickerRotationBinding() -> Binding<Double> {
+        Binding(get: { self.selectedStickerValue?.rotation ?? self.stickerRotation },
+                set: { value in
+                    self.stickerRotation = value
+                    self.updateSelectedSticker { $0.rotation = value }
+                })
+    }
+
+    func stickerOpacityBinding() -> Binding<Double> {
+        Binding(get: { (self.selectedStickerValue?.opacity ?? self.stickerOpacity / 100) * 100 },
+                set: { value in
+                    self.stickerOpacity = value
+                    self.updateSelectedSticker { $0.opacity = value / 100 }
+                })
+    }
+
+    func stickerColorBinding() -> Binding<MakeupColor> {
+        Binding(get: { self.selectedStickerValue?.color ?? self.stickerColor },
+                set: { value in
+                    self.stickerColor = value
+                    self.updateSelectedSticker { $0.color = value }
+                })
+    }
+
+    // MARK: - Lens and backdrop colours
+
+    /// A lens colour picked by hand switches the iris tool on, the same way a
+    /// makeup swatch does.
+    func setLensColor(_ color: MakeupColor) {
+        guard adjustments.lensColor != color else { return }
+        adjustments.lensColor = color
+        if adjustments.lensTint == 0 { adjustments.lensTint = 45 }
+    }
+
+    func lensColorBinding() -> Binding<MakeupColor> {
+        Binding(get: { self.adjustments.lensColor },
+                set: { self.setLensColor($0) })
+    }
+
+    func setBackgroundFillColor(_ color: MakeupColor) {
+        guard adjustments.backgroundFillColor != color else { return }
+        adjustments.backgroundFillColor = color
+        if adjustments.backgroundFill == 0, !adjustments.backgroundRemove {
+            adjustments.backgroundFill = 100
+        }
+    }
+
+    func backgroundFillColorBinding() -> Binding<MakeupColor> {
+        Binding(get: { self.adjustments.backgroundFillColor },
+                set: { self.setBackgroundFillColor($0) })
     }
 
     // MARK: - Zoom and pan
@@ -978,6 +1172,7 @@ final class EditorModel: ObservableObject {
         let masks = self.masksPreview
         let faces = self.faces
         let spots = self.spotsPreview
+        let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop)
         let colorSpace = self.sourceColorSpace
         let processor = self.processor
         isBusy = true
@@ -988,7 +1183,8 @@ final class EditorModel: ObservableObject {
 
             let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
                 let processed = processor.process(source, adjustments: adjustments,
-                                                  masks: masks, faces: faces, spots: spots)
+                                                  masks: masks, faces: faces, spots: spots,
+                                                  art: art)
                 return processor.renderCGImage(processed, scale: 1, colorSpace: colorSpace)
             }.value
 
@@ -1006,6 +1202,8 @@ final class EditorModel: ObservableObject {
     func resetAll() {
         commitAdjustments()
         adjustments = .zero
+        stickers.removeAll()
+        selectedSticker = nil
         comparePosition = settings.comparePosition
         commitAdjustments()
     }
@@ -1377,6 +1575,7 @@ final class EditorModel: ObservableObject {
         let masks = self.masksFull
         let faces = self.faces
         let spots = self.spotsFull
+        let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop)
         let colorSpace = self.sourceColorSpace
         let metadata = self.sourceMetadata
         let processor = self.processor
@@ -1402,7 +1601,8 @@ final class EditorModel: ObservableObject {
                     }
                 }
                 let processed = processor.process(source, adjustments: adjustments,
-                                                  masks: fullMasks, faces: faces, spots: spots)
+                                                  masks: fullMasks, faces: faces, spots: spots,
+                                                  art: art)
                 return processor.write(processed, to: url, format: format,
                                        quality: quality, colorSpace: colorSpace,
                                        metadata: metadata)
@@ -1455,7 +1655,8 @@ final class EditorModel: ObservableObject {
                               autoRetouchStrength: autoRetouchStrength,
                               autoColorStrength: autoColorStrength,
                               crop: appliedCrop,
-                              healSpots: healSpots.isEmpty ? nil : healSpots)
+                              healSpots: healSpots.isEmpty ? nil : healSpots,
+                              stickers: stickers.isEmpty ? nil : stickers)
     }
 
     private func writeProject(to url: URL) {

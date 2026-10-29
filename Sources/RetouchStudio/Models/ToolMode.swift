@@ -13,6 +13,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
     case crop
     case body
     case background
+    case art
 
     var id: String { rawValue }
 
@@ -20,7 +21,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
     /// leave untouched hide the strip instead of showing a dead control.
     var showsPresets: Bool {
         self != .crop && self != .look && self != .makeup
-            && self != .body && self != .background
+            && self != .body && self != .background && self != .art
     }
 
     var title: String {
@@ -43,6 +44,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
         case .crop: return "crop"
         case .body: return "figure.stand"
         case .background: return "person.and.background.dotted"
+        case .art: return "star.circle"
         }
     }
 }

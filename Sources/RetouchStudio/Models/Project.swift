@@ -32,4 +32,7 @@ struct RetouchProject: Codable {
     /// Empty is written as `nil` so older projects and older readers are
     /// unaffected.
     var healSpots: [HealSpot]? = nil
+    /// Placed stickers, again in original-photo coordinates. `nil` keeps older
+    /// project files and older readers working unchanged.
+    var stickers: [Sticker]? = nil
 }

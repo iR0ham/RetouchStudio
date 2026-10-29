@@ -73,6 +73,7 @@ struct InspectorView: View {
         case .looks: looksContent
         case .body: bodyContent
         case .background: backgroundContent
+        case .art: artContent
         }
     }
 
@@ -251,6 +252,25 @@ struct InspectorView: View {
                          value: model.binding(for: \.lashDarken),
                          range: 0...100,
                          onReset: { model.resetEffect(\.lashDarken) })
+            ParameterRow(title: model.s.teethAlign,
+                         value: model.binding(for: \.teethAlign),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.teethAlign) })
+
+            HStack(spacing: 6) {
+                GroupLabel(text: model.s.lensColor)
+                Spacer(minLength: 6)
+                ColorPicker(model.s.lensColor,
+                            selection: lensPickerBinding,
+                            supportsOpacity: false)
+                    .labelsHidden()
+                    .help(model.s.pickColorHelp)
+            }
+
+            ParameterRow(title: model.s.lensTint,
+                         value: model.binding(for: \.lensTint),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.lensTint) })
 
             if model.hasImage, model.faceCount > 0, !model.hasVisibleTeeth {
                 SectionNote(text: model.s.teethNotVisible)
@@ -326,6 +346,10 @@ struct InspectorView: View {
                              value: model.binding(for: \.hairShine),
                              range: 0...100,
                              onReset: { model.resetEffect(\.hairShine) })
+                ParameterRow(title: model.s.hairVolume,
+                             value: model.binding(for: \.hairVolume),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.hairVolume) })
             }
 
             SectionNote(text: model.faceCount > 0 ? model.s.makeupNote : model.s.makeupNoFace)
@@ -500,8 +524,142 @@ struct InspectorView: View {
             ParameterRow(title: model.s.backgroundSaturation,
                          value: model.binding(for: \.backgroundSaturation),
                          onReset: { model.resetEffect(\.backgroundSaturation) })
+
+            HStack(spacing: 6) {
+                GroupLabel(text: model.s.backgroundFillColor)
+                Spacer(minLength: 6)
+                ColorPicker(model.s.backgroundFillColor,
+                            selection: fillColorBinding,
+                            supportsOpacity: false)
+                    .labelsHidden()
+                    .help(model.s.pickColorHelp)
+            }
+
+            ParameterRow(title: model.s.backgroundFill,
+                         value: model.binding(for: \.backgroundFill),
+                         range: 0...100,
+                         onReset: { model.resetEffect(\.backgroundFill) })
+
+            Toggle(isOn: removeBackgroundBinding) {
+                Text(model.s.backgroundRemove)
+                    .font(Theme.Font.face(size: 11))
+                    .foregroundStyle(Theme.text)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            if model.adjustments.backgroundRemove {
+                SectionNote(text: model.s.backgroundRemoveNote)
+            }
+
             subjectNote(scope: model.s.backgroundScope)
         }
+    }
+
+    private var artContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                      spacing: 6) {
+                ForEach(StickerKind.allCases) { kind in
+                    PresetChip(title: kind.title,
+                               isActive: model.stickerKindBinding().wrappedValue == kind) {
+                        model.stickerKindBinding().wrappedValue = kind
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                GroupLabel(text: model.s.makeupColor)
+                Spacer(minLength: 6)
+                ColorPicker(model.s.makeupCustomColor,
+                            selection: artColorBinding,
+                            supportsOpacity: false)
+                    .labelsHidden()
+                    .help(model.s.pickColorHelp)
+            }
+
+            ParameterRow(title: model.s.artSize,
+                         value: model.stickerSizeBinding(),
+                         range: 2...60)
+            ParameterRow(title: model.s.artRotation,
+                         value: model.stickerRotationBinding(),
+                         range: -180...180)
+            ParameterRow(title: model.s.opacity,
+                         value: model.stickerOpacityBinding(),
+                         range: 0...100)
+
+            HStack(spacing: 6) {
+                artButton(title: model.s.artDelete, icon: "trash",
+                          enabled: model.canDeleteSticker,
+                          action: model.deleteSelectedSticker)
+                artButton(title: model.s.artClear, icon: "xmark.circle",
+                          enabled: model.hasStickers,
+                          action: model.clearStickers)
+            }
+
+            SectionNote(text: model.s.artNote)
+        }
+    }
+
+    private func artButton(title: String,
+                           icon: String,
+                           enabled: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Icon(name: icon, size: 11)
+                Text(title)
+                    .font(Theme.Font.face(size: 10.5))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Theme.inset)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle(dip: 0.94))
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+    }
+
+    private func makeupColor(from color: Color) -> MakeupColor? {
+        guard let ns = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+        return MakeupColor(hue: Double(ns.hueComponent) * 360,
+                           saturation: Double(ns.saturationComponent),
+                           value: Double(ns.brightnessComponent))
+    }
+
+    private var lensPickerBinding: Binding<Color> {
+        Binding(get: { model.adjustments.lensColor.color },
+                set: { newValue in
+                    guard let color = makeupColor(from: newValue) else { return }
+                    model.setLensColor(color)
+                })
+    }
+
+    private var fillColorBinding: Binding<Color> {
+        Binding(get: { model.adjustments.backgroundFillColor.color },
+                set: { newValue in
+                    guard let color = makeupColor(from: newValue) else { return }
+                    model.setBackgroundFillColor(color)
+                })
+    }
+
+    private var removeBackgroundBinding: Binding<Bool> {
+        Binding(get: { model.adjustments.backgroundRemove },
+                set: { model.adjustments.backgroundRemove = $0 })
+    }
+
+    private var artColorBinding: Binding<Color> {
+        Binding(get: { model.stickerColorBinding().wrappedValue.color },
+                set: { newValue in
+                    guard let color = makeupColor(from: newValue) else { return }
+                    model.stickerColorBinding().wrappedValue = color
+                })
     }
 
     /// The two scene tools need a subject. Say so instead of leaving the
@@ -655,19 +813,26 @@ private struct PanelRow<Content: View>: View {
 
     @State private var hovering = false
 
-    private var isModified: Bool { panel.isModified(model.adjustments) }
+    private var isModified: Bool {
+        panel == .art ? model.hasStickers : panel.isModified(model.adjustments)
+    }
 
     private var reset: (() -> Void)? {
         switch panel.resetKind {
         case .nothing: return nil
         case .skin: return { model.resetGroup(.skin) }
         case .shape: return { model.resetGroup(.reshape) }
-        case .eyes: return { model.resetEffects([\.teethWhiten, \.eyeBrighten, \.eyeSharpen, \.irisEnhance, \.lashDarken]) }
+        case .eyes:
+            return {
+                model.resetEffects([\.teethWhiten, \.eyeBrighten, \.eyeSharpen,
+                                    \.irisEnhance, \.lashDarken, \.lensTint, \.teethAlign])
+            }
         case .makeup: return { model.resetGroup(.makeup) }
         case .color: return { model.resetGroup(.colorLight) }
         case .looks: return { model.resetGroup(.look) }
         case .body: return { model.resetGroup(.body) }
         case .background: return { model.resetGroup(.background) }
+        case .art: return { model.clearStickers() }
         }
     }
 
@@ -761,6 +926,7 @@ enum Panel: String, CaseIterable, Identifiable {
     case looks
     case body
     case background
+    case art
 
     var id: String { rawValue }
 
@@ -780,6 +946,7 @@ enum Panel: String, CaseIterable, Identifiable {
         case .looks: return .look
         case .body: return .body
         case .background: return .background
+        case .art: return .art
         }
     }
 
@@ -801,6 +968,7 @@ enum Panel: String, CaseIterable, Identifiable {
         case .looks: return .looks
         case .body: return .body
         case .background: return .background
+        case .art: return .art
         }
     }
 
@@ -819,16 +987,18 @@ enum Panel: String, CaseIterable, Identifiable {
         case .eyes:
             return a.teethWhiten != 0 || a.eyeBrighten != 0 || a.eyeSharpen != 0
                 || a.irisEnhance != 0 || a.lashDarken != 0
+                || a.lensTint != 0 || a.teethAlign != 0
         case .makeup: return a.hasMakeup
         case .color: return a.colorLightOnly != .zero
         case .looks: return a.hasLook || a.grain != 0
         case .body: return a.bodyOnly != .zero
         case .background: return a.backgroundOnly != .zero
+        case .art: return false
         }
     }
 }
 
 /// The group a row's reset glyph clears.
 enum PanelReset {
-    case nothing, skin, shape, eyes, makeup, color, looks, body, background
+    case nothing, skin, shape, eyes, makeup, color, looks, body, background, art
 }

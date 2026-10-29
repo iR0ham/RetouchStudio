@@ -135,6 +135,14 @@ struct CompareCanvas: View {
                     .opacity(model.zoom > 1.0001 ? 0 : 1)
                     .allowsHitTesting(false)
 
+                if model.adjustments.backgroundRemove {
+                    TransparencyGrid()
+                        .frame(width: displayed.width, height: displayed.height)
+                        .clipShape(RoundedRectangle(cornerRadius: sheetRadius, style: .continuous))
+                        .position(center)
+                        .allowsHitTesting(false)
+                }
+
                 Image(nsImage: processed)
                     .resizable()
                     .interpolation(.high)
@@ -149,6 +157,11 @@ struct CompareCanvas: View {
 
                 if model.toolMode == .heal {
                     HealOverlay(model: model, displayed: displayed)
+                        .position(center)
+                }
+
+                if model.toolMode == .art {
+                    ArtOverlay(model: model, displayed: displayed)
                         .position(center)
                 }
 
@@ -444,6 +457,30 @@ private struct DockButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Theme.bone.opacity(configuration.isPressed ? 0.08 : 0))
             )
+    }
+}
+
+/// The grey checkerboard behind a removed background, so the transparency an
+/// export will carry is visible on the canvas instead of reading as black.
+struct TransparencyGrid: View {
+    var body: some View {
+        Canvas { context, size in
+            let cell: CGFloat = 9
+            context.fill(Path(CGRect(origin: .zero, size: size)),
+                         with: .color(Color(white: 0.90)))
+
+            let columns = Int(ceil(size.width / cell))
+            let rows = Int(ceil(size.height / cell))
+            for row in 0..<rows {
+                for column in 0..<columns where (row + column).isMultiple(of: 2) {
+                    let rect = CGRect(x: CGFloat(column) * cell,
+                                      y: CGFloat(row) * cell,
+                                      width: cell,
+                                      height: cell)
+                    context.fill(Path(rect), with: .color(Color(white: 0.78)))
+                }
+            }
+        }
     }
 }
 

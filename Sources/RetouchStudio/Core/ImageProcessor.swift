@@ -657,7 +657,8 @@ final class ImageProcessor {
                  adjustments a: Adjustments,
                  masks: MaskSet?,
                  faces: [FaceGeometry] = [],
-                 spots: SpotHealing? = nil) -> CIImage {
+                 spots: SpotHealing? = nil,
+                 art: [Sticker] = []) -> CIImage {
         let extent = source.extent
         // Every radius is expressed relative to image size so the preview and
         // the full-resolution export look the same.
@@ -751,7 +752,18 @@ final class ImageProcessor {
                                                   mask: underEyeMask, scale: scale)
         }
 
-        // 3) Teeth and eyes.
+        // 3) Teeth and eyes. Alignment runs first: it closes the gaps between
+        //    teeth, and whitening then treats the straightened enamel as one
+        //    surface instead of brightening both sides of a dark line.
+        if a.teethAlign > 0, let teethMask = masks?.teeth {
+            let gapRadius = faces.first?.enamelRect.map { $0.height * extent.height * 0.45 }
+                ?? (min(extent.width, extent.height) * 0.006)
+            let searchMask = grown(teethMask,
+                                   by: max(1, gapRadius * 0.8),
+                                   feather: max(1.5, gapRadius * 0.35))
+            image = SkinEngine.alignTeeth(image, strength: a.teethAlign,
+                                          mask: searchMask, radius: gapRadius)
+        }
         if a.teethWhiten > 0, let teethMask = masks?.teeth {
             image = SkinEngine.whitenTeeth(image, strength: a.teethWhiten, mask: teethMask)
         }
@@ -768,6 +780,10 @@ final class ImageProcessor {
         }
         if a.lashDarken > 0, let lashMask = masks?.lashes {
             image = SkinEngine.darkenLashes(image, strength: a.lashDarken, mask: lashMask)
+        }
+        if a.lensTint > 0, let irisMask = masks?.iris {
+            image = MakeupEngine.applyLens(image, strength: a.lensTint,
+                                           mask: irisMask, color: a.lensColor)
         }
 
         // 3b) Makeup, after the skin work: smoothing first would dilute the
@@ -801,7 +817,8 @@ final class ImageProcessor {
             image = MakeupEngine.applyContour(image, strength: a.contour,
                                               mask: contourMask, color: a.contourColor)
         }
-        if a.hairColor > 0 || a.hairShine > 0, let hairGeometry = masks?.hair {
+        if a.hairColor > 0 || a.hairShine > 0 || a.hairVolume > 0,
+           let hairGeometry = masks?.hair {
             // The head band is geometric; the subject silhouette trims it so a
             // wall, curtain or sky behind the head cannot be dyed.
             let hairMask = masks?.person.map { MaskBuilder.intersect(hairGeometry, $0) }
@@ -813,6 +830,22 @@ final class ImageProcessor {
             if a.hairShine > 0 {
                 image = MakeupEngine.addHairShine(image, strength: a.hairShine,
                                                   mask: hairMask, scale: scale)
+            }
+            if a.hairVolume > 0, let face = faces.first {
+                // The crown is the head band around the hairline; the bulge is
+                // centred there, and the mask is grown by a fraction of its own
+                // radius so the new volume is not blended away at the old edge.
+                let box = face.hairRect
+                let center = CGPoint(x: box.midX * extent.width,
+                                     y: box.midY * extent.height)
+                let radius = max(box.width * extent.width,
+                                 box.height * extent.height) * 0.62
+                let volumeMask = grown(hairMask,
+                                       by: max(1, radius * 0.16),
+                                       feather: max(2, radius * 0.10))
+                image = SceneEngine.addHairVolume(image, mask: volumeMask,
+                                                  center: center, radius: radius,
+                                                  amount: a.hairVolume)
             }
         }
 
@@ -862,6 +895,22 @@ final class ImageProcessor {
                                                 tone: a.backgroundTone,
                                                 saturation: a.backgroundSaturation,
                                                 scale: scale)
+        }
+        // A solid backdrop is graded like the blurred one — behind the subject
+        // and before removal — so compositing order stays predictable.
+        if a.backgroundFill > 0, let person = masks?.person {
+            image = SceneEngine.fillBackground(image, person: person,
+                                               color: a.backgroundFillColor,
+                                               amount: a.backgroundFill)
+        }
+        if a.backgroundRemove, let person = masks?.person {
+            image = SceneEngine.removeBackground(image, person: person)
+        }
+
+        // 7) Art sits on top of everything, including a replaced background:
+        //    a sticker is placed on the finished picture, not under its grade.
+        if !art.isEmpty {
+            image = ArtRenderer.apply(image, stickers: art)
         }
 
         return image.cropped(to: extent)
@@ -999,7 +1048,16 @@ final class ImageProcessor {
                colorSpace: CGColorSpace? = nil,
                metadata: [CFString: Any] = [:]) -> Bool {
         let ciFormat: CIFormat = format == .jpeg ? .RGBA8 : .RGBA16
-        guard let cgImage = renderCGImage(image, scale: 1, colorSpace: colorSpace, format: ciFormat) else {
+        // A removed background is transparent, and JPEG has no alpha channel:
+        // flatten onto white so the file has a real backdrop instead of the
+        // black pixels an ignored alpha channel would leave behind.
+        var flattened = image
+        if format == .jpeg {
+            let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1))
+                .cropped(to: image.extent)
+            flattened = image.composited(over: white)
+        }
+        guard let cgImage = renderCGImage(flattened, scale: 1, colorSpace: colorSpace, format: ciFormat) else {
             return false
         }
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL,

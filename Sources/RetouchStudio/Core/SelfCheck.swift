@@ -77,6 +77,16 @@ enum SelfCheck {
         passed = checkLooksAndGrain() && passed
         print("-- makeup: lips, cheeks and brows --")
         passed = checkMakeup() && passed
+        print("-- contact lens tints the iris, keeps its striations --")
+        passed = checkLensTint() && passed
+        print("-- teeth alignment closes gaps and leaves enamel alone --")
+        passed = checkTeethAlignment() && passed
+        print("-- hair volume grows the crown, not the face --")
+        passed = checkHairVolume() && passed
+        print("-- background fill and removal follow the person mask --")
+        passed = checkBackgroundReplacement() && passed
+        print("-- stickers composite last and follow the crop --")
+        passed = checkStickers() && passed
         print("-- hair dye, shine and contour masks --")
         passed = checkHairAndContour() && passed
         print("-- split tone and luminance-only detail --")
@@ -1766,6 +1776,9 @@ enum SelfCheck {
         adjustments.browDefine = 50
         adjustments.eyeshadow = 25
         adjustments.eyeliner = 15
+        let stickers = [Sticker(kind: .heart, center: CGPoint(x: 0.3, y: 0.6),
+                                size: 0.18, rotation: 25, opacity: 0.8,
+                                color: MakeupColor(hue: 330, saturation: 0.7, value: 0.9))]
 
         let project = RetouchProject(imagePath: "/tmp/photo.jpg",
                                      adjustments: adjustments,
@@ -1774,7 +1787,8 @@ enum SelfCheck {
                                      autoRetouchStrength: 55,
                                      autoColorStrength: 65,
                                      crop: crop,
-                                     healSpots: spots)
+                                     healSpots: spots,
+                                     stickers: stickers)
         guard let data = try? JSONEncoder().encode(project),
               let decoded = try? JSONDecoder().decode(RetouchProject.self, from: data) else {
             print("  ✗ could not encode/decode a project")
@@ -1782,12 +1796,14 @@ enum SelfCheck {
         }
         let roundTrip = decoded.crop == crop && decoded.adjustments == adjustments
             && decoded.healSpots == spots
+            && decoded.stickers == stickers
             && decoded.autoColorStrength == 65
 
         // Projects written before crop existed have no `crop` key at all.
         var legacyObject = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         legacyObject.removeValue(forKey: "crop")
         legacyObject.removeValue(forKey: "healSpots")
+        legacyObject.removeValue(forKey: "stickers")
         legacyObject.removeValue(forKey: "autoColorStrength")
         if var old = legacyObject["adjustments"] as? [String: Any] {
             old.removeValue(forKey: "blacks")
@@ -1797,11 +1813,12 @@ enum SelfCheck {
         let legacyData = try? JSONSerialization.data(withJSONObject: legacyObject)
         let legacy = legacyData.flatMap { try? JSONDecoder().decode(RetouchProject.self, from: $0) }
         let legacyOK = legacy?.crop == nil && legacy?.healSpots == nil
+            && legacy?.stickers == nil
             && legacy?.autoColorStrength == nil
             && legacy?.adjustments.blacks == 0 && legacy?.adjustments.whites == 0
             && legacy?.adjustments.smooth == 42
 
-        print("  \(roundTrip ? "✓" : "✗") crop, stamps and sliders survive a project round-trip")
+        print("  \(roundTrip ? "✓" : "✗") crop, stamps, stickers and sliders survive a project round-trip")
         print("  \(legacyOK ? "✓" : "✗") a project without a crop or levels key still opens")
         return roundTrip && legacyOK
     }
@@ -2975,6 +2992,351 @@ enum SelfCheck {
         return context.makeImage()
     }
 
+    // MARK: - Contact lens, teeth alignment, background replacement, stickers
+
+    /// A lens is a pigment on the iris, so it must colour the iris while its
+    /// own light and dark bands keep the shape — and nothing outside the iris
+    /// may move.
+    private static func checkLensTint() -> Bool {
+        var passed = true
+        let size = 320
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        guard let fixture = makeLensFixture(size: size) else {
+            print("  ✗ could not build the lens fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else {
+            print("  ✗ could not render the lens fixture")
+            return false
+        }
+        let irisRect = CGRect(x: 0.40, y: 0.44, width: 0.20, height: 0.12)
+        guard let irisMask = MaskBuilder.makeMask(
+            extent: extent,
+            shapes: [MaskShape(ellipse: irisRect)],
+            feather: 1.5) else {
+            print("  ✗ could not build the iris mask")
+            return false
+        }
+
+        let lens = MakeupColor(hue: 25, saturation: 0.90, value: 0.95)
+        let tintedCI = MakeupEngine.applyLens(source, strength: 100, mask: irisMask, color: lens)
+        guard let tinted = processor.renderCGImage(tintedCI, scale: 1) else {
+            print("  ✗ could not render the lens pass")
+            return false
+        }
+
+        let lightPoint = CGPoint(x: 0.455, y: 0.50)
+        let darkPoint = CGPoint(x: 0.545, y: 0.50)
+        let skinRect = CGRect(x: 0.05, y: 0.05, width: 0.15, height: 0.15)
+        let irisMove = meanColorDifference(baseline, tinted, normalized: irisRect)
+        let skinMove = meanColorDifference(baseline, tinted, normalized: skinRect)
+
+        let lightBefore = luminance(baseline, normalizedAt: lightPoint) ?? 0
+        let darkBefore = luminance(baseline, normalizedAt: darkPoint) ?? 0
+        let lightAfter = luminance(tinted, normalizedAt: lightPoint) ?? 0
+        let darkAfter = luminance(tinted, normalizedAt: darkPoint) ?? 0
+        let contrastBefore = lightBefore - darkBefore
+        let contrastAfter = lightAfter - darkAfter
+
+        let ok = irisMove > 12 && skinMove <= 0.5
+            && contrastBefore > 20 && Double(contrastAfter) > Double(contrastBefore) * 0.6
+        print("  \(ok ? "✓" : "✗") lens: iris Δ\(String(format: "%.1f", irisMove)), "
+            + "skin Δ\(String(format: "%.2f", skinMove)), "
+            + "striation \(contrastBefore) → \(contrastAfter) levels")
+        passed = ok && passed
+
+        // A clear lens is a no-op, not a faint wash.
+        let clear = MakeupEngine.applyLens(source, strength: 0, mask: irisMask, color: lens)
+        let clearDelta = processor.renderCGImage(clear, scale: 1)
+            .flatMap { meanAbsoluteDifference(baseline, $0) } ?? 999
+        let clearOK = clearDelta == 0
+        print("  \(clearOK ? "✓" : "✗") zero strength leaves the iris untouched (Δ\(String(format: "%.3f", clearDelta)))")
+        return clearOK && passed
+    }
+
+    /// Skin-toned sclera with a two-tone iris and a dark pupil. The light and
+    /// dark halves are the striations the lens has to preserve.
+    private static func makeLensFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+        context.setFillColor(CGColor(red: 0.93, green: 0.94, blue: 0.93, alpha: 1))
+        context.fillEllipse(in: CGRect(x: s * 0.32, y: s * 0.40, width: s * 0.36, height: s * 0.20))
+
+        let iris = CGRect(x: s * 0.40, y: s * 0.44, width: s * 0.20, height: s * 0.12)
+        context.saveGState()
+        context.addEllipse(in: iris)
+        context.clip()
+        context.setFillColor(CGColor(red: 0.30, green: 0.42, blue: 0.62, alpha: 1))
+        context.fill(CGRect(x: iris.minX, y: iris.minY, width: iris.width / 2, height: iris.height))
+        context.setFillColor(CGColor(red: 0.16, green: 0.24, blue: 0.42, alpha: 1))
+        context.fill(CGRect(x: iris.midX, y: iris.minY, width: iris.width / 2, height: iris.height))
+        context.restoreGState()
+
+        context.setFillColor(CGColor(red: 0.05, green: 0.06, blue: 0.09, alpha: 1))
+        context.fillEllipse(in: CGRect(x: s * 0.475, y: s * 0.475, width: s * 0.05, height: s * 0.05))
+        return context.makeImage()
+    }
+
+    /// Alignment fills the dark gaps between teeth with the enamel around
+    /// them. Enamel that is already even has to stay exactly where it was.
+    private static func checkTeethAlignment() -> Bool {
+        let size = 320
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        guard let fixture = makeSpacedTeethFixture(size: size) else {
+            print("  ✗ could not build the spaced-teeth fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else {
+            print("  ✗ could not render the spaced-teeth fixture")
+            return false
+        }
+        let teethRect = CGRect(x: 0.31, y: 0.43, width: 0.38, height: 0.14)
+        guard let mask = MaskBuilder.makeMask(
+            extent: extent,
+            shapes: [MaskShape(rect: teethRect, cornerRadius: 0.03)],
+            feather: 1.5) else {
+            print("  ✗ could not build the teeth mask")
+            return false
+        }
+
+        let aligned = processor.renderCGImage(
+            SkinEngine.alignTeeth(source, strength: 100, mask: mask, radius: 6), scale: 1)
+        guard let aligned else {
+            print("  ✗ could not render the alignment pass")
+            return false
+        }
+
+        let gapPoint = CGPoint(x: 0.41, y: 0.50)
+        let enamelPoint = CGPoint(x: 0.455, y: 0.50)
+        let gapBefore = luminance(baseline, normalizedAt: gapPoint) ?? 0
+        let gapAfter = luminance(aligned, normalizedAt: gapPoint) ?? 0
+        let enamelBefore = luminance(baseline, normalizedAt: enamelPoint) ?? 0
+        let enamelAfter = luminance(aligned, normalizedAt: enamelPoint) ?? 0
+        let gapLift = gapAfter - gapBefore
+        let enamelHold = abs(enamelAfter - enamelBefore)
+
+        let ok = gapLift > 15 && enamelHold <= 3
+        print("  \(ok ? "✓" : "✗") gaps +\(gapLift) levels (\(gapBefore) → \(gapAfter)), "
+            + "enamel Δ\(enamelHold) levels")
+        return ok
+    }
+
+    /// A bright enamel band with three dark gaps between the teeth.
+    private static func makeSpacedTeethFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let s = CGFloat(size)
+        context.setFillColor(CGColor(red: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+        context.setFillColor(CGColor(red: 0.30, green: 0.10, blue: 0.12, alpha: 1))
+        context.fill(CGRect(x: s * 0.28, y: s * 0.40, width: s * 0.44, height: s * 0.20))
+        context.setFillColor(CGColor(red: 0.78, green: 0.76, blue: 0.70, alpha: 1))
+        context.fill(CGRect(x: s * 0.32, y: s * 0.44, width: s * 0.36, height: s * 0.12))
+        context.setFillColor(CGColor(red: 0.35, green: 0.31, blue: 0.28, alpha: 1))
+        for x in [0.405, 0.485, 0.565] {
+            context.fill(CGRect(x: s * CGFloat(x), y: s * 0.44,
+                                width: s * 0.010, height: s * 0.12))
+        }
+        return context.makeImage()
+    }
+
+    /// Volume is a bulge inside the hair band. The crown must rise into the
+    /// space above the original hairline while the face and the room stay put.
+    private static func checkHairVolume() -> Bool {
+        var passed = true
+        let size = 400
+        guard let fixture = makeHairContourFixture(size: size) else {
+            print("  ✗ could not build the hair fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let face = makeupFace()
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else {
+            print("  ✗ could not render the hair fixture")
+            return false
+        }
+        guard let masks = processor.buildMasks(extent: source.extent, faces: [face], image: source) else {
+            print("  ✗ could not build the hair fixture masks")
+            return false
+        }
+
+        var volume = Adjustments()
+        volume.hairVolume = 100
+        let volumed = processor.renderCGImage(
+            processor.process(source, adjustments: volume, masks: masks, faces: [face]), scale: 1)
+        guard let volumed else {
+            print("  ✗ could not render the hair-volume pass")
+            return false
+        }
+
+        let crownPoint = CGPoint(x: 0.50, y: 0.935)
+        let facePoint = CGPoint(x: 0.50, y: 0.40)
+        let roomPoint = CGPoint(x: 0.02, y: 0.50)
+        let crownBefore = luminance(baseline, normalizedAt: crownPoint) ?? 0
+        let crownAfter = luminance(volumed, normalizedAt: crownPoint) ?? 0
+        let faceMove = sampleDelta(baseline, volumed, at: facePoint)
+        let roomMove = sampleDelta(baseline, volumed, at: roomPoint)
+        let crownDrop = crownBefore - crownAfter
+        let ok = crownDrop > 25 && faceMove <= 0.5 && roomMove <= 0.5
+        print("  \(ok ? "✓" : "✗") hair volume: crown \(crownBefore) → \(crownAfter), "
+            + "face Δ\(String(format: "%.2f", faceMove)), room Δ\(String(format: "%.2f", roomMove))")
+        passed = ok && passed
+
+        // A zero slider is a no-op.
+        var none = Adjustments()
+        none.hairVolume = 0
+        let untouched = processor.renderCGImage(
+            processor.process(source, adjustments: none, masks: masks, faces: [face]), scale: 1)
+            .flatMap { meanAbsoluteDifference(baseline, $0) } ?? 999
+        let noneOK = untouched == 0
+        print("  \(noneOK ? "✓" : "✗") zero volume leaves the hair untouched (Δ\(String(format: "%.3f", untouched)))")
+        return noneOK && passed
+    }
+
+    /// Fill paints the person's surroundings and stops at the subject; removal
+    /// makes those same pixels transparent while the subject stays opaque.
+    private static func checkBackgroundReplacement() -> Bool {
+        var passed = true
+        let size = 400
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        guard let fixture = makeSceneFixture(size: size) else {
+            print("  ✗ could not build the scene fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1),
+              let person = MaskBuilder.makeMask(
+                extent: extent,
+                shapes: [MaskShape(rect: CGRect(x: 0.30, y: 0.08, width: 0.40, height: 0.84),
+                                   cornerRadius: 0.06)],
+                feather: 2) else {
+            print("  ✗ could not prepare the background fixture")
+            return false
+        }
+
+        let backRect = CGRect(x: 0.02, y: 0.40, width: 0.18, height: 0.20)
+        let skinRect = CGRect(x: 0.38, y: 0.55, width: 0.24, height: 0.28)
+
+        // 1) A white fill covers the room and leaves the subject alone.
+        var fill = Adjustments()
+        fill.backgroundFill = 100
+        fill.backgroundFillColor = MakeupColor(hue: 0, saturation: 0, value: 0.97)
+        guard let filled = processor.renderCGImage(
+            processor.process(source, adjustments: fill, masks: .personOnly(person)), scale: 1) else {
+            print("  ✗ could not render the background fill")
+            return false
+        }
+        let backFill = meanColorDifference(baseline, filled, normalized: backRect)
+        let subjectFill = meanColorDifference(baseline, filled, normalized: skinRect)
+        let fillLuma = regionMeanLuminance(filled, normalized: backRect)
+        let fillOK = backFill > 20 && subjectFill <= 0.5 && fillLuma > 200
+        print("  \(fillOK ? "✓" : "✗") background fill: room Δ\(String(format: "%.1f", backFill)) "
+            + "to \(String(format: "%.0f", fillLuma)), subject Δ\(String(format: "%.2f", subjectFill))")
+        passed = fillOK && passed
+
+        // 2) Removal clears the room's alpha and keeps the subject opaque.
+        var cutout = Adjustments()
+        cutout.backgroundRemove = true
+        guard let removed = processor.renderCGImage(
+            processor.process(source, adjustments: cutout, masks: .personOnly(person)), scale: 1) else {
+            print("  ✗ could not render the background removal")
+            return false
+        }
+        let backAlpha = alpha(removed, normalized: CGPoint(x: 0.09, y: 0.50)) ?? -1
+        let subjectAlpha = alpha(removed, normalized: CGPoint(x: 0.50, y: 0.50)) ?? -1
+        let removeOK = backAlpha < 12 && subjectAlpha > 240
+        print("  \(removeOK ? "✓" : "✗") background removal: room alpha \(backAlpha), "
+            + "subject alpha \(subjectAlpha)")
+        passed = removeOK && passed
+
+        // 3) Both live in the background group and need the person mask.
+        let groupOK = cutout.backgroundOnly.backgroundRemove
+            && cutout.usesPersonTools
+            && fill.backgroundOnly.backgroundFill == 100
+            && !Adjustments(smooth: 40).usesPersonTools
+        print("  \(groupOK ? "✓" : "✗") fill and removal belong to the background group")
+        return groupOK && passed
+    }
+
+    /// A sticker is composited after every retouch, and a crop moves it with
+    /// the pixels: the working-frame mapping round-trips and the pipeline draws
+    /// it at the center it was placed on.
+    private static func checkStickers() -> Bool {
+        var passed = true
+        let size = 300
+        guard let fixture = makeStickerFixture(size: size) else {
+            print("  ✗ could not build the sticker fixture")
+            return false
+        }
+        let processor = ImageProcessor.shared
+        let source = CIImage(cgImage: fixture)
+        guard let baseline = processor.renderCGImage(source, scale: 1) else {
+            print("  ✗ could not render the sticker fixture")
+            return false
+        }
+
+        let color = MakeupColor(hue: 0, saturation: 0.90, value: 0.85)
+        let sticker = Sticker(kind: .star, center: CGPoint(x: 0.5, y: 0.5),
+                              size: 0.40, rotation: 0, opacity: 1, color: color)
+        guard let drawn = processor.renderCGImage(
+            processor.process(source, adjustments: Adjustments(), masks: nil, art: [sticker]),
+            scale: 1) else {
+            print("  ✗ could not render the sticker pass")
+            return false
+        }
+        let centre = pixel(drawn, normalized: CGPoint(x: 0.5, y: 0.5))
+        let corner = sampleDelta(baseline, drawn, at: CGPoint(x: 0.06, y: 0.06))
+        let centreOK = centre.map { $0.r > 150 && $0.r - $0.g > 70 } ?? false
+        let drawOK = centreOK && corner <= 0.5
+        print("  \(drawOK ? "✓" : "✗") sticker: centre \(centre.map { "rgb(\($0.r), \($0.g), \($0.b))" } ?? "nil"), "
+            + "corner Δ\(String(format: "%.2f", corner))")
+        passed = drawOK && passed
+
+        // Crop mapping: normalize into the working frame and back.
+        let crop = CGRect(x: 0.2, y: 0.25, width: 0.5, height: 0.5)
+        let working = ArtGeometry.workingCenter(sticker.center, crop: crop)
+        let restored = ArtGeometry.originalCenter(working, crop: crop)
+        let workingSize = ArtGeometry.workingSize(sticker.size, crop: crop)
+        let restoreSize = ArtGeometry.originalSize(workingSize, crop: crop)
+        let cropOK = abs(restored.x - sticker.center.x) < 0.0001
+            && abs(restored.y - sticker.center.y) < 0.0001
+            && abs(workingSize - 0.8) < 0.0001
+            && abs(restoreSize - sticker.size) < 0.0001
+        print("  \(cropOK ? "✓" : "✗") crop mapping: centre \(fmtPoint(restored)), "
+            + "size \(String(format: "%.2f", workingSize)) → \(String(format: "%.2f", restoreSize))")
+        passed = cropOK && passed
+
+        // Stickers are part of the project: they must decode unchanged.
+        let encoded = try? JSONEncoder().encode([sticker])
+        let decoded = encoded.flatMap { try? JSONDecoder().decode([Sticker].self, from: $0) }
+        let codecOK = decoded == [sticker] && ArtRenderer.glyph(sticker) != nil
+        print("  \(codecOK ? "✓" : "✗") a sticker survives encode/decode and has a drawn glyph")
+        return codecOK && passed
+    }
+
+    private static func makeStickerFixture(size: Int) -> CGImage? {
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setFillColor(CGColor(red: 0.50, green: 0.50, blue: 0.50, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        return context.makeImage()
+    }
+
     // MARK: - Hair and contour
 
     /// Hair is dyed through its own geometry and contour through the cheek
@@ -3231,6 +3593,13 @@ enum SelfCheck {
         a.hslHue[HSLBand.blue.rawValue] = 30
         a.hslSaturation[HSLBand.green.rawValue] = -45
         a.hslLuminance[HSLBand.orange.rawValue] = 20
+        a.lensTint = 55
+        a.lensColor = MakeupColor(hue: 205, saturation: 0.45, value: 0.40)
+        a.teethAlign = 65
+        a.hairVolume = 45
+        a.backgroundFill = 80
+        a.backgroundFillColor = MakeupColor(hue: 190, saturation: 0.30, value: 0.85)
+        a.backgroundRemove = true
 
         do {
             let data = try JSONEncoder().encode(a)
@@ -3243,8 +3612,14 @@ enum SelfCheck {
                 && b.hslHue[HSLBand.blue.rawValue] == 30
                 && b.hslSaturation[HSLBand.green.rawValue] == -45
                 && b.hslLuminance[HSLBand.orange.rawValue] == 20
+                && b.lensTint == 55 && b.lensColor == a.lensColor
+                && b.teethAlign == 65 && b.hairVolume == 45
+                && b.backgroundFill == 80 && b.backgroundFillColor == a.backgroundFillColor
+                && b.backgroundRemove
             let backwards = legacy.hslHue.count == HSLBand.allCases.count
                 && legacy.hairColor == 0 && legacy.bodyWaist == 0 && legacy.curveHighlights == 0
+                && legacy.lensTint == 0 && legacy.teethAlign == 0 && legacy.hairVolume == 0
+                && legacy.backgroundFill == 0 && !legacy.backgroundRemove
             print("  \(roundTrip ? "✓" : "✗") new fields survive encode/decode")
             print("  \(backwards ? "✓" : "✗") a project without them opens with defaults")
             return roundTrip && backwards
@@ -3548,6 +3923,19 @@ enum SelfCheck {
         let index = y * image.bytesPerRow + x * bytesPerPixel
         guard index + 2 < CFDataGetLength(data) else { return nil }
         return (Int(pointer[index]), Int(pointer[index + 1]), Int(pointer[index + 2]))
+    }
+
+    /// Alpha at a normalized point, for a background that has been removed.
+    private static func alpha(_ image: CGImage, normalized point: CGPoint) -> Int? {
+        guard let data = image.dataProvider?.data, let pointer = CFDataGetBytePtr(data) else { return nil }
+        let bytesPerPixel = max(1, image.bitsPerPixel / 8)
+        guard bytesPerPixel >= 4 else { return nil }
+        let x = Int((point.x * CGFloat(image.width)).rounded())
+        let y = Int(((1 - point.y) * CGFloat(image.height)).rounded())
+        guard x >= 0, y >= 0, x < image.width, y < image.height else { return nil }
+        let index = y * image.bytesPerRow + x * bytesPerPixel
+        guard index + 3 < CFDataGetLength(data) else { return nil }
+        return Int(pointer[index + 3])
     }
 
     private static func pixel(_ image: CGImage, normalized point: CGPoint) -> (r: Int, g: Int, b: Int)? {

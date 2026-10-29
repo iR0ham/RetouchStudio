@@ -20,6 +20,9 @@ enum StatusToken: Equatable {
     case healCleared
     case healStampRemoved
     case healStampAdded(Int)
+    case stickerAdded(Int)
+    case stickerRemoved
+    case stickersCleared
     case presetSaved(String)
     case analyzingSmart
     case smartFailed

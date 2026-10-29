@@ -163,6 +163,32 @@ struct Adjustments: Equatable, Codable {
     var hslSaturation: [Double] = Array(repeating: 0, count: HSLBand.allCases.count)
     var hslLuminance: [Double] = Array(repeating: 0, count: HSLBand.allCases.count)
 
+    // MARK: - Iris colour and teeth alignment
+    //
+    // A contact lens is a pigment on the iris that keeps its striations, which
+    // is the same operation as lipstick on a lip — so it rides the same
+    // luminance-preserving tint and stays in the retouch group.
+    var lensTint: Double = 0            // 0...100
+    var lensColor: MakeupColor = MakeupColor(hue: 210, saturation: 0.45, value: 0.48)
+    /// Closes the dark gaps between teeth by borrowing the enamel around them,
+    /// so a spaced or uneven smile reads straighter without warping the jaw.
+    var teethAlign: Double = 0          // 0...100
+
+    // MARK: - Hair volume
+    //
+    // A radial bulge confined to the hair band. It is a makeup-group tool
+    // because it changes how the hair reads rather than the face's geometry.
+    var hairVolume: Double = 0          // 0...100
+
+    // MARK: - Background replacement
+    //
+    // Fill puts a solid colour behind the subject; removal makes the background
+    // transparent so an export can be dropped onto another backdrop. Both read
+    // the same feathered person mask as blur/tone/saturation.
+    var backgroundFill: Double = 0      // 0...100
+    var backgroundFillColor: MakeupColor = MakeupColor(hue: 0, saturation: 0, value: 0.96)
+    var backgroundRemove: Bool = false
+
     static let zero = Adjustments()
 
     var isIdentity: Bool { self == .zero }
@@ -186,6 +212,9 @@ struct Adjustments: Equatable, Codable {
         a.shine = shine
         a.irisEnhance = irisEnhance
         a.lashDarken = lashDarken
+        a.lensTint = lensTint
+        a.lensColor = lensColor
+        a.teethAlign = teethAlign
         return a
     }
 
@@ -259,6 +288,7 @@ struct Adjustments: Equatable, Codable {
         a.hairColor = hairColor
         a.hairTint = hairTint
         a.hairShine = hairShine
+        a.hairVolume = hairVolume
         a.contour = contour
         a.contourColor = contourColor
         return a
@@ -282,6 +312,9 @@ struct Adjustments: Equatable, Codable {
         a.backgroundBlur = backgroundBlur
         a.backgroundTone = backgroundTone
         a.backgroundSaturation = backgroundSaturation
+        a.backgroundFill = backgroundFill
+        a.backgroundFillColor = backgroundFillColor
+        a.backgroundRemove = backgroundRemove
         return a
     }
 
@@ -290,7 +323,7 @@ struct Adjustments: Equatable, Codable {
     /// band would otherwise tint a wall behind the subject.
     var usesPersonTools: Bool {
         bodyOnly != .zero || backgroundOnly != .zero
-            || hairColor != 0 || hairShine != 0
+            || hairColor != 0 || hairShine != 0 || hairVolume != 0
     }
 
     var hasMakeup: Bool { makeupOnly != .zero }
@@ -314,6 +347,7 @@ struct Adjustments: Equatable, Codable {
         result.hairColor = patch.hairColor
         result.hairTint = patch.hairTint
         result.hairShine = patch.hairShine
+        result.hairVolume = patch.hairVolume
         result.contour = patch.contour
         result.contourColor = patch.contourColor
         return result
@@ -367,6 +401,9 @@ struct Adjustments: Equatable, Codable {
         result.shine = patch.shine
         result.irisEnhance = patch.irisEnhance
         result.lashDarken = patch.lashDarken
+        result.lensTint = patch.lensTint
+        result.lensColor = patch.lensColor
+        result.teethAlign = patch.teethAlign
         return result
     }
 
@@ -389,6 +426,8 @@ struct Adjustments: Equatable, Codable {
         result.shine = shine * factor
         result.irisEnhance = irisEnhance * factor
         result.lashDarken = lashDarken * factor
+        result.lensTint = lensTint * factor
+        result.teethAlign = teethAlign * factor
         return result
     }
 
@@ -448,6 +487,9 @@ struct Adjustments: Equatable, Codable {
         result.backgroundBlur = patch.backgroundBlur
         result.backgroundTone = patch.backgroundTone
         result.backgroundSaturation = patch.backgroundSaturation
+        result.backgroundFill = patch.backgroundFill
+        result.backgroundFillColor = patch.backgroundFillColor
+        result.backgroundRemove = patch.backgroundRemove
         return result
     }
 }
@@ -541,6 +583,8 @@ extension Adjustments {
         case contour, contourColor
         case curveShadows, curveMidtones, curveHighlights
         case hslHue, hslSaturation, hslLuminance
+        case lensTint, lensColor, teethAlign, hairVolume
+        case backgroundFill, backgroundFillColor, backgroundRemove
         // Written by the palette-only builds; read to migrate old projects.
         case lipShadeID, blushShadeID
     }
@@ -552,6 +596,9 @@ extension Adjustments {
         }
         func text(_ key: CodingKeys) -> String {
             (try? c.decodeIfPresent(String.self, forKey: key)) ?? ""
+        }
+        func flag(_ key: CodingKeys) -> Bool {
+            ((try? c.decodeIfPresent(Bool.self, forKey: key)) ?? nil) ?? false
         }
         /// A per-band array, padded or trimmed to the current band count so a
         /// file written by a build with a different band list still decodes.
@@ -641,6 +688,14 @@ extension Adjustments {
         backgroundBlur = amount(.backgroundBlur)
         backgroundTone = amount(.backgroundTone)
         backgroundSaturation = amount(.backgroundSaturation)
+        lensTint = amount(.lensTint)
+        lensColor = color(.lensColor, fallback: MakeupColor(hue: 210, saturation: 0.45, value: 0.48))
+        teethAlign = amount(.teethAlign)
+        hairVolume = amount(.hairVolume)
+        backgroundFill = amount(.backgroundFill)
+        backgroundFillColor = color(.backgroundFillColor,
+                                    fallback: MakeupColor(hue: 0, saturation: 0, value: 0.96))
+        backgroundRemove = flag(.backgroundRemove)
     }
 
     /// Written by hand because the legacy shade identifiers are decode-only:
@@ -673,8 +728,11 @@ extension Adjustments {
             (.curveHighlights, curveHighlights),
             (.backgroundBlur, backgroundBlur), (.backgroundTone, backgroundTone),
             (.backgroundSaturation, backgroundSaturation),
+            (.lensTint, lensTint), (.teethAlign, teethAlign), (.hairVolume, hairVolume),
+            (.backgroundFill, backgroundFill),
         ]
         for (key, value) in amounts { try c.encode(value, forKey: key) }
+        try c.encode(backgroundRemove, forKey: .backgroundRemove)
         try c.encode(lookID, forKey: .lookID)
         try c.encode(lipColor, forKey: .lipColor)
         try c.encode(blushColor, forKey: .blushColor)
@@ -683,6 +741,8 @@ extension Adjustments {
         try c.encode(linerColor, forKey: .linerColor)
         try c.encode(hairTint, forKey: .hairTint)
         try c.encode(contourColor, forKey: .contourColor)
+        try c.encode(lensColor, forKey: .lensColor)
+        try c.encode(backgroundFillColor, forKey: .backgroundFillColor)
         try c.encode(hslHue, forKey: .hslHue)
         try c.encode(hslSaturation, forKey: .hslSaturation)
         try c.encode(hslLuminance, forKey: .hslLuminance)
