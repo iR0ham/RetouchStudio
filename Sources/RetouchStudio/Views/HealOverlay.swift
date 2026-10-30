@@ -60,6 +60,9 @@ struct HealOverlay: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onEnded { value in
+                        // The click that brings the window forward must not
+                        // heal or erase anything.
+                        guard model.acceptsPointerEdit else { return }
                         let point = CGPoint(
                             x: value.location.x / max(1, displayed.width),
                             y: value.location.y / max(1, displayed.height))

@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 SDK=""
 for candidate in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>/dev/null | sort -Vr); do
   probe=$(mktemp -d)
-  printf 'import SwiftUI\n' > "$probe/p.swift"
+  printf 'import SwiftUI\nstruct P: View { @State var v = 1; var body: some View { Text("\\(v)") } }\n' > "$probe/p.swift"
   if swiftc -typecheck -target arm64-apple-macosx14.0 -sdk "$candidate" "$probe/p.swift" >/dev/null 2>&1; then
     SDK="$candidate"; rm -rf "$probe"; break
   fi
@@ -21,13 +21,17 @@ done
 
 # Swift only allows top-level code in a file named main.swift, so the suite is
 # copied to a scratch directory under that name before compiling.
+#
+# The app's whole source tree is linked except `App.swift` (its @main would
+# collide with main.swift and it launches the UI) and `SelfCheck.swift` (the
+# separate --selftest harness). The engine and the models share types in both
+# directions, so linking only a hand-picked subset drifts out of date.
 WORK="$(mktemp -d)"
 cp Tests/EngineTests.swift "$WORK/main.swift"
 OUT="$WORK/enginetests"
 swiftc -O -target arm64-apple-macosx14.0 -sdk "$SDK" -o "$OUT" \
   "$WORK/main.swift" \
-  $(find Sources/RetouchStudio/Core -name '*.swift' ! -name 'SelfCheck.swift') \
-  Sources/RetouchStudio/Models/Adjustments.swift \
+  $(find Sources/RetouchStudio -name '*.swift' ! -name 'App.swift' ! -name 'SelfCheck.swift') \
   -framework SwiftUI -framework AppKit -framework CoreImage \
   -framework Vision -framework UniformTypeIdentifiers 2>&1 | grep -E "error:" && exit 1
 

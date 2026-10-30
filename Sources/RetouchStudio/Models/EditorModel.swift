@@ -799,6 +799,19 @@ final class EditorModel: ObservableObject {
     /// zoom and the compare handle must stand aside.
     var toolOwnsCanvas: Bool { toolMode == .crop || toolMode == .heal || toolMode == .art }
 
+    /// When the app last became active. The click that brings the window
+    /// forward still reaches the canvas, so tools that place something on a
+    /// click ignore pointer edits for a moment after it.
+    private var lastActivation = Date.distantPast
+
+    func noteActivation() {
+        lastActivation = Date()
+    }
+
+    var acceptsPointerEdit: Bool {
+        Date().timeIntervalSince(lastActivation) > 0.3
+    }
+
     // MARK: - Healing brush
 
     /// Brush radius as a fraction of the working image's short side. Storing the

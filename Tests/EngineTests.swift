@@ -55,13 +55,18 @@ func makeFace(size: Int) -> (CIImage, CGImage, CGPoint) {
     for (sx, sy, r) in [(0.34, 0.62, 7.0), (0.46, 0.46, 8.0), (0.60, 0.56, 6.5)] {
         ctx.fillEllipse(in: CGRect(x: s * sx - r, y: s * sy - r, width: r * 2, height: r * 2))
     }
+    // The mouth opening holds warm-white teeth, so the enamel gate has
+    // something real to whiten. A skin-coloured mouth correctly gates teeth
+    // whitening off, which would make the per-slider test report a dead tool.
+    ctx.setFillColor(CGColor(srgbRed: 0.93, green: 0.90, blue: 0.80, alpha: 1))
+    ctx.fill(CGRect(x: s * 0.445, y: s * 0.596, width: s * 0.11, height: s * 0.026))
     let cg = ctx.makeImage()!
     return (CIImage(cgImage: cg), cg, CGPoint(x: size / 2, y: size / 2))
 }
 
 func face(_ size: Int) -> FaceGeometry {
     let s = CGFloat(size)
-    let f = FaceGeometry.synthetic(
+    var f = FaceGeometry.synthetic(
         boundingBox: CGRect(x: 0.18, y: 0.28, width: 0.64, height: 0.64),
         faceContour: poly(CGRect(x: 0.18, y: 0.28, width: 0.64, height: 0.64)),
         leftEye: poly(CGRect(x: 0.30, y: 0.66, width: 0.14, height: 0.07)),
@@ -71,6 +76,9 @@ func face(_ size: Int) -> FaceGeometry {
         outerLips: poly(CGRect(x: 0.42, y: 0.36, width: 0.16, height: 0.06)),
         innerLips: poly(CGRect(x: 0.44, y: 0.375, width: 0.12, height: 0.03)),
         nose: poly(CGRect(x: 0.45, y: 0.52, width: 0.10, height: 0.08)))
+    // Vision sets this from the mouth pixels; the fixture paints real teeth, so
+    // the same gate is on for the test.
+    f.hasVisibleTeeth = true
     _ = s
     return f
 }
@@ -145,7 +153,6 @@ let size = 420
 let (source, baseCG, _) = makeFace(size: size)
 let extent = CGRect(x: 0, y: 0, width: size, height: size)
 let f = face(size)
-processor.reshapeFaces = [f]
 guard let masks = processor.buildMasks(extent: extent, faces: [f]) else {
     print("could not build masks"); exit(1)
 }
@@ -164,7 +171,7 @@ let cheek = CGRect(x: cheekNorm.minX * CGFloat(size),
                    height: cheekNorm.height * CGFloat(size))
 
 func render(_ a: Adjustments) -> CGImage? {
-    processor.renderCGImage(processor.process(source, adjustments: a, masks: masks), scale: 1)
+    processor.renderCGImage(processor.process(source, adjustments: a, masks: masks, faces: [f]), scale: 1)
 }
 
 print("\n[1] smoothing retains more texture than a plain blur")

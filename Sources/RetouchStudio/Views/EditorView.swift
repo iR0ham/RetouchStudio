@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct EditorView: View {
@@ -34,6 +35,10 @@ struct EditorView: View {
             if mode == .crop {
                 model.beginCrop()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.noteActivation()
         }
         .onAppear {
             model.refreshDefaultStatus()

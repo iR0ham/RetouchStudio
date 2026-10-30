@@ -514,31 +514,37 @@ struct InspectorView: View {
 
     private var backgroundContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ParameterRow(title: model.s.backgroundBlur,
-                         value: model.binding(for: \.backgroundBlur),
-                         range: 0...100,
-                         onReset: { model.resetEffect(\.backgroundBlur) })
-            ParameterRow(title: model.s.backgroundTone,
-                         value: model.binding(for: \.backgroundTone),
-                         onReset: { model.resetEffect(\.backgroundTone) })
-            ParameterRow(title: model.s.backgroundSaturation,
-                         value: model.binding(for: \.backgroundSaturation),
-                         onReset: { model.resetEffect(\.backgroundSaturation) })
+            // Removing the background discards it, so grading it first cannot
+            // change what the photo shows. They dim together to say so.
+            Group {
+                ParameterRow(title: model.s.backgroundBlur,
+                             value: model.binding(for: \.backgroundBlur),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.backgroundBlur) })
+                ParameterRow(title: model.s.backgroundTone,
+                             value: model.binding(for: \.backgroundTone),
+                             onReset: { model.resetEffect(\.backgroundTone) })
+                ParameterRow(title: model.s.backgroundSaturation,
+                             value: model.binding(for: \.backgroundSaturation),
+                             onReset: { model.resetEffect(\.backgroundSaturation) })
 
-            HStack(spacing: 6) {
-                GroupLabel(text: model.s.backgroundFillColor)
-                Spacer(minLength: 6)
-                ColorPicker(model.s.backgroundFillColor,
-                            selection: fillColorBinding,
-                            supportsOpacity: false)
-                    .labelsHidden()
-                    .help(model.s.pickColorHelp)
+                HStack(spacing: 6) {
+                    GroupLabel(text: model.s.backgroundFillColor)
+                    Spacer(minLength: 6)
+                    ColorPicker(model.s.backgroundFillColor,
+                                selection: fillColorBinding,
+                                supportsOpacity: false)
+                        .labelsHidden()
+                        .help(model.s.pickColorHelp)
+                }
+
+                ParameterRow(title: model.s.backgroundFill,
+                             value: model.binding(for: \.backgroundFill),
+                             range: 0...100,
+                             onReset: { model.resetEffect(\.backgroundFill) })
             }
-
-            ParameterRow(title: model.s.backgroundFill,
-                         value: model.binding(for: \.backgroundFill),
-                         range: 0...100,
-                         onReset: { model.resetEffect(\.backgroundFill) })
+            .disabled(model.adjustments.backgroundRemove)
+            .opacity(model.adjustments.backgroundRemove ? 0.45 : 1)
 
             Toggle(isOn: removeBackgroundBinding) {
                 Text(model.s.backgroundRemove)
@@ -552,7 +558,25 @@ struct InspectorView: View {
                 SectionNote(text: model.s.backgroundRemoveNote)
             }
 
-            subjectNote(scope: model.s.backgroundScope)
+            if model.adjustments.backgroundRemove {
+                removalSubjectNote
+            } else {
+                subjectNote(scope: model.s.backgroundScope)
+            }
+        }
+    }
+
+    /// Removal still needs a subject, but the grading scope sentence would be
+    /// describing sliders that are switched off.
+    @ViewBuilder
+    private var removalSubjectNote: some View {
+        switch model.subjectState {
+        case .detecting:
+            SectionNote(text: model.s.subjectDetecting)
+        case .unavailable:
+            SectionNote(text: model.s.subjectMissing)
+        case .unknown, .available:
+            EmptyView()
         }
     }
 

@@ -12,7 +12,6 @@ struct ArtOverlay: View {
 
     @State private var dragging: UUID?
     @State private var startResolved = false
-    @State private var lastActivation = Date.distantPast
 
     /// Sticker sizes are fractions of the short side, so they read the same at
     /// any zoom or window size and match what the export draws.
@@ -33,10 +32,6 @@ struct ArtOverlay: View {
             for: NSApplication.didResignActiveNotification)) { _ in
             dragging = nil
             startResolved = false
-        }
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.didBecomeActiveNotification)) { _ in
-            lastActivation = Date()
         }
     }
 
@@ -89,12 +84,11 @@ struct ArtOverlay: View {
                         }
                     }
                     .onEnded { value in
-                        // The click that brings the window forward must not
-                        // paint the photo, and a tap lands where it pressed.
+                        // The click that brings the window forward is also
+                        // delivered here, and a tap lands where it pressed.
                         let isTap = hypot(value.translation.width,
                                           value.translation.height) < 2
-                        let focused = Date().timeIntervalSince(lastActivation) > 0.3
-                        if focused, isTap, dragging == nil {
+                        if model.acceptsPointerEdit, isTap, dragging == nil {
                             model.tapArt(at: normalized(value.startLocation))
                         }
                         dragging = nil

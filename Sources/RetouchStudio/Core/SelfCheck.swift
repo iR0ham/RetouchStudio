@@ -2651,7 +2651,7 @@ enum SelfCheck {
         let teethLumaAfter = (teethAfter.r + teethAfter.g + teethAfter.b) / 3
         let liftOK = teethLumaAfter > teethLumaBefore
         let allOK = yellowOK && gumOK && liftOK
-        print("  \(allOK ? "✓" : "✗") teeth: yellow \(before) → \(after), enamel \(teethLumaBefore) → \(teethLumaAfter), gum Δ=\(String(format: "%.1f", gumDelta))")
+        print("  \(allOK ? "✓" : "✗") teeth: yellow \(before) → \(after), enamel \(teethLumaBefore) → \(teethLumaAfter), gum Δ=\(String(format: "%.1f", gumDelta)) (g \(gumBefore.g) → \(gumAfter.g))")
         return allOK
     }
 
