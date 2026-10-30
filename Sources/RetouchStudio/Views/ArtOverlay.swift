@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 /// The sticker layer. A click on empty photo places the current sticker, a
@@ -10,7 +12,7 @@ struct ArtOverlay: View {
 
     @State private var dragging: UUID?
     @State private var startResolved = false
-    @State private var moved = false
+    @State private var lastActivation = Date.distantPast
 
     /// Sticker sizes are fractions of the short side, so they read the same at
     /// any zoom or window size and match what the export draws.
@@ -25,6 +27,17 @@ struct ArtOverlay: View {
             }
         }
         .frame(width: displayed.width, height: displayed.height)
+        // Losing focus cancels the mouse-up, so a half-finished drag would
+        // otherwise stay armed and move a sticker on the next click.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification)) { _ in
+            dragging = nil
+            startResolved = false
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in
+            lastActivation = Date()
+        }
     }
 
     private func stickerLayer(_ sticker: Sticker) -> some View {
@@ -73,19 +86,19 @@ struct ArtOverlay: View {
 
                         if let id = dragging {
                             model.moveSticker(id, to: normalized(value.location))
-                        } else if hypot(value.translation.width, value.translation.height) > 2 {
-                            moved = true
                         }
                     }
                     .onEnded { value in
-                        if !startResolved {
-                            model.tapArt(at: normalized(value.location))
-                        } else if dragging == nil, !moved {
-                            model.tapArt(at: normalized(value.location))
+                        // The click that brings the window forward must not
+                        // paint the photo, and a tap lands where it pressed.
+                        let isTap = hypot(value.translation.width,
+                                          value.translation.height) < 2
+                        let focused = Date().timeIntervalSince(lastActivation) > 0.3
+                        if focused, isTap, dragging == nil {
+                            model.tapArt(at: normalized(value.startLocation))
                         }
                         dragging = nil
                         startResolved = false
-                        moved = false
                     }
             )
     }
