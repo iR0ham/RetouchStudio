@@ -663,7 +663,8 @@ final class EditorModel: ObservableObject {
 
     private var sourceFull: CIImage?
     private var sourcePreview: CIImage?
-    private var masksFull: MaskSet?
+    /// The on-screen set only. Exports build their own set at export
+    /// resolution and release it, so a document never keeps both.
     private var masksPreview: MaskSet?
     private var spotsPreview: SpotHealing?
     /// True while a load installs the stamps that came with the project, so the
@@ -828,7 +829,6 @@ final class EditorModel: ObservableObject {
     private func install(_ result: LoadResult) {
         sourceFull = result.sourceFull
         sourcePreview = result.sourcePreview
-        masksFull = result.masksFull
         masksPreview = result.masksPreview
         sourceColorSpace = result.colorSpace
         sourceMetadata = result.metadata
@@ -2154,8 +2154,12 @@ final class EditorModel: ObservableObject {
             statusToken = .operationBusy
             return
         }
+        // A photo small enough to load at full size already has a set on
+        // screen; otherwise hand nothing over and the renderer builds one at
+        // export resolution, then drops it.
+        let masks = sourcePreview?.extent.size == image.extent.size ? masksPreview : nil
         let source = ExportSource(image: image,
-                                  masks: masksFull,
+                                  masks: masks,
                                   faces: faces,
                                   photoAspect: sourceAspect,
                                   colorSpace: sourceColorSpace,
@@ -2487,8 +2491,9 @@ final class EditorModel: ObservableObject {
                                           crop: fileSnapshot.crop) else {
             return BatchOutcome(saved: false, skippedCrop: false)
         }
+        // Each file builds its own set inside the renderer, one file at a time.
         let source = ExportSource(image: result.sourceFull,
-                                  masks: result.masksFull,
+                                  masks: nil,
                                   faces: result.faces,
                                   photoAspect: fileAspect,
                                   colorSpace: result.colorSpace,

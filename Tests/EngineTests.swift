@@ -651,6 +651,118 @@ check(rasterRatio * rasterRatio <= 0.45,
       "the preview mask raster is 40% of the full one",
       String(format: "%.0f%%", rasterRatio * rasterRatio * 100))
 
+print("\n[12] export masks are built at export resolution")
+
+// A preview set is rasterized at 1024 no matter how large the photo is; an
+// export set is rasterized at the photo's own resolution up to the cap. The
+// feather is expressed in output pixels, so the same normalized edge must
+// stay the same width after scaling — measured here as the distance between
+// two fixed levels on the mask's ramp, which is resolution-independent.
+
+/// Width in pixels between the 25% and 75% levels of a left-to-right mask
+/// edge. The mask bitmap is gamma-encoded, but a fixed pair of levels on a
+/// monotone ramp scales with the feather, which is what the ratio needs.
+func edgeWidth(_ image: CGImage, row: Int, x0: Int, x1: Int) -> Double? {
+    guard let data = image.dataProvider?.data, let p = CFDataGetBytePtr(data),
+          row >= 0, row < image.height else { return nil }
+    let bpp = image.bitsPerPixel / 8
+    func value(_ x: Int) -> Double { Double(p[row * image.bytesPerRow + x * bpp]) / 255 }
+    var low: Double?, high: Double?
+    for x in max(1, x0)...min(image.width - 1, x1) {
+        let v = value(x), previous = value(x - 1)
+        guard v - previous > 0.0001 else { continue }
+        if low == nil, previous < 0.25, v >= 0.25 {
+            low = Double(x - 1) + (0.25 - previous) / (v - previous)
+        }
+        if high == nil, previous < 0.75, v >= 0.75 {
+            high = Double(x - 1) + (0.75 - previous) / (v - previous)
+        }
+    }
+    guard let low, let high else { return nil }
+    return high - low
+}
+
+let previewSide = 1100
+let exportSide = 2200
+if let previewMasks = processor.buildMasks(extent: CGRect(x: 0, y: 0, width: previewSide, height: previewSide),
+                                           faces: [face(previewSide)],
+                                           maskDimension: MaskBuilder.previewMaskDimension),
+   let exportMasks = processor.buildMasks(extent: CGRect(x: 0, y: 0, width: exportSide, height: exportSide),
+                                          faces: [face(exportSide)],
+                                          maskDimension: MaskBuilder.exportMaskDimension),
+   let previewEdge = previewMasks.face.flatMap({ processor.renderCGImage($0, scale: 1) }),
+   let exportEdge = exportMasks.face.flatMap({ processor.renderCGImage($0, scale: 1) }),
+   let previewWidth = edgeWidth(previewEdge, row: Int(0.4 * Double(previewSide)),
+                                x0: Int(0.10 * Double(previewSide)), x1: Int(0.30 * Double(previewSide))),
+   let exportWidth = edgeWidth(exportEdge, row: Int(0.4 * Double(exportSide)),
+                               x0: Int(0.10 * Double(exportSide)), x1: Int(0.30 * Double(exportSide))) {
+    let ratio = exportWidth / previewWidth
+    let expected = Double(exportSide) / Double(previewSide)
+    check(abs(ratio - expected) / expected < 0.05,
+          "the export edge is the preview edge scaled by the resolution ratio",
+          String(format: "%.2f× (expect %.2f×): %.1f → %.1f px",
+                 ratio, expected, previewWidth, exportWidth))
+} else {
+    check(false, "export mask edge renders")
+}
+
+// A photo larger than the preview is the case that matters: the preview set
+// is actually raster-capped there, so the two sets really differ.
+check(CGFloat(previewSide) > MaskBuilder.previewMaskDimension,
+      "the preview edge fixture is larger than the preview raster")
+
+// Rendering at export resolution with the export set must change pixels only
+// near mask boundaries. A global shift would show as differences in the
+// background, far from the face.
+let localSide = 1600
+let (localSource, _, _) = makeFace(size: localSide, blemishScale: 0, pores: true, spots: false)
+let localExtent = CGRect(x: 0, y: 0, width: localSide, height: localSide)
+let localFace = face(localSide)
+if let previewMasks = processor.buildMasks(extent: localExtent, faces: [localFace],
+                                           image: localSource,
+                                           maskDimension: MaskBuilder.previewMaskDimension),
+   let exportMasks = processor.buildMasks(extent: localExtent, faces: [localFace],
+                                          image: localSource,
+                                          maskDimension: MaskBuilder.exportMaskDimension),
+   let previewRender = processor.renderCGImage(
+        processor.process(localSource, adjustments: smooth, masks: previewMasks,
+                          faces: [localFace]), scale: 1),
+   let exportRender = processor.renderCGImage(
+        processor.process(localSource, adjustments: smooth, masks: exportMasks,
+                          faces: [localFace]), scale: 1),
+   let dataA = previewRender.dataProvider?.data, let dataB = exportRender.dataProvider?.data {
+    let pa = CFDataGetBytePtr(dataA)!, pb = CFDataGetBytePtr(dataB)!
+    let bpp = previewRender.bitsPerPixel / 8
+    let faceBox = localFace.boundingBox
+    let outsideLeft = Int((faceBox.minX - 0.04) * CGFloat(localSide))
+    let outsideRight = Int((faceBox.maxX + 0.04) * CGFloat(localSide))
+    let outsideTop = Int((1 - faceBox.maxY - 0.04) * CGFloat(localSide))
+    let outsideBottom = Int((1 - faceBox.minY + 0.04) * CGFloat(localSide))
+    var differing = 0, outside = 0, maxDelta = 0
+    for y in 0..<previewRender.height {
+        for x in 0..<previewRender.width {
+            let index = y * previewRender.bytesPerRow + x * bpp
+            let delta = max(abs(Int(pa[index]) - Int(pb[index])),
+                            abs(Int(pa[index + 1]) - Int(pb[index + 1])),
+                            abs(Int(pa[index + 2]) - Int(pb[index + 2])))
+            maxDelta = max(maxDelta, delta)
+            guard delta > 0 else { continue }
+            differing += 1
+            if x < outsideLeft || x > outsideRight || y < outsideTop || y > outsideBottom {
+                outside += 1
+            }
+        }
+    }
+    // The old path's baseline was a 1024-raster set stretched over the export
+    // frame; this is that same baseline. The frame must not move, and the
+    // change has to stay at the level of mask-edge noise.
+    check(differing > 0 && outside == 0 && maxDelta <= 4,
+          "export masks leave the frame alone and differ only at edge noise",
+          "\(differing) pixels differ, \(outside) outside the face, max \(maxDelta)/255")
+} else {
+    check(false, "export-vs-preview render")
+}
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")

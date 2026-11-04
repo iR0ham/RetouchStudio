@@ -100,7 +100,6 @@ struct LoadResult {
     var sourceFull: CIImage
     var sourcePreview: CIImage
     var faces: [FaceGeometry]
-    var masksFull: MaskSet?
     var masksPreview: MaskSet?
     var originalPreview: CGImage
     var preview: CGImage
@@ -185,10 +184,9 @@ final class ImageProcessor {
             faces = AutoAnalyzer.annotateEyes(faces: faces, buffer: buffer)
         }
 
-        // Both retained sets are masked at the preview target: they describe
-        // geometry, and the export builds its own set at export resolution.
-        let masksFull = buildMasks(extent: full.extent, faces: faces, image: full,
-                                   maskDimension: MaskBuilder.previewMaskDimension)
+        // One retained set, at the preview target. The export builds its own
+        // set at export resolution (see `ExportService.render`), so no
+        // full-resolution rasters sit idle between edits.
         let masksPreview = buildMasks(extent: previewSource.extent, faces: faces,
                                       image: previewSource,
                                       maskDimension: MaskBuilder.previewMaskDimension)
@@ -199,7 +197,6 @@ final class ImageProcessor {
         return LoadResult(sourceFull: full,
                           sourcePreview: previewSource,
                           faces: faces,
-                          masksFull: masksFull,
                           masksPreview: masksPreview,
                           originalPreview: originalPreview,
                           preview: preview,

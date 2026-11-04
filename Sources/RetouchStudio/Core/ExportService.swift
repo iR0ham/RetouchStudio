@@ -96,6 +96,16 @@ enum ExportService {
         let crop = snapshot.crop
 
         var masks = source.masks
+        // The retained preview set describes a scaled-down frame: stretching it
+        // over the export would widen every feather by the same factor. A set
+        // built here runs at the photo's own resolution and is released with
+        // this call, so back-to-back exports never hold two.
+        if masks == nil, !source.faces.isEmpty {
+            masks = processor.buildMasks(extent: source.image.extent,
+                                         faces: source.faces,
+                                         image: source.image,
+                                         maskDimension: MaskBuilder.exportMaskDimension)
+        }
         if snapshot.adjustments.usesPersonTools, masks?.person == nil,
            let analysis = PersonAnalyzer.analysis(for: source.image) {
             masks = masks.map { set in

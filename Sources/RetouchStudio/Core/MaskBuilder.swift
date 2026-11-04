@@ -48,6 +48,12 @@ enum MaskBuilder {
     /// of the 1600 px raster. Export builds its own set (see ExportService).
     static let previewMaskDimension: CGFloat = 1024
 
+    /// An export is the file the owner keeps, so its masks are built at the
+    /// photo's own resolution — up to this cap. `makeMask` already stops at
+    /// the extent, so this only bounds a scan-sized photo; the set lives for
+    /// one render and is released, never retained.
+    static let exportMaskDimension: CGFloat = 4096
+
     /// Builds a soft mask that exactly covers `extent`.
     /// White = apply the effect, transparent = leave alone.
     static func makeMask(extent: CGRect,

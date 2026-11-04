@@ -70,10 +70,16 @@ enum SelfCheck {
         report("preview rendered")
 
         var retouch = Adjustments(); retouch.smooth = 60; retouch.blemish = 60
+        // The export builds this set at the photo's own resolution and drops
+        // it when the render returns; nothing keeps it afterwards.
+        let exportMasks = processor.buildMasks(extent: result.sourceFull.extent,
+                                               faces: result.faces,
+                                               image: result.sourceFull,
+                                               maskDimension: MaskBuilder.exportMaskDimension)
         _ = processor.renderCGImage(
             processor.process(result.sourceFull, adjustments: retouch,
-                              masks: result.masksFull, faces: result.faces), scale: 1)
-        report("full render")
+                              masks: exportMasks, faces: result.faces), scale: 1)
+        report("full render (export masks)")
 
         let previewExtent = result.sourcePreview.extent
         let previewScale = min(1, MaskBuilder.previewMaskDimension
@@ -85,12 +91,10 @@ enum SelfCheck {
             let pixels = (extent.width * scale).rounded() * (extent.height * scale).rounded()
             return pixels * 4 * 21 / 1_048_576   // 21 RGBA masks in a set
         }
-        let now = maskSetMegabytes(result.sourcePreview.extent, MaskBuilder.previewMaskDimension)
-            + maskSetMegabytes(result.sourceFull.extent, MaskBuilder.previewMaskDimension)
-        let before = maskSetMegabytes(result.sourcePreview.extent, MaskBuilder.maxMaskDimension)
-            + maskSetMegabytes(result.sourceFull.extent, MaskBuilder.maxMaskDimension)
-        print(String(format: "  mask buffers: %.0f MB now vs %.0f MB at 1600 px (%.0f%% lower)",
-                     now, before, (1 - now / max(before, 1)) * 100))
+        let retained = maskSetMegabytes(result.sourcePreview.extent, MaskBuilder.previewMaskDimension)
+        let transient = maskSetMegabytes(result.sourceFull.extent, MaskBuilder.exportMaskDimension)
+        print(String(format: "  mask buffers: %.0f MB retained at rest, %.0f MB transient during export",
+                     retained, transient))
         return true
     }
 
@@ -1899,7 +1903,8 @@ enum SelfCheck {
             fileSnapshot.crop = applies ? crop : nil
             guard let result = processor.load(from: url, previewMaxDimension: 400,
                                               crop: fileSnapshot.crop) else { return (0, 0, applies) }
-            let source = ExportSource(image: result.sourceFull, masks: result.masksFull,
+            // The renderer builds this file's mask set at export resolution itself.
+            let source = ExportSource(image: result.sourceFull, masks: nil,
                                       faces: result.faces, photoAspect: aspect,
                                       colorSpace: result.colorSpace, metadata: result.metadata)
             guard let rendered = ExportService.render(fileSnapshot, source: source) else {
@@ -2145,8 +2150,12 @@ enum SelfCheck {
         let openedOK = abs(loaded.pixelSize.width - 100) < 1 && abs(loaded.pixelSize.height - 50) < 1
         print("  \(openedOK ? "✓" : "✗") reopened project is \(Int(loaded.pixelSize.width))×\(Int(loaded.pixelSize.height)) (expect 100×50)")
 
+        let masks = processor.buildMasks(extent: loaded.sourceFull.extent,
+                                         faces: loaded.faces,
+                                         image: loaded.sourceFull,
+                                         maskDimension: MaskBuilder.exportMaskDimension)
         let processed = processor.process(loaded.sourceFull, adjustments: reopened.adjustments,
-                                          masks: loaded.masksFull, faces: loaded.faces)
+                                          masks: masks, faces: loaded.faces)
         guard processor.write(processed, to: exportURL, format: .png, quality: 1,
                               colorSpace: loaded.colorSpace, metadata: loaded.metadata),
               let source = CGImageSourceCreateWithURL(exportURL as CFURL, nil),
