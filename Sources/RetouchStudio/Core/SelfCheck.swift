@@ -2002,7 +2002,8 @@ enum SelfCheck {
                                      autoColorStrength: 65,
                                      crop: crop,
                                      healSpots: spots,
-                                     stickers: stickers)
+                                     stickers: stickers,
+                                     selectedFace: 2)
         guard let data = try? JSONEncoder().encode(project),
               let decoded = try? JSONDecoder().decode(RetouchProject.self, from: data) else {
             print("  ✗ could not encode/decode a project")
@@ -2013,6 +2014,7 @@ enum SelfCheck {
             && decoded.stickers == stickers
             && decoded.autoColorStrength == 65
             && decoded.exportLongEdge == 2048
+            && decoded.selectedFace == 2
 
         // Projects written before crop existed have no `crop` key at all.
         var legacyObject = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -2020,6 +2022,7 @@ enum SelfCheck {
         legacyObject.removeValue(forKey: "healSpots")
         legacyObject.removeValue(forKey: "stickers")
         legacyObject.removeValue(forKey: "autoColorStrength")
+        legacyObject.removeValue(forKey: "selectedFace")
         if var old = legacyObject["adjustments"] as? [String: Any] {
             old.removeValue(forKey: "blacks")
             old.removeValue(forKey: "whites")
@@ -2030,11 +2033,12 @@ enum SelfCheck {
         let legacyOK = legacy?.crop == nil && legacy?.healSpots == nil
             && legacy?.stickers == nil
             && legacy?.autoColorStrength == nil
+            && legacy?.selectedFace == nil
             && legacy?.adjustments.blacks == 0 && legacy?.adjustments.whites == 0
             && legacy?.adjustments.smooth == 42
 
-        print("  \(roundTrip ? "✓" : "✗") crop, stamps, stickers and sliders survive a project round-trip")
-        print("  \(legacyOK ? "✓" : "✗") a project without a crop or levels key still opens")
+        print("  \(roundTrip ? "✓" : "✗") crop, stamps, stickers, face selection and sliders survive a project round-trip")
+        print("  \(legacyOK ? "✓" : "✗") a project without a crop, levels or selection key still opens")
         return roundTrip && legacyOK
     }
 

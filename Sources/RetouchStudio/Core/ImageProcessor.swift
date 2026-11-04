@@ -226,6 +226,30 @@ final class ImageProcessor {
 
     // MARK: - Masks
 
+    /// Width of the face that sets feature sizes, in pixels. The selected face
+    /// wins; with no selection the median over every accepted face wins, so a
+    /// single spurious small face cannot shrink the blemish radius. `nil` only
+    /// when there are no faces at all.
+    static func faceWidthPixels(faces: [FaceGeometry], focus: FaceGeometry?,
+                                extent: CGRect) -> CGFloat? {
+        if let focus, focus.boundingBox.width > 0 {
+            return focus.boundingBox.width * extent.width
+        }
+        let widths = faces.map(\.boundingBox.width).filter { $0 > 0 }.sorted()
+        guard !widths.isEmpty else { return nil }
+        return widths[widths.count / 2] * extent.width
+    }
+
+    /// The skin masks of a face without landmarks still have to be usable:
+    /// feature rectangles derived from missing outlines come out null or
+    /// infinite, so only boxes that are finite and non-empty get a shape.
+    private func validRect(_ rect: CGRect) -> CGRect? {
+        guard !rect.isNull, !rect.isInfinite, !rect.isEmpty,
+              rect.origin.x.isFinite, rect.origin.y.isFinite,
+              rect.width.isFinite, rect.height.isFinite else { return nil }
+        return rect
+    }
+
     /// Builds the full per-region mask set. Feathering is proportional to image
     /// size so the preview and the full-resolution export match visually.
     ///
@@ -265,6 +289,7 @@ final class ImageProcessor {
         var lashParts: [CIImage] = []
 
         for face in faces {
+            guard validRect(face.boundingBox) != nil else { continue }
             // Face silhouette: contour plus a soft band over forehead/cheeks.
             if face.faceContour.count >= 3 {
                 faceShapes.append(MaskShape(points: face.faceContour))
@@ -275,9 +300,17 @@ final class ImageProcessor {
             }
             faceShapes.append(MaskShape(rect: face.upperFaceRectForMask, cornerRadius: 0.34))
             skinShapes.append(MaskShape(ellipse: face.foreheadRect))
-            skinShapes.append(MaskShape(ellipse: face.leftCheekRect))
-            skinShapes.append(MaskShape(ellipse: face.rightCheekRect))
-            noseShapes.append(MaskShape(rect: face.noseRect, cornerRadius: 0.35))
+            if face.hasLandmarks {
+                if let cheek = validRect(face.leftCheekRect) {
+                    skinShapes.append(MaskShape(ellipse: cheek))
+                }
+                if let cheek = validRect(face.rightCheekRect) {
+                    skinShapes.append(MaskShape(ellipse: cheek))
+                }
+                if let nose = validRect(face.noseRect) {
+                    noseShapes.append(MaskShape(rect: nose, cornerRadius: 0.35))
+                }
+            }
 
             if face.leftEye.count >= 3 {
                 eyeShapes.append(MaskShape(points: face.leftEye))
@@ -313,8 +346,14 @@ final class ImageProcessor {
                 // whole hair band, which is a few pixels wider on each side.
                 browShapes.append(MaskShape(points: FaceGeometry.scaled(brow, by: 1.06)))
             }
-            cheekShapes.append(MaskShape(ellipse: face.leftBlushRect))
-            cheekShapes.append(MaskShape(ellipse: face.rightBlushRect))
+            if face.hasLandmarks {
+                if let blush = validRect(face.leftBlushRect) {
+                    cheekShapes.append(MaskShape(ellipse: blush))
+                }
+                if let blush = validRect(face.rightBlushRect) {
+                    cheekShapes.append(MaskShape(ellipse: blush))
+                }
+            }
 
             hairShapes.append(MaskShape(rect: face.hairRect, cornerRadius: 0.42))
             hairSideShapes.append(contentsOf: face.hairSideRects.map { MaskShape(ellipse: $0) })
@@ -329,8 +368,14 @@ final class ImageProcessor {
                 teethShapes.append(MaskShape(rect: teeth, cornerRadius: 0.30))
             }
 
-            underEyeShapes.append(MaskShape(ellipse: face.leftUnderEyeRect))
-            underEyeShapes.append(MaskShape(ellipse: face.rightUnderEyeRect))
+            if face.hasLandmarks {
+                if let underEye = validRect(face.leftUnderEyeRect) {
+                    underEyeShapes.append(MaskShape(ellipse: underEye))
+                }
+                if let underEye = validRect(face.rightUnderEyeRect) {
+                    underEyeShapes.append(MaskShape(ellipse: underEye))
+                }
+            }
 
             foreheadShapes.append(MaskShape(ellipse: face.foreheadRect))
 
@@ -658,7 +703,8 @@ final class ImageProcessor {
                  masks: MaskSet?,
                  faces: [FaceGeometry] = [],
                  spots: SpotHealing? = nil,
-                 art: [Sticker] = []) -> CIImage {
+                 art: [Sticker] = [],
+                 focus: FaceGeometry? = nil) -> CIImage {
         let extent = source.extent
         // Every radius is expressed relative to image size so the preview and
         // the full-resolution export look the same.
@@ -680,10 +726,11 @@ final class ImageProcessor {
         //    eyes and lips out from under their own masks.
         if let skinMask = masks?.skin, let textureMask = masks?.skinTexture {
             // Blemish size scales with the face, not the image: a spot is a
-            // roughly constant fraction of a face's width. Deriving the median
-            // radius this way keeps the slider behaving the same on the preview
-            // and on the full-resolution export.
-            let faceWidthPx = faces.first.map { $0.boundingBox.width * extent.width }
+            // roughly constant fraction of a face's width. A selected face is
+            // what its owner is working on, so it sets the class; otherwise
+            // the median of every accepted face does, so a group photo is not
+            // tuned to whoever happens to be first.
+            let faceWidthPx = Self.faceWidthPixels(faces: faces, focus: focus, extent: extent)
                 ?? (extent.width * 0.30)
             // Factor chosen by measurement, not taste. The median can only heal
             // a blemish smaller than its own kernel (about 2.3x the radius), so
@@ -756,7 +803,7 @@ final class ImageProcessor {
         //    teeth, and whitening then treats the straightened enamel as one
         //    surface instead of brightening both sides of a dark line.
         if a.teethAlign > 0, let teethMask = masks?.teeth {
-            let gapRadius = faces.first?.enamelRect.map { $0.height * extent.height * 0.45 }
+            let gapRadius = (focus ?? faces.first)?.enamelRect.map { $0.height * extent.height * 0.45 }
                 ?? (min(extent.width, extent.height) * 0.006)
             let searchMask = grown(teethMask,
                                    by: max(1, gapRadius * 0.8),
@@ -831,7 +878,7 @@ final class ImageProcessor {
                 image = MakeupEngine.addHairShine(image, strength: a.hairShine,
                                                   mask: hairMask, scale: scale)
             }
-            if a.hairVolume > 0, let face = faces.first {
+            if a.hairVolume > 0, let face = focus ?? faces.first {
                 // The crown is the head band around the hairline; the bulge is
                 // centred there, and the mask is grown by a fraction of its own
                 // radius so the new volume is not blended away at the old edge.

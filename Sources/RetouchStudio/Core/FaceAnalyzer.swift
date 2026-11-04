@@ -410,7 +410,8 @@ struct FaceGeometry {
                           rightEyebrow: [CGPoint] = [],
                           outerLips: [CGPoint] = [],
                           innerLips: [CGPoint] = [],
-                          nose: [CGPoint] = []) -> FaceGeometry {
+                          nose: [CGPoint] = [],
+                          hasLandmarks: Bool = true) -> FaceGeometry {
         FaceGeometry(boundingBox: boundingBox,
                      faceContour: faceContour,
                      leftEye: leftEye,
@@ -424,11 +425,37 @@ struct FaceGeometry {
                      nose: nose,
                      noseCrest: [],
                      medianLine: [],
-                     hasLandmarks: true)
+                     hasLandmarks: hasLandmarks)
     }
 }
 
 enum FaceAnalyzer {
+
+    /// Vision reports a confidence per observation and a normalized box. A
+    /// background face in a group photo is exactly the case that trips the rest
+    /// of the pipeline: no landmarks, a few pixels wide, and a box that would
+    /// otherwise contribute makeup shapes over the wrong person.
+    static let minimumConfidence: Float = 0.35
+    /// Fraction of the frame. 0.2% is about 26×26 px on a 1600 px photo: below
+    /// this a face is a speck, not a subject.
+    static let minimumArea: CGFloat = 0.002
+
+    static func isAcceptable(boundingBox: CGRect, confidence: Float) -> Bool {
+        guard boundingBox.width > 0, boundingBox.height > 0,
+              boundingBox.origin.x.isFinite, boundingBox.origin.y.isFinite,
+              boundingBox.width.isFinite, boundingBox.height.isFinite else { return false }
+        return confidence >= minimumConfidence
+            && boundingBox.width * boundingBox.height >= minimumArea
+    }
+
+    /// Largest first. Selection is an index into this stable order, and the
+    /// overlay and the blemish radius agree on which face is the subject.
+    static func ordered(_ faces: [FaceGeometry]) -> [FaceGeometry] {
+        faces.sorted {
+            $0.boundingBox.width * $0.boundingBox.height
+                > $1.boundingBox.width * $1.boundingBox.height
+        }
+    }
 
     /// Detects faces in an image that has already been oriented upright.
     static func analyze(_ image: CGImage) -> [FaceGeometry] {
@@ -440,7 +467,9 @@ enum FaceAnalyzer {
             return []
         }
         guard let results = request.results else { return [] }
-        return results.compactMap { geometry(from: $0) }
+        return ordered(results
+            .filter { isAcceptable(boundingBox: $0.boundingBox, confidence: $0.confidence) }
+            .compactMap { geometry(from: $0) })
     }
 
     private static func geometry(from observation: VNFaceObservation) -> FaceGeometry {

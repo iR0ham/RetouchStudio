@@ -45,11 +45,15 @@ struct RetouchProject: Codable {
     /// the leader ends were dragged. `nil` leaves the tool off, as it was
     /// before the tool existed.
     var analysis: AnalysisSettings? = nil
+    /// The face the owner was working on, as an index into the accepted faces
+    /// (largest first). `nil` keeps the automatic choice.
+    var selectedFace: Int? = nil
 
     private enum CodingKeys: String, CodingKey {
         case version, imagePath, imageBookmark, adjustments, exportFormat,
              exportQuality, exportLongEdge, autoRetouchStrength,
-             autoColorStrength, crop, healSpots, stickers, analysis
+             autoColorStrength, crop, healSpots, stickers, analysis,
+             selectedFace
     }
 
     init(imagePath: String, imageBookmark: Data? = nil,
@@ -57,7 +61,8 @@ struct RetouchProject: Codable {
          exportQuality: Double, exportLongEdge: Int? = nil,
          autoRetouchStrength: Double, autoColorStrength: Double? = nil,
          crop: CGRect? = nil, healSpots: [HealSpot]? = nil,
-         stickers: [Sticker]? = nil, analysis: AnalysisSettings? = nil) {
+         stickers: [Sticker]? = nil, analysis: AnalysisSettings? = nil,
+         selectedFace: Int? = nil) {
         self.imagePath = imagePath
         self.imageBookmark = imageBookmark
         self.adjustments = adjustments
@@ -70,6 +75,7 @@ struct RetouchProject: Codable {
         self.healSpots = healSpots
         self.stickers = stickers
         self.analysis = analysis
+        self.selectedFace = selectedFace
     }
 
     /// Decoded by hand so a project written before the version key existed
@@ -89,5 +95,6 @@ struct RetouchProject: Codable {
         healSpots = try c.decodeIfPresent([HealSpot].self, forKey: .healSpots)
         stickers = try c.decodeIfPresent([Sticker].self, forKey: .stickers)
         analysis = try c.decodeIfPresent(AnalysisSettings.self, forKey: .analysis)
+        selectedFace = try c.decodeIfPresent(Int.self, forKey: .selectedFace)
     }
 }

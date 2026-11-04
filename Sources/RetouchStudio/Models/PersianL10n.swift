@@ -371,6 +371,9 @@ final class PersianL10n: L10n {
     override var analysisNoFace: String {
         "چهره‌ای پیدا نشد. آنالیز به یک چهرهٔ واضح و رو به دوربین نیاز دارد."
     }
+    override var faceSelectionTitle: String { "سوژه" }
+    override var faceSelectionAuto: String { "خودکار" }
+    override func faceSelectionName(_ index: Int) -> String { "چهرهٔ \(Digits.num(index + 1))" }
     override var analysisExportSection: String { "آنالیز چهره" }
     override var analysisExportMode: String { "خروجی" }
     override var analysisMargin: String { "حاشیه" }

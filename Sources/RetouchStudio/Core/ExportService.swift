@@ -13,6 +13,10 @@ struct ExportSnapshot: Equatable {
     var analysis = AnalysisSettings()
     /// Crop in normalized photo coordinates with a top-left origin.
     var crop: CGRect?
+    /// Index into the photo's sorted faces, or nil for the automatic choice.
+    /// Feature sizes and the callouts follow it, so an export matches what the
+    /// editor showed.
+    var selectedFaceIndex: Int?
     var format: ExportFormat = .jpeg
     var quality: Double = 0.92
     var longEdge: CGFloat?
@@ -92,9 +96,12 @@ enum ExportService {
                                           aspect: source.photoAspect)
             : []
 
+        let focus = snapshot.selectedFaceIndex
+            .flatMap { source.faces.indices.contains($0) ? source.faces[$0] : nil }
+
         var rendered = processor.process(source.image, adjustments: snapshot.adjustments,
                                          masks: masks, faces: source.faces,
-                                         spots: spots, art: art)
+                                         spots: spots, art: art, focus: focus)
 
         guard snapshot.includeAnalysis, snapshot.analysis.isEnabled, !source.faces.isEmpty
         else { return RenderedExport(image: rendered, carriesSourceMetadata: true) }
@@ -102,16 +109,17 @@ enum ExportService {
         switch snapshot.analysis.exportMode {
         case .onPhoto:
             rendered = AnalysisRenderer.apply(rendered, faces: source.faces,
-                                              settings: snapshot.analysis)
+                                              settings: snapshot.analysis, focus: focus)
         case .poster:
             rendered = AnalysisRenderer.poster(rendered, faces: source.faces,
-                                               settings: snapshot.analysis)
+                                               settings: snapshot.analysis, focus: focus)
         case .overlayOnly:
             // Lines on transparency, for the owner to place over a photo of
             // their own in whatever layout tool they use.
             guard let lines = AnalysisRenderer.render(size: rendered.extent.size,
                                                       faces: source.faces,
-                                                      settings: snapshot.analysis)
+                                                      settings: snapshot.analysis,
+                                                      focus: focus)
             else { return nil }
             return RenderedExport(image: CIImage(cgImage: lines), carriesSourceMetadata: false)
         }

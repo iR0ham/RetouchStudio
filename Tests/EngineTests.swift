@@ -320,6 +320,109 @@ if let ident = render(Adjustments()) {
     check(d < 0.01, "default settings change nothing", String(format: "mean delta %.4f", d))
 } else { check(false, "identity render") }
 
+print("\n[8] multi-face selection and landmarkless faces")
+// Confidence and area are read from Vision's own numbers. A dim background
+// face is excluded before it can contribute masks; a speck is not a subject.
+check(!FaceAnalyzer.isAcceptable(boundingBox: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                                 confidence: 0.2),
+      "a low-confidence face is rejected")
+check(!FaceAnalyzer.isAcceptable(boundingBox: CGRect(x: 0.4, y: 0.4, width: 0.02, height: 0.02),
+                                 confidence: 0.99),
+      "a face smaller than 0.2% of the frame is rejected")
+check(FaceAnalyzer.isAcceptable(boundingBox: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                                confidence: 0.9),
+      "an ordinary face is accepted")
+
+let smallFace = FaceGeometry.synthetic(
+    boundingBox: CGRect(x: 0.02, y: 0.02, width: 0.2, height: 0.2),
+    faceContour: poly(CGRect(x: 0.02, y: 0.02, width: 0.2, height: 0.2)))
+let midFace = FaceGeometry.synthetic(
+    boundingBox: CGRect(x: 0.38, y: 0.38, width: 0.3, height: 0.3),
+    faceContour: poly(CGRect(x: 0.38, y: 0.38, width: 0.3, height: 0.3)))
+let bigFace = FaceGeometry.synthetic(
+    boundingBox: CGRect(x: 0.62, y: 0.60, width: 0.4, height: 0.4),
+    faceContour: poly(CGRect(x: 0.62, y: 0.60, width: 0.4, height: 0.4)))
+let ordered = FaceAnalyzer.ordered([smallFace, bigFace, midFace])
+check(ordered.map(\.boundingBox.width) == [0.4, 0.3, 0.2],
+      "faces are ordered largest first",
+      ordered.map { String(format: "%.2f", $0.boundingBox.width) }.joined(separator: ", "))
+
+// Feature sizes: the median of everyone by default, the chosen face when
+// there is one. 1000 px frame → 0.2/0.3/0.4 faces are 200/300/400 px wide.
+let frame = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+let medianWidth = ImageProcessor.faceWidthPixels(faces: [bigFace, smallFace, midFace],
+                                                 focus: nil, extent: frame) ?? 0
+let focusWidth = ImageProcessor.faceWidthPixels(faces: [bigFace, smallFace, midFace],
+                                                focus: smallFace, extent: frame) ?? 0
+check(abs(medianWidth - 300) < 0.5,
+      "without a selection the median face sets the blemish class",
+      String(format: "%.0f px", medianWidth))
+check(abs(focusWidth - 200) < 0.5,
+      "selecting a face switches the blemish class to its width",
+      String(format: "%.0f px", focusWidth))
+
+check(AnalysisRenderer.primaryFace([bigFace, midFace], focus: midFace)?.boundingBox
+        == midFace.boundingBox,
+      "the overlay follows the selected face")
+check(AnalysisRenderer.primaryFace([smallFace, bigFace], focus: nil)?.boundingBox
+        == bigFace.boundingBox,
+      "with no selection the largest face carries the callouts")
+
+// Every accepted face still gets the skin work, whichever one drives the
+// callouts. The two boxes sit over skin-coloured pixels in the fixture.
+let leftFace = FaceGeometry.synthetic(
+    boundingBox: CGRect(x: 0.06, y: 0.20, width: 0.36, height: 0.40),
+    faceContour: poly(CGRect(x: 0.06, y: 0.20, width: 0.36, height: 0.40)))
+let rightFace = FaceGeometry.synthetic(
+    boundingBox: CGRect(x: 0.58, y: 0.18, width: 0.34, height: 0.38),
+    faceContour: poly(CGRect(x: 0.58, y: 0.18, width: 0.34, height: 0.38)))
+if let bothMasks = processor.buildMasks(extent: extent, faces: [leftFace, rightFace]) {
+    var all = Adjustments(); all.smooth = 70; all.texturePreserve = 80
+    if let out = processor.renderCGImage(
+        processor.process(source, adjustments: all, masks: bothMasks,
+                          faces: [leftFace, rightFace], focus: rightFace), scale: 1) {
+        let leftDelta = localDelta(baseCG, out, normalized: leftFace.boundingBox)
+        let rightDelta = localDelta(baseCG, out, normalized: rightFace.boundingBox)
+        check(leftDelta > 0.3, "the non-selected face is still smoothed",
+              String(format: "mean delta %.2f", leftDelta))
+        check(rightDelta > 0.3, "the selected face is smoothed too",
+              String(format: "mean delta %.2f", rightDelta))
+    } else { check(false, "two-face render") }
+} else { check(false, "two-face masks") }
+
+// A face Vision found but could not annotate. Missing outlines must not turn
+// into null/infinite rectangles: no makeup shapes, no NaN, and smoothing still
+// works inside the box.
+let landless = FaceGeometry.synthetic(
+    boundingBox: CGRect(x: 0.25, y: 0.22, width: 0.5, height: 0.56),
+    hasLandmarks: false)
+if let landlessMasks = processor.buildMasks(extent: extent, faces: [landless], image: source) {
+    func finite(_ image: CIImage?) -> Bool {
+        guard let e = image?.extent else { return true }
+        return e.origin.x.isFinite && e.origin.y.isFinite
+            && e.width.isFinite && e.height.isFinite
+    }
+    let allFinite = [landlessMasks.skin, landlessMasks.face, landlessMasks.forehead,
+                     landlessMasks.hair].allSatisfy(finite)
+    check(landlessMasks.skin != nil && allFinite,
+          "a landmarkless face still gets finite skin masks")
+    check(landlessMasks.cheeks == nil && landlessMasks.underEyes == nil
+            && landlessMasks.teeth == nil && landlessMasks.eyes == nil
+            && landlessMasks.nose == nil && landlessMasks.lips == nil,
+          "no makeup or feature shapes without landmarks")
+
+    var smoothBox = Adjustments(); smoothBox.smooth = 70; smoothBox.texturePreserve = 80
+    if let out = processor.renderCGImage(
+        processor.process(source, adjustments: smoothBox, masks: landlessMasks,
+                          faces: [landless]), scale: 1) {
+        check(out.width == size && out.height == size,
+              "the landmarkless render has a finite extent")
+        let d = localDelta(baseCG, out, normalized: landless.foreheadRect)
+        check(d > 0.1, "smoothing still works inside its box",
+              String(format: "mean delta %.2f in the forehead band", d))
+    } else { check(false, "landmarkless render") }
+} else { check(false, "landmarkless masks") }
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")

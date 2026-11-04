@@ -72,6 +72,12 @@ final class EditorModel: ObservableObject {
     @Published private(set) var originalImage: NSImage?
     @Published private(set) var previewImage: NSImage?
     @Published private(set) var faces: [FaceGeometry] = []
+    /// Which accepted face the owner is working on, as an index into `faces`
+    /// (largest first). `nil` means automatic: the largest face for callouts
+    /// and the median width for feature sizes.
+    @Published private(set) var selectedFaceIndex: Int?
+    /// The makeup palette each accepted face measured, in the same order.
+    private var faceFamilies: [MakeupFamily] = []
     @Published private(set) var isBusy = false
     @Published private(set) var statusToken: StatusToken = .none
     @Published private(set) var imageName = ""
@@ -163,6 +169,7 @@ final class EditorModel: ObservableObject {
         var stickers: [Sticker] = []
         var analysis = AnalysisSettings()
         var crop: CGRect?
+        var selectedFaceIndex: Int?
     }
 
     private var undoStack: [EditState] = []
@@ -176,7 +183,8 @@ final class EditorModel: ObservableObject {
 
     private var currentState: EditState {
         EditState(adjustments: adjustments, healSpots: healSpots,
-                  stickers: stickers, analysis: analysis, crop: appliedCrop)
+                  stickers: stickers, analysis: analysis, crop: appliedCrop,
+                  selectedFaceIndex: selectedFaceIndex)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -239,11 +247,17 @@ final class EditorModel: ObservableObject {
     /// off the main actor without touching the history stack.
     private func restore(_ state: EditState) {
         let cropChanged = state.crop != appliedCrop
+        let selectionChanged = state.selectedFaceIndex != selectedFaceIndex
         adjustments = state.adjustments
         healSpots = state.healSpots
         stickers = state.stickers
         analysis = state.analysis
+        applyFaceSelection(state.selectedFaceIndex)
         selectedSticker = nil
+        if selectionChanged {
+            refreshAnalysisOverlay()
+            if hasImage { schedulePreview() }
+        }
         updateCleanState()
         guard cropChanged else { return }
         appliedCrop = state.crop
@@ -307,7 +321,37 @@ final class EditorModel: ObservableObject {
             return
         }
         analysisOverlay = AnalysisRenderer.render(size: previewSize, faces: faces,
-                                                  settings: analysis)
+                                                  settings: analysis, focus: focusFace)
+    }
+
+    /// The face the owner picked, or nil for the automatic choice.
+    var focusFace: FaceGeometry? {
+        guard let selectedFaceIndex, faces.indices.contains(selectedFaceIndex) else { return nil }
+        return faces[selectedFaceIndex]
+    }
+
+    /// Switches which face drives the callouts, the makeup palette and the
+    /// feature sizes. It is part of the document, so it is an undo step and
+    /// survives save/reopen.
+    func selectFace(_ index: Int?) {
+        guard hasImage else { return }
+        let target = index.flatMap { faces.indices.contains($0) ? $0 : nil }
+        guard target != selectedFaceIndex else { return }
+        commitAdjustments()
+        applyFaceSelection(target)
+        commitAdjustments()
+        updateCleanState()
+        refreshAnalysisOverlay()
+        schedulePreview()
+    }
+
+    private func applyFaceSelection(_ index: Int?) {
+        selectedFaceIndex = index.flatMap { faces.indices.contains($0) ? $0 : nil }
+        if let selectedFaceIndex, faceFamilies.indices.contains(selectedFaceIndex) {
+            makeupFamily = faceFamilies[selectedFaceIndex]
+        } else {
+            makeupFamily = faceFamilies.first ?? .medium
+        }
     }
 
     private func updateCleanState() {
@@ -689,16 +733,17 @@ final class EditorModel: ObservableObject {
         sourceMetadata = result.metadata
         faces = result.faces
         faceCount = result.faces.count
+        // Each accepted face gets its own palette, so switching the selection
+        // switches the makeup family to that face's measured skin.
+        faceFamilies = result.faces.map { face in
+            AutoAnalyzer.cheekLuminance(result.originalPreview, face: face)
+                .map(MakeupFamily.of(skinLuminance:)) ?? .medium
+        }
+        applyFaceSelection(nil)
         // A new set of pixels means the old silhouette no longer describes it.
         personGeneration += 1
         subjectState = .unknown
         hasBodyPose = false
-        if let face = result.faces.first,
-           let luma = AutoAnalyzer.cheekLuminance(result.originalPreview, face: face) {
-            makeupFamily = MakeupFamily.of(skinLuminance: luma)
-        } else {
-            makeupFamily = .medium
-        }
         originalImage = NSImage(cgImage: result.originalPreview,
                                size: NSSize(width: result.originalPreview.width, height: result.originalPreview.height))
         previewImage = NSImage(cgImage: result.preview,
@@ -738,6 +783,7 @@ final class EditorModel: ObservableObject {
         healSpots = project?.healSpots ?? []
         stickers = project?.stickers ?? []
         analysis = project?.analysis ?? AnalysisSettings()
+        applyFaceSelection(project?.selectedFace)
         isLoadingState = false
         selectedSticker = nil
         rebuildSpotMasks()
@@ -869,6 +915,7 @@ final class EditorModel: ObservableObject {
         generation += 1
         let generation = self.generation
         let crop = appliedCrop
+        let selection = selectedFaceIndex
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
         let url = imageURL
@@ -888,10 +935,16 @@ final class EditorModel: ObservableObject {
                 return
             }
             self.install(result)
+            // The faces are the same people under a smaller frame: cropping
+            // must not silently drop back to the automatic face.
+            self.applyFaceSelection(selection)
+            self.refreshAnalysisOverlay()
             // The stamps live in original-photo coordinates, so a new crop moves
             // them onto the new frame before the canvas repaints.
             self.rebuildSpotMasks()
-            if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
+            if selection != nil || !self.healSpots.isEmpty || !self.stickers.isEmpty {
+                self.schedulePreview()
+            }
             self.updateCleanState()
             self.isBusy = false
             if !restoring {
@@ -1249,7 +1302,7 @@ final class EditorModel: ObservableObject {
     /// coordinates the renderer uses.
     var analysisLeaders: [(region: AnalysisRegion, end: CGPoint)] {
         guard analysis.isEnabled,
-              let face = AnalysisRenderer.primaryFace(faces) else { return [] }
+              let face = AnalysisRenderer.primaryFace(faces, focus: focusFace) else { return [] }
         let ends = AnalysisRenderer.layout(face: face, settings: analysis)
         return analysis.primaryCallouts.compactMap { region in
             ends[region].map { (region, $0) }
@@ -1280,7 +1333,7 @@ final class EditorModel: ObservableObject {
     /// feature the renderer picked otherwise.
     var analysisAnchors: [(region: AnalysisRegion, point: CGPoint)] {
         guard analysis.isEnabled,
-              let face = AnalysisRenderer.primaryFace(faces) else { return [] }
+              let face = AnalysisRenderer.primaryFace(faces, focus: focusFace) else { return [] }
         return analysis.primaryCallouts.compactMap { region in
             let point = analysis.anchor(for: region)
                 ?? AnalysisRenderer.anchor(region, face: face)
@@ -1484,6 +1537,7 @@ final class EditorModel: ObservableObject {
         let adjustments = self.adjustments
         let masks = self.masksPreview
         let faces = self.faces
+        let focus = focusFace
         let spots = self.spotsPreview
         let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop, aspect: sourceAspect)
         let colorSpace = self.sourceColorSpace
@@ -1497,7 +1551,7 @@ final class EditorModel: ObservableObject {
             let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
                 let processed = processor.process(source, adjustments: adjustments,
                                                   masks: masks, faces: faces, spots: spots,
-                                                  art: art)
+                                                  art: art, focus: focus)
                 return processor.renderCGImage(processed, scale: 1, colorSpace: colorSpace)
             }.value
 
@@ -1521,6 +1575,8 @@ final class EditorModel: ObservableObject {
         stickers.removeAll()
         selectedSticker = nil
         analysis = AnalysisSettings()
+        applyFaceSelection(nil)
+        refreshAnalysisOverlay()
         comparePosition = settings.comparePosition
         if cropChanged {
             appliedCrop = nil
@@ -1972,6 +2028,7 @@ final class EditorModel: ObservableObject {
                               stickers: stickers,
                               analysis: analysis,
                               crop: appliedCrop,
+                              selectedFaceIndex: selectedFaceIndex,
                               format: effectiveExportFormat,
                               quality: exportQuality,
                               longEdge: exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil,
@@ -2051,7 +2108,8 @@ final class EditorModel: ObservableObject {
                               crop: appliedCrop,
                               healSpots: healSpots.isEmpty ? nil : healSpots,
                               stickers: stickers.isEmpty ? nil : stickers,
-                              analysis: analysis == AnalysisSettings() ? nil : analysis)
+                              analysis: analysis == AnalysisSettings() ? nil : analysis,
+                              selectedFace: selectedFaceIndex)
     }
 
     private func writeProject(to url: URL) {

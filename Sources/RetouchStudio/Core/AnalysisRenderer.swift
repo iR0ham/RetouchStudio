@@ -13,11 +13,13 @@ enum AnalysisRenderer {
     // MARK: - Entry points
 
     static func apply(_ image: CIImage, faces: [FaceGeometry],
-                      settings: AnalysisSettings) -> CIImage {
+                      settings: AnalysisSettings,
+                      focus: FaceGeometry? = nil) -> CIImage {
         guard settings.isEnabled else { return image }
         let extent = image.extent
         guard let overlay = render(size: extent.size, faces: faces, settings: settings,
-                                   photoRect: CGRect(origin: .zero, size: extent.size))
+                                   photoRect: CGRect(origin: .zero, size: extent.size),
+                                   focus: focus)
         else { return image }
         return CIImage(cgImage: overlay)
             .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
@@ -27,16 +29,17 @@ enum AnalysisRenderer {
 
     /// The overlay over a photo that fills the canvas.
     static func render(size: CGSize, faces: [FaceGeometry],
-                       settings: AnalysisSettings) -> CGImage? {
+                       settings: AnalysisSettings,
+                       focus: FaceGeometry? = nil) -> CGImage? {
         render(size: size, faces: faces, settings: settings,
-               photoRect: CGRect(origin: .zero, size: size))
+               photoRect: CGRect(origin: .zero, size: size), focus: focus)
     }
 
     /// `photoRect` is where the photo sits on the canvas, in canvas pixels with
     /// the origin at the bottom-left. A poster export insets it, so the same
     /// callouts land on the photo while the leader lines run into the empty band.
     static func render(size: CGSize, faces: [FaceGeometry], settings: AnalysisSettings,
-                       photoRect: CGRect) -> CGImage? {
+                       photoRect: CGRect, focus: FaceGeometry? = nil) -> CGImage? {
         guard size.width >= 2, size.height >= 2, !faces.isEmpty else { return nil }
         let width = Int(size.width.rounded())
         let height = Int(size.height.rounded())
@@ -65,7 +68,7 @@ enum AnalysisRenderer {
             }
         }
 
-        if let primary = primaryFace(faces) {
+        if let primary = primaryFace(faces, focus: focus) {
             drawCallouts(in: ctx, face: primary, m: metrics, settings: settings,
                          poster: photoRect.width < size.width - 0.5)
         }
@@ -73,23 +76,36 @@ enum AnalysisRenderer {
         return ctx.makeImage()
     }
 
-    static func primaryFace(_ faces: [FaceGeometry]) -> FaceGeometry? {
-        faces.max {
-            $0.boundingBox.width * $0.boundingBox.height
-                < $1.boundingBox.width * $1.boundingBox.height
+    /// The face the callouts belong to. The owner's selection wins; without
+    /// one the largest face does.
+    static func primaryFace(_ faces: [FaceGeometry],
+                            focus: FaceGeometry? = nil) -> FaceGeometry? {
+        guard let focus else {
+            return faces.max {
+                $0.boundingBox.width * $0.boundingBox.height
+                    < $1.boundingBox.width * $1.boundingBox.height
+            }
         }
+        // Fall back to the largest face if the selection points at a face that
+        // is no longer in the accepted set.
+        return faces.contains { $0.boundingBox == focus.boundingBox } ? focus
+            : faces.max {
+                $0.boundingBox.width * $0.boundingBox.height
+                    < $1.boundingBox.width * $1.boundingBox.height
+            }
     }
 
     /// The poster export: the photo sits on a larger canvas, and the band
     /// around it is the photo's own edge, clamped and blurred, so the leader
     /// lines end somewhere that belongs to the picture.
     static func poster(_ image: CIImage, faces: [FaceGeometry],
-                       settings: AnalysisSettings) -> CIImage {
+                       settings: AnalysisSettings,
+                       focus: FaceGeometry? = nil) -> CIImage {
         let extent = image.extent
         let margin = CGFloat(max(0, settings.marginPercent)) / 100
             * min(extent.width, extent.height)
         guard margin >= 1 else {
-            return apply(image, faces: faces, settings: settings)
+            return apply(image, faces: faces, settings: settings, focus: focus)
         }
         let canvas = CGRect(x: 0, y: 0,
                             width: extent.width + margin * 2,
@@ -112,7 +128,8 @@ enum AnalysisRenderer {
 
         guard settings.isEnabled,
               let overlay = render(size: canvas.size, faces: faces,
-                                   settings: settings, photoRect: photoRect)
+                                   settings: settings, photoRect: photoRect,
+                                   focus: focus)
         else { return composed }
         return CIImage(cgImage: overlay)
             .composited(over: composed)

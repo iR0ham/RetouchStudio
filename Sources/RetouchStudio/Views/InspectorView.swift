@@ -659,6 +659,22 @@ struct InspectorView: View {
 
     private var analysisContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if model.faces.count > 1 {
+                GroupLabel(text: model.s.faceSelectionTitle)
+                HStack(spacing: 6) {
+                    PresetChip(title: model.s.faceSelectionAuto,
+                               isActive: model.selectedFaceIndex == nil) {
+                        model.selectFace(nil)
+                    }
+                    ForEach(Array(model.faces.indices), id: \.self) { index in
+                        PresetChip(title: model.s.faceSelectionName(index),
+                                   isActive: model.selectedFaceIndex == index) {
+                            model.selectFace(index)
+                        }
+                    }
+                }
+            }
+
             Toggle(isOn: model.analysisEnabledBinding) {
                 Text(model.s.analysisEnable)
                     .font(Theme.Font.face(size: 11))

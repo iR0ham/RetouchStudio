@@ -682,6 +682,17 @@ func testProjectVersionGuard() async {
     check(legacy.version == RetouchProject.currentVersion,
           "a missing version decodes as the current one", "v\(legacy.version)")
     check(legacy.imageBookmark == nil, "a project without a bookmark still opens")
+
+    let chosen = RetouchProject(imagePath: photoURL.path,
+                                adjustments: .zero,
+                                exportFormat: "png",
+                                exportQuality: 1,
+                                autoRetouchStrength: 70,
+                                selectedFace: 1)
+    let reopened = (try? JSONEncoder().encode(chosen))
+        .flatMap { try? JSONDecoder().decode(RetouchProject.self, from: $0) }
+    check(reopened?.selectedFace == 1, "the chosen face survives save and reopen",
+          "selectedFace=\(reopened?.selectedFace.map(String.init) ?? "nil")")
 }
 
 // MARK: - runner
