@@ -1125,7 +1125,8 @@ final class EditorModel: ObservableObject {
         let clamped = CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y)))
         let visible = visibleHealSpots
         if let hit = visible.first(where: {
-            hypot($0.spot.center.x - clamped.x, $0.spot.center.y - clamped.y) <= $0.spot.radius
+            HealGeometry.shortSideDistance($0.spot.center, clamped, aspect: workingAspect)
+                <= $0.spot.radius
         }) {
             healSpots.remove(at: hit.index)
             statusToken = healSpots.isEmpty ? .healCleared : .healStampRemoved
@@ -1931,7 +1932,7 @@ final class EditorModel: ObservableObject {
         for spot in spots {
             let working = HealSpot(center: spot.center, radius: spot.radius)
             let covered = (existing + addedWorking).contains {
-                hypot($0.center.x - working.center.x, $0.center.y - working.center.y)
+                HealGeometry.shortSideDistance($0.center, working.center, aspect: workingAspect)
                     <= max($0.radius, working.radius)
             }
             guard !covered else { continue }

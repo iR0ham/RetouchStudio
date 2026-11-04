@@ -703,9 +703,11 @@ final class ImageProcessor {
             // image-wide default: a 3 px stamp must not bleed 7 px into clean
             // skin around it.
             let feather = max(1.2, min(0.004 * shortSide, radius * 0.35))
-            guard let mask = MaskBuilder.makeMask(extent: extent,
-                                                  shapes: HealGeometry.shapes(for: bucket),
-                                                  feather: feather) else { return nil }
+            guard let mask = MaskBuilder.makeMask(
+                extent: extent,
+                shapes: HealGeometry.shapes(for: bucket,
+                                            aspect: extent.width / max(1, extent.height)),
+                feather: feather) else { return nil }
             return SpotHealing.Pass(mask: mask, radius: radius)
         }
         guard !passes.isEmpty else { return nil }

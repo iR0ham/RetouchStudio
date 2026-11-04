@@ -2173,8 +2173,32 @@ enum SelfCheck {
         let radiiOK = mixedRadii.count == 2 && mixedRadii[1] >= mixedRadii[0] * 2
         print("  \(radiiOK ? "✓" : "✗") stamps keep their own radius (passes: \(mixedRadii.map { fmt(Double($0)) }.joined(separator: ", ")))")
 
+        // A stamp is stored as a fraction of the short side, so on a non-square
+        // photo its mask must still cover a circle in pixels, not an ellipse
+        // shaped like the frame. A 240×320 portrait with a 0.1 stamp wants a
+        // 48×48 px footprint.
+        let portrait = CGRect(x: 0, y: 0, width: 240, height: 320)
+        let roundStamp = HealSpot(center: CGPoint(x: 0.5, y: 0.5), radius: 0.1)
+        var roundOK = false
+        if let roundMask = processor.spotsMask(extent: portrait, spots: [roundStamp])?
+            .passes.first.flatMap({ processor.renderCGImage($0.mask, scale: 1) }) {
+            var minX = roundMask.width, maxX = -1, minY = roundMask.height, maxY = -1
+            for y in 0..<roundMask.height {
+                for x in 0..<roundMask.width where (luminance(roundMask, x: x, y: y) ?? 0) > 128 {
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+            let width = maxX - minX + 1, height = maxY - minY + 1
+            let ratio = height > 0 ? Double(width) / Double(height) : 0
+            roundOK = width > 0 && abs(ratio - 1) <= 0.02
+            print("  \(roundOK ? "✓" : "✗") a portrait stamp is round: \(width)×\(height) px (ratio \(fmt(ratio)))")
+        } else {
+            print("  ✗ a portrait stamp is round: no mask")
+        }
+
         return maskOK && clearedOK && untouchedOK && textureOK && roundTripOK
-            && droppedOK && radiiOK
+            && droppedOK && radiiOK && roundOK
     }
 
     // MARK: - Smart Analyze

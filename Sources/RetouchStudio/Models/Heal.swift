@@ -61,22 +61,36 @@ enum HealGeometry {
         }
     }
 
-    /// Mask shapes for a set of stamps. `MaskShape` uses a bottom-left origin,
-    /// so the y of each disc flips.
-    static func shapes(for spots: [HealSpot]) -> [MaskShape] {
-        spots.map { spot in
-            let diameter = spot.radius * 2
-            let rect = CGRect(x: spot.center.x - spot.radius,
-                              y: 1 - spot.center.y - spot.radius,
-                              width: diameter, height: diameter)
-            return MaskShape(mode: .add, ellipse: rect)
-        }
+    /// Distance between two normalized points measured in short-side units,
+    /// which is the unit a stamp radius is expressed in. On a non-square frame
+    /// the same normalized step spans more pixels across than down (or the
+    /// other way around), so a plain `hypot` would test an ellipse footprint
+    /// against a point.
+    static func shortSideDistance(_ first: CGPoint, _ second: CGPoint,
+                                  aspect: CGFloat) -> CGFloat {
+        let ratio = max(0.0001, aspect)
+        let dx = (first.x - second.x) * max(1, ratio)
+        let dy = (first.y - second.y) * max(1, 1 / ratio)
+        return hypot(dx, dy)
     }
 
-    /// One healing pass serves every stamp, sized by the largest of them: the
-    /// median window only has to be wide enough to clear the biggest spot, and
-    /// smaller stamps sit inside that patch anyway.
-    static func largestRadius(_ spots: [HealSpot]) -> CGFloat {
-        spots.map(\.radius).max() ?? 0
+    /// Mask shapes for a set of stamps. `MaskShape` uses a bottom-left origin,
+    /// so the y of each disc flips. The radius is a fraction of the frame's
+    /// short side, so on a non-square photo the normalized width and height
+    /// differ: dividing by the pixel aspect keeps the repair footprint a circle
+    /// in pixels instead of an ellipse the shape of the photo, and the export
+    /// gets the same circle as the preview.
+    static func shapes(for spots: [HealSpot], aspect: CGFloat) -> [MaskShape] {
+        let ratio = max(0.0001, aspect)
+        let radiusX = ratio >= 1 ? 1 / ratio : 1
+        let radiusY = ratio >= 1 ? 1 : ratio
+        return spots.map { spot in
+            let rx = spot.radius * radiusX
+            let ry = spot.radius * radiusY
+            let rect = CGRect(x: spot.center.x - rx,
+                              y: 1 - spot.center.y - ry,
+                              width: rx * 2, height: ry * 2)
+            return MaskShape(mode: .add, ellipse: rect)
+        }
     }
 }

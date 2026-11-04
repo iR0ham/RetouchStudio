@@ -531,6 +531,85 @@ if let fullMasks = processor.buildMasks(extent: fullExtent, faces: [fullFace]),
     check(false, "preview/export parity renders")
 }
 
+print("\n[10] heal stamps stay round on non-square photos")
+
+// A stamp's radius is a fraction of the short side, so a square normalized
+// rect becomes an ellipse whose aspect equals the photo's. The mask must be a
+// circle in pixels, and the repair it drives must stay as effective.
+func makeHealFixture(width: Int, height: Int, blemishRadius: CGFloat) -> CGImage {
+    let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                        bytesPerRow: 0, space: sRGB,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(srgbRed: 0.86, green: 0.72, blue: 0.64, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+    let cx = CGFloat(width) / 2, cy = CGFloat(height) / 2
+    ctx.setFillColor(CGColor(srgbRed: 0.55, green: 0.35, blue: 0.33, alpha: 1))
+    ctx.fillEllipse(in: CGRect(x: cx - blemishRadius, y: cy - blemishRadius,
+                               width: blemishRadius * 2, height: blemishRadius * 2))
+    return ctx.makeImage()!
+}
+
+/// Bounding box of a mask's lit pixels, in image pixels. The 50% contour of a
+/// blurred disc sits on the unblurred edge, so feathering does not bias it.
+func maskBounds(_ image: CGImage, threshold: UInt8 = 128) -> CGRect? {
+    guard let data = image.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return nil }
+    let bpp = image.bitsPerPixel / 8
+    var minX = image.width, minY = image.height, maxX = -1, maxY = -1
+    for y in 0..<image.height {
+        for x in 0..<image.width where p[y * image.bytesPerRow + x * bpp] >= threshold {
+            minX = min(minX, x); maxX = max(maxX, x)
+            minY = min(minY, y); maxY = max(maxY, y)
+        }
+    }
+    guard maxX >= minX, maxY >= minY else { return nil }
+    return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+}
+
+let roundStamp = HealSpot(center: CGPoint(x: 0.5, y: 0.5), radius: 0.08)
+for (label, width, height) in [("3:2", 600, 400), ("2:3", 400, 600), ("1:1", 400, 400)] {
+    let frame = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+    guard let healing = processor.spotsMask(extent: frame, spots: [roundStamp]),
+          let pass = healing.passes.first,
+          let mask = processor.renderCGImage(pass.mask, scale: 1),
+          let box = maskBounds(mask) else {
+        check(false, "\(label) stamp mask"); continue
+    }
+    let ratio = box.width / box.height
+    check(abs(ratio - 1) <= 0.02,
+          "\(label) stamp footprint is round in pixels",
+          String(format: "%.0f×%.0f px (ratio %.3f)", box.width, box.height, ratio))
+    let expected = 2 * roundStamp.radius * CGFloat(min(width, height))
+    check(abs(box.width - expected) <= 2 && abs(box.height - expected) <= 2,
+          "\(label) stamp keeps its short-side size",
+          String(format: "%.0f×%.0f px, %.0f px expected", box.width, box.height, expected))
+}
+
+// A square photo must keep the shape it had before the aspect correction.
+if case .ellipse(let squareRect) = HealGeometry.shapes(for: [roundStamp], aspect: 1)[0].kind {
+    let legacy = CGRect(x: roundStamp.center.x - roundStamp.radius,
+                        y: 1 - roundStamp.center.y - roundStamp.radius,
+                        width: roundStamp.radius * 2, height: roundStamp.radius * 2)
+    check(squareRect == legacy, "a square photo keeps the original stamp shape")
+} else {
+    check(false, "a square photo keeps the original stamp shape")
+}
+
+for (label, width, height) in [("3:2", 600, 400), ("2:3", 400, 600)] {
+    let fixture = makeHealFixture(width: width, height: height, blemishRadius: 10)
+    let frame = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+    let before = spotProminence(fixture, 0.5, 0.5)
+    guard let healing = processor.spotsMask(extent: frame, spots: [roundStamp]),
+          let out = processor.renderCGImage(
+            processor.process(CIImage(cgImage: fixture), adjustments: .zero,
+                              masks: nil, spots: healing), scale: 1) else {
+        check(false, "\(label) stamped heal"); continue
+    }
+    let after = spotProminence(out, 0.5, 0.5)
+    check(after < before * 0.4,
+          "\(label) a stamped blemish is cleared",
+          String(format: "prominence %.1f → %.1f", before, after))
+}
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")
