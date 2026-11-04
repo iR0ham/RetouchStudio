@@ -154,20 +154,21 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Undo / redo
 
-    /// Everything one undo step covers. Stamping the healing brush is an edit
-    /// exactly like moving a slider, so both travel through history together.
+    /// Everything one undo step covers. Stamping the healing brush and reframing
+    /// with the crop tool are edits exactly like moving a slider, so all of them
+    /// travel through history together.
     private struct EditState: Equatable {
         var adjustments = Adjustments()
         var healSpots: [HealSpot] = []
         var stickers: [Sticker] = []
         var analysis = AnalysisSettings()
+        var crop: CGRect?
     }
 
     private var undoStack: [EditState] = []
     private var redoStack: [EditState] = []
     private var lastCommitted = EditState()
     private var cleanState = EditState()
-    private var cleanCrop: CGRect?
     private var coalesceTask: Task<Void, Never>?
 
     @Published private(set) var canUndo = false
@@ -175,7 +176,7 @@ final class EditorModel: ObservableObject {
 
     private var currentState: EditState {
         EditState(adjustments: adjustments, healSpots: healSpots,
-                  stickers: stickers, analysis: analysis)
+                  stickers: stickers, analysis: analysis, crop: appliedCrop)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -234,13 +235,21 @@ final class EditorModel: ObservableObject {
 
     /// Assigning both published properties fires their `didSet`, which rebuilds
     /// the masks and repaints the canvas, so history never leaves a stale stamp
-    /// on screen.
+    /// on screen. A crop change also has to re-read the pixels, which happens
+    /// off the main actor without touching the history stack.
     private func restore(_ state: EditState) {
+        let cropChanged = state.crop != appliedCrop
         adjustments = state.adjustments
         healSpots = state.healSpots
         stickers = state.stickers
         analysis = state.analysis
         selectedSticker = nil
+        updateCleanState()
+        guard cropChanged else { return }
+        appliedCrop = state.crop
+        cropAspect = .free
+        cropDraft = CropGeometry.full
+        reloadCropped(restoring: true)
     }
 
     /// The pill used to keep saying "Auto Color & Light applied" after ⌘Z, when
@@ -302,8 +311,7 @@ final class EditorModel: ObservableObject {
     }
 
     private func updateCleanState() {
-        hasUnsavedChanges = hasImage
-            && (currentState != cleanState || appliedCrop != cleanCrop)
+        hasUnsavedChanges = hasImage && currentState != cleanState
         scheduleAutosave()
     }
 
@@ -628,7 +636,6 @@ final class EditorModel: ObservableObject {
     /// ask again during the termination that follows.
     func discardUnsavedChanges() {
         cleanState = currentState
-        cleanCrop = appliedCrop
         updateCleanState()
     }
 
@@ -734,7 +741,6 @@ final class EditorModel: ObservableObject {
 
         cropAspect = .free
         cleanState = currentState
-        cleanCrop = appliedCrop
         comparePosition = settings.comparePosition
         resetHistory()
         // A crash copy lives nowhere else, so it must still count as unsaved:
@@ -742,7 +748,6 @@ final class EditorModel: ObservableObject {
         // This runs after resetHistory, which re-baselines the clean state.
         if project != nil, projectURL == nil {
             cleanState = EditState()
-            cleanCrop = nil
             updateCleanState()
         }
         resetView()
@@ -816,22 +821,36 @@ final class EditorModel: ObservableObject {
         let composed = CropGeometry.clamped(CropGeometry.composed(cropDraft, over: appliedCrop))
         let target: CGRect? = CropGeometry.isFull(composed) ? nil : composed
         guard target != appliedCrop else { return }
+        // A pending slider drag is its own step; the framing change is another,
+        // so ⌘Z gives the previous frame back without also undoing the drag.
+        commitAdjustments()
         appliedCrop = target
-        reloadCropped()
+        // Leader ends were pinned against the old frame; the face has moved, so
+        // they go back to the automatic layout as part of the same step.
+        if !analysis.endpoints.isEmpty { analysis.resetEndpoints() }
+        commitAdjustments()
+        updateCleanState()
+        reloadCropped(restoring: false)
     }
 
     func resetCrop() {
         guard hasImage, !isBusy, appliedCrop != nil || !cropDraftIsFull else { return }
+        commitAdjustments()
         appliedCrop = nil
         cropAspect = .free
         cropDraft = CropGeometry.full
-        reloadCropped()
+        if !analysis.endpoints.isEmpty { analysis.resetEndpoints() }
+        commitAdjustments()
+        updateCleanState()
+        reloadCropped(restoring: false)
     }
 
     /// Re-reads the source with the current crop and rebuilds masks and previews.
-    /// Adjustments and the undo stack survive: the crop changes the pixels, not
-    /// the slider values.
-    private func reloadCropped() {
+    /// History is never touched here: a crop is already an undo step, and an
+    /// undo that changes it calls back in with `restoring` so the restored
+    /// analysis pins survive the re-load. `generation` makes a slow reload from
+    /// an older undo lose to the newer one.
+    private func reloadCropped(restoring: Bool) {
         guard let imageURL else { return }
         loadTask?.cancel()
         renderTask?.cancel()
@@ -860,13 +879,12 @@ final class EditorModel: ObservableObject {
             // The stamps live in original-photo coordinates, so a new crop moves
             // them onto the new frame before the canvas repaints.
             self.rebuildSpotMasks()
-            // Leader ends were pinned against the old frame; the face has moved,
-            // so they go back to the automatic layout.
-            if !self.analysis.endpoints.isEmpty { self.analysis.resetEndpoints() }
             if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
             self.updateCleanState()
             self.isBusy = false
-            self.statusToken = crop == nil ? .cropReset : .cropApplied
+            if !restoring {
+                self.statusToken = crop == nil ? .cropReset : .cropApplied
+            }
         }
     }
 
@@ -1485,21 +1503,31 @@ final class EditorModel: ObservableObject {
     func resetAll() {
         guard hasImage else { return }
         commitAdjustments()
+        let cropChanged = appliedCrop != nil
         adjustments = .zero
         if !healSpots.isEmpty { healSpots.removeAll() }
         stickers.removeAll()
         selectedSticker = nil
         analysis = AnalysisSettings()
         comparePosition = settings.comparePosition
+        if cropChanged {
+            appliedCrop = nil
+            cropAspect = .free
+            cropDraft = CropGeometry.full
+        }
+        // Sliders, stamps, stickers, analysis and framing go back in one step,
+        // so one ⌘Z returns the whole document.
         commitAdjustments()
+        updateCleanState()
+        if cropChanged { reloadCropped(restoring: false) }
     }
 
-    /// True when every group, stamp, sticker and analysis pin matches a new
-    /// document. The Reset All menu item keys off this, not off the sliders
-    /// alone.
+    /// True when every group, stamp, sticker, analysis pin and the framing
+    /// match a new document. The Reset All menu item keys off this, not off the
+    /// sliders alone.
     var isDocumentPristine: Bool {
         adjustments.isIdentity && healSpots.isEmpty && stickers.isEmpty
-            && analysis == AnalysisSettings()
+            && analysis == AnalysisSettings() && appliedCrop == nil
     }
 
     func apply(_ preset: Preset) {
@@ -2000,7 +2028,6 @@ final class EditorModel: ObservableObject {
             // The edit is now persisted, so the discard prompt has nothing to
             // protect until the next change.
             cleanState = currentState
-            cleanCrop = appliedCrop
             updateCleanState()
             statusToken = .projectSaved(url.lastPathComponent)
         } catch {

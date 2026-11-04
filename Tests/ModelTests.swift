@@ -274,6 +274,12 @@ func testResetAllClearsEverything() async {
     model.adjustments.smooth = 30
     model.tapHeal(at: CGPoint(x: 0.5, y: 0.5))
     model.tapArt(at: CGPoint(x: 0.3, y: 0.3))
+    check(await waitUntil { !model.isBusy }, "the stamp preview settles")
+    model.cropDraft = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    model.applyCrop()
+    check(await waitUntil { !model.isBusy && model.appliedCrop != nil }, "a crop joins the edit")
+    // Pins are placed after the crop: applying a crop clears the old endpoints,
+    // so a pin set before it would not be part of the document being reset.
     model.analysis.isEnabled = true
     model.analysis.setEndpoint(CGPoint(x: 0.9, y: 0.9), for: .lips)
     check(!model.isDocumentPristine, "a document with every kind of edit is not pristine")
@@ -283,7 +289,9 @@ func testResetAllClearsEverything() async {
     check(model.healSpots.isEmpty, "heal stamps are gone")
     check(model.stickers.isEmpty, "stickers are gone")
     check(model.analysis == AnalysisSettings(), "analysis overlay is back to default")
+    check(model.appliedCrop == nil, "the crop is back to the original framing")
     check(model.isDocumentPristine, "the document reads as pristine")
+    check(await waitUntil { !model.isBusy }, "the uncropped pixels finish loading")
 
     model.undo()
     check(model.adjustments.smooth == 30, "one undo restores the slider")
@@ -291,6 +299,8 @@ func testResetAllClearsEverything() async {
     check(model.stickers.count == 1, "one undo restores the sticker")
     check(model.analysis.isEnabled && !model.analysis.endpoints.isEmpty,
           "one undo restores the analysis pins")
+    check(model.appliedCrop != nil, "one undo restores the crop")
+    check(await waitUntil { !model.isBusy }, "the restored crop finishes re-reading")
 }
 
 // MARK: - P1-1 / H-3
@@ -455,6 +465,85 @@ func testBatchMatchesSingleExport() async {
     }
 }
 
+// MARK: - P1-2 / H-5
+
+@MainActor
+func testCropIsUndoable() async {
+    print("\n[P1-2] crop travels through undo history")
+
+    let url = workDir.appendingPathComponent("crop-undo.png")
+    guard let image = makeImage(width: 800, height: 600), writePNG(image, to: url) else {
+        check(false, "crop fixture")
+        return
+    }
+
+    let model = EditorModel()
+    model.load(url: url)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture loads")
+    check(model.workingPixelSize == CGSize(width: 800, height: 600), "original frame is 800×600")
+
+    let half = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+    model.cropDraft = half
+    model.applyCrop()
+    check(await waitUntil { !model.isBusy && model.appliedCrop != nil }, "crop applies")
+    check(model.workingPixelSize == CGSize(width: 400, height: 300), "crop re-reads the pixels")
+    check(model.hasUnsavedChanges, "a crop-only edit is unsaved work")
+    check(model.canUndo, "the crop is an undo step")
+
+    model.undo()
+    check(await waitUntil { !model.isBusy }, "undo finishes its re-read")
+    check(model.appliedCrop == nil && model.workingPixelSize == CGSize(width: 800, height: 600),
+          "undo restores the previous frame")
+    check(!model.hasUnsavedChanges, "undo returns to the clean baseline")
+    check(model.canRedo, "redo is offered")
+
+    model.redo()
+    check(await waitUntil { !model.isBusy }, "redo finishes its re-read")
+    check(model.appliedCrop != nil && model.workingPixelSize == CGSize(width: 400, height: 300),
+          "redo re-applies the crop")
+
+    // The re-read must not clear the stack: one undo gives the frame back, a
+    // second undo still reaches the slider edit made before the crop.
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+    model.adjustments.contrast = 24
+    model.commitAdjustments()
+    model.cropDraft = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    model.applyCrop()
+    _ = await waitUntil { !model.isBusy }
+    check(model.appliedCrop != nil, "second crop applies")
+
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.adjustments.contrast == 24 && model.appliedCrop == nil,
+          "one undo removes only the crop")
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.adjustments.contrast == 0, "the next undo reaches the slider")
+    check(model.workingPixelSize == CGSize(width: 800, height: 600), "back at the original frame")
+
+    // Reset Crop is its own step too.
+    model.cropDraft = half
+    model.applyCrop()
+    _ = await waitUntil { !model.isBusy }
+    model.resetCrop()
+    check(await waitUntil { !model.isBusy && model.appliedCrop == nil }, "reset crop applies")
+    model.undo()
+    check(await waitUntil { !model.isBusy }, "undo after reset finishes")
+    check(model.appliedCrop != nil && model.workingPixelSize == CGSize(width: 400, height: 300),
+          "undo of Reset Crop brings the crop back")
+
+    // A second undo arriving while the first re-read is still running must win:
+    // the stale load is discarded by the generation guard.
+    model.cropDraft = CGRect(x: 0.05, y: 0.05, width: 0.5, height: 0.5)
+    model.applyCrop()
+    model.undo()
+    model.undo()
+    check(await waitUntil { !model.isBusy }, "overlapping undos settle")
+    check(model.appliedCrop == nil && model.workingPixelSize == CGSize(width: 800, height: 600),
+          "a stale crop reload never installs")
+}
+
 // MARK: - runner
 
 @MainActor
@@ -462,6 +551,7 @@ func runAll() async {
     await testExportDoesNotSave()
     await testSmartKeepsUnmeasuredFields()
     await testResetAllClearsEverything()
+    await testCropIsUndoable()
     await testBatchMatchesSingleExport()
 
     print("\n" + String(repeating: "-", count: 60))
