@@ -527,6 +527,10 @@ final class PersianL10n: L10n {
         "اینکه از هر اصلاح اندازه‌گیری‌شده چقدر اعمال شود."
     }
     override var settingsExport: String { "خروجی" }
+    override var settingsStripMetadata: String { "حذف موقعیت مکانی و مشخصات دوربین" }
+    override var settingsStripMetadataNote: String {
+        "GPS، نام مالک دوربین، شمارهٔ سریال و یادداشت‌ها از خروجی حذف می‌شوند. جهت، پروفایل رنگ و ابعاد حفظ می‌شوند."
+    }
     override var settingsTools: String { "ابزارها" }
     override var settingsRecovery: String { "بازیابی" }
     override var settingsRecoveryToggle: String { "یک نسخهٔ بازیابی از کار ذخیره‌نشده نگه دار" }

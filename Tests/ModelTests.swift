@@ -804,6 +804,38 @@ func testPreviewStaysAtPreviewResolution() async {
           "\(Int(rendered.width))×\(Int(rendered.height))")
 }
 
+// MARK: - P2-6 / M-6
+
+@MainActor
+func testPrivacySettingDefaults() async {
+    print("\n[P2-6] privacy stripping defaults on and survives a restart")
+
+    let suite = "RetouchStudio.tests.\(UUID().uuidString)"
+    guard let store = UserDefaults(suiteName: suite) else {
+        check(false, "temporary preferences")
+        return
+    }
+    defer { store.removePersistentDomain(forName: suite) }
+
+    let fresh = AppSettings(store: store)
+    check(fresh.stripLocationMetadata,
+          "a fresh install strips location and camera identity")
+
+    fresh.stripLocationMetadata = false
+    let reopened = AppSettings(store: store)
+    check(!reopened.stripLocationMetadata, "turning it off survives a restart")
+
+    // A preference file written before the key existed has no answer; the
+    // missing key must mean the private default, not "keep everything".
+    store.removeObject(forKey: "settings.stripLocationMetadata")
+    let missing = AppSettings(store: store)
+    check(missing.stripLocationMetadata,
+          "a preference without the key keeps the private default")
+
+    reopened.resetToDefaults()
+    check(reopened.stripLocationMetadata, "Restore Defaults turns the strip back on")
+}
+
 // MARK: - runner
 
 @MainActor
@@ -817,6 +849,7 @@ func runAll() async {
     await testProjectVersionGuard()
     await testOperationCoordination()
     await testPreviewStaysAtPreviewResolution()
+    await testPrivacySettingDefaults()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

@@ -20,6 +20,7 @@ final class AppSettings: ObservableObject {
         static let exportLongEdge = 0
         static let healBrushPercent = 1.6
         static let showFaceOverlay = false
+        static let stripLocationMetadata = true
     }
 
     private enum Key {
@@ -32,6 +33,7 @@ final class AppSettings: ObservableObject {
         static let healBrushPercent = "settings.healBrushPercent"
         static let showFaceOverlay = "settings.showFaceOverlay"
         static let recovery = "settings.recoveryEnabled"
+        static let stripLocationMetadata = "settings.stripLocationMetadata"
     }
 
     private let store: UserDefaults
@@ -66,6 +68,12 @@ final class AppSettings: ObservableObject {
     @Published var recoveryEnabled: Bool {
         didSet { store.set(recoveryEnabled, forKey: Key.recovery) }
     }
+    /// Leave GPS and camera identity out of exports. On by default: a
+    /// retouched portrait should not publish where it was taken or which body
+    /// and lens produced it.
+    @Published var stripLocationMetadata: Bool {
+        didSet { store.set(stripLocationMetadata, forKey: Key.stripLocationMetadata) }
+    }
     /// The interface language. The global `AppLanguage.current` follows it, so
     /// the font tokens and the About/Help windows read the same answer.
     @Published var language: AppLanguage = AppLanguage.current {
@@ -90,6 +98,11 @@ final class AppSettings: ObservableObject {
         recoveryEnabled = store.object(forKey: Key.recovery) == nil
             ? true
             : store.bool(forKey: Key.recovery)
+        // A preference written before this key existed decodes to the privacy-
+        // preserving default, not to "keep everything".
+        stripLocationMetadata = store.object(forKey: Key.stripLocationMetadata) == nil
+            ? Defaults.stripLocationMetadata
+            : store.bool(forKey: Key.stripLocationMetadata)
     }
 
     func resetToDefaults() {
@@ -102,6 +115,7 @@ final class AppSettings: ObservableObject {
         healBrushPercent = Defaults.healBrushPercent
         showFaceOverlay = Defaults.showFaceOverlay
         recoveryEnabled = true
+        stripLocationMetadata = Defaults.stripLocationMetadata
         language = .english
     }
 }

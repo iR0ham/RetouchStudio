@@ -132,6 +132,8 @@ enum SelfCheck {
         passed = checkColorGateSpace() && passed
         print("-- 16-bit export and metadata --")
         passed = checkExportDepthAndMetadata(outDirectory: outDirectory) && passed
+        print("-- export drops location and camera identity --")
+        passed = checkPrivacyMetadata(outDirectory: outDirectory) && passed
         print("-- batch export keeps each file's own shape --")
         passed = checkBatchExportGeometry(outDirectory: outDirectory) && passed
         print("-- undo and redo history --")
@@ -1823,9 +1825,14 @@ enum SelfCheck {
         let pngURL = directory.appendingPathComponent("selftest-export-16.png")
         let tiffURL = directory.appendingPathComponent("selftest-export-16.tif")
         let jpegURL = directory.appendingPathComponent("selftest-export-8.jpg")
-        let wrote = processor.write(ci, to: pngURL, format: .png, quality: 1, metadata: metadata)
-            && processor.write(ci, to: tiffURL, format: .tiff, quality: 1, metadata: metadata)
-            && processor.write(ci, to: jpegURL, format: .jpeg, quality: 0.9, metadata: metadata)
+        // This check is about the writer's own fidelity, so it opts out of the
+        // privacy strip that the export pipeline applies above it.
+        let wrote = processor.write(ci, to: pngURL, format: .png, quality: 1,
+                                    metadata: metadata, stripPrivacyMetadata: false)
+            && processor.write(ci, to: tiffURL, format: .tiff, quality: 1,
+                               metadata: metadata, stripPrivacyMetadata: false)
+            && processor.write(ci, to: jpegURL, format: .jpeg, quality: 0.9,
+                               metadata: metadata, stripPrivacyMetadata: false)
 
         func depth(_ url: URL) -> Int? {
             guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -1864,6 +1871,107 @@ enum SelfCheck {
         let resizeOK = resizedWrote && resizedPixels.0 == 48 && resizedPixels.1 == 48
         print("  \(resizeOK ? "✓" : "✗") long-edge export: \(size)×\(size) → \(resizedPixels.0)×\(resizedPixels.1) (expect 48×48)")
         return wroteOK && depthOK && metadataOK && resizeOK
+    }
+
+    // MARK: - ۱۲.۵) حفظ حریم خصوصی در متادیتا
+
+    /// A portrait can say where it was taken and which body and lens shot it.
+    /// The export pipeline drops those keys by default and leaves the rest of
+    /// EXIF, the orientation, the DPI and the profile alone.
+    private static func checkPrivacyMetadata(outDirectory: String) -> Bool {
+        let size = 64
+        guard let context = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            print("  ✗ could not build the privacy fixture")
+            return false
+        }
+        context.setFillColor(CGColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        guard let cg = context.makeImage() else { return false }
+
+        let metadata: [CFString: Any] = [
+            kCGImagePropertyDPIWidth: 300,
+            kCGImagePropertyDPIHeight: 300,
+            kCGImagePropertyOrientation: 6,
+            kCGImagePropertyGPSDictionary: [
+                kCGImagePropertyGPSLatitude: NSNumber(value: 35.7),
+                kCGImagePropertyGPSLatitudeRef: "N",
+                kCGImagePropertyGPSLongitude: NSNumber(value: 51.4),
+                kCGImagePropertyGPSLongitudeRef: "E"
+            ],
+            kCGImagePropertyExifDictionary: [
+                kCGImagePropertyExifCameraOwnerName: "Roham",
+                kCGImagePropertyExifBodySerialNumber: "BODY-123",
+                kCGImagePropertyExifLensSerialNumber: "LENS-456",
+                kCGImagePropertyExifUserComment: "private note",
+                kCGImagePropertyExifImageUniqueID: "ABCDEF0123456789",
+                kCGImagePropertyExifDateTimeOriginal: "2026:01:02 03:04:05"
+            ],
+            kCGImagePropertyTIFFDictionary: [
+                kCGImagePropertyTIFFArtist: "Retouch SelfTest",
+                kCGImagePropertyTIFFMake: "CameraCo"
+            ]
+        ]
+
+        let directory = URL(fileURLWithPath: outDirectory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let rendered = RenderedExport(image: CIImage(cgImage: cg), carriesSourceMetadata: true)
+
+        func properties(_ url: URL) -> [CFString: Any] {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            else { return [:] }
+            return props
+        }
+
+        var strip = ExportSnapshot()
+        strip.format = .jpeg
+        strip.quality = 0.95
+        let strippedURL = directory.appendingPathComponent("selftest-privacy-stripped.jpg")
+        let wroteStripped = ExportService.write(rendered, snapshot: strip, to: strippedURL,
+                                                colorSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                                                metadata: metadata)
+        let stripped = properties(strippedURL)
+        let strippedExif = stripped[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+        let strippedTIFF = stripped[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+        let noLocation = stripped[kCGImagePropertyGPSDictionary] == nil
+        let noIdentity = strippedExif[kCGImagePropertyExifCameraOwnerName] == nil
+            && strippedExif[kCGImagePropertyExifBodySerialNumber] == nil
+            && strippedExif[kCGImagePropertyExifLensSerialNumber] == nil
+            && strippedExif[kCGImagePropertyExifUserComment] == nil
+            && strippedExif[kCGImagePropertyExifImageUniqueID] == nil
+            && strippedTIFF[kCGImagePropertyTIFFArtist] == nil
+        let keptExposure = (strippedExif[kCGImagePropertyExifDateTimeOriginal] as? String)
+            == "2026:01:02 03:04:05"
+            && (strippedTIFF[kCGImagePropertyTIFFMake] as? String) == "CameraCo"
+        let orientation = (stripped[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 0
+        let dpi = (stripped[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 0
+        let geometryOK = orientation == 1 && abs(dpi - 300) < 1
+            && (stripped[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue == size
+
+        var keep = strip
+        keep.stripsPrivacyMetadata = false
+        let keptURL = directory.appendingPathComponent("selftest-privacy-kept.jpg")
+        let wroteKept = ExportService.write(rendered, snapshot: keep, to: keptURL,
+                                            colorSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                                            metadata: metadata)
+        let kept = properties(keptURL)
+        let keptExif = kept[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+        let keptTIFF = kept[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+        let keptIdentity = kept[kCGImagePropertyGPSDictionary] != nil
+            && (keptExif[kCGImagePropertyExifCameraOwnerName] as? String) == "Roham"
+            && (keptExif[kCGImagePropertyExifBodySerialNumber] as? String) == "BODY-123"
+            && (keptTIFF[kCGImagePropertyTIFFArtist] as? String) == "Retouch SelfTest"
+
+        print("  \(noLocation ? "✓" : "✗") GPS is not written to the export")
+        print("  \(noIdentity ? "✓" : "✗") owner, serials and comments are gone")
+        print("  \(keptExposure ? "✓" : "✗") exposure date and camera make survive")
+        print("  \(geometryOK ? "✓" : "✗") orientation=\(orientation) dpi=\(Int(dpi)) size preserved (expect 1 / 300 / \(size))")
+        print("  \(keptIdentity ? "✓" : "✗") turning the setting off keeps the identity keys")
+        return wroteStripped && wroteKept && noLocation && noIdentity
+            && keptExposure && geometryOK && keptIdentity
     }
 
     /// A batch job carries one snapshot but many shapes. The crop describes the

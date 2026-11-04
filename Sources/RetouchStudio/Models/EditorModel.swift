@@ -54,6 +54,10 @@ final class EditorModel: ObservableObject {
     @Published var exportLongEdge: Int = 0 {
         didSet { settings.exportLongEdge = exportLongEdge }
     }
+    /// Leave GPS and camera identity out of exports.
+    @Published var stripLocationMetadata = true {
+        didSet { settings.stripLocationMetadata = stripLocationMetadata }
+    }
 
     // Batch export
     @Published var showBatchSheet = false
@@ -699,6 +703,7 @@ final class EditorModel: ObservableObject {
         exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
         exportQuality = settings.exportQuality
         exportLongEdge = settings.exportLongEdge
+        stripLocationMetadata = settings.stripLocationMetadata
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
         comparePosition = settings.comparePosition
@@ -1970,6 +1975,7 @@ final class EditorModel: ObservableObject {
         exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
         exportQuality = settings.exportQuality
         exportLongEdge = settings.exportLongEdge
+        stripLocationMetadata = settings.stripLocationMetadata
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
         language = settings.language
@@ -2153,6 +2159,7 @@ final class EditorModel: ObservableObject {
                               format: effectiveExportFormat,
                               quality: exportQuality,
                               longEdge: exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil,
+                              stripsPrivacyMetadata: stripLocationMetadata,
                               includeStamps: includeStamps,
                               includeAnalysis: includeAnalysis)
     }

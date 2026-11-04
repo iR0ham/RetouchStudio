@@ -511,6 +511,10 @@ class L10n {
         "How much of each measured fix Smart Analyze applies."
     }
     var settingsExport: String { "EXPORT" }
+    var settingsStripMetadata: String { "Remove location and camera info" }
+    var settingsStripMetadataNote: String {
+        "Leaves GPS, camera owner, serial numbers and comments out of exports. Orientation, colour profile and size are kept."
+    }
     var settingsTools: String { "TOOLS" }
     var settingsRecovery: String { "RECOVERY" }
     var settingsRecoveryToggle: String { "Keep a recovery copy of unsaved work" }

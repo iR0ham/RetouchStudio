@@ -117,6 +117,25 @@ struct SettingsView: View {
                                           set: { model.exportQuality = $0 / 100 }),
                            tint: Theme.accent)
             }
+
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.s.settingsStripMetadata)
+                        .font(Theme.Font.face(size: 12.5))
+                        .foregroundStyle(Theme.text)
+                    Text(model.s.settingsStripMetadataNote)
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: $model.stripLocationMetadata)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(Theme.accent)
+                    .accessibilityLabel(model.s.settingsStripMetadata)
+            }
+            .padding(.vertical, 2)
         }
     }
 

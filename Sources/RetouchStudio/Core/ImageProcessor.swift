@@ -1113,6 +1113,7 @@ final class ImageProcessor {
                quality: Double,
                colorSpace: CGColorSpace? = nil,
                metadata: [CFString: Any] = [:],
+               stripPrivacyMetadata: Bool = true,
                maxDimension: CGFloat? = nil) -> Bool {
         let ciFormat: CIFormat = format == .jpeg ? .RGBA8 : .RGBA16
         var output = image
@@ -1139,6 +1140,9 @@ final class ImageProcessor {
                                                               1,
                                                               nil) else { return false }
         var properties = metadata
+        if stripPrivacyMetadata {
+            properties = Self.strippedPrivacyMetadata(properties)
+        }
         // These describe the source pixels, not the exported ones.
         for key in [kCGImagePropertyPixelWidth, kCGImagePropertyPixelHeight,
                     kCGImagePropertyDepth, kCGImagePropertyColorModel,
@@ -1155,6 +1159,31 @@ final class ImageProcessor {
         }
         CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
         return CGImageDestinationFinalize(destination)
+    }
+
+    /// Removes the keys that say where a photo was taken or who owns the gear.
+    /// Only these keys: the rest of EXIF still describes how the picture was
+    /// taken, which an edit has no reason to discard. The artist lives in TIFF;
+    /// the serials and comments live in EXIF; the location is its own
+    /// dictionary.
+    static func strippedPrivacyMetadata(_ metadata: [CFString: Any]) -> [CFString: Any] {
+        var properties = metadata
+        properties.removeValue(forKey: kCGImagePropertyGPSDictionary)
+        if var exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] {
+            for key in [kCGImagePropertyExifUserComment,
+                        kCGImagePropertyExifCameraOwnerName,
+                        kCGImagePropertyExifBodySerialNumber,
+                        kCGImagePropertyExifLensSerialNumber,
+                        kCGImagePropertyExifImageUniqueID] {
+                exif.removeValue(forKey: key)
+            }
+            properties[kCGImagePropertyExifDictionary] = exif
+        }
+        if var tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
+            tiff.removeValue(forKey: kCGImagePropertyTIFFArtist)
+            properties[kCGImagePropertyTIFFDictionary] = tiff
+        }
+        return properties
     }
 
     /// Lanczos resample, moved back to a zero origin so the writer sees the
