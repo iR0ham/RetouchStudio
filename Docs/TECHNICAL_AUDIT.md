@@ -4,6 +4,7 @@
 **Revision audited:** `8cc2d0c` ("fix: ignore window-activating clicks and dim dead background controls") plus 26 uncommitted changes in the working tree (23 modified files and three untracked analysis files); this document is the only file the audit itself added
 **Audit date:** 2026-11-04
 **Auditor's constraint:** No source file was modified, refactored or rewritten. This document is the only artifact created.
+**Post-audit addendum (2026-11-04):** §14 records the disposition of every Critical and High finding and of the P1/P2 items in the companion plan, with commit hashes and test names. The findings below remain as written in the audited snapshot.
 **Companion brief:** The task refers to an existing "Project Brief". At the start of the audit no such document existed in the repository (a tree-wide search returned no `*.md`, `README`, `docs/`, or brief of any kind). This audit therefore stands alone and reconstructs intent from source, comments and the verified behaviour of the build.
 
 ---
@@ -1907,3 +1908,60 @@ The group views are defined in `Adjustments.swift:150-470`. The manual copy func
 | Real-photo self-test (§13 rerun) | `/tmp/rs-audit-13-face.log`, `/tmp/rs-audit-13-face/` | exit 0; 166 ✓ / 0 ✗; `SELFTEST: PASS`; 2268×4032, 1 face |
 
 These logs are temporary and deliberately outside the repository. Reproduce them with the commands in §9.1 and §13.G.1. No private photo was copied into the repository.
+
+---
+
+## 14. Post-audit addendum — closed findings
+
+The stabilization plan (companion document, branch `stabilization`) has been
+carried out through item P2-6. This table is the evidence index: each closed
+finding names the commit that fixed it and the check that now guards it.
+Finding text is struck through here; the original entries in §10 and §13 are
+left untouched as the audited snapshot.
+
+| Finding | Planned item | Commit | Guarding check |
+|---|---|---|---|
+| ~~C-1 — Export marks the document clean (Critical)~~ | P0-1 | `7a8bc54` | ModelTests `[P0-1]` `testExportDoesNotSave` |
+| ~~H-1 — Smart Analyze overwrites fields it did not measure (High)~~ | P0-2 | `7f74527` | ModelTests `[P0-2]` `testSmartKeepsUnmeasuredFields` |
+| ~~H-2 — Reset All is incomplete (High)~~ | P0-3 | `7f74527` | ModelTests `[P0-3]` `testResetAllClearsEverything` |
+| ~~H-3 — Batch export is not the single-export pipeline (High)~~ | P1-1 | `cbc4038` | ModelTests `[P1-1]` `testBatchMatchesSingleExport`; self-test batch geometry |
+| ~~H-4 — Projects depend on absolute photo paths (High)~~ | P1-3 | `0301660` | ModelTests `[P1-3]` `testProjectRelink` |
+| ~~H-5 — Crop is outside undo/redo (High)~~ | P1-2 | `6f63200` | ModelTests `[P1-2]` `testCropIsUndoable` |
+| ~~H-6 — Preview and export disagree on blemish kernel size (High)~~ | P1-6 | `a057a3f` | EngineTests `[9]` a blemish is the same fraction at every resolution |
+| ~~H-7 — Every face is edited while radii come from `faces.first` (High)~~ | P1-4 | `447a108` | EngineTests `[8]` ordered faces, focus width, per-face mask coverage |
+| ~~M-1 — Heal stamps are ellipses on non-square photos~~ | P1-7 | `6e6286c` | EngineTests `[10]` heal stamps stay round |
+| ~~M-2 — Mask resolution is capped at 1600 px~~ | P2-2 | `b2873b8` | EngineTests `[12]` export masks at export resolution; `--memcheck` transient report |
+| ~~M-3 — Full-resolution processing before downscale~~ | P1-6 | `a057a3f` | ModelTests `[P1-6]` `testPreviewStaysAtPreviewResolution` |
+| ~~M-4 — Preview renders cannot be interrupted~~ | P1-5 | `ee71b86` | ModelTests `[P1-5]` `testOperationCoordination` (cancel paths) |
+| ~~M-6 — Exports retain GPS and personal EXIF~~ | P2-6 | `1169f1f` | EngineTests `[16]` exports drop location and camera identity; ModelTests `[P2-6]` `testPrivacySettingDefaults`; self-test `checkPrivacyMetadata` |
+| ~~M-9 — Project version is not validated~~ | P1-3 | `0301660` | ModelTests `[P1-3]` `testProjectVersionGuard` |
+| ~~M-10 — Mask memory footprint~~ | P2-1 | `c8bfe13` | EngineTests `[11]` 1024 px preview set is visually indistinguishable |
+| ~~M-13 — Export/Save/Open are not serialised~~ | P1-5 | `ee71b86` | ModelTests `[P1-5]` `testOperationCoordination` |
+| ~~M-14 — Even Skin Tone changes shading and contrast~~ | P2-3 | `08e84cb` | EngineTests `[13]` luminance held, chroma evened |
+| ~~M-15 — Teeth alignment grown band reaches the lips~~ | P2-4 | `c78ad80` | EngineTests `[14]` teeth alignment never reaches the lips |
+| ~~M-16 — Landmarkless face feeds null-derived rects~~ | P1-4 / P2-5 | `447a108` / `655f226` | EngineTests `[8]` landmarkless masks; `[15]` finite analysis anchors and ink |
+| ~~P0-4 — Analysis work existed only on disk~~ | P0-4 | `aa8399a` (+ icon `3688d57`) | Build, both suites and the packaged self-test pass at the addendum revision |
+
+### 14.1 Verification at this addendum
+
+Run on `stabilization` at `1169f1f`, 2026-11-04:
+
+| Suite | Result |
+|---|---|
+| `./Tests/run.sh` | `ENGINE TESTS: PASS` (sections 1–16); `MODEL TESTS: PASS` (P0-1…P2-6) |
+| `./build.sh` | App bundle built; built-in self-test passed |
+| Packaged `--selftest --face "$HOME/Documents/image test/IMG_8264.JPG"` | `SELFTEST: PASS`, including the new privacy check |
+| Settings window, live | "Remove location and camera info" visible and on; toggled off and back on; the saved preference read back as `1` |
+
+The private portrait was read in place; no private fixture, export or log was
+committed. Nothing was pushed.
+
+### 14.2 Not closed by this pass
+
+The deferred findings in the plan's §7 remain open by design: M-5 (no Save in
+the discard alert), M-7 (localisation parity), M-8 (canvas accessibility), M-11
+(opt-in real-photo checks), M-12 (analysis export with no face), and the Low
+items L-1…L-7. In particular, the deprecated Core Image kernel warnings are
+still emitted exactly as described in L-1; they are a warning, not a failure,
+and fixing them would rewrite working kernels without a behavioural test that
+requires it.
