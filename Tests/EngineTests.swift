@@ -940,6 +940,68 @@ if let teethMask = masks.teeth,
     check(false, "zero-strength teeth alignment")
 }
 
+print("\n[15] a landmarkless face still gets usable analysis callouts")
+// Vision can return a face box with no feature points. Everything the overlay
+// draws has to come from that box: finite anchors, leader ends inside the
+// frame, and actual ink on a non-square canvas.
+let landlessAnalysis = FaceGeometry.synthetic(
+    boundingBox: CGRect(x: 0.25, y: 0.22, width: 0.5, height: 0.56),
+    hasLandmarks: false)
+var allRegions = AnalysisSettings()
+allRegions.isEnabled = true
+allRegions.regions = Set(AnalysisRegion.allCases)
+
+func inFrame(_ p: CGPoint) -> Bool {
+    p.x.isFinite && p.y.isFinite && (0...1).contains(p.x) && (0...1).contains(p.y)
+}
+
+let landlessAnchors = AnalysisRegion.allCases.map {
+    (region: $0, point: AnalysisRenderer.anchor($0, face: landlessAnalysis))
+}
+let badAnchors = landlessAnchors.filter { !inFrame($0.point) }
+check(badAnchors.isEmpty,
+      "every callout anchor is finite and inside the photo",
+      badAnchors.map { String(format: "%@ (%.2f, %.2f)", $0.region.rawValue,
+                              $0.point.x, $0.point.y) }.joined(separator: ", "))
+
+let landlessEnds = AnalysisRenderer.layout(face: landlessAnalysis, settings: allRegions)
+check(landlessEnds.count == AnalysisRegion.allCases.count,
+      "every region gets a leader end",
+      "\(landlessEnds.count) ends")
+let badEnds = landlessEnds.filter { !inFrame($0.value) }
+check(badEnds.isEmpty,
+      "every leader end is finite and inside the photo",
+      badEnds.map { $0.key.rawValue }.joined(separator: ", "))
+
+func inkPixels(_ image: CGImage) -> Int {
+    guard let data = image.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return 0 }
+    let bpp = image.bitsPerPixel / 8
+    var count = 0
+    for y in stride(from: 0, to: image.height, by: 2) {
+        for x in stride(from: 0, to: image.width, by: 2)
+        where p[y * image.bytesPerRow + x * bpp + 3] > 8 {
+            count += 1
+        }
+    }
+    return count
+}
+
+let analysisCanvas = CGSize(width: 600, height: 800)
+if let outline = AnalysisRenderer.render(size: analysisCanvas, faces: [landlessAnalysis],
+                                         settings: allRegions) {
+    let ink = inkPixels(outline)
+    check(ink > 100, "the dashed overlay draws from the face box alone",
+          "\(ink) sampled ink pixels")
+} else { check(false, "landmarkless analysis overlay") }
+
+var meshSettings = allRegions
+meshSettings.showsMesh = true
+if let mesh = AnalysisRenderer.render(size: analysisCanvas, faces: [landlessAnalysis],
+                                      settings: meshSettings) {
+    check(mesh.width == 600 && mesh.height == 800, "the mesh mode renders without landmarks",
+          "\(inkPixels(mesh)) sampled ink pixels")
+} else { check(false, "landmarkless analysis mesh") }
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")

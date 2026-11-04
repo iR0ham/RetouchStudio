@@ -686,6 +686,8 @@ struct InspectorView: View {
 
             if !model.analysisReady {
                 SectionNote(text: model.s.analysisNoFace)
+            } else if model.analysisUsesFaceBoxFallback {
+                SectionNote(text: model.s.analysisNoLandmarks)
             }
 
             Group {

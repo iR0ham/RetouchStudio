@@ -496,6 +496,11 @@ enum FaceAnalyzer {
         let leftEye = FaceGeometry.scaled(absolute(landmarks?.leftEye), by: 1.22)
         let rightEye = FaceGeometry.scaled(absolute(landmarks?.rightEye), by: 1.22)
 
+        // Vision can hand back a landmark container with no traced points. The
+        // mask builder reads this flag as "these regions exist", so it follows
+        // the points themselves, not the container.
+        let traced = (landmarks?.allPoints?.pointCount ?? 0) >= 3
+
         return FaceGeometry(boundingBox: box,
                             faceContour: contour,
                             leftEye: leftEye,
@@ -509,6 +514,6 @@ enum FaceAnalyzer {
                             nose: absolute(landmarks?.nose),
                             noseCrest: absolute(landmarks?.noseCrest),
                             medianLine: absolute(landmarks?.medianLine),
-                            hasLandmarks: landmarks != nil)
+                            hasLandmarks: traced)
     }
 }

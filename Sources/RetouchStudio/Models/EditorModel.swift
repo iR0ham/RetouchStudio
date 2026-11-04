@@ -1346,6 +1346,15 @@ final class EditorModel: ObservableObject {
     /// The overlay can only be drawn on a photo that has a face to measure.
     var analysisReady: Bool { hasImage && !faces.isEmpty }
 
+    /// Vision found the face but traced no feature points, so the callouts run
+    /// from the face box. The overlay still draws; the panel says why the dots
+    /// are approximate.
+    var analysisUsesFaceBoxFallback: Bool {
+        guard analysisReady,
+              let face = AnalysisRenderer.primaryFace(faces, focus: focusFace) else { return false }
+        return !face.hasLandmarks
+    }
+
     var canResetAnalysisPins: Bool { !analysis.endpoints.isEmpty || !analysis.anchors.isEmpty }
 
     var analysisEnabledBinding: Binding<Bool> {

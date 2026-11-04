@@ -363,6 +363,9 @@ class L10n {
     var analysisNoFace: String {
         "No face found. The analysis needs a clear, front-facing face."
     }
+    var analysisNoLandmarks: String {
+        "This face has no feature points. The dots and lines follow the face box."
+    }
     var faceSelectionTitle: String { "Subject" }
     var faceSelectionAuto: String { "Auto" }
     func faceSelectionName(_ index: Int) -> String { "Face \(Digits.num(index + 1))" }
