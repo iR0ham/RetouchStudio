@@ -35,25 +35,32 @@ func poly(_ r: CGRect) -> [CGPoint] {
      CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
 }
 
-/// A synthetic face with real pore-level noise and a few dark spots.
-func makeFace(size: Int) -> (CIImage, CGImage, CGPoint) {
+/// A synthetic face with real pore-level noise and a few dark spots. The
+/// parity fixtures scale the spots with the render size, because a blemish is
+/// a fixed fraction of a face and not a fixed number of pixels.
+func makeFace(size: Int, blemishScale: CGFloat = 1,
+              pores: Bool = true, spots: Bool = true) -> (CIImage, CGImage, CGPoint) {
     let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
                         space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     let s = CGFloat(size)
     ctx.setFillColor(CGColor(srgbRed: 0.86, green: 0.72, blue: 0.64, alpha: 1))
     ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
     var gen = SystemRandomNumberGenerator()
-    for _ in 0..<(size * size / 6) {
-        let x = CGFloat.random(in: s * 0.22...s * 0.78, using: &gen)
-        let y = CGFloat.random(in: s * 0.30...s * 0.88, using: &gen)
-        // Realistic pore contrast: subtle, a few levels either side of the base tone.
-        let v = Double.random(in: 0.80...0.94, using: &gen)
-        ctx.setFillColor(CGColor(srgbRed: v, green: v * 0.86, blue: v * 0.78, alpha: 1))
-        ctx.fill(CGRect(x: x, y: y, width: 1, height: 1))
+    if pores {
+        for _ in 0..<(size * size / 6) {
+            let x = CGFloat.random(in: s * 0.22...s * 0.78, using: &gen)
+            let y = CGFloat.random(in: s * 0.30...s * 0.88, using: &gen)
+            // Realistic pore contrast: subtle, a few levels either side of the base tone.
+            let v = Double.random(in: 0.80...0.94, using: &gen)
+            ctx.setFillColor(CGColor(srgbRed: v, green: v * 0.86, blue: v * 0.78, alpha: 1))
+            ctx.fill(CGRect(x: x, y: y, width: 1, height: 1))
+        }
     }
     ctx.setFillColor(CGColor(srgbRed: 0.55, green: 0.35, blue: 0.33, alpha: 1))
-    for (sx, sy, r) in [(0.34, 0.62, 7.0), (0.46, 0.46, 8.0), (0.60, 0.56, 6.5)] {
-        ctx.fillEllipse(in: CGRect(x: s * sx - r, y: s * sy - r, width: r * 2, height: r * 2))
+    for (sx, sy, r) in [(0.34, 0.62, 7.0), (0.46, 0.46, 8.0), (0.60, 0.56, 6.5)] where spots {
+        let radius = r * blemishScale
+        ctx.fillEllipse(in: CGRect(x: s * sx - radius, y: s * sy - radius,
+                                   width: radius * 2, height: radius * 2))
     }
     // The mouth opening holds warm-white teeth, so the enamel gate has
     // something real to whiten. A skin-coloured mouth correctly gates teeth
@@ -422,6 +429,107 @@ if let landlessMasks = processor.buildMasks(extent: extent, faces: [landless], i
               String(format: "mean delta %.2f in the forehead band", d))
     } else { check(false, "landmarkless render") }
 } else { check(false, "landmarkless masks") }
+
+print("\n[9] a blemish is the same fraction of a face at every resolution")
+
+// The spot radius is derived from face width over the short side, so the same
+// face photographed at two resolutions must ask for the same fraction.
+let smallFrame = CGRect(x: 0, y: 0, width: 400, height: 400)
+let largeFrame = CGRect(x: 0, y: 0, width: 1600, height: 1600)
+let smallFraction = ImageProcessor.blemishRadiusFraction(faces: [face(400)], focus: nil,
+                                                         extent: smallFrame)
+let largeFraction = ImageProcessor.blemishRadiusFraction(faces: [face(1600)], focus: nil,
+                                                         extent: largeFrame)
+check(abs(smallFraction - largeFraction) < 0.02 * largeFraction,
+      "a 400 px and a 1600 px face ask for the same normalized radius",
+      String(format: "%.5f vs %.5f", smallFraction, largeFraction))
+let smallPx = smallFraction * smallFrame.width
+let largePx = largeFraction * largeFrame.width
+check(abs(smallPx * 4 - largePx) < 0.02 * largePx,
+      "the pixel radius grows with the frame",
+      String(format: "%.2f px vs %.2f px", smallPx, largePx))
+
+let bigFraction = ImageProcessor.blemishRadiusFraction(faces: [bigFace, smallFace],
+                                                       focus: smallFace, extent: frame)
+check(bigFraction < ImageProcessor.blemishRadiusFraction(faces: [bigFace, smallFace],
+                                                          focus: nil, extent: frame),
+      "the chosen face still sets the radius")
+
+// A photo with no spots must come out untouched at any size: the gate is what
+// protects clean skin, and it does not know about resolution.
+func cleanRenderDelta(size: Int) -> Double? {
+    let (cleanSource, cleanBase, _) = makeFace(size: size, pores: false, spots: false)
+    let cleanFace = face(size)
+    let cleanExtent = CGRect(x: 0, y: 0, width: size, height: size)
+    guard let cleanMasks = processor.buildMasks(extent: cleanExtent, faces: [cleanFace]) else {
+        return nil
+    }
+    var cleanAdj = Adjustments(); cleanAdj.blemish = 75
+    guard let out = processor.renderCGImage(
+        processor.process(cleanSource, adjustments: cleanAdj, masks: cleanMasks,
+                          faces: [cleanFace]), scale: 1) else { return nil }
+    return localDelta(cleanBase, out, normalized: CGRect(x: 0, y: 0, width: 1, height: 1))
+}
+if let smallClean = cleanRenderDelta(size: 600), let largeClean = cleanRenderDelta(size: 1800) {
+    check(smallClean < 1.0 && largeClean < 1.0,
+          "blemish removal leaves clean skin alone at both sizes",
+          String(format: "%.3f / %.3f levels", smallClean, largeClean))
+} else {
+    check(false, "clean blemish renders")
+}
+
+// The same photo at 3000 px and at the preview size must heal the same spot.
+let fullSize = 3000
+let previewSize = 1800
+let previewScale = CGFloat(previewSize) / CGFloat(fullSize)
+let (fullSource, fullBase, _) = makeFace(size: fullSize,
+                                         blemishScale: CGFloat(fullSize) / 420,
+                                         pores: false)
+let previewSource = fullSource
+    .applyingFilter("CILanczosScaleTransform", parameters: [
+        kCIInputScaleKey: previewScale,
+        kCIInputAspectRatioKey: 1.0
+    ])
+    .cropped(to: CGRect(x: 0, y: 0, width: previewSize, height: previewSize))
+let fullFace = face(fullSize), previewFace = face(previewSize)
+let fullExtent = CGRect(x: 0, y: 0, width: fullSize, height: fullSize)
+let previewExtent = CGRect(x: 0, y: 0, width: previewSize, height: previewSize)
+var parity = Adjustments(); parity.blemish = 75
+let spotRegion = CGRect(x: 0.26, y: 0.54, width: 0.18, height: 0.18)
+
+if let fullMasks = processor.buildMasks(extent: fullExtent, faces: [fullFace]),
+   let previewMasks = processor.buildMasks(extent: previewExtent, faces: [previewFace]),
+   let fullOut = processor.renderCGImage(
+        processor.process(fullSource, adjustments: parity, masks: fullMasks,
+                          faces: [fullFace]), scale: 1),
+   let previewOut = processor.renderCGImage(
+        processor.process(previewSource, adjustments: parity, masks: previewMasks,
+                          faces: [previewFace]), scale: 1),
+   let fullSmall = processor.renderCGImage(
+        CIImage(cgImage: fullOut)
+            .applyingFilter("CILanczosScaleTransform", parameters: [
+                kCIInputScaleKey: previewScale,
+                kCIInputAspectRatioKey: 1.0
+            ])
+            .cropped(to: previewExtent), scale: 1) {
+    let d = localDelta(fullSmall, previewOut, normalized: spotRegion)
+    check(d >= 0 && d < 5.1,
+          "preview and full export heal the spot alike",
+          String(format: "mean delta %.2f/255 in the spot region", d))
+    let fullSpot = texture(fullOut, CGRect(x: 0.30 * CGFloat(fullSize),
+                                           y: (1 - 0.66) * CGFloat(fullSize),
+                                           width: 0.08 * CGFloat(fullSize),
+                                           height: 0.08 * CGFloat(fullSize)))
+    let baseSpot = texture(fullBase, CGRect(x: 0.30 * CGFloat(fullSize),
+                                            y: (1 - 0.66) * CGFloat(fullSize),
+                                            width: 0.08 * CGFloat(fullSize),
+                                            height: 0.08 * CGFloat(fullSize)))
+    check(fullSpot < baseSpot,
+          "the full export actually repaired the spot",
+          String(format: "texture %.2f → %.2f", baseSpot, fullSpot))
+} else {
+    check(false, "preview/export parity renders")
+}
 
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {

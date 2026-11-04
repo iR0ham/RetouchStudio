@@ -102,16 +102,19 @@ enum SkinEngine {
     ///     median, so only genuine outliers are replaced. Ordinary skin is left
     ///     bit-for-bit alone.
     ///
-    /// `spotRadius` is in pixels and is derived from the face size by the
-    /// caller, so the same slider value behaves identically on the preview and
-    /// on the full-resolution export.
+    /// `radiusFraction` is the face-derived spot radius as a fraction of the
+    /// image's short side, so the preview and the full-resolution export heal
+    /// the same physical spot instead of trusting a pixel number that means
+    /// different things at two resolutions.
     static func removeBlemishes(_ image: CIImage,
                                 strength: Double,
                                 mask: CIImage,
-                                spotRadius: CGFloat) -> CIImage {
+                                radiusFraction: CGFloat) -> CIImage {
         let amount = min(1, max(0, strength / 100))
         guard amount > 0.001 else { return image }
         let extent = image.extent
+        let shortSide = min(extent.width, extent.height)
+        let spotRadius = max(1.5, radiusFraction * shortSide)
 
         // The median is used to LOCATE blemishes and to supply their
         // replacement colour — it is never blended in over clean skin.
@@ -236,10 +239,13 @@ enum SkinEngine {
 
     /// Median with an effective kernel of about `radius` pixels. `CIMedianFilter`
     /// is a fixed 3x3, so the image is downscaled, medianed and scaled back up.
+    /// The scale cap is a pixel cost budget, not a visual choice: on a large
+    /// export the same normalized spot needs a wider kernel than on the
+    /// preview, and capping at the old 8 px is what made spots survive export.
     private static func localMedian(_ source: CIImage,
                                     effectiveRadius radius: CGFloat,
                                     extent: CGRect) -> CIImage {
-        let factor = max(1.0, min(8.0, radius))
+        let factor = max(1.0, min(64.0, radius))
         guard factor > 1.2 else {
             return source.clampedToExtent()
                 .applyingFilter("CIMedianFilter")

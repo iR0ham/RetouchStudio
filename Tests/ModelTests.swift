@@ -771,6 +771,39 @@ func testOperationCoordination() async {
           leftovers.joined(separator: ", "))
 }
 
+// MARK: - P1-6 / H-6 / M-3
+
+@MainActor
+func testPreviewStaysAtPreviewResolution() async {
+    print("\n[P1-6] a slider preview renders the preview copy, not the full photo")
+
+    let url = workDir.appendingPathComponent("preview-resolution.png")
+    guard let image = makeImage(width: 3000, height: 2000), writePNG(image, to: url) else {
+        check(false, "preview-resolution fixture")
+        return
+    }
+
+    let model = EditorModel()
+    model.load(url: url)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture loads")
+    check(model.workingPixelSize == CGSize(width: 3000, height: 2000),
+          "the full photo is 3000×2000", "\(model.workingPixelSize)")
+
+    let loaded = model.previewImage?.size ?? .zero
+    check(max(loaded.width, loaded.height) > 0 && max(loaded.width, loaded.height) <= 1800,
+          "the loaded preview is capped at 1800 px",
+          "\(Int(loaded.width))×\(Int(loaded.height))")
+
+    model.adjustments.contrast = 20
+    model.schedulePreview()
+    check(await waitUntil { !model.isBusy }, "the slider preview settles")
+    let rendered = model.previewImage?.size ?? .zero
+    check(max(rendered.width, rendered.height) > 0
+            && max(rendered.width, rendered.height) <= 1800,
+          "a slider preview still renders the preview copy",
+          "\(Int(rendered.width))×\(Int(rendered.height))")
+}
+
 // MARK: - runner
 
 @MainActor
@@ -783,6 +816,7 @@ func runAll() async {
     await testProjectRelink()
     await testProjectVersionGuard()
     await testOperationCoordination()
+    await testPreviewStaysAtPreviewResolution()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

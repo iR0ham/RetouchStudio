@@ -240,6 +240,20 @@ final class ImageProcessor {
         return widths[widths.count / 2] * extent.width
     }
 
+    /// Blemish radius as a fraction of the render's short side. The preview
+    /// and the export describe the same face with different pixel widths, so
+    /// only a fraction survives the resolution change unchanged. Measured on
+    /// the test face: 0.030 clears the real spots while leaving clean skin
+    /// alone; larger factors make the median skip spots instead of healing
+    /// them.
+    static func blemishRadiusFraction(faces: [FaceGeometry], focus: FaceGeometry?,
+                                      extent: CGRect) -> CGFloat {
+        let faceWidthPx = faceWidthPixels(faces: faces, focus: focus, extent: extent)
+            ?? (extent.width * 0.30)
+        let shortSide = max(min(extent.width, extent.height), 1)
+        return faceWidthPx / shortSide * 0.030
+    }
+
     /// The skin masks of a face without landmarks still have to be usable:
     /// feature rectangles derived from missing outlines come out null or
     /// infinite, so only boxes that are finite and non-empty get a shape.
@@ -729,28 +743,13 @@ final class ImageProcessor {
             // roughly constant fraction of a face's width. A selected face is
             // what its owner is working on, so it sets the class; otherwise
             // the median of every accepted face does, so a group photo is not
-            // tuned to whoever happens to be first.
-            let faceWidthPx = Self.faceWidthPixels(faces: faces, focus: focus, extent: extent)
-                ?? (extent.width * 0.30)
-            // Factor chosen by measurement, not taste. The median can only heal
-            // a blemish smaller than its own kernel (about 2.3x the radius), so
-            // the factor decides the largest removable spot:
-            //
-            //   factor  kernel   typical blemishes cleared   clean texture
-            //   0.022   13.6 px  2 of 3                     1.00x
-            //   0.030   18.5 px  3 of 3                     1.00x   <- chosen
-            //   0.038   23.5 px  3 of 3                     1.00x
-            //   0.046   28.4 px  2 of 3 (kernel skips them)  1.00x
-            //
-            // 0.030 clears the real blemishes on the test face while leaving
-            // clean skin and the background untouched, with the flatter optimum
-            // on either side. The upper clamp keeps the median affordable on
-            // large images.
-            let spotRadius = max(1.5, min(24.0, faceWidthPx * 0.030))
-
+            // tuned to whoever happens to be first. The fraction, not a pixel
+            // radius, crosses the preview/export boundary.
             if a.blemish > 0 {
+                let fraction = Self.blemishRadiusFraction(faces: faces, focus: focus,
+                                                          extent: extent)
                 image = SkinEngine.removeBlemishes(image, strength: a.blemish,
-                                                   mask: textureMask, spotRadius: spotRadius)
+                                                   mask: textureMask, radiusFraction: fraction)
             }
             if a.wrinkle > 0 {
                 image = SkinEngine.reduceWrinkles(image, strength: a.wrinkle,
