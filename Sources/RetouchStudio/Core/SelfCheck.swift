@@ -11,7 +11,7 @@ enum SelfCheck {
 
     static func runIfRequested() {
         let arguments = CommandLine.arguments
-        guard arguments.contains("--selftest") else { return }
+        guard arguments.contains("--selftest") || arguments.contains("--memcheck") else { return }
 
         var facePath: String?
         if let index = arguments.firstIndex(of: "--face"), index + 1 < arguments.count {
@@ -22,9 +22,76 @@ enum SelfCheck {
             outDirectory = arguments[index + 1]
         }
 
+        if arguments.contains("--memcheck") {
+            let ok = runMemoryCheck(facePath: facePath)
+            print(ok ? "MEMCHECK: done" : "MEMCHECK: needs --face /path/to/photo")
+            exit(ok ? 0 : 1)
+        }
+
         let passed = run(facePath: facePath, outDirectory: outDirectory)
         print(passed ? "SELFTEST: PASS" : "SELFTEST: FAIL")
         exit(passed ? 0 : 1)
+    }
+
+    /// Where the process stands in resident memory, for the mask-budget check.
+    private static func residentMegabytes() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size
+            / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        guard status == KERN_SUCCESS else { return -1 }
+        return Double(info.resident_size) / 1_048_576
+    }
+
+    /// `--memcheck --face photo.jpg` prints resident memory after loading,
+    /// after a preview render and after a full-resolution render. The mask sets
+    /// are the point: they are the biggest thing an idle document keeps.
+    private static func runMemoryCheck(facePath: String?) -> Bool {
+        func report(_ stage: String) {
+            print("  \(stage): \(String(format: "%.0f", residentMegabytes())) MB RSS")
+        }
+        report("baseline")
+        guard let facePath else { return false }
+        let processor = ImageProcessor.shared
+        guard let result = processor.load(from: URL(fileURLWithPath: facePath),
+                                          previewMaxDimension: 1800) else {
+            print("  ✗ could not load \(facePath)")
+            return false
+        }
+        report("loaded (\(Int(result.pixelSize.width))×\(Int(result.pixelSize.height)))")
+
+        _ = processor.renderCGImage(
+            processor.process(result.sourcePreview, adjustments: .zero,
+                              masks: result.masksPreview, faces: result.faces), scale: 1)
+        report("preview rendered")
+
+        var retouch = Adjustments(); retouch.smooth = 60; retouch.blemish = 60
+        _ = processor.renderCGImage(
+            processor.process(result.sourceFull, adjustments: retouch,
+                              masks: result.masksFull, faces: result.faces), scale: 1)
+        report("full render")
+
+        let previewExtent = result.sourcePreview.extent
+        let previewScale = min(1, MaskBuilder.previewMaskDimension
+            / max(previewExtent.width, previewExtent.height))
+        print("  preview mask raster: \(Int((previewExtent.width * previewScale).rounded()))×\(Int((previewExtent.height * previewScale).rounded())) px per mask")
+
+        func maskSetMegabytes(_ extent: CGRect, _ target: CGFloat) -> Double {
+            let scale = min(1, target / max(extent.width, extent.height))
+            let pixels = (extent.width * scale).rounded() * (extent.height * scale).rounded()
+            return pixels * 4 * 21 / 1_048_576   // 21 RGBA masks in a set
+        }
+        let now = maskSetMegabytes(result.sourcePreview.extent, MaskBuilder.previewMaskDimension)
+            + maskSetMegabytes(result.sourceFull.extent, MaskBuilder.previewMaskDimension)
+        let before = maskSetMegabytes(result.sourcePreview.extent, MaskBuilder.maxMaskDimension)
+            + maskSetMegabytes(result.sourceFull.extent, MaskBuilder.maxMaskDimension)
+        print(String(format: "  mask buffers: %.0f MB now vs %.0f MB at 1600 px (%.0f%% lower)",
+                     now, before, (1 - now / max(before, 1)) * 100))
+        return true
     }
 
     static func run(facePath: String?, outDirectory: String) -> Bool {

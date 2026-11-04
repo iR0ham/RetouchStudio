@@ -610,6 +610,47 @@ for (label, width, height) in [("3:2", 600, 400), ("2:3", 400, 600)] {
           String(format: "prominence %.1f → %.1f", before, after))
 }
 
+print("\n[11] a 1024 px preview mask set is visually indistinguishable")
+
+// Masks are rasterized at a capped size and upscaled. The preview target is
+// 1024 instead of 1600: 40% of the pixels, same edge in output space because
+// the feather is scaled with the raster.
+let maskSide = 1800
+let maskExtent = CGRect(x: 0, y: 0, width: maskSide, height: maskSide)
+let maskFace = face(maskSide)
+if let fullMasks = processor.buildMasks(extent: maskExtent, faces: [maskFace],
+                                        maskDimension: MaskBuilder.maxMaskDimension),
+   let lightMasks = processor.buildMasks(extent: maskExtent, faces: [maskFace],
+                                         maskDimension: MaskBuilder.previewMaskDimension),
+   let fullSkin = fullMasks.skin.flatMap({ processor.renderCGImage($0, scale: 1) }),
+   let lightSkin = lightMasks.skin.flatMap({ processor.renderCGImage($0, scale: 1) }),
+   let dataA = fullSkin.dataProvider?.data, let dataB = lightSkin.dataProvider?.data {
+    let pa = CFDataGetBytePtr(dataA)!, pb = CFDataGetBytePtr(dataB)!
+    let bpp = fullSkin.bitsPerPixel / 8
+    var differing = 0.0, total = 0.0, sum = 0.0
+    for y in stride(from: 0, to: fullSkin.height, by: 2) {
+        for x in stride(from: 0, to: fullSkin.width, by: 2) {
+            let index = y * fullSkin.bytesPerRow + x * bpp
+            total += 1
+            let delta = abs(Int(pa[index]) - Int(pb[index]))
+            sum += Double(delta)
+            if delta > 8 { differing += 1 }
+        }
+    }
+    let fraction = differing / max(total, 1)
+    check(fraction < 0.005,
+          "shrinking the mask raster moves fewer than 0.5% of pixels",
+          String(format: "%.3f%% differ by >8/255, mean %.2f/255",
+                 fraction * 100, sum / max(total, 1)))
+} else {
+    check(false, "preview mask set builds")
+}
+
+let rasterRatio = MaskBuilder.previewMaskDimension / MaskBuilder.maxMaskDimension
+check(rasterRatio * rasterRatio <= 0.45,
+      "the preview mask raster is 40% of the full one",
+      String(format: "%.0f%%", rasterRatio * rasterRatio * 100))
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")

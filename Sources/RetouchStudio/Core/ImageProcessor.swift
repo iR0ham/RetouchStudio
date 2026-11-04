@@ -185,8 +185,13 @@ final class ImageProcessor {
             faces = AutoAnalyzer.annotateEyes(faces: faces, buffer: buffer)
         }
 
-        let masksFull = buildMasks(extent: full.extent, faces: faces, image: full)
-        let masksPreview = buildMasks(extent: previewSource.extent, faces: faces, image: previewSource)
+        // Both retained sets are masked at the preview target: they describe
+        // geometry, and the export builds its own set at export resolution.
+        let masksFull = buildMasks(extent: full.extent, faces: faces, image: full,
+                                   maskDimension: MaskBuilder.previewMaskDimension)
+        let masksPreview = buildMasks(extent: previewSource.extent, faces: faces,
+                                      image: previewSource,
+                                      maskDimension: MaskBuilder.previewMaskDimension)
 
         let processed = process(previewSource, adjustments: .zero, masks: masksPreview, faces: faces)
         guard let preview = renderCGImage(processed, scale: 1, colorSpace: colorSpace) else { return nil }
@@ -271,8 +276,14 @@ final class ImageProcessor {
     /// not geometric: enamel stops at the gum line, sclera stops at the iris.
     /// Without it the masks fall back to their geometric shapes, which is what
     /// synthetic fixtures and tests without pixels use.
-    func buildMasks(extent: CGRect, faces: [FaceGeometry], image: CIImage? = nil) -> MaskSet? {
+    func buildMasks(extent: CGRect, faces: [FaceGeometry], image: CIImage? = nil,
+                    maskDimension: CGFloat = MaskBuilder.maxMaskDimension) -> MaskSet? {
         guard !faces.isEmpty else { return nil }
+
+        func make(_ shapes: [MaskShape], _ feather: CGFloat) -> CIImage? {
+            MaskBuilder.makeMask(extent: extent, shapes: shapes, feather: feather,
+                                 maxDimension: maskDimension)
+        }
 
         let shortSide = min(extent.width, extent.height)
         let feather = max(3, 0.006 * shortSide)
@@ -403,10 +414,9 @@ final class ImageProcessor {
                 let box = FaceGeometry.boundingBox(of: eye.outline)
                 guard box.width > 0.004, box.height > 0.002 else { continue }
 
-                let scleraGeometry = MaskBuilder.makeMask(
-                    extent: extent,
-                    shapes: [MaskShape(points: FaceGeometry.scaled(eye.outline, by: 0.88))],
-                    feather: tightFeather)
+                let scleraGeometry = make(
+                    [MaskShape(points: FaceGeometry.scaled(eye.outline, by: 0.88))],
+                    tightFeather)
                 if let part = gatedMask(geometry: scleraGeometry, image: image,
                                         lumaMin: face.eyeScleraLuminance,
                                         saturationMax: 0.45) {
@@ -415,10 +425,7 @@ final class ImageProcessor {
 
                 let irisRect = FaceGeometry.irisRect(eye: eye.outline, pupil: eye.pupil)
                 if irisRect.isNull { continue }
-                let irisGeometry = MaskBuilder.makeMask(
-                    extent: extent,
-                    shapes: [MaskShape(ellipse: irisRect)],
-                    feather: tightFeather)
+                let irisGeometry = make([MaskShape(ellipse: irisRect)], tightFeather)
                 if let part = gatedMask(geometry: irisGeometry, image: image,
                                         lumaMin: 0,
                                         lumaMax: face.eyeScleraLuminance,
@@ -426,14 +433,13 @@ final class ImageProcessor {
                     irisParts.append(part)
                 }
 
-                let lashGeometry = MaskBuilder.makeMask(
-                    extent: extent,
-                    shapes: [
+                let lashGeometry = make(
+                    [
                         MaskShape(points: FaceGeometry.scaled(eye.outline, by: 1.06)),
                         MaskShape(mode: .erase, ellipse: irisRect.insetBy(dx: irisRect.width * 0.18,
                                                                           dy: irisRect.height * 0.10))
                     ],
-                    feather: tightFeather)
+                    tightFeather)
                 if let part = gatedMask(geometry: lashGeometry, image: image,
                                         lumaMin: 0,
                                         lumaMax: face.eyeScleraLuminance * 0.95,
@@ -443,7 +449,7 @@ final class ImageProcessor {
             }
         }
 
-        let teethGeometry = MaskBuilder.makeMask(extent: extent, shapes: teethShapes, feather: tightFeather)
+        let teethGeometry = make(teethShapes, tightFeather)
         // Enamel only: bright and low-saturation. This is the same test the
         // visibility annotation uses, so whitening cannot land on gums or the
         // dark gap between teeth.
@@ -463,32 +469,31 @@ final class ImageProcessor {
         // The feather is deliberately wider than the other tight masks — a brow
         // band is only a few pixels tall, and a hard edge reads as a drawn-on
         // stripe instead of thicker hair.
-        let browGeometry = MaskBuilder.makeMask(extent: extent, shapes: browShapes, feather: tightFeather)
+        let browGeometry = make(browShapes, tightFeather)
         let browFeather = max(3, 0.007 * shortSide)
         let brows = browGeometry.map { grown($0, by: max(1.2, 0.0025 * shortSide), feather: browFeather) }
-        let cheeks = MaskBuilder.makeMask(extent: extent, shapes: cheekShapes, feather: softFeather)
+        let cheeks = make(cheekShapes, softFeather)
 
         // Lids are soft like a powder, and the brow hair is taken out of them so
         // eyeshadow never turns into a second eyebrow. The liner band is the
         // opposite: a narrow, hard-edged line that follows the lashes.
-        var lids = MaskBuilder.makeMask(extent: extent, shapes: lidShapes,
-                                        feather: max(2.5, 0.006 * shortSide))
+        var lids = make(lidShapes, max(2.5, 0.006 * shortSide))
         if let browMask = brows, let lidMask = lids {
             lids = MaskBuilder.subtract(browMask, from: lidMask)
         }
         let linerFeather = max(1.5, 0.002 * shortSide)
-        let liners = MaskBuilder.makeMask(extent: extent, shapes: lashLineShapes, feather: linerFeather)
+        let liners = make(lashLineShapes, linerFeather)
 
         // Hair is a colour target, so it gets a soft edge. The pixel gate keeps
         // a bright wall out of the band; the person mask (when Body, Background
         // or Hair has loaded one) finishes the job in the pipeline.
-        let faceSilhouette = MaskBuilder.makeMask(extent: extent, shapes: faceShapes, feather: feather)
-        let hairTop = MaskBuilder.makeMask(extent: extent, shapes: hairShapes, feather: softFeather)
+        let faceSilhouette = make(faceShapes, feather)
+        let hairTop = make(hairShapes, softFeather)
         // The side panels sit where hair falls past the ears — and where the
         // cheek is. Skin is inside the same luma gate as brown hair, so the
         // face silhouette is cut out of the side panels only; the head band
         // above the hairline must keep its pixels.
-        var hairSides = MaskBuilder.makeMask(extent: extent, shapes: hairSideShapes, feather: softFeather)
+        var hairSides = make(hairSideShapes, softFeather)
         if let faceSilhouette, let sides = hairSides {
             hairSides = MaskBuilder.subtract(faceSilhouette, from: sides)
         }
@@ -499,14 +504,12 @@ final class ImageProcessor {
         let hair = gatedMask(geometry: hairGeometry, image: image,
                              lumaMin: 0, lumaMax: 0.82, saturationMax: 1)
 
-        let contours = MaskBuilder.makeMask(extent: extent, shapes: contourShapes,
-                                            feather: softFeather)
+        let contours = make(contourShapes, softFeather)
 
         // Everything the skin work must not touch: the eye and lip bands, plus
         // the brow hair itself. Subtracted from the *finished* masks, so the
         // silhouette's own feather can no longer bleed smoothing into the hole.
-        var protected = MaskBuilder.makeMask(extent: extent, shapes: shieldShapes,
-                                             feather: max(2, 0.004 * shortSide))
+        var protected = make(shieldShapes, max(2, 0.004 * shortSide))
         if let brows {
             protected = protected.map { MaskBuilder.union($0, brows) } ?? brows
         }
@@ -516,23 +519,23 @@ final class ImageProcessor {
         }
 
         return MaskSet(
-            skin: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: feather)),
+            skin: shielded(make(skinShapes, feather)),
             face: faceSilhouette,
-            eyes: MaskBuilder.makeMask(extent: extent, shapes: eyeShapes, feather: tightFeather),
-            leftEye: MaskBuilder.makeMask(extent: extent, shapes: leftEyeShapes, feather: tightFeather),
-            rightEye: MaskBuilder.makeMask(extent: extent, shapes: rightEyeShapes, feather: tightFeather),
+            eyes: make(eyeShapes, tightFeather),
+            leftEye: make(leftEyeShapes, tightFeather),
+            rightEye: make(rightEyeShapes, tightFeather),
             sclera: scleraMask,
             iris: irisMask,
             lashes: lashMask,
             eyeDetail: eyeDetail,
-            lips: MaskBuilder.makeMask(extent: extent, shapes: lipShapes, feather: tightFeather),
+            lips: make(lipShapes, tightFeather),
             teeth: teethMask,
             brows: brows,
             cheeks: cheeks,
-            underEyes: shielded(MaskBuilder.makeMask(extent: extent, shapes: underEyeShapes, feather: softFeather)),
-            forehead: MaskBuilder.makeMask(extent: extent, shapes: foreheadShapes, feather: softFeather),
-            nose: MaskBuilder.makeMask(extent: extent, shapes: noseShapes, feather: softFeather),
-            skinTexture: shielded(MaskBuilder.makeMask(extent: extent, shapes: skinShapes, feather: softFeather)),
+            underEyes: shielded(make(underEyeShapes, softFeather)),
+            forehead: make(foreheadShapes, softFeather),
+            nose: make(noseShapes, softFeather),
+            skinTexture: shielded(make(skinShapes, softFeather)),
             lids: lids,
             liners: liners,
             hair: hair,

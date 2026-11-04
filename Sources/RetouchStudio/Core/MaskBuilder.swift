@@ -43,15 +43,21 @@ enum MaskBuilder {
     /// eyes) need enough resolution to stay accurate after scaling.
     static let maxMaskDimension: CGFloat = 1600
 
+    /// The on-screen set only has to look right behind an 1800 px preview:
+    /// 1024 px is indistinguishable at 100% and uses about 40% of the memory
+    /// of the 1600 px raster. Export builds its own set (see ExportService).
+    static let previewMaskDimension: CGFloat = 1024
+
     /// Builds a soft mask that exactly covers `extent`.
     /// White = apply the effect, transparent = leave alone.
     static func makeMask(extent: CGRect,
                          shapes: [MaskShape],
                          feather: CGFloat,
-                         softness: CGFloat = 0) -> CIImage? {
+                         softness: CGFloat = 0,
+                         maxDimension: CGFloat = maxMaskDimension) -> CIImage? {
         guard extent.width >= 2, extent.height >= 2, !shapes.isEmpty else { return nil }
 
-        let scale = min(1, maxMaskDimension / max(extent.width, extent.height))
+        let scale = min(1, maxDimension / max(extent.width, extent.height))
         let width = max(1, Int((extent.width * scale).rounded()))
         let height = max(1, Int((extent.height * scale).rounded()))
 
