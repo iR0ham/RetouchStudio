@@ -251,6 +251,14 @@ class L10n {
     var projectPhotoMissing: String {
         "The photo this project refers to is no longer at that path."
     }
+    var projectLocateTitle: String { "Locate Photo" }
+    func projectLocateMessage(_ name: String) -> String {
+        "Choose where \u{201C}\(name)\u{201D} is now. The project will remember the new place."
+    }
+    func projectTooNew(_ version: Int) -> String {
+        "This project was written by a newer version of the app (v\(Digits.num(version)))."
+    }
+    var projectRelinked: String { "Project opened and the photo's new location was saved." }
 
     // Batch
     var batchExportMenu: String { "Batch Export…" }
@@ -595,6 +603,8 @@ class L10n {
         case .projectSaveFailed: return projectSaveFailed
         case .projectPhotoMissing: return projectPhotoMissing
         case .projectOpenFailed: return projectOpenFailed
+        case .projectTooNew(let version): return projectTooNew(version)
+        case .projectRelinked: return projectRelinked
         case .batchStarting: return batchStarting
         case .batchProgress(let index, let total): return batchProgress(index, total)
         case .batchFinished(let saved, let total, let skipped):

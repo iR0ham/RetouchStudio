@@ -544,6 +544,146 @@ func testCropIsUndoable() async {
           "a stale crop reload never installs")
 }
 
+// MARK: - P1-3 / H-4 / M-9
+
+@MainActor
+func writeProject(_ project: RetouchProject, to url: URL) -> Bool {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let data = try? encoder.encode(project) else { return false }
+    return (try? data.write(to: url, options: .atomic)) != nil
+}
+
+@MainActor
+func testProjectRelink() async {
+    print("\n[P1-3] a moved photo is found again")
+
+    let folderA = workDir.appendingPathComponent("relink-a-\(UUID().uuidString)")
+    let folderB = workDir.appendingPathComponent("relink-b-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+    let originalPhoto = folderA.appendingPathComponent("portrait.png")
+    let movedPhoto = folderB.appendingPathComponent("portrait.png")
+    let projectURL = folderA.appendingPathComponent("portrait.retouch")
+
+    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: originalPhoto) else {
+        check(false, "relink fixture")
+        return
+    }
+    // The bookmark is made where the photo lives today. Moving the file must
+    // not invalidate it.
+    let bookmark = try? originalPhoto.bookmarkData(options: [],
+                                                   includingResourceValuesForKeys: nil,
+                                                   relativeTo: nil)
+    let project = RetouchProject(imagePath: originalPhoto.path,
+                                 imageBookmark: bookmark,
+                                 adjustments: .zero,
+                                 exportFormat: "jpeg",
+                                 exportQuality: 0.9,
+                                 autoRetouchStrength: 70)
+    check(writeProject(project, to: projectURL), "project written next to the photo")
+    try? FileManager.default.moveItem(at: originalPhoto, to: movedPhoto)
+    check(!FileManager.default.fileExists(atPath: originalPhoto.path),
+          "photo moved away from the recorded path")
+
+    let model = EditorModel()
+    model.openProject(at: projectURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "project opens with the photo missing")
+    check(model.statusToken == .projectRelinked, "the status says the photo was relinked",
+          "\(model.statusToken)")
+    check(model.workingPixelSize == CGSize(width: 480, height: 600), "the moved photo is the one loaded")
+
+    // The project was rewritten with the new path, so opening it again resolves
+    // without asking anyone.
+    let rewritten = (try? Data(contentsOf: projectURL))
+        .flatMap { try? JSONDecoder().decode(RetouchProject.self, from: $0) }
+    let recordedURL = rewritten.map { URL(fileURLWithPath: $0.imagePath).resolvingSymlinksInPath() }
+    check(recordedURL == movedPhoto.resolvingSymlinksInPath(),
+          "the project now records the new path", rewritten?.imagePath ?? "unreadable")
+    check(rewritten?.imageBookmark != nil, "the rebuilt bookmark is stored")
+    if let rewritten {
+        let resolved = model.resolveProjectImage(rewritten, projectURL: projectURL)
+        check(resolved?.standardizedFileURL == movedPhoto.standardizedFileURL,
+              "a second open resolves straight to the photo")
+    }
+
+    // A whole folder move (photo + project together) needs no bookmark at all:
+    // the sibling next to the project is the photo.
+    let folderC = workDir.appendingPathComponent("relink-c-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folderC, withIntermediateDirectories: true)
+    let movedFolder = workDir.appendingPathComponent("relink-d-\(UUID().uuidString)")
+    try? FileManager.default.moveItem(at: folderC, to: movedFolder)
+    let siblingPhoto = movedFolder.appendingPathComponent("sibling.png")
+    check(makeImage(width: 120, height: 120).map { writePNG($0, to: siblingPhoto) } ?? false,
+          "sibling fixture written")
+    let siblingProject = RetouchProject(imagePath: folderC.appendingPathComponent("sibling.png").path,
+                                        adjustments: .zero,
+                                        exportFormat: "jpeg",
+                                        exportQuality: 0.9,
+                                        autoRetouchStrength: 70)
+    let siblingURL = movedFolder.appendingPathComponent("sibling.retouch")
+    let siblingResolved = model.resolveProjectImage(
+        siblingProject, projectURL: siblingURL)
+    check(siblingResolved?.standardizedFileURL == siblingPhoto.standardizedFileURL,
+          "a moved folder resolves through the sibling path")
+
+    let gone = RetouchProject(imagePath: "/nonexistent/\(UUID().uuidString).png",
+                              adjustments: .zero,
+                              exportFormat: "jpeg",
+                              exportQuality: 0.9,
+                              autoRetouchStrength: 70)
+    check(model.resolveProjectImage(gone, projectURL: movedFolder.appendingPathComponent("gone.retouch")) == nil,
+          "a photo that is truly gone goes to Locate")
+}
+
+@MainActor
+func testProjectVersionGuard() async {
+    print("\n[P1-3] future projects are refused, old ones still open")
+
+    let folder = workDir.appendingPathComponent("version-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let photoURL = folder.appendingPathComponent("photo.png")
+    let projectURL = folder.appendingPathComponent("future.retouch")
+    guard let image = makeImage(width: 240, height: 300), writePNG(image, to: photoURL) else {
+        check(false, "version fixture")
+        return
+    }
+
+    var future = RetouchProject(imagePath: photoURL.path,
+                                adjustments: .zero,
+                                exportFormat: "jpeg",
+                                exportQuality: 0.9,
+                                autoRetouchStrength: 70)
+    future.version = RetouchProject.currentVersion + 1
+    check(writeProject(future, to: projectURL), "a version-2 project is written")
+
+    let model = EditorModel()
+    model.openProject(at: projectURL)
+    // The guard runs synchronously before the load, so no sleep is needed.
+    check(model.statusToken == .projectTooNew(RetouchProject.currentVersion + 1),
+          "the version guard explains why it was refused", "\(model.statusToken)")
+    check(!model.hasImage, "nothing was loaded from the newer project")
+
+    // A project written before the version key existed is version 1.
+    let encoder = JSONEncoder()
+    guard var object = (try? encoder.encode(future)).flatMap({
+        try? JSONSerialization.jsonObject(with: $0)
+    }) as? [String: Any] else {
+        check(false, "fixture JSON")
+        return
+    }
+    object.removeValue(forKey: "version")
+    object.removeValue(forKey: "imageBookmark")
+    guard let legacyData = try? JSONSerialization.data(withJSONObject: object),
+          let legacy = try? JSONDecoder().decode(RetouchProject.self, from: legacyData) else {
+        check(false, "a project without a version key decodes")
+        return
+    }
+    check(legacy.version == RetouchProject.currentVersion,
+          "a missing version decodes as the current one", "v\(legacy.version)")
+    check(legacy.imageBookmark == nil, "a project without a bookmark still opens")
+}
+
 // MARK: - runner
 
 @MainActor
@@ -553,6 +693,8 @@ func runAll() async {
     await testResetAllClearsEverything()
     await testCropIsUndoable()
     await testBatchMatchesSingleExport()
+    await testProjectRelink()
+    await testProjectVersionGuard()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

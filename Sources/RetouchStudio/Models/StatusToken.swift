@@ -38,6 +38,8 @@ enum StatusToken: Equatable {
     case projectSaveFailed
     case projectPhotoMissing
     case projectOpenFailed
+    case projectTooNew(Int)
+    case projectRelinked
     case batchStarting
     case batchProgress(Int, Int)
     case batchFinished(saved: Int, total: Int, cropsSkipped: Int)

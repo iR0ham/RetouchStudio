@@ -17,6 +17,9 @@ struct RetouchProject: Codable {
 
     var version = currentVersion
     var imagePath: String
+    /// A bookmark to the photo. It survives moving the file or its folder,
+    /// which the recorded path alone does not. `nil` in older projects.
+    var imageBookmark: Data? = nil
     var adjustments: Adjustments
     var exportFormat: String
     var exportQuality: Double
@@ -42,4 +45,49 @@ struct RetouchProject: Codable {
     /// the leader ends were dragged. `nil` leaves the tool off, as it was
     /// before the tool existed.
     var analysis: AnalysisSettings? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case version, imagePath, imageBookmark, adjustments, exportFormat,
+             exportQuality, exportLongEdge, autoRetouchStrength,
+             autoColorStrength, crop, healSpots, stickers, analysis
+    }
+
+    init(imagePath: String, imageBookmark: Data? = nil,
+         adjustments: Adjustments, exportFormat: String,
+         exportQuality: Double, exportLongEdge: Int? = nil,
+         autoRetouchStrength: Double, autoColorStrength: Double? = nil,
+         crop: CGRect? = nil, healSpots: [HealSpot]? = nil,
+         stickers: [Sticker]? = nil, analysis: AnalysisSettings? = nil) {
+        self.imagePath = imagePath
+        self.imageBookmark = imageBookmark
+        self.adjustments = adjustments
+        self.exportFormat = exportFormat
+        self.exportQuality = exportQuality
+        self.exportLongEdge = exportLongEdge
+        self.autoRetouchStrength = autoRetouchStrength
+        self.autoColorStrength = autoColorStrength
+        self.crop = crop
+        self.healSpots = healSpots
+        self.stickers = stickers
+        self.analysis = analysis
+    }
+
+    /// Decoded by hand so a project written before the version key existed
+    /// still opens: it predates every schema change, so it is version 1.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? Self.currentVersion
+        imagePath = try c.decode(String.self, forKey: .imagePath)
+        imageBookmark = try c.decodeIfPresent(Data.self, forKey: .imageBookmark)
+        adjustments = try c.decode(Adjustments.self, forKey: .adjustments)
+        exportFormat = try c.decode(String.self, forKey: .exportFormat)
+        exportQuality = try c.decode(Double.self, forKey: .exportQuality)
+        exportLongEdge = try c.decodeIfPresent(Int.self, forKey: .exportLongEdge)
+        autoRetouchStrength = try c.decode(Double.self, forKey: .autoRetouchStrength)
+        autoColorStrength = try c.decodeIfPresent(Double.self, forKey: .autoColorStrength)
+        crop = try c.decodeIfPresent(CGRect.self, forKey: .crop)
+        healSpots = try c.decodeIfPresent([HealSpot].self, forKey: .healSpots)
+        stickers = try c.decodeIfPresent([Sticker].self, forKey: .stickers)
+        analysis = try c.decodeIfPresent(AnalysisSettings.self, forKey: .analysis)
+    }
 }

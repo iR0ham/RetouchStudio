@@ -258,6 +258,14 @@ final class PersianL10n: L10n {
     override var projectPhotoMissing: String {
         "عکسی که این پروژه به آن اشاره می‌کند دیگر در آن مسیر نیست."
     }
+    override var projectLocateTitle: String { "پیدا کردن عکس" }
+    override func projectLocateMessage(_ name: String) -> String {
+        "جای کنونی «\(name)» را انتخاب کن. پروژه جای تازه را به یاد می‌سپارد."
+    }
+    override func projectTooNew(_ version: Int) -> String {
+        "این پروژه با نسخهٔ تازه‌تری از برنامه (نسخهٔ \(Digits.num(version))) نوشته شده است."
+    }
+    override var projectRelinked: String { "پروژه باز شد و جای تازهٔ عکس ذخیره شد." }
 
     // MARK: - Batch
 

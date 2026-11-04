@@ -546,6 +546,8 @@ final class EditorModel: ObservableObject {
     private var recentsObserver: AnyCancellable?
     private var smartGeneration = 0
     private var offeredRecovery = false
+    /// Project file to rewrite once a relocated photo finishes loading.
+    private var pendingRelink: URL?
     private var batchGeneration = 0
     private var generation = 0
     /// Invalidates an in-flight segmentation when the photo or crop changes.
@@ -639,9 +641,11 @@ final class EditorModel: ObservableObject {
         updateCleanState()
     }
 
-    func load(url: URL, restoring project: RetouchProject? = nil, projectURL: URL? = nil) {
+    func load(url: URL, restoring project: RetouchProject? = nil,
+              projectURL: URL? = nil, relinkURL: URL? = nil) {
         loadTask?.cancel()
         renderTask?.cancel()
+        pendingRelink = relinkURL
         batchGeneration += 1
         batchTask?.cancel()
         batchTask = nil
@@ -772,6 +776,14 @@ final class EditorModel: ObservableObject {
             statusToken = .noFaceColorOnly
         } else {
             statusToken = .facesDetected(result.faces.count)
+        }
+
+        // The photo was found somewhere other than the recorded path. Rewrite
+        // the project once, so the next open resolves straight to it.
+        if let relinkURL = pendingRelink {
+            pendingRelink = nil
+            rewriteProject(at: relinkURL)
+            if project != nil { statusToken = .projectRelinked }
         }
     }
 
@@ -1825,11 +1837,35 @@ final class EditorModel: ObservableObject {
         guard !offeredRecovery, !hasImage, settings.recoveryEnabled else { return }
         offeredRecovery = true
         guard let project = RecoveryStore.read() else { return }
-        let source = URL(fileURLWithPath: project.imagePath)
-        guard FileManager.default.fileExists(atPath: source.path) else {
-            RecoveryStore.clear()
-            return
+
+        // The recovery copy points at a photo the same way a project does, so
+        // it uses the same resolver. A photo that moved is not a reason to
+        // throw the edits away.
+        var source = resolveProjectImage(project, projectURL: nil)
+        if source == nil {
+            let alert = NSAlert()
+            alert.messageText = s.recoveryTitle
+            alert.informativeText = s.projectPhotoMissing
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: s.projectLocateTitle)
+            let discard = alert.addButton(withTitle: s.recoveryDiscard)
+            discard.hasDestructiveAction = true
+            discard.keyEquivalent = ""
+            guard alert.runModal() == .alertFirstButtonReturn,
+                  let picked = locatePhoto(for: project) else {
+                RecoveryStore.clear()
+                return
+            }
+            source = picked
         }
+        guard let source else { return }
+        if source.standardizedFileURL != URL(fileURLWithPath: project.imagePath).standardizedFileURL {
+            var updated = project
+            updated.imagePath = source.path
+            updated.imageBookmark = bookmark(for: source)
+            _ = RecoveryStore.write(updated)
+        }
+
         let alert = NSAlert()
         alert.messageText = s.recoveryTitle
         alert.informativeText = s.recoveryMessage(source.lastPathComponent)
@@ -2005,6 +2041,7 @@ final class EditorModel: ObservableObject {
     private func makeProject() -> RetouchProject? {
         guard let imageURL else { return nil }
         return RetouchProject(imagePath: imageURL.path,
+                              imageBookmark: bookmark(for: imageURL),
                               adjustments: adjustments,
                               exportFormat: exportFormat.rawValue,
                               exportQuality: exportQuality,
@@ -2052,14 +2089,78 @@ final class EditorModel: ObservableObject {
         guard confirmDiscardIfNeeded() else { return }
         do {
             let project = try JSONDecoder().decode(RetouchProject.self, from: Data(contentsOf: url))
-            let source = URL(fileURLWithPath: project.imagePath)
-            guard FileManager.default.fileExists(atPath: source.path) else {
+            guard project.version <= RetouchProject.currentVersion else {
+                statusToken = .projectTooNew(project.version)
+                return
+            }
+            var source = resolveProjectImage(project, projectURL: url)
+            if source == nil { source = locatePhoto(for: project) }
+            guard let source else {
                 statusToken = .projectPhotoMissing
                 return
             }
-            load(url: source, restoring: project, projectURL: url)
+            let recorded = URL(fileURLWithPath: project.imagePath).standardizedFileURL
+            let relocated = source.standardizedFileURL != recorded
+            load(url: source, restoring: project, projectURL: url,
+                 relinkURL: relocated ? url : nil)
         } catch {
             statusToken = .projectOpenFailed
+        }
+    }
+
+    /// Where the photo a project points at lives now, in order of trust: the
+    /// bookmark survives a move, the absolute path covers an unmoved file, and
+    /// a file sitting next to the project covers a moved folder. `nil` means
+    /// the owner has to point at it.
+    func resolveProjectImage(_ project: RetouchProject, projectURL: URL?) -> URL? {
+        let manager = FileManager.default
+        if let data = project.imageBookmark,
+           let url = resolveBookmark(data),
+           manager.fileExists(atPath: url.path) {
+            return url
+        }
+        let absolute = URL(fileURLWithPath: project.imagePath)
+        if manager.fileExists(atPath: absolute.path) { return absolute }
+        if let projectURL {
+            let sibling = projectURL.deletingLastPathComponent()
+                .appendingPathComponent((project.imagePath as NSString).lastPathComponent)
+            if manager.fileExists(atPath: sibling.path) { return sibling }
+        }
+        return nil
+    }
+
+    private func bookmark(for url: URL) -> Data? {
+        try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    private func resolveBookmark(_ data: Data) -> URL? {
+        var stale = false
+        return try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil,
+                        bookmarkDataIsStale: &stale)
+    }
+
+    private func locatePhoto(for project: RetouchProject) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = s.projectLocateTitle
+        panel.message = s.projectLocateMessage((project.imagePath as NSString).lastPathComponent)
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// Writes the project again with the photo's current path and bookmark.
+    /// The clean baseline is untouched: relinking records where the photo is,
+    /// it does not save pending edits.
+    private func rewriteProject(at url: URL) {
+        guard let project = makeProject() else { return }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(project).write(to: url, options: .atomic)
+        } catch {
+            // The photo still opens; only the next launch will ask again.
         }
     }
 
