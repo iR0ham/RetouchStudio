@@ -230,6 +230,11 @@ class L10n {
     var renderingExport: String { "Rendering full-quality export…" }
     func saved(_ name: String) -> String { "Saved \(name)" }
     var exportFailed: String { "Could not save the export." }
+    var exportCancelled: String { "Export cancelled." }
+    var cancelExport: String { "Cancel Export" }
+    var operationBusy: String {
+        "Another operation is still running — try again when it finishes."
+    }
 
     // Unsaved changes
     var unsavedTitle: String { "Discard unsaved adjustments?" }
@@ -277,6 +282,7 @@ class L10n {
             : ""
         return "Batch export finished: \(savedText)\(skippedText)."
     }
+    var batchCancelled: String { "Batch export cancelled." }
     var batchSheetTitle: String { "Batch Export" }
     func batchSelected(_ count: Int) -> String {
         count == 1 ? "1 photo selected" : "\(Digits.num(count)) photos selected"
@@ -602,6 +608,8 @@ class L10n {
         case .renderingExport: return renderingExport
         case .saved(let name): return saved(name)
         case .exportFailed: return exportFailed
+        case .exportCancelled: return exportCancelled
+        case .operationBusy: return operationBusy
         case .projectSaved(let name): return projectSaved(name)
         case .projectSaveFailed: return projectSaveFailed
         case .projectPhotoMissing: return projectPhotoMissing
@@ -612,6 +620,7 @@ class L10n {
         case .batchProgress(let index, let total): return batchProgress(index, total)
         case .batchFinished(let saved, let total, let skipped):
             return batchFinished(saved, total, cropsSkipped: skipped)
+        case .batchCancelled: return batchCancelled
         }
     }
 

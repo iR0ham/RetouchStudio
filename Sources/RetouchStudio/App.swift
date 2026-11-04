@@ -211,16 +211,18 @@ struct RetouchStudioApp: App {
             CommandGroup(replacing: .undoRedo) {
                 Button(model.s.undoMenu) { model.undo() }
                     .keyboardShortcut("z")
-                    .disabled(!model.canUndo)
+                    .disabled(!model.canUndo || model.isHistoryBlocked)
                 Button(model.s.redoMenu) { model.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(!model.canRedo)
+                    .disabled(!model.canRedo || model.isHistoryBlocked)
             }
             CommandGroup(replacing: .newItem) {
                 Button(model.s.openMenu) { model.openImage() }
                     .keyboardShortcut("o")
+                    .disabled(model.isOperationBlocking)
                 Button(model.s.openProjectMenu) { model.openProject() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                    .disabled(model.isOperationBlocking)
                 Menu(model.s.openRecentMenu) {
                     if model.recents.entries.isEmpty {
                         Text(model.s.openRecentEmpty)
@@ -241,17 +243,17 @@ struct RetouchStudioApp: App {
             CommandGroup(replacing: .saveItem) {
                 Button(model.s.saveProjectMenu) { model.saveProject() }
                     .keyboardShortcut("s")
-                    .disabled(!model.hasImage)
+                    .disabled(!model.hasImage || model.isOperationBlocking)
                 Button(model.s.saveProjectAsMenu) { model.saveProjectAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
-                    .disabled(!model.hasImage)
+                    .disabled(!model.hasImage || model.isOperationBlocking)
                 Divider()
                 Button(model.s.exportMenu) { model.presentExportSheet() }
                     .keyboardShortcut("e")
-                    .disabled(!model.hasImage)
+                    .disabled(!model.hasImage || model.isOperationBlocking)
                 Button(model.s.batchExportMenu) { model.batchExport() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
-                    .disabled(!model.hasImage || model.isBusy)
+                    .disabled(!model.hasImage || model.isOperationBlocking || model.isBatchRunning)
             }
             CommandMenu(model.s.retouchMenu) {
                 Button(model.s.smartAnalyze) { model.smartAnalyze() }
@@ -260,7 +262,7 @@ struct RetouchStudioApp: App {
                 Divider()
                 Button(model.s.resetMenu) { model.resetAll() }
                     .keyboardShortcut("r")
-                    .disabled(!model.hasImage || model.isDocumentPristine)
+                    .disabled(!model.hasImage || model.isDocumentPristine || model.isOperationBlocking)
                 Divider()
                 Toggle(model.s.showCompareMenu, isOn: $model.compareEnabled)
                 Toggle(model.s.showFaceOverlayMenu, isOn: $model.showFaceOverlay)

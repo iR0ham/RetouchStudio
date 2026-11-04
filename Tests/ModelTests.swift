@@ -695,6 +695,82 @@ func testProjectVersionGuard() async {
           "selectedFace=\(reopened?.selectedFace.map(String.init) ?? "nil")")
 }
 
+// MARK: - P1-5 / M-13 / M-4
+
+@MainActor
+func testOperationCoordination() async {
+    print("\n[P1-5] blocking work is serialized and previews cannot end it")
+
+    let sourceURL = workDir.appendingPathComponent("coordination.png")
+    guard let big = makeImage(width: 2400, height: 1800), writePNG(big, to: sourceURL) else {
+        check(false, "coordination fixture")
+        return
+    }
+
+    let model = EditorModel()
+    model.load(url: sourceURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture loads")
+
+    // A preview in flight must lose the busy flag to the export that follows.
+    model.schedulePreview()
+    check(model.isBusy, "a preview starts as busy")
+
+    let first = workDir.appendingPathComponent("coordination-first.png")
+    model.export(to: first)
+    check(model.isExporting && model.isBusy, "export starts over the preview")
+
+    model.schedulePreview()
+    check(model.isBusy, "a preview requested during an export is refused")
+    try? await Task.sleep(nanoseconds: 120_000_000)
+    if model.isExporting {
+        check(model.isBusy, "the interrupted preview never clears the export's busy flag")
+    }
+    check(await waitUntil(240) { !model.isBusy && !model.isExporting }, "export releases busy once")
+    check(FileManager.default.fileExists(atPath: first.path), "the export was written")
+
+    // A second blocking request is refused with a visible status, not queued.
+    let second = workDir.appendingPathComponent("coordination-second.png")
+    model.export(to: second)
+    check(model.isExporting, "a fresh export starts")
+    let third = workDir.appendingPathComponent("coordination-third.png")
+    model.export(to: third)
+    check(model.statusToken == .operationBusy, "a concurrent export is refused", "\(model.statusToken)")
+
+    let refusedFolder = workDir.appendingPathComponent("coordination-refused-batch")
+    try? FileManager.default.createDirectory(at: refusedFolder, withIntermediateDirectories: true)
+    model.runBatch([sourceURL], to: refusedFolder)
+    check(!model.isBatchRunning && model.statusToken == .operationBusy,
+          "a batch cannot start during an export")
+    model.undo()
+    check(model.statusToken == .operationBusy, "undo is refused while an export runs")
+
+    check(await waitUntil(240) { !model.isBusy && !model.isExporting }, "the export still finishes")
+    check(!FileManager.default.fileExists(atPath: third.path), "the refused export wrote nothing")
+    let refusedOut = (try? FileManager.default.contentsOfDirectory(atPath: refusedFolder.path)) ?? []
+    check(refusedOut.isEmpty, "the refused batch wrote nothing", refusedOut.joined(separator: ", "))
+
+    // Cancelling a render releases busy exactly once and leaves no file.
+    let cancelled = workDir.appendingPathComponent("coordination-cancelled.png")
+    model.export(to: cancelled)
+    model.cancelExport()
+    check(await waitUntil(240) { !model.isBusy && !model.isExporting }, "cancel releases busy")
+    check(model.statusToken == .exportCancelled, "cancel is reported", "\(model.statusToken)")
+    check(!FileManager.default.fileExists(atPath: cancelled.path), "a cancelled export writes no file")
+
+    // A cancelled batch stops between files and reports why.
+    let batchFolder = workDir.appendingPathComponent("coordination-batch")
+    try? FileManager.default.createDirectory(at: batchFolder, withIntermediateDirectories: true)
+    model.runBatch([sourceURL, sourceURL], to: batchFolder)
+    check(model.isBatchRunning && model.isBusy, "batch starts")
+    model.cancelBatchExport()
+    check(await waitUntil(240) { !model.isBatchRunning && !model.isBusy }, "batch cancel releases busy")
+    check(model.statusToken == .batchCancelled, "batch cancel is reported", "\(model.statusToken)")
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: batchFolder.path))?
+        .filter { $0.hasSuffix(".tmp") } ?? []
+    check(leftovers.isEmpty, "a cancelled batch leaves no partial files",
+          leftovers.joined(separator: ", "))
+}
+
 // MARK: - runner
 
 @MainActor
@@ -706,6 +782,7 @@ func runAll() async {
     await testBatchMatchesSingleExport()
     await testProjectRelink()
     await testProjectVersionGuard()
+    await testOperationCoordination()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

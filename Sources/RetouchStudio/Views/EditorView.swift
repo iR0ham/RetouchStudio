@@ -180,21 +180,42 @@ struct ExportSheet: View {
 
                 Spacer()
 
-                Button {
-                    model.saveExport()
-                } label: {
-                    Text(model.s.save)
-                        .font(Theme.Font.button)
-                        .foregroundStyle(Theme.accentInk)
-                        .frame(height: 36)
-                        .padding(.horizontal, 22)
-                        .background(
-                            Capsule(style: .continuous).fill(Theme.accent)
-                        )
-                        .contentShape(Capsule())
+                if model.isExporting {
+                    // The render is already running; the only useful action is
+                    // to stop it. The job checks cancellation before writing, so
+                    // nothing lands on disk.
+                    Button {
+                        model.cancelExport()
+                    } label: {
+                        Text(model.s.cancelExport)
+                            .font(Theme.Font.button)
+                            .foregroundStyle(Theme.accentInk)
+                            .frame(height: 36)
+                            .padding(.horizontal, 22)
+                            .background(
+                                Capsule(style: .continuous).fill(Theme.accent)
+                            )
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(PressableButtonStyle(dip: 0.96))
+                    .keyboardShortcut(.defaultAction)
+                } else {
+                    Button {
+                        model.saveExport()
+                    } label: {
+                        Text(model.s.save)
+                            .font(Theme.Font.button)
+                            .foregroundStyle(Theme.accentInk)
+                            .frame(height: 36)
+                            .padding(.horizontal, 22)
+                            .background(
+                                Capsule(style: .continuous).fill(Theme.accent)
+                            )
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(PressableButtonStyle(dip: 0.96))
+                    .keyboardShortcut(.defaultAction)
                 }
-                .buttonStyle(PressableButtonStyle(dip: 0.96))
-                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(22)

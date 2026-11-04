@@ -34,6 +34,8 @@ enum StatusToken: Equatable {
     case renderingExport
     case saved(String)
     case exportFailed
+    case exportCancelled
+    case operationBusy
     case projectSaved(String)
     case projectSaveFailed
     case projectPhotoMissing
@@ -43,4 +45,5 @@ enum StatusToken: Equatable {
     case batchStarting
     case batchProgress(Int, Int)
     case batchFinished(saved: Int, total: Int, cropsSkipped: Int)
+    case batchCancelled
 }

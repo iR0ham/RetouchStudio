@@ -49,6 +49,25 @@ struct RenderedExport {
 
 enum ExportService {
 
+    /// How a one-photo export ended. `cancelled` is distinct from `failed`
+    /// because nothing was written and the owner asked for it.
+    enum Outcome {
+        case saved, cancelled, failed
+    }
+
+    /// Renders and writes in one cancellable step. Cancellation is checked
+    /// before the expensive render and again before the file is committed, so
+    /// a cancelled export leaves no photo behind even though Core Image itself
+    /// does not stop early.
+    static func run(_ snapshot: ExportSnapshot, source: ExportSource, to url: URL) -> Outcome {
+        if Task.isCancelled { return .cancelled }
+        guard let rendered = render(snapshot, source: source) else { return .failed }
+        if Task.isCancelled { return .cancelled }
+        let wrote = write(rendered, snapshot: snapshot, to: url,
+                          colorSpace: source.colorSpace, metadata: source.metadata)
+        return wrote ? .saved : .failed
+    }
+
     /// Aspect ratio of the file as the pipeline will decode it, orientation
     /// applied. Read from metadata so a batch can decide about the crop before
     /// paying for a full decode.

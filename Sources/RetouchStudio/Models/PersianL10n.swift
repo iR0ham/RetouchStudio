@@ -235,6 +235,11 @@ final class PersianL10n: L10n {
     override var renderingExport: String { "در حال ساخت خروجی با کیفیت کامل…" }
     override func saved(_ name: String) -> String { "\(name) ذخیره شد" }
     override var exportFailed: String { "خروجی ذخیره نشد." }
+    override var exportCancelled: String { "خروجی لغو شد." }
+    override var cancelExport: String { "لغو خروجی" }
+    override var operationBusy: String {
+        "یک عملیات دیگر در جریان است — بعد از پایانش دوباره امتحان کن."
+    }
 
     // MARK: - Unsaved changes
 
@@ -285,6 +290,7 @@ final class PersianL10n: L10n {
             : ""
         return "خروجی گروهی تمام شد: \(savedText)\(skippedText)."
     }
+    override var batchCancelled: String { "خروجی گروهی لغو شد." }
     override var batchSheetTitle: String { "خروجی گروهی" }
     override func batchSelected(_ count: Int) -> String {
         count == 1 ? "۱ عکس انتخاب شده" : "\(Digits.num(count)) عکس انتخاب شده"

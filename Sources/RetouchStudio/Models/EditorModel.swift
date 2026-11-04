@@ -79,6 +79,9 @@ final class EditorModel: ObservableObject {
     /// The makeup palette each accepted face measured, in the same order.
     private var faceFamilies: [MakeupFamily] = []
     @Published private(set) var isBusy = false
+    /// True while a full-quality export is rendering, so the export sheet can
+    /// offer to cancel it instead of starting a second one.
+    @Published private(set) var isExporting = false
     @Published private(set) var statusToken: StatusToken = .none
     @Published private(set) var imageName = ""
     @Published private(set) var imageURL: URL?
@@ -158,6 +161,84 @@ final class EditorModel: ObservableObject {
         return gaps
     }
 
+    // MARK: - Operation coordination
+
+    /// What kind of job holds the busy flag. Previews may be superseded by a
+    /// newer preview or by any other job; everything else is exclusive.
+    private enum OperationKind {
+        case preview, load, export, batch, save, open, smart
+    }
+
+    private struct OperationToken: Equatable {
+        let kind: OperationKind
+        let id: Int
+    }
+
+    /// The job that owns `isBusy`. A completion only clears the flag when its
+    /// token is still the active one, so a slow preview can never end an export
+    /// that started after it.
+    private var activeOperation: OperationToken?
+    private var operationCounter = 0
+    /// Set when a blocking job stopped a preview in flight, so the canvas is
+    /// painted again once that job finishes.
+    private var previewInterrupted = false
+
+    /// True while a job other than a preview is running. Menu items and entry
+    /// points use this instead of raw `isBusy`, because a preview must not lock
+    /// out Save, Export or Undo.
+    var isOperationBlocking: Bool {
+        guard let activeOperation else { return false }
+        return activeOperation.kind != .preview
+    }
+
+    /// History edits re-read the photo, so they may replace a preview or an
+    /// older re-read but must not cut in front of an export, a batch or a
+    /// Smart analysis.
+    var isHistoryBlocked: Bool { !canStart(.load) }
+
+    private func canStart(_ kind: OperationKind) -> Bool {
+        guard let active = activeOperation else { return true }
+        switch active.kind {
+        case .preview: return true
+        case .load: return kind == .load
+        default: return false
+        }
+    }
+
+    private func begin(_ kind: OperationKind) -> OperationToken? {
+        guard canStart(kind) else { return nil }
+        if kind != .preview, renderTask != nil {
+            renderTask?.cancel()
+            renderTask = nil
+            previewInterrupted = true
+        }
+        operationCounter += 1
+        let token = OperationToken(kind: kind, id: operationCounter)
+        activeOperation = token
+        isBusy = true
+        return token
+    }
+
+    /// The only place that clears `isBusy`. A stale token does nothing, which
+    /// is what makes overlapping operations safe.
+    private func end(_ token: OperationToken) {
+        guard activeOperation == token else { return }
+        activeOperation = nil
+        isBusy = false
+        guard previewInterrupted, token.kind != .preview else { return }
+        previewInterrupted = false
+        if hasImage { schedulePreview() }
+    }
+
+    /// Entry points that must not interrupt a render or a batch. A preview is
+    /// not blocking: save and export may start while one is in flight.
+    @discardableResult
+    private func refuseIfBlocking() -> Bool {
+        guard isOperationBlocking else { return false }
+        statusToken = .operationBusy
+        return true
+    }
+
     // MARK: - Undo / redo
 
     /// Everything one undo step covers. Stamping the healing brush and reframing
@@ -216,6 +297,12 @@ final class EditorModel: ObservableObject {
     }
 
     func undo() {
+        // A newer load may replace an older one, which is what makes two quick
+        // undos settle on the last frame instead of the first.
+        guard canStart(.load) else {
+            statusToken = .operationBusy
+            return
+        }
         // Flush a change whose debounce is still waiting, so ⌘Z right after a
         // drag undoes that drag instead of skipping past it.
         commitAdjustments()
@@ -228,6 +315,10 @@ final class EditorModel: ObservableObject {
     }
 
     func redo() {
+        guard canStart(.load) else {
+            statusToken = .operationBusy
+            return
+        }
         // Editing after an undo starts a new branch; the old redo history goes.
         guard currentState == lastCommitted else {
             commitAdjustments()
@@ -582,6 +673,8 @@ final class EditorModel: ObservableObject {
     private var sourceMetadata: [CFString: Any] = [:]
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    private var exportTask: Task<Void, Never>?
+    private var exportJob: Task<ExportService.Outcome, Never>?
     private var thumbTask: Task<Void, Never>?
     private var batchTask: Task<Void, Never>?
     private var batchSources: [URL] = []
@@ -619,6 +712,7 @@ final class EditorModel: ObservableObject {
     // MARK: - Input
 
     func openImage() {
+        guard !refuseIfBlocking() else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -632,6 +726,7 @@ final class EditorModel: ObservableObject {
 
     /// Entry point for drag-and-drop and for Finder / Open With.
     func requestLoad(url: URL) {
+        guard !refuseIfBlocking() else { return }
         // Choosing a photo answers the launch question, so the recovery copy
         // stays on disk for the next plain launch instead of interrupting this
         // one (and is never silently deleted).
@@ -687,8 +782,13 @@ final class EditorModel: ObservableObject {
 
     func load(url: URL, restoring project: RetouchProject? = nil,
               projectURL: URL? = nil, relinkURL: URL? = nil) {
+        // A newer load wins over an older one, but no load may cut in front of
+        // an export, a batch or a Smart analysis.
+        guard let token = begin(.load) else {
+            statusToken = .operationBusy
+            return
+        }
         loadTask?.cancel()
-        renderTask?.cancel()
         pendingRelink = relinkURL
         batchGeneration += 1
         batchTask?.cancel()
@@ -698,7 +798,6 @@ final class EditorModel: ObservableObject {
         generation += 1
         let generation = self.generation
 
-        isBusy = true
         statusToken = .readingImage
         imageName = url.lastPathComponent
 
@@ -713,11 +812,13 @@ final class EditorModel: ObservableObject {
 
             guard let self, self.generation == generation else { return }
             guard let result else {
-                self.isBusy = false
+                self.end(token)
                 self.statusToken = .couldNotRead
                 return
             }
             self.apply(result, restoring: project, projectURL: projectURL)
+            self.end(token)
+            if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
         }
     }
 
@@ -801,7 +902,6 @@ final class EditorModel: ObservableObject {
             updateCleanState()
         }
         resetView()
-        isBusy = false
         // The report belongs to the photo that was just replaced.
         smartGeneration += 1
         smartReport = nil
@@ -812,10 +912,6 @@ final class EditorModel: ObservableObject {
         } else {
             recents.add(result.url, isProject: false)
         }
-        // The preview from the load has no stamps or stickers in it, so repaint
-        // when there are any to draw.
-        if !healSpots.isEmpty || !stickers.isEmpty { schedulePreview() }
-
         if project != nil {
             statusToken = .projectOpened
         } else if result.faces.isEmpty {
@@ -910,8 +1006,11 @@ final class EditorModel: ObservableObject {
     /// an older undo lose to the newer one.
     private func reloadCropped(restoring: Bool) {
         guard let imageURL else { return }
+        guard let token = begin(.load) else {
+            statusToken = .operationBusy
+            return
+        }
         loadTask?.cancel()
-        renderTask?.cancel()
         generation += 1
         let generation = self.generation
         let crop = appliedCrop
@@ -920,7 +1019,6 @@ final class EditorModel: ObservableObject {
         let previewMaxDimension = self.previewMaxDimension
         let url = imageURL
 
-        isBusy = true
         statusToken = .applyingCrop
 
         loadTask = Task { [weak self] in
@@ -930,7 +1028,7 @@ final class EditorModel: ObservableObject {
 
             guard let self, self.generation == generation else { return }
             guard let result else {
-                self.isBusy = false
+                self.end(token)
                 self.statusToken = .couldNotRead
                 return
             }
@@ -942,11 +1040,11 @@ final class EditorModel: ObservableObject {
             // The stamps live in original-photo coordinates, so a new crop moves
             // them onto the new frame before the canvas repaints.
             self.rebuildSpotMasks()
+            self.updateCleanState()
+            self.end(token)
             if selection != nil || !self.healSpots.isEmpty || !self.stickers.isEmpty {
                 self.schedulePreview()
             }
-            self.updateCleanState()
-            self.isBusy = false
             if !restoring {
                 self.statusToken = crop == nil ? .cropReset : .cropApplied
             }
@@ -1529,6 +1627,9 @@ final class EditorModel: ObservableObject {
 
     func schedulePreview() {
         guard let source = sourcePreview else { return }
+        // Previews coalesce among themselves but never cut in front of a
+        // load, an export or a batch; that job repaints the canvas when done.
+        guard let token = begin(.preview) else { return }
         if adjustments.usesPersonTools { ensurePersonMask() }
         renderTask?.cancel()
         generation += 1
@@ -1542,11 +1643,14 @@ final class EditorModel: ObservableObject {
         let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop, aspect: sourceAspect)
         let colorSpace = self.sourceColorSpace
         let processor = self.processor
-        isBusy = true
 
         renderTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 40_000_000)
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                if let self, self.activeOperation == token { self.renderTask = nil }
+                self?.end(token)
+                return
+            }
 
             let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
                 let processed = processor.process(source, adjustments: adjustments,
@@ -1555,19 +1659,23 @@ final class EditorModel: ObservableObject {
                 return processor.renderCGImage(processed, scale: 1, colorSpace: colorSpace)
             }.value
 
-            guard let self, self.generation == generation else { return }
+            // A newer preview, a load or an export has taken over: its token
+            // owns the canvas and the busy flag now.
+            guard let self, self.generation == generation,
+                  self.activeOperation == token else { return }
+            self.renderTask = nil
             if let cgImage {
                 self.previewImage = NSImage(cgImage: cgImage,
                                            size: NSSize(width: cgImage.width, height: cgImage.height))
             }
-            self.isBusy = false
+            self.end(token)
         }
     }
 
     // MARK: - Adjustments
 
     func resetAll() {
-        guard hasImage else { return }
+        guard hasImage, !refuseIfBlocking() else { return }
         commitAdjustments()
         let cropChanged = appliedCrop != nil
         adjustments = .zero
@@ -1746,10 +1854,13 @@ final class EditorModel: ObservableObject {
     /// color/light numbers come out as. Nothing moves until `applySmartReport`.
     func smartAnalyze() {
         guard let source = sourcePreview, !isAnalyzingSmart else { return }
+        guard let operation = begin(.smart) else {
+            statusToken = .operationBusy
+            return
+        }
         smartGeneration += 1
         let token = smartGeneration
         isAnalyzingSmart = true
-        isBusy = true
         statusToken = .analyzingSmart
         let faces = self.faces
         let skinMask = masksPreview?.skin
@@ -1769,7 +1880,7 @@ final class EditorModel: ObservableObject {
             }.value
             guard let self, self.smartGeneration == token else { return }
             self.isAnalyzingSmart = false
-            self.isBusy = false
+            self.end(operation)
             guard let report else {
                 self.statusToken = .smartFailed
                 return
@@ -2038,6 +2149,10 @@ final class EditorModel: ObservableObject {
 
     func export(to url: URL) {
         guard let image = sourceFull, let snapshot = makeExportSnapshot() else { return }
+        guard let token = begin(.export) else {
+            statusToken = .operationBusy
+            return
+        }
         let source = ExportSource(image: image,
                                   masks: masksFull,
                                   faces: faces,
@@ -2045,35 +2160,46 @@ final class EditorModel: ObservableObject {
                                   colorSpace: sourceColorSpace,
                                   metadata: sourceMetadata)
 
-        isBusy = true
+        isExporting = true
         statusToken = .renderingExport
 
-        Task { [weak self] in
-            let success = await Task.detached(priority: .userInitiated) { () -> Bool in
-                guard let rendered = ExportService.render(snapshot, source: source) else {
-                    return false
-                }
-                return ExportService.write(rendered, snapshot: snapshot, to: url,
-                                           colorSpace: source.colorSpace,
-                                           metadata: source.metadata)
-            }.value
-
+        let job = Task.detached(priority: .userInitiated) {
+            ExportService.run(snapshot, source: source, to: url)
+        }
+        exportJob = job
+        exportTask = Task { [weak self] in
+            let outcome = await job.value
             guard let self else { return }
-            self.isBusy = false
-            if success {
+            self.exportJob = nil
+            self.exportTask = nil
+            self.isExporting = false
+            // `end` releases the busy flag exactly once, whether the job saved,
+            // failed or was cancelled.
+            self.end(token)
+            switch outcome {
+            case .saved:
                 self.showExportSheet = false
                 self.statusToken = .saved(url.lastPathComponent)
                 // An exported copy is not a saved project: the edits still
                 // live only in this window, so the clean baseline must not move.
-            } else {
+            case .cancelled:
+                self.statusToken = .exportCancelled
+            case .failed:
                 self.statusToken = .exportFailed
             }
         }
     }
 
+    /// Stops the one-photo export. The render job checks cancellation before it
+    /// commits, so a cancelled export never writes a partial file.
+    func cancelExport() {
+        exportJob?.cancel()
+    }
+
     // MARK: - Projects
 
     func saveProject() {
+        guard !refuseIfBlocking() else { return }
         if let projectURL {
             writeProject(to: projectURL)
         } else {
@@ -2082,7 +2208,7 @@ final class EditorModel: ObservableObject {
     }
 
     func saveProjectAs() {
-        guard hasImage else { return }
+        guard hasImage, !refuseIfBlocking() else { return }
         let base = (imageName as NSString).deletingPathExtension
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(base.isEmpty ? "retouch" : base).\(RetouchProject.fileExtension)"
@@ -2131,6 +2257,7 @@ final class EditorModel: ObservableObject {
     }
 
     func openProject() {
+        guard !refuseIfBlocking() else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [RetouchProject.contentType]
         panel.allowsMultipleSelection = false
@@ -2143,6 +2270,7 @@ final class EditorModel: ObservableObject {
     /// Opening a project replaces the current photo, so it shares the discard
     /// guard with normal loading.
     func openProject(at url: URL) {
+        guard !refuseIfBlocking() else { return }
         offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
         do {
@@ -2228,7 +2356,7 @@ final class EditorModel: ObservableObject {
     /// one folder. Each photo gets its own face detection and masks, so the
     /// same slider values land on each face instead of on fixed coordinates.
     func batchExport() {
-        guard hasImage, !isBatchRunning else { return }
+        guard hasImage, !isBatchRunning, !refuseIfBlocking() else { return }
         let sources = NSOpenPanel()
         sources.title = s.batchChoosePhotos
         sources.allowedContentTypes = [.image]
@@ -2275,6 +2403,10 @@ final class EditorModel: ObservableObject {
                                                 includeAnalysis: batchIncludeAnalysis) else {
             return
         }
+        guard let token = begin(.batch) else {
+            statusToken = .operationBusy
+            return
+        }
         batchGeneration += 1
         let batch = batchGeneration
         batchTask?.cancel()
@@ -2289,7 +2421,6 @@ final class EditorModel: ObservableObject {
         batchSavedCount = 0
         batchSkippedCrops = 0
         batchHasReport = false
-        isBusy = true
         statusToken = .batchStarting
 
         batchTask = Task { [weak self] in
@@ -2321,10 +2452,15 @@ final class EditorModel: ObservableObject {
             guard let self, self.batchGeneration == batch else { return }
             self.batchTask = nil
             self.isBatchRunning = false
-            self.isBusy = false
             self.batchHasReport = true
-            self.statusToken = .batchFinished(saved: saved, total: urls.count,
-                                              cropsSkipped: skipped)
+            let wasCancelled = Task.isCancelled
+            self.end(token)
+            if wasCancelled {
+                self.statusToken = .batchCancelled
+            } else {
+                self.statusToken = .batchFinished(saved: saved, total: urls.count,
+                                                  cropsSkipped: skipped)
+            }
         }
     }
 
