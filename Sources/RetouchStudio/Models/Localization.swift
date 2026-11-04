@@ -260,11 +260,27 @@ class L10n {
     func batchProgress(_ index: Int, _ total: Int) -> String {
         "Exporting \(Digits.num(index)) of \(Digits.num(total))…"
     }
-    func batchFinished(_ saved: Int, _ total: Int) -> String {
-        saved == total
-            ? "Batch export finished: \(Digits.num(saved)) photos saved."
-            : "Batch export finished: \(Digits.num(saved)) of \(Digits.num(total)) photos saved."
+    func batchFinished(_ saved: Int, _ total: Int, cropsSkipped: Int) -> String {
+        let savedText = saved == total
+            ? "\(Digits.num(saved)) photos saved"
+            : "\(Digits.num(saved)) of \(Digits.num(total)) photos saved"
+        let skippedText = cropsSkipped > 0
+            ? " · \(Digits.num(cropsSkipped)) crops skipped (different shape)"
+            : ""
+        return "Batch export finished: \(savedText)\(skippedText)."
     }
+    var batchSheetTitle: String { "Batch Export" }
+    func batchSelected(_ count: Int) -> String {
+        count == 1 ? "1 photo selected" : "\(Digits.num(count)) photos selected"
+    }
+    var batchIncludeStamps: String { "Healing stamps and stickers" }
+    var batchIncludeStampsDetail: String {
+        "Only right when the other photos share this photo's blemishes."
+    }
+    var batchIncludeAnalysis: String { "Analysis overlay" }
+    var batchIncludeAnalysisDetail: String { "Callouts follow each photo's own face." }
+    var batchStart: String { "Start Export" }
+    var batchDone: String { "Done" }
 
     // Crop
     var applyingCrop: String { "Applying crop…" }
@@ -581,7 +597,8 @@ class L10n {
         case .projectOpenFailed: return projectOpenFailed
         case .batchStarting: return batchStarting
         case .batchProgress(let index, let total): return batchProgress(index, total)
-        case .batchFinished(let saved, let total): return batchFinished(saved, total)
+        case .batchFinished(let saved, let total, let skipped):
+            return batchFinished(saved, total, cropsSkipped: skipped)
         }
     }
 

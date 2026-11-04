@@ -40,5 +40,5 @@ enum StatusToken: Equatable {
     case projectOpenFailed
     case batchStarting
     case batchProgress(Int, Int)
-    case batchFinished(Int, Int)
+    case batchFinished(saved: Int, total: Int, cropsSkipped: Int)
 }

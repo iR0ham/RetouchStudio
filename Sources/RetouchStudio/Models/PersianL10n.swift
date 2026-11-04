@@ -268,11 +268,27 @@ final class PersianL10n: L10n {
     override func batchProgress(_ index: Int, _ total: Int) -> String {
         "خروجی \(Digits.num(index)) از \(Digits.num(total))…"
     }
-    override func batchFinished(_ saved: Int, _ total: Int) -> String {
-        saved == total
-            ? "خروجی گروهی تمام شد: \(Digits.num(saved)) عکس ذخیره شد."
-            : "خروجی گروهی تمام شد: \(Digits.num(saved)) از \(Digits.num(total)) عکس ذخیره شد."
+    override func batchFinished(_ saved: Int, _ total: Int, cropsSkipped: Int) -> String {
+        let savedText = saved == total
+            ? "\(Digits.num(saved)) عکس ذخیره شد"
+            : "\(Digits.num(saved)) از \(Digits.num(total)) عکس ذخیره شد"
+        let skippedText = cropsSkipped > 0
+            ? " · \(Digits.num(cropsSkipped)) برش رد شد (شکل متفاوت)"
+            : ""
+        return "خروجی گروهی تمام شد: \(savedText)\(skippedText)."
     }
+    override var batchSheetTitle: String { "خروجی گروهی" }
+    override func batchSelected(_ count: Int) -> String {
+        count == 1 ? "۱ عکس انتخاب شده" : "\(Digits.num(count)) عکس انتخاب شده"
+    }
+    override var batchIncludeStamps: String { "مهرهای هیل و استیکرها" }
+    override var batchIncludeStampsDetail: String {
+        "فقط وقتی درست است که بقیهٔ عکس‌ها هم لکه‌های همین عکس را داشته باشند."
+    }
+    override var batchIncludeAnalysis: String { "اورلی تحلیل" }
+    override var batchIncludeAnalysisDetail: String { "خطوط با چهرهٔ هر عکس خودش جابه‌جا می‌شوند." }
+    override var batchStart: String { "شروع خروجی" }
+    override var batchDone: String { "تمام" }
 
     // MARK: - Crop
 

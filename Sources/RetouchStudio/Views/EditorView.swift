@@ -27,6 +27,10 @@ struct EditorView: View {
             ExportSheet(model: model)
                 .environment(\.layoutDirection, model.language.layoutDirection)
         }
+        .sheet(isPresented: $model.showBatchSheet) {
+            BatchExportSheet(model: model)
+                .environment(\.layoutDirection, model.language.layoutDirection)
+        }
         .sheet(isPresented: $model.showSmartSheet) {
             SmartAnalyzeSheet(model: model)
                 .environment(\.layoutDirection, model.language.layoutDirection)
@@ -285,5 +289,169 @@ struct ExportSheet: View {
                 .strokeBorder(Theme.stroke, lineWidth: 0.5)
         )
         .animation(Motion.snappy, value: model.exportFormat)
+    }
+}
+
+// MARK: - Batch
+
+struct BatchExportSheet: View {
+    @ObservedObject var model: EditorModel
+
+    private var progress: Double {
+        model.batchTotal > 0
+            ? Double(model.batchCompleted) / Double(model.batchTotal)
+            : 0
+    }
+
+    /// Which file the batch is on: `batchCompleted` counts finished files.
+    private var currentIndex: Int {
+        min(model.batchCompleted + 1, model.batchTotal)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 10) {
+                Icon(name: "photo.on.rectangle.angled", size: 16, emphasised: true)
+                    .foregroundStyle(Theme.accent)
+                Text(model.s.batchSheetTitle)
+                    .font(Theme.Font.face(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                Spacer()
+                Text(model.s.batchSelected(model.batchTotal))
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.faint)
+            }
+
+            if model.isBatchRunning || model.batchHasReport {
+                progressSection
+            } else {
+                optionsSection
+            }
+
+            Hairline()
+
+            HStack(spacing: 10) {
+                if model.isBatchRunning {
+                    secondaryButton(model.s.cancel) { model.cancelBatchExport() }
+                } else {
+                    secondaryButton(model.batchHasReport ? model.s.batchDone : model.s.cancel) {
+                        model.dismissBatchSheet()
+                    }
+                }
+
+                Spacer()
+
+                if !model.isBatchRunning && !model.batchHasReport {
+                    primaryButton(model.s.batchStart) { model.startBatchExport() }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(22)
+        .frame(width: 440)
+        .background(Theme.panel)
+        .preferredColorScheme(.dark)
+    }
+
+    private var optionsSection: some View {
+        VStack(spacing: 2) {
+            optionRow(model.s.batchIncludeStamps,
+                      detail: model.s.batchIncludeStampsDetail,
+                      isOn: $model.batchIncludeStamps)
+            optionRow(model.s.batchIncludeAnalysis,
+                      detail: model.s.batchIncludeAnalysisDetail,
+                      isOn: $model.batchIncludeAnalysis)
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                .fill(Theme.background)
+        )
+    }
+
+    private var progressSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if model.isBatchRunning {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .tint(Theme.accent)
+                HStack {
+                    Text(model.s.batchProgress(currentIndex, model.batchTotal))
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.muted)
+                    Spacer()
+                    Text(Digits.percent(Int((progress * 100).rounded())))
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.text)
+                        .contentTransition(.numericText())
+                        .animation(Motion.snappy, value: progress)
+                }
+            } else {
+                Text(model.s.statusText(.batchFinished(saved: model.batchSavedCount,
+                                                       total: model.batchTotal,
+                                                       cropsSkipped: model.batchSkippedCrops)))
+                    .font(Theme.Font.face(size: 11.5))
+                    .foregroundStyle(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func optionRow(_ title: String, detail: String,
+                           isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Theme.Font.face(size: 12.5, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                Text(detail)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(Theme.accent)
+                .focusable(false)
+                .accessibilityLabel(title)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private func secondaryButton(_ title: String,
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Font.face(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.muted)
+                .frame(height: 36)
+                .padding(.horizontal, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(Theme.inset)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    private func primaryButton(_ title: String,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Font.button)
+                .foregroundStyle(Theme.accentInk)
+                .frame(height: 36)
+                .padding(.horizontal, 22)
+                .background(
+                    Capsule(style: .continuous).fill(Theme.accent)
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressableButtonStyle(dip: 0.96))
     }
 }

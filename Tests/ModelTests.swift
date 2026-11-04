@@ -293,6 +293,168 @@ func testResetAllClearsEverything() async {
           "one undo restores the analysis pins")
 }
 
+// MARK: - P1-1 / H-3
+
+func readImage(_ url: URL) -> CGImage? {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    return CGImageSourceCreateImageAtIndex(source, 0, nil)
+}
+
+/// Mean absolute channel difference in 0…255, the same scale a 1/255
+/// acceptance threshold is written in.
+func meanDelta(_ aURL: URL, _ bURL: URL) -> Double? {
+    guard let a = readImage(aURL), let b = readImage(bURL),
+          a.width == b.width, a.height == b.height else { return nil }
+
+    func bytes(_ image: CGImage) -> [UInt8]? {
+        var data = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        guard let ctx = CGContext(data: &data, width: image.width, height: image.height,
+                                  bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                  space: sRGB,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return data
+    }
+
+    guard let da = bytes(a), let db = bytes(b) else { return nil }
+    var sum = 0.0
+    for offset in stride(from: 0, to: da.count, by: 4) {
+        for channel in 0..<3 {
+            sum += abs(Double(da[offset + channel]) - Double(db[offset + channel]))
+        }
+    }
+    return sum / Double((da.count / 4) * 3)
+}
+
+/// How many pixels differ by more than `threshold` on any channel. A small
+/// sticker barely moves a whole-image mean, but it is unmistakable per pixel.
+func changedPixels(_ aURL: URL, _ bURL: URL, threshold: Int = 8) -> Int? {
+    guard let a = readImage(aURL), let b = readImage(bURL),
+          a.width == b.width, a.height == b.height else { return nil }
+
+    func bytes(_ image: CGImage) -> [UInt8]? {
+        var data = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        guard let ctx = CGContext(data: &data, width: image.width, height: image.height,
+                                  bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                  space: sRGB,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return data
+    }
+
+    guard let da = bytes(a), let db = bytes(b) else { return nil }
+    var count = 0
+    for offset in stride(from: 0, to: da.count, by: 4) {
+        for channel in 0..<3 where abs(Int(da[offset + channel]) - Int(db[offset + channel])) > threshold {
+            count += 1
+            break
+        }
+    }
+    return count
+}
+
+@MainActor
+func testBatchMatchesSingleExport() async {
+    print("\n[P1-1] batch export equals a single export and respects each file's shape")
+
+    let docURL = workDir.appendingPathComponent("batch-doc.png")
+    let sameURL = workDir.appendingPathComponent("batch-same.png")
+    let squareURL = workDir.appendingPathComponent("batch-square.png")
+    guard let docImage = makeImage(width: 800, height: 600),
+          let squareImage = makeImage(width: 600, height: 600) else {
+        check(false, "batch fixtures")
+        return
+    }
+    check(writePNG(docImage, to: docURL) && writePNG(docImage, to: sameURL)
+          && writePNG(squareImage, to: squareURL), "fixtures written")
+
+    let brokenURL = workDir.appendingPathComponent("batch-broken.txt")
+    try? "not a photo".write(to: brokenURL, atomically: true, encoding: .utf8)
+
+    let model = EditorModel()
+    model.load(url: docURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "document loads")
+
+    model.cropDraft = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+    model.applyCrop()
+    check(await waitUntil { !model.isBusy && model.appliedCrop != nil }, "crop applies")
+
+    model.adjustments.contrast = 30
+    model.adjustments.exposure = 8
+    model.tapHeal(at: CGPoint(x: 0.5, y: 0.5))
+    model.tapArt(at: CGPoint(x: 0.3, y: 0.3))
+    model.exportFormat = .png
+
+    let singleURL = workDir.appendingPathComponent("batch-single.png")
+    model.export(to: singleURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: singleURL.path) && !model.isBusy
+    }, "single export finishes")
+
+    let folder = workDir.appendingPathComponent("batch-out")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+    model.batchIncludeStamps = true
+    model.batchIncludeAnalysis = true
+    model.runBatch([sameURL, squareURL, brokenURL], to: folder)
+    check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
+          "batch finishes")
+
+    check(model.batchTotal == 3, "batch reports all three files", "total \(model.batchTotal)")
+    check(model.batchSavedCount == 2 && model.batchSkippedCrops == 1,
+          "one file failed and one crop was skipped",
+          "saved \(model.batchSavedCount), skipped \(model.batchSkippedCrops)")
+    check(!model.isBusy, "isBusy is released once at the end")
+
+    let sameOut = folder.appendingPathComponent("batch-same-retouched.png")
+    let squareOut = folder.appendingPathComponent("batch-square-retouched.png")
+    if let delta = meanDelta(singleURL, sameOut) {
+        check(delta < 1.0, "batch pixels match the single export",
+              String(format: "mean delta %.3f/255", delta))
+    } else {
+        check(false, "same-shape batch file written", sameOut.lastPathComponent)
+    }
+
+    if let sameDims = readImage(sameOut) {
+        check(sameDims.width == 400 && sameDims.height == 300,
+              "same-shape file takes the document crop",
+              "\(sameDims.width)×\(sameDims.height)")
+    } else {
+        check(false, "same-shape output reads back")
+    }
+
+    if let squareDims = readImage(squareOut) {
+        check(squareDims.width == 600 && squareDims.height == 600,
+              "different-shape file exports whole",
+              "\(squareDims.width)×\(squareDims.height)")
+    } else {
+        check(false, "square output reads back")
+    }
+
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?
+        .filter { $0.hasSuffix(".tmp") } ?? []
+    check(leftovers.isEmpty, "no partial files remain", leftovers.joined(separator: ", "))
+
+    // Stamps are opt-in for batch work, so the same snapshot without them must
+    // produce a different picture from the one that carried them.
+    let plainFolder = workDir.appendingPathComponent("batch-plain")
+    try? FileManager.default.createDirectory(at: plainFolder, withIntermediateDirectories: true)
+    model.batchIncludeStamps = false
+    model.runBatch([sameURL], to: plainFolder)
+    check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
+          "batch without stamps finishes")
+    let plainOut = plainFolder.appendingPathComponent("batch-same-retouched.png")
+    if let stampDelta = meanDelta(sameOut, plainOut) {
+        let changed = changedPixels(sameOut, plainOut) ?? 0
+        check(stampDelta > 0.1 && changed > 100, "stamps and stickers appear only when asked for",
+              String(format: "mean delta %.2f/255, %d pixels changed", stampDelta, changed))
+    } else {
+        check(false, "batch without stamps written")
+    }
+}
+
 // MARK: - runner
 
 @MainActor
@@ -300,6 +462,7 @@ func runAll() async {
     await testExportDoesNotSave()
     await testSmartKeepsUnmeasuredFields()
     await testResetAllClearsEverything()
+    await testBatchMatchesSingleExport()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

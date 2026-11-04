@@ -55,6 +55,19 @@ final class EditorModel: ObservableObject {
         didSet { settings.exportLongEdge = exportLongEdge }
     }
 
+    // Batch export
+    @Published var showBatchSheet = false
+    /// Stamps and analysis describe the face that is open, so a batch starts
+    /// with both switched off.
+    @Published var batchIncludeStamps = false
+    @Published var batchIncludeAnalysis = false
+    @Published private(set) var isBatchRunning = false
+    @Published private(set) var batchTotal = 0
+    @Published private(set) var batchCompleted = 0
+    @Published private(set) var batchSavedCount = 0
+    @Published private(set) var batchSkippedCrops = 0
+    @Published private(set) var batchHasReport = false
+
     // State
     @Published private(set) var originalImage: NSImage?
     @Published private(set) var previewImage: NSImage?
@@ -509,7 +522,6 @@ final class EditorModel: ObservableObject {
     private var sourcePreview: CIImage?
     private var masksFull: MaskSet?
     private var masksPreview: MaskSet?
-    private var spotsFull: SpotHealing?
     private var spotsPreview: SpotHealing?
     /// True while a load installs the stamps that came with the project, so the
     /// stamp `didSet` does not treat restored state as a new user edit.
@@ -520,6 +532,8 @@ final class EditorModel: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private var thumbTask: Task<Void, Never>?
     private var batchTask: Task<Void, Never>?
+    private var batchSources: [URL] = []
+    private var batchFolder: URL?
     private var autosaveTask: Task<Void, Never>?
     private var recentsObserver: AnyCancellable?
     private var smartGeneration = 0
@@ -624,6 +638,8 @@ final class EditorModel: ObservableObject {
         batchGeneration += 1
         batchTask?.cancel()
         batchTask = nil
+        isBatchRunning = false
+        showBatchSheet = false
         generation += 1
         let generation = self.generation
 
@@ -946,11 +962,11 @@ final class EditorModel: ObservableObject {
         statusToken = .healCleared
     }
 
-    /// Rebuilds the healing masks for the current stamps, at both the working
-    /// resolution and the preview resolution.
+    /// Rebuilds the healing masks at preview resolution. The export builds its
+    /// own masks at full resolution inside `ExportService`, so a stamp edit no
+    /// longer pays for a full-size render it may never use.
     private func rebuildSpotMasks() {
         let working = HealGeometry.workingSpots(healSpots, crop: appliedCrop)
-        spotsFull = sourceFull.flatMap { processor.spotsMask(extent: $0.extent, spots: working) }
         spotsPreview = sourcePreview.flatMap { processor.spotsMask(extent: $0.extent, spots: working) }
     }
 
@@ -1882,65 +1898,43 @@ final class EditorModel: ObservableObject {
         export(to: url)
     }
 
+    /// The document as an export describes it. Both the single-photo export and
+    /// batch export start here, so their snapshots cannot diverge.
+    func makeExportSnapshot(includeStamps: Bool = true,
+                            includeAnalysis: Bool = true) -> ExportSnapshot? {
+        guard hasImage else { return nil }
+        return ExportSnapshot(adjustments: adjustments,
+                              healSpots: healSpots,
+                              stickers: stickers,
+                              analysis: analysis,
+                              crop: appliedCrop,
+                              format: effectiveExportFormat,
+                              quality: exportQuality,
+                              longEdge: exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil,
+                              includeStamps: includeStamps,
+                              includeAnalysis: includeAnalysis)
+    }
+
     func export(to url: URL) {
-        guard let source = sourceFull else { return }
-        let adjustments = self.adjustments
-        let masks = self.masksFull
-        let faces = self.faces
-        let spots = self.spotsFull
-        let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop, aspect: sourceAspect)
-        let analysis = self.analysis
-        let colorSpace = self.sourceColorSpace
-        let metadata = self.sourceMetadata
-        let processor = self.processor
-        let format = effectiveExportFormat
-        let quality = self.exportQuality
-        let longEdge = self.exportLongEdge > 0 ? CGFloat(self.exportLongEdge) : nil
+        guard let image = sourceFull, let snapshot = makeExportSnapshot() else { return }
+        let source = ExportSource(image: image,
+                                  masks: masksFull,
+                                  faces: faces,
+                                  photoAspect: sourceAspect,
+                                  colorSpace: sourceColorSpace,
+                                  metadata: sourceMetadata)
 
         isBusy = true
         statusToken = .renderingExport
 
         Task { [weak self] in
             let success = await Task.detached(priority: .userInitiated) { () -> Bool in
-                var fullMasks = masks
-                if adjustments.usesPersonTools, fullMasks?.person == nil {
-                    if let analysis = PersonAnalyzer.analysis(for: source) {
-                        fullMasks = fullMasks.map { set in
-                            var copy = set
-                            copy.person = analysis.mask
-                            copy.pose = analysis.pose
-                            return copy
-                        } ?? MaskSet.personOnly(analysis.mask, pose: analysis.pose)
-                    }
+                guard let rendered = ExportService.render(snapshot, source: source) else {
+                    return false
                 }
-                var rendered = processor.process(source, adjustments: adjustments,
-                                                 masks: fullMasks, faces: faces, spots: spots,
-                                                 art: art)
-                let drawAnalysis = analysis.isEnabled && !faces.isEmpty
-                if drawAnalysis {
-                    switch analysis.exportMode {
-                    case .onPhoto:
-                        rendered = AnalysisRenderer.apply(rendered, faces: faces,
-                                                          settings: analysis)
-                    case .poster:
-                        rendered = AnalysisRenderer.poster(rendered, faces: faces,
-                                                           settings: analysis)
-                    case .overlayOnly:
-                        // Lines on transparency, for the owner to place over a
-                        // photo of their own in whatever layout tool they use.
-                        guard let lines = AnalysisRenderer.render(size: rendered.extent.size,
-                                                                  faces: faces,
-                                                                  settings: analysis)
-                        else { return false }
-                        return processor.write(CIImage(cgImage: lines), to: url,
-                                               format: .png, quality: 1,
-                                               colorSpace: colorSpace,
-                                               maxDimension: longEdge)
-                    }
-                }
-                return processor.write(rendered, to: url, format: format,
-                                       quality: quality, colorSpace: colorSpace,
-                                       metadata: metadata, maxDimension: longEdge)
+                return ExportService.write(rendered, snapshot: snapshot, to: url,
+                                           colorSpace: source.colorSpace,
+                                           metadata: source.metadata)
             }.value
 
             guard let self else { return }
@@ -2048,7 +2042,7 @@ final class EditorModel: ObservableObject {
     /// one folder. Each photo gets its own face detection and masks, so the
     /// same slider values land on each face instead of on fixed coordinates.
     func batchExport() {
-        guard hasImage else { return }
+        guard hasImage, !isBatchRunning else { return }
         let sources = NSOpenPanel()
         sources.title = s.batchChoosePhotos
         sources.allowedContentTypes = [.image]
@@ -2063,72 +2057,147 @@ final class EditorModel: ObservableObject {
         destination.allowsMultipleSelection = false
         guard destination.runModal() == .OK, let folder = destination.url else { return }
 
-        runBatch(sources.urls, to: folder)
+        batchSources = sources.urls
+        batchFolder = folder
+        batchTotal = sources.urls.count
+        batchCompleted = 0
+        batchSavedCount = 0
+        batchSkippedCrops = 0
+        batchHasReport = false
+        showBatchSheet = true
     }
 
-    private func runBatch(_ urls: [URL], to folder: URL) {
+    /// Runs the job the sheet is showing, with the options it is showing.
+    func startBatchExport() {
+        guard !isBatchRunning, !batchSources.isEmpty, let folder = batchFolder else { return }
+        runBatch(batchSources, to: folder)
+    }
+
+    func cancelBatchExport() {
+        batchTask?.cancel()
+    }
+
+    func dismissBatchSheet() {
+        guard !isBatchRunning else { return }
+        showBatchSheet = false
+    }
+
+    /// The batch uses the same snapshot and the same renderer as a single
+    /// export; only the pixels and the measurements differ per file.
+    func runBatch(_ urls: [URL], to folder: URL) {
+        guard let snapshot = makeExportSnapshot(includeStamps: batchIncludeStamps,
+                                                includeAnalysis: batchIncludeAnalysis) else {
+            return
+        }
         batchGeneration += 1
         let batch = batchGeneration
         batchTask?.cancel()
 
-        let adjustments = self.adjustments
-        let format = exportFormat
-        let quality = exportQuality
-        let longEdge = exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil
-        let crop = appliedCrop
+        let documentAspect = sourceAspect
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
 
+        isBatchRunning = true
+        batchTotal = urls.count
+        batchCompleted = 0
+        batchSavedCount = 0
+        batchSkippedCrops = 0
+        batchHasReport = false
         isBusy = true
         statusToken = .batchStarting
 
         batchTask = Task { [weak self] in
             var saved = 0
+            var skipped = 0
+            var completed = 0
             for (index, url) in urls.enumerated() {
                 if Task.isCancelled { break }
                 self?.statusToken = .batchProgress(index + 1, urls.count)
 
-                let success = await Task.detached(priority: .userInitiated) { () -> Bool in
-                    guard let result = processor.load(from: url,
-                                                      previewMaxDimension: previewMaxDimension,
-                                                      crop: crop) else {
-                        return false
-                    }
-                    var masks = result.masksFull
-                    if adjustments.usesPersonTools, masks?.person == nil,
-                       let analysis = PersonAnalyzer.analysis(for: result.sourceFull) {
-                        masks = masks.map { set in
-                            var copy = set
-                            copy.person = analysis.mask
-                            copy.pose = analysis.pose
-                            return copy
-                        } ?? MaskSet.personOnly(analysis.mask, pose: analysis.pose)
-                    }
-                    let processed = processor.process(result.sourceFull,
-                                                      adjustments: adjustments,
-                                                      masks: masks,
-                                                      faces: result.faces)
-                    let base = url.deletingPathExtension().lastPathComponent
-                    var out = folder.appendingPathComponent("\(base)-retouched.\(format.fileExtension)")
-                    var counter = 2
-                    while FileManager.default.fileExists(atPath: out.path) {
-                        out = folder.appendingPathComponent("\(base)-retouched-\(counter).\(format.fileExtension)")
-                        counter += 1
-                    }
-                    return processor.write(processed, to: out, format: format,
-                                           quality: quality, colorSpace: result.colorSpace,
-                                           metadata: result.metadata, maxDimension: longEdge)
+                let outcome = await Task.detached(priority: .userInitiated) { () -> BatchOutcome in
+                    Self.exportOne(url, to: folder, snapshot: snapshot,
+                                   documentAspect: documentAspect,
+                                   processor: processor,
+                                   previewMaxDimension: previewMaxDimension)
                 }.value
 
-                if success { saved += 1 }
+                if outcome.saved { saved += 1 }
+                if outcome.skippedCrop { skipped += 1 }
+                completed = index + 1
+                if let self, self.batchGeneration == batch {
+                    self.batchCompleted = completed
+                    self.batchSavedCount = saved
+                    self.batchSkippedCrops = skipped
+                }
+                if Task.isCancelled { break }
             }
 
             guard let self, self.batchGeneration == batch else { return }
             self.batchTask = nil
+            self.isBatchRunning = false
             self.isBusy = false
-            self.statusToken = .batchFinished(saved, urls.count)
+            self.batchHasReport = true
+            self.statusToken = .batchFinished(saved: saved, total: urls.count,
+                                              cropsSkipped: skipped)
         }
     }
+
+    /// One file of a batch job, off the main actor. Every input that describes
+    /// geometry comes from this file: its own load, its own masks and faces,
+    /// its own aspect. The document's crop is used only when the shape matches.
+    private nonisolated static func exportOne(_ url: URL,
+                                              to folder: URL,
+                                              snapshot: ExportSnapshot,
+                                              documentAspect: CGFloat,
+                                              processor: ImageProcessor,
+                                              previewMaxDimension: CGFloat) -> BatchOutcome {
+        let fileAspect = ExportService.pixelAspect(of: url) ?? 0
+        let useCrop = ExportService.cropApplies(snapshot.crop,
+                                                documentAspect: documentAspect,
+                                                fileAspect: fileAspect)
+        var fileSnapshot = snapshot
+        fileSnapshot.crop = useCrop ? snapshot.crop : nil
+        let skippedCrop = snapshot.crop != nil && !useCrop
+
+        guard let result = processor.load(from: url,
+                                          previewMaxDimension: previewMaxDimension,
+                                          crop: fileSnapshot.crop) else {
+            return BatchOutcome(saved: false, skippedCrop: false)
+        }
+        let source = ExportSource(image: result.sourceFull,
+                                  masks: result.masksFull,
+                                  faces: result.faces,
+                                  photoAspect: fileAspect,
+                                  colorSpace: result.colorSpace,
+                                  metadata: result.metadata)
+        guard let rendered = ExportService.render(fileSnapshot, source: source) else {
+            return BatchOutcome(saved: false, skippedCrop: false)
+        }
+        let out = uniqueOutputURL(for: url, in: folder, format: fileSnapshot.format)
+        let saved = ExportService.write(rendered, snapshot: fileSnapshot, to: out,
+                                        colorSpace: result.colorSpace,
+                                        metadata: result.metadata)
+        // A file that produced no export is a failure, not a skipped crop.
+        return BatchOutcome(saved: saved, skippedCrop: skippedCrop && saved)
+    }
+
+    private nonisolated static func uniqueOutputURL(for url: URL,
+                                                    in folder: URL,
+                                                    format: ExportFormat) -> URL {
+        let base = url.deletingPathExtension().lastPathComponent
+        var out = folder.appendingPathComponent("\(base)-retouched.\(format.fileExtension)")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: out.path) {
+            out = folder.appendingPathComponent("\(base)-retouched-\(counter).\(format.fileExtension)")
+            counter += 1
+        }
+        return out
+    }
+}
+
+private struct BatchOutcome {
+    var saved = false
+    var skippedCrop = false
 }
 
 /// State of the subject silhouette Body and Background rely on.

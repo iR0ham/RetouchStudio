@@ -61,6 +61,8 @@ enum SelfCheck {
         passed = checkColorGateSpace() && passed
         print("-- 16-bit export and metadata --")
         passed = checkExportDepthAndMetadata(outDirectory: outDirectory) && passed
+        print("-- batch export keeps each file's own shape --")
+        passed = checkBatchExportGeometry(outDirectory: outDirectory) && passed
         print("-- undo and redo history --")
         passed = checkUndoHistory() && passed
         print("-- crop geometry, orientation and project round-trip --")
@@ -1791,6 +1793,68 @@ enum SelfCheck {
         let resizeOK = resizedWrote && resizedPixels.0 == 48 && resizedPixels.1 == 48
         print("  \(resizeOK ? "✓" : "✗") long-edge export: \(size)×\(size) → \(resizedPixels.0)×\(resizedPixels.1) (expect 48×48)")
         return wroteOK && depthOK && metadataOK && resizeOK
+    }
+
+    /// A batch job carries one snapshot but many shapes. The crop describes the
+    /// open photo's framing, so it may only be used on a file of the same shape;
+    /// every other file exports whole. This exercises the same decision and
+    /// renderer the batch row runs.
+    private static func checkBatchExportGeometry(outDirectory: String) -> Bool {
+        let directory = URL(fileURLWithPath: outDirectory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let processor = ImageProcessor.shared
+
+        guard let wideFixture = makeCropFixture(width: 200, height: 100),
+              let squareFixture = makeCropFixture(width: 120, height: 120) else {
+            print("  ✗ could not build the batch fixtures")
+            return false
+        }
+        let wideURL = directory.appendingPathComponent("selftest-batch-wide.png")
+        let squareURL = directory.appendingPathComponent("selftest-batch-square.png")
+        guard processor.write(CIImage(cgImage: wideFixture), to: wideURL, format: .png, quality: 1),
+              processor.write(CIImage(cgImage: squareFixture), to: squareURL, format: .png, quality: 1)
+        else {
+            print("  ✗ could not write the batch fixtures")
+            return false
+        }
+
+        var adjustments = Adjustments()
+        adjustments.contrast = 20
+        let crop = CGRect(x: 0.25, y: 0, width: 0.5, height: 1)
+        let snapshot = ExportSnapshot(adjustments: adjustments, crop: crop,
+                                      format: .png, quality: 1,
+                                      includeStamps: false, includeAnalysis: false)
+
+        func export(_ url: URL, as name: String) -> (width: Int, height: Int, cropped: Bool) {
+            let aspect = ExportService.pixelAspect(of: url) ?? 0
+            let applies = ExportService.cropApplies(crop, documentAspect: 2, fileAspect: aspect)
+            var fileSnapshot = snapshot
+            fileSnapshot.crop = applies ? crop : nil
+            guard let result = processor.load(from: url, previewMaxDimension: 400,
+                                              crop: fileSnapshot.crop) else { return (0, 0, applies) }
+            let source = ExportSource(image: result.sourceFull, masks: result.masksFull,
+                                      faces: result.faces, photoAspect: aspect,
+                                      colorSpace: result.colorSpace, metadata: result.metadata)
+            guard let rendered = ExportService.render(fileSnapshot, source: source) else {
+                return (0, 0, applies)
+            }
+            let out = directory.appendingPathComponent(name)
+            _ = ExportService.write(rendered, snapshot: fileSnapshot, to: out,
+                                    colorSpace: result.colorSpace, metadata: result.metadata)
+            guard let source = CGImageSourceCreateWithURL(out as CFURL, nil),
+                  let written = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                return (0, 0, applies)
+            }
+            return (written.width, written.height, applies)
+        }
+
+        let wide = export(wideURL, as: "selftest-batch-wide-out.png")
+        let square = export(squareURL, as: "selftest-batch-square-out.png")
+        let wideOK = wide.cropped && wide.width == 100 && wide.height == 100
+        let squareOK = !square.cropped && square.width == 120 && square.height == 120
+        print("  \(wideOK ? "✓" : "✗") same-shape file takes the crop: \(wide.width)×\(wide.height) (expect 100×100)")
+        print("  \(squareOK ? "✓" : "✗") different-shape file exports whole: \(square.width)×\(square.height) (expect 120×120)")
+        return wideOK && squareOK
     }
 
     // MARK: - ۱۳) تاریخچه‌ی واگرد
