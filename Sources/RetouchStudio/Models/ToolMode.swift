@@ -14,6 +14,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
     case body
     case background
     case art
+    case analysis
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
     var showsPresets: Bool {
         self != .crop && self != .look && self != .makeup
             && self != .body && self != .background && self != .art
+            && self != .analysis
     }
 
     var title: String {
@@ -30,6 +32,14 @@ enum ToolMode: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         L10n.current.toolSubtitle(self)
+    }
+
+    /// The bare number that picks this tool, in the order of the bar. The art
+    /// tool is deliberately left without one: it is the eleventh case and the
+    /// row only has ten number keys.
+    var shortcutKey: String? {
+        guard let index = Self.allCases.firstIndex(of: self), index < 10 else { return nil }
+        return index == 9 ? "0" : String(index + 1)
     }
 
     var icon: String {
@@ -45,6 +55,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
         case .body: return "figure.stand"
         case .background: return "person.and.background.dotted"
         case .art: return "star.circle"
+        case .analysis: return "viewfinder"
         }
     }
 }

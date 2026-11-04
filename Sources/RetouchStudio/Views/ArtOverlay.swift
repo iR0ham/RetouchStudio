@@ -24,6 +24,11 @@ struct ArtOverlay: View {
             ForEach(model.visibleStickers, id: \.sticker.id) { entry in
                 stickerLayer(entry.sticker)
             }
+
+            if let selected = model.visibleStickers
+                .first(where: { $0.sticker.id == model.selectedSticker })?.sticker {
+                selectionHandles(for: selected)
+            }
         }
         .frame(width: displayed.width, height: displayed.height)
         // Losing focus cancels the mouse-up, so a half-finished drag would
@@ -95,6 +100,71 @@ struct ArtOverlay: View {
                         startResolved = false
                     }
             )
+    }
+
+    /// Corner and rotation handles for the selected sticker. Both drive the
+    /// stored sticker through the model, so they match the sliders exactly and
+    /// stay correct at any zoom.
+    private func selectionHandles(for sticker: Sticker) -> some View {
+        let side = max(8, sticker.size * shortSide)
+        let center = CGPoint(x: sticker.center.x * displayed.width,
+                             y: sticker.center.y * displayed.height)
+        let corner = point(around: center,
+                           angle: sticker.rotation + 45,
+                           distance: side * 0.5 * 1.41421356)
+        let rotor = point(around: center,
+                          angle: sticker.rotation - 90,
+                          distance: side * 0.5 + 20)
+
+        return ZStack {
+            Circle()
+                .fill(Theme.panel)
+                .overlay(Circle().stroke(Theme.accentBright, lineWidth: 1.5))
+                .frame(width: 9, height: 9)
+                .frame(width: 26, height: 26)
+                .contentShape(Circle())
+                .position(rotor)
+                .help(model.s.artDragRotate)
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            // The click that activates the window also lands
+                            // here; it must not nudge the rotation.
+                            guard model.acceptsPointerEdit else { return }
+                            let dx = Double(value.location.x - center.x)
+                            let dy = Double(value.location.y - center.y)
+                            model.rotateSelectedSticker(atan2(dy, dx) * 180 / Double.pi + 90)
+                        }
+                )
+
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Theme.accentBright)
+                .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .stroke(Theme.panel, lineWidth: 1.5))
+                .frame(width: 10, height: 10)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+                .position(corner)
+                .help(model.s.artDragResize)
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            guard model.acceptsPointerEdit else { return }
+                            let dx = Double(value.location.x - center.x)
+                            let dy = Double(value.location.y - center.y)
+                            // The handle sits on the diagonal, so the side is
+                            // the distance from the center times √2.
+                            let fraction = hypot(dx, dy) * 1.41421356 / Double(max(1, shortSide))
+                            model.resizeSelectedSticker(workingFraction: fraction)
+                        }
+                )
+        }
+    }
+
+    private func point(around center: CGPoint, angle: Double, distance: CGFloat) -> CGPoint {
+        let radians = angle * Double.pi / 180
+        return CGPoint(x: center.x + CGFloat(cos(radians)) * distance,
+                       y: center.y + CGFloat(sin(radians)) * distance)
     }
 
     private func normalized(_ point: CGPoint) -> CGPoint {

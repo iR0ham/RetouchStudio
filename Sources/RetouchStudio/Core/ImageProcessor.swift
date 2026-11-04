@@ -1041,21 +1041,32 @@ final class ImageProcessor {
     /// because the format defines no deeper container. Source metadata is
     /// carried over, with orientation normalized to 1 since the pixels have
     /// already been rotated upright.
+    ///
+    /// `maxDimension` downscales the longest edge with a Lanczos pass; it never
+    /// enlarges, so a target larger than the photo writes the photo as-is.
     func write(_ image: CIImage,
                to url: URL,
                format: ExportFormat,
                quality: Double,
                colorSpace: CGColorSpace? = nil,
-               metadata: [CFString: Any] = [:]) -> Bool {
+               metadata: [CFString: Any] = [:],
+               maxDimension: CGFloat? = nil) -> Bool {
         let ciFormat: CIFormat = format == .jpeg ? .RGBA8 : .RGBA16
+        var output = image
+        if let maxDimension, maxDimension > 0 {
+            let longest = max(image.extent.width, image.extent.height)
+            if longest > maxDimension, let scaled = Self.scaled(image, by: maxDimension / longest) {
+                output = scaled
+            }
+        }
         // A removed background is transparent, and JPEG has no alpha channel:
         // flatten onto white so the file has a real backdrop instead of the
         // black pixels an ignored alpha channel would leave behind.
-        var flattened = image
+        var flattened = output
         if format == .jpeg {
             let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1))
-                .cropped(to: image.extent)
-            flattened = image.composited(over: white)
+                .cropped(to: output.extent)
+            flattened = output.composited(over: white)
         }
         guard let cgImage = renderCGImage(flattened, scale: 1, colorSpace: colorSpace, format: ciFormat) else {
             return false
@@ -1081,5 +1092,18 @@ final class ImageProcessor {
         }
         CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
         return CGImageDestinationFinalize(destination)
+    }
+
+    /// Lanczos resample, moved back to a zero origin so the writer sees the
+    /// same extent as an unscaled export.
+    private static func scaled(_ image: CIImage, by scale: CGFloat) -> CIImage? {
+        guard let filter = CIFilter(name: "CILanczosScaleTransform") else { return nil }
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(scale, forKey: kCIInputScaleKey)
+        filter.setValue(1, forKey: kCIInputAspectRatioKey)
+        guard let out = filter.outputImage else { return nil }
+        let extent = out.extent
+        return out.transformed(by: CGAffineTransform(translationX: -extent.origin.x,
+                                                     y: -extent.origin.y))
     }
 }

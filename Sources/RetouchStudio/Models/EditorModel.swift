@@ -20,6 +20,9 @@ final class EditorModel: ObservableObject {
     @Published var comparePosition: Double = 0.45 {
         didSet { settings.comparePosition = comparePosition }
     }
+    /// True while Space is held. The canvas shows the untouched original, so
+    /// the owner can check the edit against the photo without moving the split.
+    @Published var isPeekingOriginal = false
     @Published var showFaceOverlay = false {
         didSet { settings.showFaceOverlay = showFaceOverlay }
     }
@@ -46,6 +49,10 @@ final class EditorModel: ObservableObject {
     }
     @Published var exportQuality: Double = 0.92 {
         didSet { settings.exportQuality = exportQuality }
+    }
+    /// Longest exported edge in pixels; 0 keeps the photo's own size.
+    @Published var exportLongEdge: Int = 0 {
+        didSet { settings.exportLongEdge = exportLongEdge }
     }
 
     // State
@@ -80,6 +87,15 @@ final class EditorModel: ObservableObject {
         didSet { stickersChanged() }
     }
     @Published var selectedSticker: UUID?
+    /// The analysis overlay's switches, regions and leader ends. It is drawn in
+    /// its own layer rather than folded into the photo pipeline: choosing a
+    /// region must not re-run every retouch pass on the picture.
+    @Published var analysis = AnalysisSettings() {
+        didSet { analysisChanged() }
+    }
+    /// The overlay as it stands, drawn at preview resolution. Kept here so
+    /// panning and zooming do not redraw the mesh on every frame.
+    @Published private(set) var analysisOverlay: CGImage?
     /// Brush diameter as a percentage of the short side, so one setting covers
     /// every photo size and the stamp means the same thing on preview and export.
     @Published var healBrushPercent: Double = 1.6 {
@@ -131,6 +147,7 @@ final class EditorModel: ObservableObject {
         var adjustments = Adjustments()
         var healSpots: [HealSpot] = []
         var stickers: [Sticker] = []
+        var analysis = AnalysisSettings()
     }
 
     private var undoStack: [EditState] = []
@@ -144,7 +161,8 @@ final class EditorModel: ObservableObject {
     @Published private(set) var canRedo = false
 
     private var currentState: EditState {
-        EditState(adjustments: adjustments, healSpots: healSpots, stickers: stickers)
+        EditState(adjustments: adjustments, healSpots: healSpots,
+                  stickers: stickers, analysis: analysis)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -208,6 +226,7 @@ final class EditorModel: ObservableObject {
         adjustments = state.adjustments
         healSpots = state.healSpots
         stickers = state.stickers
+        analysis = state.analysis
         selectedSticker = nil
     }
 
@@ -244,6 +263,29 @@ final class EditorModel: ObservableObject {
         updateUndoFlags()
         updateCleanState()
         if hasImage { schedulePreview() }
+    }
+
+    /// The overlay lives outside the photo pipeline, so a change repaints the
+    /// lines only. The picture underneath is untouched by every one of these
+    /// switches, which is why they never call `schedulePreview`.
+    private func analysisChanged() {
+        refreshAnalysisOverlay()
+        guard !isLoadingState else { return }
+        scheduleCommit()
+        updateUndoFlags()
+        updateCleanState()
+    }
+
+    /// Re-runs the overlay at preview resolution. Called on every settings
+    /// change, on a new face set, and after a crop re-load.
+    func refreshAnalysisOverlay() {
+        guard analysis.isEnabled, hasImage, !faces.isEmpty,
+              previewSize.width >= 2, previewSize.height >= 2 else {
+            analysisOverlay = nil
+            return
+        }
+        analysisOverlay = AnalysisRenderer.render(size: previewSize, faces: faces,
+                                                  settings: analysis)
     }
 
     private func updateCleanState() {
@@ -494,6 +536,7 @@ final class EditorModel: ObservableObject {
         autoColorStrength = settings.autoColorStrength
         exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
         exportQuality = settings.exportQuality
+        exportLongEdge = settings.exportLongEdge
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
         comparePosition = settings.comparePosition
@@ -639,7 +682,9 @@ final class EditorModel: ObservableObject {
         imageURL = result.url
         cropDraft = CropGeometry.full
         hasImage = true
+        isPeekingOriginal = false
         buildPresetThumbs()
+        refreshAnalysisOverlay()
     }
 
     private func apply(_ result: LoadResult,
@@ -651,6 +696,7 @@ final class EditorModel: ObservableObject {
         if let project {
             exportFormat = ExportFormat(rawValue: project.exportFormat) ?? .jpeg
             exportQuality = project.exportQuality
+            exportLongEdge = project.exportLongEdge ?? 0
             autoRetouchStrength = project.autoRetouchStrength
             autoColorStrength = project.autoColorStrength ?? 100
             adjustments = project.adjustments
@@ -664,9 +710,11 @@ final class EditorModel: ObservableObject {
         isLoadingState = true
         healSpots = project?.healSpots ?? []
         stickers = project?.stickers ?? []
+        analysis = project?.analysis ?? AnalysisSettings()
         isLoadingState = false
         selectedSticker = nil
         rebuildSpotMasks()
+        refreshAnalysisOverlay()
 
         cropAspect = .free
         cleanState = currentState
@@ -712,6 +760,14 @@ final class EditorModel: ObservableObject {
     var workingAspect: CGFloat {
         guard workingPixelSize.width > 0, workingPixelSize.height > 0 else { return 1 }
         return workingPixelSize.width / workingPixelSize.height
+    }
+
+    /// Pixel aspect ratio of the whole photo. Sticker sizes are stored against
+    /// the photo's short side, while the canvas works in the cropped frame.
+    var sourceAspect: CGFloat {
+        guard let crop = appliedCrop, crop.width > 0, crop.height > 0 else { return workingAspect }
+        guard workingPixelSize.width > 0, workingPixelSize.height > 0 else { return 1 }
+        return (workingPixelSize.width / crop.width) / (workingPixelSize.height / crop.height)
     }
 
     /// Pixel size of the draft crop, for the live readout.
@@ -788,6 +844,9 @@ final class EditorModel: ObservableObject {
             // The stamps live in original-photo coordinates, so a new crop moves
             // them onto the new frame before the canvas repaints.
             self.rebuildSpotMasks()
+            // Leader ends were pinned against the old frame; the face has moved,
+            // so they go back to the automatic layout.
+            if !self.analysis.endpoints.isEmpty { self.analysis.resetEndpoints() }
             if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
             self.updateCleanState()
             self.isBusy = false
@@ -797,7 +856,9 @@ final class EditorModel: ObservableObject {
 
     /// True when the active tool owns the pointer over the canvas, so pan,
     /// zoom and the compare handle must stand aside.
-    var toolOwnsCanvas: Bool { toolMode == .crop || toolMode == .heal || toolMode == .art }
+    var toolOwnsCanvas: Bool {
+        toolMode == .crop || toolMode == .heal || toolMode == .art || toolMode == .analysis
+    }
 
     /// When the app last became active. The click that brings the window
     /// forward still reaches the canvas, so tools that place something on a
@@ -806,6 +867,33 @@ final class EditorModel: ObservableObject {
 
     func noteActivation() {
         lastActivation = Date()
+    }
+
+    /// The key-up that ends a Space peek never arrives when the app loses focus,
+    /// so the peek is cleared from the activation notification as well.
+    func endPeek() {
+        isPeekingOriginal = false
+    }
+
+    /// Picks a tool from a bare number key. Only the ten numbered tools map;
+    /// the art tool keeps its button.
+    @discardableResult
+    func selectTool(shortcut key: String) -> Bool {
+        let numbers: [String: Int] = [
+            "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+            "6": 6, "7": 7, "8": 8, "9": 9, "0": 10,
+            "۱": 1, "۲": 2, "۳": 3, "۴": 4, "۵": 5,
+            "۶": 6, "۷": 7, "۸": 8, "۹": 9, "۰": 10,
+        ]
+        guard let number = numbers[key], number <= ToolMode.allCases.count else { return false }
+        toolMode = ToolMode.allCases[number - 1]
+        return true
+    }
+
+    /// `[` and `]` move the healing brush by one size step, inside the same
+    /// limits as the slider.
+    func nudgeHealBrush(by delta: Double) {
+        healBrushPercent = min(6, max(0.4, healBrushPercent + delta))
     }
 
     var acceptsPointerEdit: Bool {
@@ -881,7 +969,7 @@ final class EditorModel: ObservableObject {
 
     /// Stickers as the canvas sees them, keeping the stored index.
     var visibleStickers: [(index: Int, sticker: Sticker)] {
-        ArtGeometry.indexed(stickers, crop: appliedCrop)
+        ArtGeometry.indexed(stickers, crop: appliedCrop, aspect: sourceAspect)
     }
 
     private var selectedStickerValue: Sticker? {
@@ -923,7 +1011,9 @@ final class EditorModel: ObservableObject {
         let sticker = Sticker(
             kind: stickerKind,
             center: ArtGeometry.originalCenter(point, crop: appliedCrop),
-            size: ArtGeometry.originalSize(max(2, stickerSize) / 100, crop: appliedCrop),
+            size: ArtGeometry.originalSize(max(2, stickerSize) / 100,
+                                           crop: appliedCrop,
+                                           aspect: sourceAspect),
             rotation: stickerRotation,
             opacity: stickerOpacity / 100,
             color: stickerColor)
@@ -949,6 +1039,39 @@ final class EditorModel: ObservableObject {
         guard let selectedSticker,
               let index = stickers.firstIndex(where: { $0.id == selectedSticker }) else { return }
         update(&stickers[index])
+    }
+
+    /// Live resize from the corner handle. `workingFraction` is a share of the
+    /// working frame's short side, which is the unit the overlay draws in.
+    func resizeSelectedSticker(workingFraction: Double) {
+        let clamped = min(1.2, max(0.02, workingFraction))
+        updateSelectedSticker {
+            $0.size = ArtGeometry.originalSize(clamped, crop: appliedCrop, aspect: sourceAspect)
+        }
+        stickerSize = clamped * 100
+    }
+
+    /// Live rotation from the handle above a selected sticker, in degrees.
+    func rotateSelectedSticker(_ degrees: Double) {
+        let normalized = ((degrees + 180).truncatingRemainder(dividingBy: 360) + 360)
+            .truncatingRemainder(dividingBy: 360) - 180
+        updateSelectedSticker { $0.rotation = normalized }
+        stickerRotation = normalized
+    }
+
+    func duplicateSelectedSticker() {
+        guard let selected = selectedStickerValue else { return }
+        var copy = selected
+        copy.id = UUID()
+        // Offset in the working frame so the copy is visible beside the
+        // original instead of sitting exactly under it.
+        let center = ArtGeometry.workingCenter(selected.center, crop: appliedCrop)
+        let shifted = CGPoint(x: min(0.98, max(0.02, center.x + 0.04)),
+                              y: min(0.98, max(0.02, center.y + 0.04)))
+        copy.center = ArtGeometry.originalCenter(shifted, crop: appliedCrop)
+        stickers.append(copy)
+        self.selectedSticker = copy.id
+        statusToken = .stickerAdded(stickers.count)
     }
 
     func deleteSelectedSticker() {
@@ -980,11 +1103,18 @@ final class EditorModel: ObservableObject {
     }
 
     func stickerSizeBinding() -> Binding<Double> {
-        Binding(get: { (self.selectedStickerValue?.size ?? self.stickerSize / 100) * 100 },
+        Binding(get: {
+            let working = self.selectedStickerValue.map {
+                ArtGeometry.workingSize($0.size, crop: self.appliedCrop, aspect: self.sourceAspect)
+            } ?? self.stickerSize / 100
+            return working * 100
+        },
                 set: { value in
                     self.stickerSize = value
                     self.updateSelectedSticker {
-                        $0.size = ArtGeometry.originalSize(max(2, value) / 100, crop: self.appliedCrop)
+                        $0.size = ArtGeometry.originalSize(max(2, value) / 100,
+                                                           crop: self.appliedCrop,
+                                                           aspect: self.sourceAspect)
                     }
                 })
     }
@@ -1011,6 +1141,130 @@ final class EditorModel: ObservableObject {
                     self.stickerColor = value
                     self.updateSelectedSticker { $0.color = value }
                 })
+    }
+
+    // MARK: - Face analysis
+
+    /// The overlay can only be drawn on a photo that has a face to measure.
+    var analysisReady: Bool { hasImage && !faces.isEmpty }
+
+    var canResetAnalysisPins: Bool { !analysis.endpoints.isEmpty || !analysis.anchors.isEmpty }
+
+    var analysisEnabledBinding: Binding<Bool> {
+        Binding(get: { self.analysis.isEnabled },
+                set: { self.analysis.isEnabled = $0 })
+    }
+
+    var analysisMeshBinding: Binding<Bool> {
+        Binding(get: { self.analysis.showsMesh },
+                set: { self.analysis.showsMesh = $0 })
+    }
+
+    var analysisOutlineBinding: Binding<Bool> {
+        Binding(get: { self.analysis.showsFaceOutline },
+                set: { self.analysis.showsFaceOutline = $0 })
+    }
+
+    var analysisGlowBinding: Binding<Bool> {
+        Binding(get: { self.analysis.glow },
+                set: { self.analysis.glow = $0 })
+    }
+
+    var analysisOpacityBinding: Binding<Double> {
+        Binding(get: { self.analysis.lineOpacity * 100 },
+                set: { self.analysis.lineOpacity = min(1, max(0.05, $0 / 100)) })
+    }
+
+    var analysisMarginBinding: Binding<Double> {
+        Binding(get: { self.analysis.marginPercent },
+                set: { self.analysis.marginPercent = min(30, max(4, $0)) })
+    }
+
+    var analysisWeightBinding: Binding<Double> {
+        Binding(get: { self.analysis.lineWeight },
+                set: { self.analysis.lineWeight = min(240, max(60, $0)) })
+    }
+
+    var analysisTintBinding: Binding<AnalysisTint> {
+        Binding(get: { self.analysis.tint },
+                set: { self.analysis.tint = $0 })
+    }
+
+    /// A switch that decides which areas get a shape and a leader line.
+    func analysisRegionBinding(_ region: AnalysisRegion) -> Binding<Bool> {
+        Binding(get: { self.analysis.regions.contains(region) },
+                set: { on in
+                    if on { self.analysis.regions.insert(region) }
+                    else { self.analysis.regions.remove(region) }
+                })
+    }
+
+    /// Leader ends as the canvas draws them: the same normalized, bottom-left
+    /// coordinates the renderer uses.
+    var analysisLeaders: [(region: AnalysisRegion, end: CGPoint)] {
+        guard analysis.isEnabled,
+              let face = AnalysisRenderer.primaryFace(faces) else { return [] }
+        let ends = AnalysisRenderer.layout(face: face, settings: analysis)
+        return analysis.primaryCallouts.compactMap { region in
+            ends[region].map { (region, $0) }
+        }
+    }
+
+    /// The leader end under a working-frame point, within `tolerance` in the
+    /// same normalized units. The canvas starts a drag with this.
+    func analysisRegion(at point: CGPoint, tolerance: CGFloat) -> AnalysisRegion? {
+        var hit: (region: AnalysisRegion, distance: CGFloat)?
+        for leader in analysisLeaders {
+            let distance = hypot(leader.end.x - point.x, leader.end.y - point.y)
+            guard distance <= tolerance else { continue }
+            if hit == nil || distance < hit!.distance {
+                hit = (leader.region, distance)
+            }
+        }
+        return hit?.region
+    }
+
+    func dragAnalysisEnd(_ region: AnalysisRegion, to point: CGPoint) {
+        analysis.setEndpoint(CGPoint(x: min(1, max(0, point.x)),
+                                     y: min(1, max(0, point.y))),
+                             for: region)
+    }
+
+    /// Where each face-side dot sits: the owner's pin when there is one, the
+    /// feature the renderer picked otherwise.
+    var analysisAnchors: [(region: AnalysisRegion, point: CGPoint)] {
+        guard analysis.isEnabled,
+              let face = AnalysisRenderer.primaryFace(faces) else { return [] }
+        return analysis.primaryCallouts.compactMap { region in
+            let point = analysis.anchor(for: region)
+                ?? AnalysisRenderer.anchor(region, face: face)
+            return (region, point)
+        }
+    }
+
+    func analysisAnchor(at point: CGPoint, tolerance: CGFloat) -> AnalysisRegion? {
+        analysisAnchors.reduce(nil as (AnalysisRegion, CGFloat)?) { best, anchor in
+            let distance = hypot(anchor.point.x - point.x, anchor.point.y - point.y)
+            guard distance <= tolerance else { return best }
+            guard let best else { return (anchor.region, distance) }
+            return distance < best.1 ? (anchor.region, distance) : best
+        }?.0
+    }
+
+    func dragAnalysisAnchor(_ region: AnalysisRegion, to point: CGPoint) {
+        analysis.setAnchor(CGPoint(x: min(1, max(0, point.x)),
+                                   y: min(1, max(0, point.y))),
+                           for: region)
+    }
+
+    /// Both kinds of pin go back at once: they are the same gesture to the
+    /// owner, so one reset covers the lines and the dots.
+    func resetAnalysisPins() {
+        guard !analysis.endpoints.isEmpty || !analysis.anchors.isEmpty else { return }
+        commitAdjustments()
+        analysis.resetEndpoints()
+        analysis.resetAnchors()
+        commitAdjustments()
     }
 
     // MARK: - Lens and backdrop colours
@@ -1185,7 +1439,7 @@ final class EditorModel: ObservableObject {
         let masks = self.masksPreview
         let faces = self.faces
         let spots = self.spotsPreview
-        let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop)
+        let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop, aspect: sourceAspect)
         let colorSpace = self.sourceColorSpace
         let processor = self.processor
         isBusy = true
@@ -1470,6 +1724,7 @@ final class EditorModel: ObservableObject {
         autoColorStrength = settings.autoColorStrength
         exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
         exportQuality = settings.exportQuality
+        exportLongEdge = settings.exportLongEdge
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
         language = settings.language
@@ -1546,6 +1801,24 @@ final class EditorModel: ObservableObject {
         return "\(Digits.num(Int(workingPixelSize.width))) × \(Digits.num(Int(workingPixelSize.height))) px"
     }
 
+    /// Pixel size the export will actually write. Downscaling never enlarges a
+    /// photo, so a long-edge choice above the photo's own size is ignored.
+    var exportPixelSize: CGSize {
+        let size = workingPixelSize
+        guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return size }
+        let longest = max(size.width, size.height)
+        guard longest > CGFloat(exportLongEdge) else { return size }
+        let scale = CGFloat(exportLongEdge) / longest
+        return CGSize(width: (size.width * scale).rounded(),
+                      height: (size.height * scale).rounded())
+    }
+
+    var exportPixelText: String {
+        let size = exportPixelSize
+        guard size.width >= 1, size.height >= 1 else { return "" }
+        return "\(Digits.num(Int(size.width))) × \(Digits.num(Int(size.height))) px"
+    }
+
     var windowTitle: String {
         guard hasImage, !imageName.isEmpty else { return s.appName }
         return hasUnsavedChanges ? "\(imageName) — \(s.edited)" : imageName
@@ -1569,13 +1842,28 @@ final class EditorModel: ObservableObject {
     func suggestedFileName() -> String {
         let base = (imageName as NSString).deletingPathExtension
         let name = base.isEmpty ? "retouched" : "\(base)-retouched"
-        return "\(name).\(exportFormat.fileExtension)"
+        guard analysis.isEnabled else {
+            return "\(name).\(exportFormat.fileExtension)"
+        }
+        switch analysis.exportMode {
+        case .onPhoto:
+            return "\(name)-analysis.\(exportFormat.fileExtension)"
+        case .poster:
+            return "\(name)-analysis-poster.\(exportFormat.fileExtension)"
+        case .overlayOnly:
+            return "\(name)-analysis-lines.png"
+        }
+    }
+
+    /// PNG because an overlay-only export is lines on transparency.
+    private var effectiveExportFormat: ExportFormat {
+        analysis.isEnabled && analysis.exportMode == .overlayOnly ? .png : exportFormat
     }
 
     func saveExport() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedFileName()
-        panel.allowedContentTypes = [exportFormat.utType]
+        panel.allowedContentTypes = [effectiveExportFormat.utType]
         panel.canCreateDirectories = true
         panel.message = s.chooseExportLocation
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -1588,12 +1876,14 @@ final class EditorModel: ObservableObject {
         let masks = self.masksFull
         let faces = self.faces
         let spots = self.spotsFull
-        let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop)
+        let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop, aspect: sourceAspect)
+        let analysis = self.analysis
         let colorSpace = self.sourceColorSpace
         let metadata = self.sourceMetadata
         let processor = self.processor
-        let format = self.exportFormat
+        let format = effectiveExportFormat
         let quality = self.exportQuality
+        let longEdge = self.exportLongEdge > 0 ? CGFloat(self.exportLongEdge) : nil
         let exportedState = currentState
         let exportedCrop = appliedCrop
 
@@ -1613,12 +1903,34 @@ final class EditorModel: ObservableObject {
                         } ?? MaskSet.personOnly(analysis.mask, pose: analysis.pose)
                     }
                 }
-                let processed = processor.process(source, adjustments: adjustments,
-                                                  masks: fullMasks, faces: faces, spots: spots,
-                                                  art: art)
-                return processor.write(processed, to: url, format: format,
+                var rendered = processor.process(source, adjustments: adjustments,
+                                                 masks: fullMasks, faces: faces, spots: spots,
+                                                 art: art)
+                let drawAnalysis = analysis.isEnabled && !faces.isEmpty
+                if drawAnalysis {
+                    switch analysis.exportMode {
+                    case .onPhoto:
+                        rendered = AnalysisRenderer.apply(rendered, faces: faces,
+                                                          settings: analysis)
+                    case .poster:
+                        rendered = AnalysisRenderer.poster(rendered, faces: faces,
+                                                           settings: analysis)
+                    case .overlayOnly:
+                        // Lines on transparency, for the owner to place over a
+                        // photo of their own in whatever layout tool they use.
+                        guard let lines = AnalysisRenderer.render(size: rendered.extent.size,
+                                                                  faces: faces,
+                                                                  settings: analysis)
+                        else { return false }
+                        return processor.write(CIImage(cgImage: lines), to: url,
+                                               format: .png, quality: 1,
+                                               colorSpace: colorSpace,
+                                               maxDimension: longEdge)
+                    }
+                }
+                return processor.write(rendered, to: url, format: format,
                                        quality: quality, colorSpace: colorSpace,
-                                       metadata: metadata)
+                                       metadata: metadata, maxDimension: longEdge)
             }.value
 
             guard let self else { return }
@@ -1665,11 +1977,13 @@ final class EditorModel: ObservableObject {
                               adjustments: adjustments,
                               exportFormat: exportFormat.rawValue,
                               exportQuality: exportQuality,
+                              exportLongEdge: exportLongEdge == 0 ? nil : exportLongEdge,
                               autoRetouchStrength: autoRetouchStrength,
                               autoColorStrength: autoColorStrength,
                               crop: appliedCrop,
                               healSpots: healSpots.isEmpty ? nil : healSpots,
-                              stickers: stickers.isEmpty ? nil : stickers)
+                              stickers: stickers.isEmpty ? nil : stickers,
+                              analysis: analysis == AnalysisSettings() ? nil : analysis)
     }
 
     private func writeProject(to url: URL) {
@@ -1751,6 +2065,7 @@ final class EditorModel: ObservableObject {
         let adjustments = self.adjustments
         let format = exportFormat
         let quality = exportQuality
+        let longEdge = exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil
         let crop = appliedCrop
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
@@ -1793,7 +2108,7 @@ final class EditorModel: ObservableObject {
                     }
                     return processor.write(processed, to: out, format: format,
                                            quality: quality, colorSpace: result.colorSpace,
-                                           metadata: result.metadata)
+                                           metadata: result.metadata, maxDimension: longEdge)
                 }.value
 
                 if success { saved += 1 }

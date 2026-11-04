@@ -28,7 +28,7 @@ class L10n {
     var openHelp: String { "Open an image (⌘O)" }
     var exportHelp: String { "Save the retouched image (⌘E)" }
     var resetHelp: String { "Reset all adjustments (⌘R)" }
-    var compareHelp: String { "Show the before/after comparison" }
+    var compareHelp: String { "Show the before/after comparison (hold Space to see the original)" }
     var faceBoxHelp: String { "Show the detected face box and regions" }
 
     // Sections
@@ -286,9 +286,12 @@ class L10n {
     var artSize: String { "Size" }
     var artRotation: String { "Rotation" }
     var artDelete: String { "Delete Sticker" }
+    var artDuplicate: String { "Duplicate" }
     var artClear: String { "Clear All Stickers" }
+    var artDragResize: String { "Drag to resize" }
+    var artDragRotate: String { "Drag to rotate" }
     var artNote: String {
-        "Click the photo to place a sticker. Click one to select it, then drag it into place."
+        "Click the photo to place a sticker. Click one to select it, then drag it, or use its handles to resize and rotate."
     }
     var stickerRemoved: String { "Sticker removed." }
     var stickersCleared: String { "Stickers cleared." }
@@ -303,6 +306,67 @@ class L10n {
         case .flower: return "Flower"
         case .butterfly: return "Butterfly"
         case .lightning: return "Lightning"
+        }
+    }
+
+    // Face analysis
+    var analysisTitle: String { "Face Analysis" }
+    var analysisSubtitle: String { "Landmarks, shapes and leader lines — no text" }
+    var analysisEnable: String { "Show the analysis overlay" }
+    var analysisStyle: String { "Style" }
+    var analysisStyleOutline: String { "Dashed shapes" }
+    var analysisStyleMesh: String { "Face mesh" }
+    var analysisFaceOutline: String { "Face outline" }
+    var analysisAreas: String { "Areas" }
+    var analysisInk: String { "Line colour" }
+    var analysisWeight: String { "Line weight" }
+    var analysisStrength: String { "Line strength" }
+    var analysisGlow: String { "Glow" }
+    var analysisResetEnds: String { "Reset dots and ends" }
+    var analysisDragEnd: String { "Drag a dot or an end to place it" }
+    var analysisNote: String {
+        "The picture carries no text. Drag the dot on the face to move where a line starts, and its end to choose where your label goes."
+    }
+    var analysisMeshNote: String {
+        "In mesh mode the areas only choose which leader lines are drawn."
+    }
+    var analysisNoFace: String {
+        "No face found. The analysis needs a clear, front-facing face."
+    }
+    var analysisExportSection: String { "Face analysis" }
+    var analysisExportMode: String { "Export as" }
+    var analysisMargin: String { "Margin" }
+
+    func analysisRegionTitle(_ region: AnalysisRegion) -> String {
+        switch region {
+        case .forehead: return "Forehead"
+        case .eyeArea: return "Eye area"
+        case .underEye: return "Under-eye"
+        case .brows: return "Brows"
+        case .texture: return "Texture"
+        case .pigmentation: return "Pigmentation"
+        case .jawline: return "Jawline"
+        case .lips: return "Lips"
+        case .nose: return "Nose"
+        case .chin: return "Chin"
+        }
+    }
+
+    func analysisExportTitle(_ mode: AnalysisExportMode) -> String {
+        switch mode {
+        case .onPhoto: return "On the photo"
+        case .poster: return "Poster with margin"
+        case .overlayOnly: return "Lines only (PNG)"
+        }
+    }
+
+    func analysisTintTitle(_ tint: AnalysisTint) -> String {
+        switch tint {
+        case .chalk: return "Chalk"
+        case .lime: return "Lime"
+        case .sky: return "Sky"
+        case .ember: return "Ember"
+        case .ink: return "Ink"
         }
     }
 
@@ -324,7 +388,7 @@ class L10n {
     var zoomIn: String { "Zoom in (⌘+)" }
     var fitToWindow: String { "Fit to window (⌘0 or double-click)" }
     var canvasHelp: String {
-        "Drag to pan • pinch or ⌘-scroll to zoom • double-click for 100%"
+        "Drag to pan • pinch or ⌘-scroll to zoom • double-click for 100% • hold Space for the original"
     }
     var before: String { "Before" }
     var after: String { "After" }
@@ -332,6 +396,9 @@ class L10n {
     // Export sheet
     var format: String { "Format" }
     var quality: String { "Quality" }
+    var exportLongEdge: String { "Long edge" }
+    var exportOriginal: String { "Original" }
+    func exportSize(_ info: String) -> String { "Output: \(info)" }
     func originalSize(_ info: String) -> String { "Original size: \(info)" }
     func suggestedName(_ name: String) -> String { "Suggested name: \(name)" }
     var cancel: String { "Cancel" }
@@ -451,7 +518,10 @@ class L10n {
          ("⌘R", "Reset all adjustments"),
          ("⌘Z / ⇧⌘Z", "Undo / Redo"),
          ("⌘,", "Settings"),
-         ("⌘+ / ⌘− / ⌘0", "Zoom in / out / fit")]
+         ("⌘+ / ⌘− / ⌘0", "Zoom in / out / fit"),
+         ("1–0", "Pick a tool"),
+         ("[ / ]", "Healing brush size"),
+         ("Space", "Hold to see the original")]
     }
 
     // MARK: - Recent files and recovery
@@ -528,6 +598,7 @@ class L10n {
         case .body: return "Body"
         case .background: return "Background"
         case .art: return artTitle
+        case .analysis: return analysisTitle
         }
     }
 
@@ -544,6 +615,7 @@ class L10n {
         case .body: return "Smooth, tone and slim the figure"
         case .background: return "Blur and grade what is behind the subject"
         case .art: return artSubtitle
+        case .analysis: return analysisSubtitle
         }
     }
 
@@ -559,6 +631,7 @@ class L10n {
         case .body: return "Body"
         case .background: return "Background"
         case .art: return artTitle
+        case .analysis: return analysisTitle
         }
     }
 
@@ -733,6 +806,7 @@ class L10n {
     var closeButton: String { "Close" }
     var healingBrush: String { "Healing Brush" }
     var brushSize: String { "Size" }
+    var brushShortcutHint: String { "Tip: [ and ] change the brush size" }
     var stamps: String { "Stamps" }
     var clearStamps: String { "Clear Stamps" }
     var cropTool: String { "Crop" }

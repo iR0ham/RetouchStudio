@@ -108,6 +108,8 @@ enum SelfCheck {
             passed = checkRealFace(path: facePath, outDirectory: outDirectory) && passed
             print("-- auto retouch affects only the face --")
             passed = checkAutoRetouchIsFaceLocal(path: facePath) && passed
+            print("-- analysis overlay follows weight, ink and moved dots --")
+            passed = checkAnalysisOverlay(path: facePath, outDirectory: outDirectory) && passed
         }
         return passed
     }
@@ -1071,6 +1073,142 @@ enum SelfCheck {
         return faceChanged && backgroundIntact
     }
 
+    // MARK: - تحلیل چهره
+
+    /// The overlay's controls must reach the drawing, not just the panel: a
+    /// heavier weight lays down more ink, the chosen tint colours it, and a
+    /// moved face dot starts its leader from the new place. The same render
+    /// feeds the preview and every export, so this also covers the
+    /// transparency the lines-only PNG depends on.
+    private static func checkAnalysisOverlay(path: String, outDirectory: String) -> Bool {
+        guard let result = ImageProcessor.shared.load(from: URL(fileURLWithPath: path),
+                                                      previewMaxDimension: 1400),
+              !result.faces.isEmpty else {
+            print("  ✗ could not load a face for the overlay check")
+            return false
+        }
+        let faces = result.faces
+        let size = result.sourcePreview.extent.size
+
+        func render(_ settings: AnalysisSettings) -> CGImage? {
+            AnalysisRenderer.render(size: size, faces: faces, settings: settings)
+        }
+
+        func coverage(_ image: CGImage) -> Double {
+            guard let data = image.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return -1 }
+            let bpp = max(1, image.bitsPerPixel / 8)
+            let count = CFDataGetLength(data)
+            var inked = 0, total = 0
+            var y = 0
+            while y < image.height {
+                var x = 0
+                while x < image.width {
+                    let index = y * image.bytesPerRow + x * bpp
+                    if index + 3 < count, p[index + 3] > 24 { inked += 1 }
+                    total += 1
+                    x += 2
+                }
+                y += 2
+            }
+            return total > 0 ? Double(inked) / Double(total) : -1
+        }
+
+        var base = AnalysisSettings()
+        base.isEnabled = true
+        base.regions = [.lips, .jawline]
+        base.glow = false
+
+        guard let lines = render(base) else {
+            print("  ✗ could not render the overlay")
+            return false
+        }
+        let lineCover = coverage(lines)
+        let mostlyClear = lineCover > 0.0005 && lineCover < 0.30
+        print("  \(mostlyClear ? "✓" : "✗") lines on transparency, canvas mostly empty: "
+            + "\(String(format: "%.2f", lineCover * 100))% inked (expect 0.05–30%)")
+
+        var heavy = base
+        heavy.lineWeight = 240
+        let heavyCover = render(heavy).map(coverage) ?? -1
+        let thicker = heavyCover > lineCover * 1.25
+        print("  \(thicker ? "✓" : "✗") weight 240 draws more than 100: "
+            + "\(String(format: "%.2f", heavyCover * 100))% vs \(String(format: "%.2f", lineCover * 100))%")
+
+        var mesh = base
+        mesh.showsMesh = true
+        let meshCover = render(mesh).map(coverage) ?? -1
+        let meshed = meshCover > lineCover
+        print("  \(meshed ? "✓" : "✗") method style draws the mesh: "
+            + "\(String(format: "%.2f", meshCover * 100))% vs \(String(format: "%.2f", lineCover * 100))%")
+
+        var warm = base
+        warm.tint = .ember
+        var tinted = true
+        if let image = render(warm), let warmRGB = warmestPixel(image) {
+            tinted = warmRGB.r > warmRGB.b + 60
+            print("  \(tinted ? "✓" : "✗") ember ink is warm: "
+                + "rgb(\(warmRGB.r), \(warmRGB.g), \(warmRGB.b)) at the densest line")
+        } else {
+            tinted = false
+            print("  ✗ could not read a tinted line")
+        }
+
+        // A point the automatic layout leaves empty, so ink appearing there is
+        // the moved dot and nothing else.
+        let box = faces[0].boundingBox
+        let candidates = [CGPoint(x: box.minX * 0.35, y: box.maxY + (1 - box.maxY) * 0.5),
+                          CGPoint(x: box.minX * 0.35, y: box.minY * 0.5),
+                          CGPoint(x: 1 - (1 - box.maxX) * 0.35, y: box.minY * 0.5)]
+        guard let free = candidates.first(where: { (alpha(lines, normalized: $0) ?? 255) < 8 }) else {
+            print("  ✗ no empty spot to move a dot to")
+            return false
+        }
+        var moved = base
+        moved.setAnchor(free, for: .lips)
+        let movedInk = render(moved).flatMap { alpha($0, normalized: free) } ?? 0
+        let dotMoved = movedInk > 40
+        print("  \(dotMoved ? "✓" : "✗") a dragged face dot draws at its new spot: "
+            + "alpha \(movedInk) at (\(String(format: "%.2f", free.x)), \(String(format: "%.2f", free.y))) "
+            + "(empty before: \(alpha(lines, normalized: free) ?? -1))")
+
+        // The lines-only export writes the same render as a PNG.
+        let out = URL(fileURLWithPath: outDirectory)
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let wrote = ImageProcessor.shared.write(CIImage(cgImage: lines),
+                                                to: out.appendingPathComponent("selftest-analysis-lines.png"),
+                                                format: .png, quality: 1)
+        print("  \(wrote ? "✓" : "✗") lines-only PNG written: selftest-analysis-lines.png")
+
+        return mostlyClear && thicker && meshed && tinted && dotMoved && wrote
+    }
+
+    /// The most opaque pixel's colour, which on a line is its ink rather than
+    /// the antialiased edge.
+    private static func warmestPixel(_ image: CGImage) -> (r: Int, g: Int, b: Int)? {
+        guard let data = image.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return nil }
+        let bpp = max(1, image.bitsPerPixel / 8)
+        let count = CFDataGetLength(data)
+        var best: (Int, Int, Int)?
+        var bestAlpha = 0
+        var y = 0
+        while y < image.height {
+            var x = 0
+            while x < image.width {
+                let index = y * image.bytesPerRow + x * bpp
+                if index + 3 < count {
+                    let a = Int(p[index + 3])
+                    if a > bestAlpha {
+                        bestAlpha = a
+                        best = (Int(p[index]), Int(p[index + 1]), Int(p[index + 2]))
+                    }
+                }
+                x += 2
+            }
+            y += 2
+        }
+        return best
+    }
+
     // MARK: - ۶) قرارداد ماسک: خاکستریِ کاملاً مات
 
     /// Every mask must be OPAQUE GRAYSCALE: alpha is always 1 and the gray level
@@ -1641,7 +1779,18 @@ enum SelfCheck {
         let wroteOK = wrote
         print("  \(wroteOK ? "✓" : "✗") files written: png=\(pngDepth)-bit tiff=\(tiffDepth)-bit jpeg=\(jpegDepth)-bit (expect 16 / 16 / 8)")
         print("  \(metadataOK ? "✓" : "✗") metadata: dpi=\(Int(dpi)) orientation=\(orientation) artist=\(artist.isEmpty ? "missing" : artist)")
-        return wroteOK && depthOK && metadataOK
+
+        // A long-edge limit downscales with Lanczos and never enlarges.
+        let resizedURL = directory.appendingPathComponent("selftest-export-resized.png")
+        let resizedWrote = processor.write(ci, to: resizedURL, format: .png, quality: 1, maxDimension: 48)
+        let resizedPixels: (Int, Int) = {
+            guard let source = CGImageSourceCreateWithURL(resizedURL as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return (0, 0) }
+            return (image.width, image.height)
+        }()
+        let resizeOK = resizedWrote && resizedPixels.0 == 48 && resizedPixels.1 == 48
+        print("  \(resizeOK ? "✓" : "✗") long-edge export: \(size)×\(size) → \(resizedPixels.0)×\(resizedPixels.1) (expect 48×48)")
+        return wroteOK && depthOK && metadataOK && resizeOK
     }
 
     // MARK: - ۱۳) تاریخچه‌ی واگرد
@@ -1784,6 +1933,7 @@ enum SelfCheck {
                                      adjustments: adjustments,
                                      exportFormat: "jpeg",
                                      exportQuality: 0.9,
+                                     exportLongEdge: 2048,
                                      autoRetouchStrength: 55,
                                      autoColorStrength: 65,
                                      crop: crop,
@@ -1798,6 +1948,7 @@ enum SelfCheck {
             && decoded.healSpots == spots
             && decoded.stickers == stickers
             && decoded.autoColorStrength == 65
+            && decoded.exportLongEdge == 2048
 
         // Projects written before crop existed have no `crop` key at all.
         var legacyObject = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -3318,6 +3469,22 @@ enum SelfCheck {
         print("  \(cropOK ? "✓" : "✗") crop mapping: centre \(fmtPoint(restored)), "
             + "size \(String(format: "%.2f", workingSize)) → \(String(format: "%.2f", restoreSize))")
         passed = cropOK && passed
+
+        // The photo's pixel aspect decides how many pixels a normalized crop
+        // spans, so sizes must round-trip for any aspect and any crop.
+        var aspectOK = true
+        let crops: [CGRect] = [CGRect(x: 0, y: 0, width: 1, height: 1),
+                               CGRect(x: 0.1, y: 0.2, width: 0.5, height: 0.8),
+                               CGRect(x: 0.3, y: 0.1, width: 0.7, height: 0.4)]
+        for aspect in [0.6, 1.0, 1.5, 2.0] {
+            for rect in crops {
+                let mapped = ArtGeometry.workingSize(sticker.size, crop: rect, aspect: CGFloat(aspect))
+                let back = ArtGeometry.originalSize(mapped, crop: rect, aspect: CGFloat(aspect))
+                if abs(back - sticker.size) > 0.0001 { aspectOK = false }
+            }
+        }
+        print("  \(aspectOK ? "✓" : "✗") sticker size survives every crop aspect")
+        passed = aspectOK && passed
 
         // Stickers are part of the project: they must decode unchanged.
         let encoded = try? JSONEncoder().encode([sticker])

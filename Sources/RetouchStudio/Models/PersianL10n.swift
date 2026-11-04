@@ -28,7 +28,7 @@ final class PersianL10n: L10n {
     override var openHelp: String { "باز کردن یک عکس (⌘O)" }
     override var exportHelp: String { "ذخیرهٔ تصویر رتوش‌شده (⌘E)" }
     override var resetHelp: String { "بازنشانی همهٔ تنظیمات (⌘R)" }
-    override var compareHelp: String { "نمایش مقایسهٔ قبل و بعد" }
+    override var compareHelp: String { "نمایش مقایسهٔ قبل و بعد (Space را نگه دار تا اصل را ببینی)" }
     override var faceBoxHelp: String { "نمایش کادر و نواحی تشخیص‌داده‌شدهٔ چهره" }
 
     // MARK: - Sections
@@ -299,9 +299,12 @@ final class PersianL10n: L10n {
     override var artSize: String { "اندازه" }
     override var artRotation: String { "چرخش" }
     override var artDelete: String { "حذف استیکر" }
+    override var artDuplicate: String { "تکثیر" }
     override var artClear: String { "پاک کردن همهٔ استیکرها" }
+    override var artDragResize: String { "برای تغییر اندازه بکش" }
+    override var artDragRotate: String { "برای چرخاندن بکش" }
     override var artNote: String {
-        "برای گذاشتن استیکر روی عکس کلیک کن. برای انتخاب، روی یک استیکر کلیک کن و بعد آن را بکش."
+        "برای گذاشتن استیکر روی عکس کلیک کن. برای انتخاب، روی یک استیکر کلیک کن؛ بعد آن را بکش یا با دسته‌هایش اندازه و چرخشش را عوض کن."
     }
     override var stickerRemoved: String { "استیکر برداشته شد." }
     override var stickersCleared: String { "استیکرها پاک شدند." }
@@ -316,6 +319,68 @@ final class PersianL10n: L10n {
         case .flower: return "گل"
         case .butterfly: return "پروانه"
         case .lightning: return "آذرخش"
+        }
+    }
+
+    // MARK: - Face analysis
+
+    override var analysisTitle: String { "آنالیز چهره" }
+    override var analysisSubtitle: String { "نقاط، شکل‌ها و خط‌های راهنما — بدون متن" }
+    override var analysisEnable: String { "نمایش لایهٔ آنالیز" }
+    override var analysisStyle: String { "سبک" }
+    override var analysisStyleOutline: String { "شکل‌های خط‌چین" }
+    override var analysisStyleMesh: String { "مِش صورت" }
+    override var analysisFaceOutline: String { "خط دور صورت" }
+    override var analysisAreas: String { "نواحی" }
+    override var analysisInk: String { "رنگ خط" }
+    override var analysisWeight: String { "ضخامت خط" }
+    override var analysisStrength: String { "شدت خط" }
+    override var analysisGlow: String { "درخشش" }
+    override var analysisResetEnds: String { "بازنشانی نقطه‌ها" }
+    override var analysisDragEnd: String { "نقطه یا سرِ خط را بکش تا جایش را انتخاب کنی" }
+    override var analysisNote: String {
+        "عکس هیچ متنی ندارد. نقطهٔ روی صورت را بکش تا شروع خط جابه‌جا شود، و سرِ خط را بکش تا جای برچسب را انتخاب کنی."
+    }
+    override var analysisMeshNote: String {
+        "در حالت مِش، نواحی فقط تعیین می‌کنند کدام خط‌های راهنما کشیده شوند."
+    }
+    override var analysisNoFace: String {
+        "چهره‌ای پیدا نشد. آنالیز به یک چهرهٔ واضح و رو به دوربین نیاز دارد."
+    }
+    override var analysisExportSection: String { "آنالیز چهره" }
+    override var analysisExportMode: String { "خروجی" }
+    override var analysisMargin: String { "حاشیه" }
+
+    override func analysisRegionTitle(_ region: AnalysisRegion) -> String {
+        switch region {
+        case .forehead: return "پیشانی"
+        case .eyeArea: return "دور چشم"
+        case .underEye: return "زیر چشم"
+        case .brows: return "ابرو"
+        case .texture: return "بافت پوست"
+        case .pigmentation: return "لک و تیرگی"
+        case .jawline: return "خط فک"
+        case .lips: return "لب"
+        case .nose: return "بینی"
+        case .chin: return "چانه"
+        }
+    }
+
+    override func analysisExportTitle(_ mode: AnalysisExportMode) -> String {
+        switch mode {
+        case .onPhoto: return "روی عکس"
+        case .poster: return "پوستر با حاشیه"
+        case .overlayOnly: return "فقط خط‌ها (PNG)"
+        }
+    }
+
+    override func analysisTintTitle(_ tint: AnalysisTint) -> String {
+        switch tint {
+        case .chalk: return "سفید"
+        case .lime: return "لیمویی"
+        case .sky: return "آبی آسمانی"
+        case .ember: return "کهربایی"
+        case .ink: return "مشکی"
         }
     }
 
@@ -339,7 +404,7 @@ final class PersianL10n: L10n {
     override var zoomIn: String { "بزرگ‌نمایی (⌘+)" }
     override var fitToWindow: String { "اندازهٔ متناسب با پنجره (⌘0 یا دوبار کلیک)" }
     override var canvasHelp: String {
-        "برای جابه‌جایی بکش • با دو انگشت یا ⌘-اسکرول زوم کن • دوبار کلیک برای ۱۰۰٪"
+        "برای جابه‌جایی بکش • با دو انگشت یا ⌘-اسکرول زوم کن • دوبار کلیک برای ۱۰۰٪ • Space را نگه دار تا اصل را ببینی"
     }
     override var before: String { "قبل" }
     override var after: String { "بعد" }
@@ -348,6 +413,9 @@ final class PersianL10n: L10n {
 
     override var format: String { "قالب" }
     override var quality: String { "کیفیت" }
+    override var exportLongEdge: String { "ضلع بلند" }
+    override var exportOriginal: String { "اصلی" }
+    override func exportSize(_ info: String) -> String { "خروجی: \(info)" }
     override func originalSize(_ info: String) -> String { "اندازهٔ اصلی: \(info)" }
     override func suggestedName(_ name: String) -> String { "نام پیشنهادی: \(name)" }
     override var cancel: String { "انصراف" }
@@ -466,7 +534,10 @@ final class PersianL10n: L10n {
          ("⌘R", "بازنشانی همهٔ تنظیمات"),
          ("⌘Z / ⇧⌘Z", "واگرد / ازنو"),
          ("⌘,", "تنظیمات"),
-         ("⌘+ / ⌘− / ⌘0", "بزرگ‌نمایی / کوچک‌نمایی / برازش")]
+         ("⌘+ / ⌘− / ⌘0", "بزرگ‌نمایی / کوچک‌نمایی / برازش"),
+         ("۱–۰", "انتخاب ابزار"),
+         ("[ / ]", "اندازهٔ قلم‌موی ترمیم"),
+         ("Space", "نگه داشتن برای دیدن اصل")]
     }
 
     // MARK: - Recent files and recovery
@@ -497,6 +568,7 @@ final class PersianL10n: L10n {
         case .body: return "بدن"
         case .background: return "پس‌زمینه"
         case .art: return artTitle
+        case .analysis: return analysisTitle
         }
     }
 
@@ -513,6 +585,7 @@ final class PersianL10n: L10n {
         case .body: return "هموارسازی، رنگ و لاغرتر کردن"
         case .background: return "محو و رنگ‌بندی آنچه پشت سوژه است"
         case .art: return artSubtitle
+        case .analysis: return analysisSubtitle
         }
     }
 
@@ -528,6 +601,7 @@ final class PersianL10n: L10n {
         case .body: return "بدن"
         case .background: return "پس‌زمینه"
         case .art: return artTitle
+        case .analysis: return analysisTitle
         }
     }
 
@@ -702,6 +776,7 @@ final class PersianL10n: L10n {
     override var closeButton: String { "بستن" }
     override var healingBrush: String { "قلم‌موی ترمیم" }
     override var brushSize: String { "اندازه" }
+    override var brushShortcutHint: String { "نکته: با [ و ] اندازهٔ قلم را تغییر بده" }
     override var stamps: String { "مهرها" }
     override var clearStamps: String { "پاک کردن مهرها" }
     override var cropTool: String { "برش" }

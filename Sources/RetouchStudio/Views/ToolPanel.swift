@@ -219,6 +219,7 @@ private struct HealCard: View {
                         .animation(Motion.snappy, value: model.healBrushPixels)
                 }
                 BipolarSlider(value: $model.healBrushPercent, range: 0.4...6, step: 0.2)
+                    .help(model.s.brushShortcutHint)
             }
 
             HStack {

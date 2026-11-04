@@ -7,6 +7,7 @@ import SwiftUI
 struct TopBar: View {
     @ObservedObject var model: EditorModel
     @Namespace private var pill
+    @Environment(\.layoutDirection) private var direction
 
     var body: some View {
         HStack(spacing: 10) {
@@ -17,10 +18,12 @@ struct TopBar: View {
 
             documentLabel
 
-            barButton("arrow.uturn.backward",
+            // In a right-to-left shell the past sits on the right, so the two
+            // arrows swap their glyphs instead of being flipped as bitmaps.
+            barButton(direction == .rightToLeft ? "arrow.uturn.forward" : "arrow.uturn.backward",
                       help: model.s.undoHelp,
                       enabled: model.canUndo) { model.undo() }
-            barButton("arrow.uturn.forward",
+            barButton(direction == .rightToLeft ? "arrow.uturn.backward" : "arrow.uturn.forward",
                       help: model.s.redoHelp,
                       enabled: model.canRedo) { model.redo() }
 
@@ -72,8 +75,9 @@ struct TopBar: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle(dip: 0.93))
-        .help(mode.title)
+        .help(mode.shortcutKey.map { "\(mode.title)  ·  \($0)" } ?? mode.title)
         .accessibilityLabel(mode.title)
+        .accessibilityHint(mode.shortcutKey.map { $0 } ?? "")
         .accessibilityAddTraits(active ? .isSelected : [])
     }
 

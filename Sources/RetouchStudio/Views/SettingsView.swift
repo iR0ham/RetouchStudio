@@ -23,6 +23,7 @@ struct SettingsView: View {
         .background(Theme.background)
         .background(SettingsWindowTitle(title: model.s.settingsWindowTitle))
         .preferredColorScheme(.dark)
+        .environment(\.layoutDirection, model.language.layoutDirection)
     }
 
     // MARK: - Language
@@ -128,6 +129,7 @@ struct SettingsView: View {
             row(model.s.settingsBrush,
                 detail: "\(Digits.num(model.healBrushPixels)) px") {
                 BipolarSlider(value: $model.healBrushPercent, range: 0.4...6, step: 0.2)
+                    .help(model.s.brushShortcutHint)
             }
 
             HStack(spacing: 12) {

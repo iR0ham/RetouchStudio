@@ -51,6 +51,27 @@ struct CompareCanvas: View {
             events.onMagnify = { magnification, point in
                 model.setZoom(model.zoom * Double(1 + magnification), anchor: point)
             }
+            events.onKeyDown = { key in
+                guard model.hasImage else { return false }
+                if key == " " {
+                    model.isPeekingOriginal = true
+                    return true
+                }
+                if model.toolMode == .heal, key == "[" {
+                    model.nudgeHealBrush(by: -0.2)
+                    return true
+                }
+                if model.toolMode == .heal, key == "]" {
+                    model.nudgeHealBrush(by: 0.2)
+                    return true
+                }
+                return model.selectTool(shortcut: key)
+            }
+            events.onKeyUp = { key in
+                if key == " " {
+                    model.endPeek()
+                }
+            }
             events.start()
         }
         .onDisappear { events.stop() }
@@ -165,6 +186,24 @@ struct CompareCanvas: View {
                         .position(center)
                 }
 
+                // The analysis lines sit on the finished photo, at the same
+                // coordinates the export uses. While Space shows the original
+                // they step aside so the peek stays untouched.
+                if !model.isPeekingOriginal, let overlay = model.analysisOverlay {
+                    Image(decorative: overlay, scale: 1)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: displayed.width, height: displayed.height)
+                        .clipShape(RoundedRectangle(cornerRadius: sheetRadius, style: .continuous))
+                        .position(center)
+                        .allowsHitTesting(false)
+                }
+
+                if model.toolMode == .analysis && !model.isPeekingOriginal {
+                    AnalysisOverlay(model: model, displayed: displayed)
+                        .position(center)
+                }
+
                 if model.compareEnabled && !model.toolOwnsCanvas {
                     Image(nsImage: original)
                         .resizable()
@@ -209,7 +248,33 @@ struct CompareCanvas: View {
                         .position(center)
                         .allowsHitTesting(false)
                 }
+
+                // The held-Space peek covers every overlay as well: the point is
+                // to judge the edit against the photo as it arrived.
+                if model.isPeekingOriginal {
+                    Image(nsImage: original)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: displayed.width, height: displayed.height)
+                        .clipShape(RoundedRectangle(cornerRadius: sheetRadius, style: .continuous))
+                        .position(center)
+                        .allowsHitTesting(false)
+
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            compareBadge(model.s.before, highlighted: false)
+                            Spacer(minLength: 0)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(10)
+                    .allowsHitTesting(false)
+                }
             }
+            // The photo plane is not a sentence: masks, handles, healing spots
+            // and the before/after split must keep their own left-to-right
+            // geometry even when the shell is mirrored for Persian.
+            .environment(\.layoutDirection, .leftToRight)
             .frame(width: canvas.width, height: canvas.height)
             .coordinateSpace(name: canvasSpace)
             .contentShape(Rectangle())

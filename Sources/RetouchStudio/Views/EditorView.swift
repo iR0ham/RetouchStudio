@@ -22,11 +22,14 @@ struct EditorView: View {
         .background(Theme.background)
         .tint(Theme.accent)
         .preferredColorScheme(.dark)
+        .environment(\.layoutDirection, model.language.layoutDirection)
         .sheet(isPresented: $model.showExportSheet) {
             ExportSheet(model: model)
+                .environment(\.layoutDirection, model.language.layoutDirection)
         }
         .sheet(isPresented: $model.showSmartSheet) {
             SmartAnalyzeSheet(model: model)
+                .environment(\.layoutDirection, model.language.layoutDirection)
         }
         .onChange(of: model.adjustments) { _, _ in
             model.schedulePreview()
@@ -40,6 +43,10 @@ struct EditorView: View {
             for: NSApplication.didBecomeActiveNotification)) { _ in
             model.noteActivation()
         }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification)) { _ in
+            model.endPeek()
+        }
         .onAppear {
             model.refreshDefaultStatus()
         }
@@ -50,6 +57,9 @@ struct EditorView: View {
 
 struct ExportSheet: View {
     @ObservedObject var model: EditorModel
+
+    /// 0 keeps the photo's own size; the rest downscale the longest edge.
+    private static let longEdgeChoices: [Int] = [0, 4096, 2048, 1080]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -69,6 +79,8 @@ struct ExportSheet: View {
                     .foregroundStyle(Theme.faint)
                 formatPicker
             }
+            .opacity(linesOnly ? 0.4 : 1)
+            .disabled(linesOnly)
 
             if model.exportFormat.supportsQuality {
                 VStack(alignment: .leading, spacing: 2) {
@@ -86,12 +98,55 @@ struct ExportSheet: View {
                     }
                     BipolarSlider(value: $model.exportQuality, range: 0.4...1.0, step: 0.01)
                 }
+                .opacity(linesOnly ? 0.4 : 1)
+                .disabled(linesOnly)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(model.s.exportLongEdge.uppercased())
+                    .font(Theme.Font.section)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.faint)
+                HStack(spacing: 2) {
+                    ForEach(Self.longEdgeChoices, id: \.self) { edge in
+                        let active = model.exportLongEdge == edge
+                        Button {
+                            model.exportLongEdge = edge
+                        } label: {
+                            Text(edge == 0 ? model.s.exportOriginal : Digits.num(edge))
+                                .font(Theme.Font.face(size: 11.5, weight: active ? .semibold : .regular))
+                                .foregroundStyle(active ? Theme.accentInk : Theme.muted)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 28)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(active ? Theme.accent : Color.clear)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PressableButtonStyle(dip: 0.96))
+                    }
+                }
+                .padding(3)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(Theme.background)
+                )
+            }
+
+            if model.analysis.isEnabled {
+                analysisSection
             }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.s.originalSize(model.imageInfo))
                     .font(Theme.Font.caption)
                     .foregroundStyle(Theme.muted)
+                if model.exportLongEdge > 0, model.exportPixelText != model.imageInfo {
+                    Text(model.s.exportSize(model.exportPixelText))
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.muted)
+                }
                 Text(model.s.suggestedName(model.suggestedFileName()))
                     .font(Theme.Font.caption)
                     .foregroundStyle(Theme.faint)
@@ -142,6 +197,61 @@ struct ExportSheet: View {
         .frame(width: 420)
         .background(Theme.panel)
         .preferredColorScheme(.dark)
+    }
+
+    /// Line-only exports are always PNG, so the format and quality controls
+    /// have nothing to say while that mode is chosen.
+    private var linesOnly: Bool {
+        model.analysis.isEnabled && model.analysis.exportMode == .overlayOnly
+    }
+
+    /// The analysis export choices only appear once the overlay is on, so the
+    /// sheet stays as short as it was before the tool existed.
+    private var analysisSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(model.s.analysisExportSection.uppercased())
+                .font(Theme.Font.section)
+                .tracking(0.6)
+                .foregroundStyle(Theme.faint)
+
+            VStack(spacing: 2) {
+                ForEach(AnalysisExportMode.allCases) { mode in
+                    let active = model.analysis.exportMode == mode
+                    Button {
+                        model.analysis.exportMode = mode
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(model.s.analysisExportTitle(mode))
+                                .font(Theme.Font.face(size: 11.5, weight: active ? .semibold : .regular))
+                            Spacer(minLength: 6)
+                            if active {
+                                Icon(name: "checkmark", size: 10, emphasised: true)
+                            }
+                        }
+                        .foregroundStyle(active ? Theme.accentBright : Theme.muted)
+                        .padding(.horizontal, 8)
+                        .frame(height: 28)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(active ? Theme.accentSoft : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle(dip: 0.97))
+                }
+            }
+            .padding(3)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.background)
+            )
+
+            if model.analysis.exportMode == .poster {
+                ParameterRow(title: model.s.analysisMargin,
+                             value: model.analysisMarginBinding,
+                             range: 4...30)
+            }
+        }
     }
 
     private var formatPicker: some View {

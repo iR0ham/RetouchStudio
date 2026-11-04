@@ -88,9 +88,15 @@ struct BipolarSlider: View {
 
     @State private var isHovering = false
     @State private var isDragging = false
+    /// Read from the parent before the internal left-to-right override below.
+    /// A Persian slider fills and moves from the right, the way the rest of the
+    /// mirrored shell reads.
+    @Environment(\.layoutDirection) private var direction
 
     private let knob: CGFloat = 12
     private let track: CGFloat = 4
+
+    private var mirrored: Bool { direction == .rightToLeft }
 
     private var fill: some ShapeStyle {
         LinearGradient(colors: [tint.opacity(0.72), tint],
@@ -103,9 +109,11 @@ struct BipolarSlider: View {
             let usable = max(1, width - knob)
             let span = max(0.0001, range.upperBound - range.lowerBound)
             let fraction = min(1, max(0, (value - range.lowerBound) / span))
-            let knobX = knob / 2 + usable * CGFloat(fraction)
+            let visual = mirrored ? 1 - fraction : fraction
+            let knobX = knob / 2 + usable * CGFloat(visual)
             let zeroX: CGFloat? = (range.lowerBound < 0 && range.upperBound > 0)
-                ? knob / 2 + usable * CGFloat((0 - range.lowerBound) / span)
+                ? knob / 2 + usable * CGFloat(mirrored ? 1 - (0 - range.lowerBound) / span
+                                                      : (0 - range.lowerBound) / span)
                 : nil
             let grown = isHovering || isDragging
 
@@ -145,7 +153,8 @@ struct BipolarSlider: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
                         isDragging = true
-                        let fraction = min(1, max(0, (gesture.location.x - knob / 2) / usable))
+                        let raw = min(1, max(0, (gesture.location.x - knob / 2) / usable))
+                        let fraction = mirrored ? 1 - raw : raw
                         commit(range.lowerBound + Double(fraction) * span, span: span)
                     }
                     .onEnded { _ in isDragging = false }
@@ -158,6 +167,10 @@ struct BipolarSlider: View {
         .accessibilityRepresentation {
             Slider(value: $value, in: range)
         }
+        // The fill and the drag maths are drawn from the left edge. A mirrored
+        // slider would invert the handle without inverting the numbers, so the
+        // numeric track keeps its own direction in Persian too.
+        .environment(\.layoutDirection, .leftToRight)
     }
 
     /// Quantizes to the slider's step and pulls values that land near zero onto

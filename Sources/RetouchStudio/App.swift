@@ -123,6 +123,9 @@ private struct WindowBridge: NSViewRepresentable {
     /// behaviour all have to be set here. The photo name still goes into
     /// `window.title` — that is what the switcher and Mission Control show.
     private static func sync(_ model: EditorModel, to window: NSWindow) {
+        // The keyboard monitor uses this to tell the editor apart from the
+        // Settings and About windows, which share the app's event stream.
+        window.identifier = NSUserInterfaceItemIdentifier("editor")
         window.title = model.windowTitle
         window.isDocumentEdited = model.hasUnsavedChanges
         window.representedURL = model.imageURL
@@ -189,6 +192,7 @@ struct RetouchStudioApp: App {
                     ForEach(AppLanguage.allCases, id: \.self) { language in
                         Button {
                             model.language = language
+                            InfoWindows.shared.relocaliseOpenPanels()
                         } label: {
                             if model.language == language {
                                 Label(language.title, systemImage: "checkmark")

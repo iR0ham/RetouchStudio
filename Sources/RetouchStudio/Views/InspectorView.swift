@@ -74,6 +74,7 @@ struct InspectorView: View {
         case .body: bodyContent
         case .background: backgroundContent
         case .art: artContent
+        case .analysis: analysisContent
         }
     }
 
@@ -616,6 +617,9 @@ struct InspectorView: View {
                 artButton(title: model.s.artDelete, icon: "trash",
                           enabled: model.canDeleteSticker,
                           action: model.deleteSelectedSticker)
+                artButton(title: model.s.artDuplicate, icon: "plus.square.on.square",
+                          enabled: model.canDeleteSticker,
+                          action: model.duplicateSelectedSticker)
                 artButton(title: model.s.artClear, icon: "xmark.circle",
                           enabled: model.hasStickers,
                           action: model.clearStickers)
@@ -648,6 +652,117 @@ struct InspectorView: View {
         .buttonStyle(PressableButtonStyle(dip: 0.94))
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
+        .help(title)
+    }
+
+    // MARK: - Face analysis
+
+    private var analysisContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle(isOn: model.analysisEnabledBinding) {
+                Text(model.s.analysisEnable)
+                    .font(Theme.Font.face(size: 11))
+                    .foregroundStyle(Theme.text)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(!model.analysisReady)
+
+            if !model.analysisReady {
+                SectionNote(text: model.s.analysisNoFace)
+            }
+
+            Group {
+                GroupLabel(text: model.s.analysisStyle)
+                HStack(spacing: 6) {
+                    PresetChip(title: model.s.analysisStyleOutline,
+                               isActive: !model.analysis.showsMesh) {
+                        model.analysis.showsMesh = false
+                    }
+                    PresetChip(title: model.s.analysisStyleMesh,
+                               isActive: model.analysis.showsMesh) {
+                        model.analysis.showsMesh = true
+                    }
+                }
+
+                if !model.analysis.showsMesh {
+                    Toggle(isOn: model.analysisOutlineBinding) {
+                        Text(model.s.analysisFaceOutline)
+                            .font(Theme.Font.face(size: 11))
+                            .foregroundStyle(Theme.text)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+
+                GroupLabel(text: model.s.analysisInk)
+                HStack(spacing: 8) {
+                    ForEach(AnalysisTint.allCases) { tint in
+                        tintSwatch(tint)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                ParameterRow(title: model.s.analysisWeight,
+                             value: model.analysisWeightBinding,
+                             range: 60...240)
+
+                GroupLabel(text: model.s.analysisAreas)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2),
+                          spacing: 6) {
+                    ForEach(AnalysisRegion.allCases) { region in
+                        PresetChip(title: model.s.analysisRegionTitle(region),
+                                   isActive: model.analysis.regions.contains(region)) {
+                            model.analysisRegionBinding(region).wrappedValue.toggle()
+                        }
+                    }
+                }
+
+                ParameterRow(title: model.s.analysisStrength,
+                             value: model.analysisOpacityBinding,
+                             range: 5...100)
+
+                Toggle(isOn: model.analysisGlowBinding) {
+                    Text(model.s.analysisGlow)
+                        .font(Theme.Font.face(size: 11))
+                        .foregroundStyle(Theme.text)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                artButton(title: model.s.analysisResetEnds,
+                          icon: "arrow.counterclockwise",
+                          enabled: model.canResetAnalysisPins,
+                          action: model.resetAnalysisPins)
+
+                SectionNote(text: model.analysis.showsMesh
+                            ? model.s.analysisMeshNote
+                            : model.s.analysisNote)
+            }
+            .disabled(!model.analysis.isEnabled)
+            .opacity(model.analysis.isEnabled ? 1 : 0.45)
+        }
+    }
+
+    /// A swatch is the colour itself; the selected one carries the accent ring
+    /// so the row reads at a glance without labels.
+    private func tintSwatch(_ tint: AnalysisTint) -> some View {
+        let rgb = tint.rgb
+        let active = model.analysis.tint == tint
+        return Button {
+            model.analysisTintBinding.wrappedValue = tint
+        } label: {
+            Circle()
+                .fill(Color(red: rgb.r, green: rgb.g, blue: rgb.b))
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.35), lineWidth: 1))
+                .overlay(Circle().strokeBorder(active ? Theme.accentBright : Color.clear,
+                                               lineWidth: 2))
+                .frame(width: 22, height: 22)
+                .padding(2)
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressableButtonStyle(dip: 0.94))
+        .help(model.s.analysisTintTitle(tint))
     }
 
     private func makeupColor(from color: Color) -> MakeupColor? {
@@ -756,6 +871,9 @@ private struct CurveEditor: View {
                 }
             }
             .frame(height: 92)
+            // A tone curve is a graph: shadows stay on the left in every
+            // language, and the handles are positioned in absolute x.
+            .environment(\.layoutDirection, .leftToRight)
 
             SectionNote(text: model.s.curveNote)
         }
@@ -838,7 +956,11 @@ private struct PanelRow<Content: View>: View {
     @State private var hovering = false
 
     private var isModified: Bool {
-        panel == .art ? model.hasStickers : panel.isModified(model.adjustments)
+        switch panel {
+        case .art: return model.hasStickers
+        case .analysis: return model.analysis != AnalysisSettings()
+        default: return panel.isModified(model.adjustments)
+        }
     }
 
     private var reset: (() -> Void)? {
@@ -857,6 +979,7 @@ private struct PanelRow<Content: View>: View {
         case .body: return { model.resetGroup(.body) }
         case .background: return { model.resetGroup(.background) }
         case .art: return { model.clearStickers() }
+        case .analysis: return { model.analysis = AnalysisSettings() }
         }
     }
 
@@ -951,6 +1074,7 @@ enum Panel: String, CaseIterable, Identifiable {
     case body
     case background
     case art
+    case analysis
 
     var id: String { rawValue }
 
@@ -971,6 +1095,7 @@ enum Panel: String, CaseIterable, Identifiable {
         case .body: return .body
         case .background: return .background
         case .art: return .art
+        case .analysis: return .analysis
         }
     }
 
@@ -993,6 +1118,7 @@ enum Panel: String, CaseIterable, Identifiable {
         case .body: return .body
         case .background: return .background
         case .art: return .art
+        case .analysis: return .analysis
         }
     }
 
@@ -1018,11 +1144,12 @@ enum Panel: String, CaseIterable, Identifiable {
         case .body: return a.bodyOnly != .zero
         case .background: return a.backgroundOnly != .zero
         case .art: return false
+        case .analysis: return false
         }
     }
 }
 
 /// The group a row's reset glyph clears.
 enum PanelReset {
-    case nothing, skin, shape, eyes, makeup, color, looks, body, background, art
+    case nothing, skin, shape, eyes, makeup, color, looks, body, background, art, analysis
 }

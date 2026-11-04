@@ -20,6 +20,9 @@ struct RetouchProject: Codable {
     var adjustments: Adjustments
     var exportFormat: String
     var exportQuality: Double
+    /// Longest exported edge in pixels. `nil` keeps the photo's own size, and
+    /// older projects decode as `nil`.
+    var exportLongEdge: Int? = nil
     var autoRetouchStrength: Double
     /// Strength for Auto Color & Light. Projects written before it existed
     /// decode as `nil` and the editor falls back to applying the analysis
@@ -35,4 +38,8 @@ struct RetouchProject: Codable {
     /// Placed stickers, again in original-photo coordinates. `nil` keeps older
     /// project files and older readers working unchanged.
     var stickers: [Sticker]? = nil
+    /// The face-analysis overlay, including which areas were chosen and where
+    /// the leader ends were dragged. `nil` leaves the tool off, as it was
+    /// before the tool existed.
+    var analysis: AnalysisSettings? = nil
 }

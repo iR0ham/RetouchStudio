@@ -29,6 +29,13 @@ final class InfoWindows {
         }
     }
 
+    /// A language switch in the menu reaches the editor instantly, but the
+    /// panels hold a snapshot, so they have to be rebuilt by hand.
+    func relocaliseOpenPanels() {
+        if windows["about"] != nil { showAbout() }
+        if windows["help"] != nil { showHelp() }
+    }
+
     private func show<V: View>(id: String,
                                title: String,
                                size: NSSize,
@@ -36,7 +43,7 @@ final class InfoWindows {
         if let existing = windows[id] {
             if builtIn[id] != AppLanguage.current {
                 existing.title = title
-                existing.contentView = NSHostingView(rootView: content())
+                existing.contentView = NSHostingView(rootView: localised(content()))
                 builtIn[id] = AppLanguage.current
             }
             existing.makeKeyAndOrderFront(nil)
@@ -58,13 +65,19 @@ final class InfoWindows {
         window.isMovableByWindowBackground = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
-        window.contentView = NSHostingView(rootView: content())
+        window.contentView = NSHostingView(rootView: localised(content()))
         window.setContentSize(size)
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         windows[id] = window
         builtIn[id] = AppLanguage.current
+    }
+
+    /// The informational panels are hosted by AppKit, outside the editor's
+    /// SwiftUI environment, so the direction has to be handed to them here.
+    private func localised<V: View>(_ content: V) -> some View {
+        content.environment(\.layoutDirection, AppLanguage.current.layoutDirection)
     }
 }
 
