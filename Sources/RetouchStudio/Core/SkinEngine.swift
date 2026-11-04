@@ -651,6 +651,12 @@ enum SkinEngine {
             // A gap is much darker than the enamel around it. Ordinary tooth
             // shading that is close to the median stays exactly as it was.
             float gap = smoothstep(0.18, 0.42, ml - l);
+            // The median window can reach across the lip line. A coloured
+            // sample (lip, gum) carries no enamel, so it repairs nothing.
+            float mx = max(m.r, max(m.g, m.b));
+            float mn = min(m.r, min(m.g, m.b));
+            float saturation = mx > 0.0001 ? (mx - mn) / mx : 0.0;
+            gap *= 1.0 - smoothstep(0.32, 0.46, saturation);
             // Keep a trace of the gap's own shadow so the filled tooth still
             // has form instead of reading as a white sticker.
             vec3 filled = mix(m, m * 0.92, gap * 0.35);

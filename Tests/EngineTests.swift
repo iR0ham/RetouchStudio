@@ -847,6 +847,99 @@ if let zeroOut = processor.renderCGImage(zeroTone, scale: 1) {
     check(false, "zero-strength render")
 }
 
+print("\n[14] teeth alignment never reaches the lips")
+
+// A bright enamel band with dark gaps, framed by a red lip and pink gum.
+// The alignment mask used to grow past the enamel and blend enamel-coloured
+// fill into the lip; the fill must stay inside the mouth opening.
+func makeMouthFixture(size: Int, enamel: CGRect) -> CGImage {
+    let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
+                            bytesPerRow: 0, space: sRGB,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let s = CGFloat(size)
+    context.setFillColor(CGColor(srgbRed: 0.82, green: 0.66, blue: 0.58, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: s, height: s))
+    // Lip band, larger than the traced lip outline on purpose.
+    context.setFillColor(CGColor(srgbRed: 0.55, green: 0.15, blue: 0.18, alpha: 1))
+    context.fill(CGRect(x: s * 0.405, y: s * 0.330, width: s * 0.190, height: s * 0.120))
+    // Gum above and below the enamel.
+    context.setFillColor(CGColor(srgbRed: 0.80, green: 0.52, blue: 0.55, alpha: 1))
+    context.fill(CGRect(x: s * 0.41, y: s * (enamel.maxY + 0.002), width: s * 0.18, height: s * 0.020))
+    context.fill(CGRect(x: s * 0.41, y: s * (enamel.minY - 0.022), width: s * 0.18, height: s * 0.020))
+    // Enamel.
+    context.setFillColor(CGColor(srgbRed: 0.80, green: 0.78, blue: 0.72, alpha: 1))
+    context.fill(CGRect(x: s * enamel.minX, y: s * enamel.minY,
+                        width: s * enamel.width, height: s * enamel.height))
+    // Dark gaps between the teeth.
+    context.setFillColor(CGColor(srgbRed: 0.26, green: 0.23, blue: 0.21, alpha: 1))
+    for x in [0.460, 0.491, 0.522] {
+        context.fill(CGRect(x: s * CGFloat(x), y: s * enamel.minY,
+                            width: s * 0.008, height: s * enamel.height))
+    }
+    return context.makeImage()!
+}
+
+func point(_ image: CGImage, _ nx: CGFloat, _ ny: CGFloat) -> (r: Double, g: Double, b: Double)? {
+    guard let data = image.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return nil }
+    let bpp = image.bitsPerPixel / 8
+    let x = min(image.width - 1, max(0, Int(nx * CGFloat(image.width))))
+    let y = min(image.height - 1, max(0, Int((1 - ny) * CGFloat(image.height))))
+    let i = y * image.bytesPerRow + x * bpp
+    return (Double(p[i]), Double(p[i + 1]), Double(p[i + 2]))
+}
+
+let mouthSide = 320
+let mouthFace = face(mouthSide)
+if let enamel = mouthFace.enamelRect {
+    let mouthFixture = makeMouthFixture(size: mouthSide, enamel: enamel)
+    let mouthSource = CIImage(cgImage: mouthFixture)
+    let mouthExtent = CGRect(x: 0, y: 0, width: mouthSide, height: mouthSide)
+    guard let mouthMasks = processor.buildMasks(extent: mouthExtent, faces: [mouthFace],
+                                                image: mouthSource) else {
+        print("could not build the mouth masks"); exit(1)
+    }
+    var align = Adjustments(); align.teethAlign = 80
+    if let before = processor.renderCGImage(mouthSource, scale: 1),
+       let after = processor.renderCGImage(
+            processor.process(mouthSource, adjustments: align, masks: mouthMasks,
+                              faces: [mouthFace]), scale: 1),
+       let gapBefore = point(before, 0.495, enamel.midY),
+       let gapAfter = point(after, 0.495, enamel.midY),
+       let lipBefore = point(before, 0.575, enamel.midY),
+       let lipAfter = point(after, 0.575, enamel.midY),
+       let gumBefore = point(before, 0.50, enamel.maxY + 0.012),
+       let gumAfter = point(after, 0.50, enamel.maxY + 0.012) {
+        let gapLift = displayLuma(gapAfter) - displayLuma(gapBefore)
+        let lipDelta = max(abs(lipAfter.r - lipBefore.r),
+                           max(abs(lipAfter.g - lipBefore.g), abs(lipAfter.b - lipBefore.b)))
+        let gumDelta = max(abs(gumAfter.r - gumBefore.r),
+                           max(abs(gumAfter.g - gumBefore.g), abs(gumAfter.b - gumBefore.b)))
+        check(gapLift > 15,
+              "the gap between teeth still closes",
+              String(format: "+%.1f levels", gapLift))
+        check(lipDelta < 1,
+              "the lip keeps its colour",
+              String(format: "max channel Δ%.2f/255", lipDelta))
+        check(gumDelta < 1,
+              "no halo at the gum line",
+              String(format: "max channel Δ%.2f/255", gumDelta))
+    } else {
+        check(false, "teeth alignment render")
+    }
+} else {
+    check(false, "mouth fixture geometry")
+}
+
+if let teethMask = masks.teeth,
+   let zeroAligned = processor.renderCGImage(
+        SkinEngine.alignTeeth(source, strength: 0, mask: teethMask, radius: 6), scale: 1) {
+    check(meanDelta(baseCG, zeroAligned) < 0.001,
+          "alignment slider 0 is an exact no-op",
+          String(format: "mean delta %.4f", meanDelta(baseCG, zeroAligned)))
+} else {
+    check(false, "zero-strength teeth alignment")
+}
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")

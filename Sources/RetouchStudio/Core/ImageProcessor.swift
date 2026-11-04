@@ -806,9 +806,24 @@ final class ImageProcessor {
         if a.teethAlign > 0, let teethMask = masks?.teeth {
             let gapRadius = (focus ?? faces.first)?.enamelRect.map { $0.height * extent.height * 0.45 }
                 ?? (min(extent.width, extent.height) * 0.006)
-            let searchMask = grown(teethMask,
-                                   by: max(1, gapRadius * 0.8),
-                                   feather: max(1.5, gapRadius * 0.35))
+            let grownMask = grown(teethMask,
+                                  by: max(1, gapRadius * 0.8),
+                                  feather: max(1.5, gapRadius * 0.35))
+            // Growing the gated enamel is what reaches the dark gaps, but it
+            // also reaches the lips, and filling a lip with enamel colour is
+            // what tinted them. The mouth regions stop at the lip line; their
+            // feather lets the fill fade instead of ending on a seam. They are
+            // kept tight because the only pixels the kernel changes are gaps
+            // inside the band, so nothing needs to blend across the lip.
+            let mouthRegions = faces.compactMap { face -> CIImage? in
+                guard face.hasVisibleTeeth,
+                      let rect = face.enamelRect.flatMap({ validRect($0) }) else { return nil }
+                return MaskBuilder.makeMask(extent: extent,
+                                            shapes: [MaskShape(rect: rect, cornerRadius: 0.30)],
+                                            feather: max(1.5, gapRadius * 0.2))
+            }
+            let searchMask = unionAll(mouthRegions).map { MaskBuilder.intersect(grownMask, $0) }
+                ?? grownMask
             image = SkinEngine.alignTeeth(image, strength: a.teethAlign,
                                           mask: searchMask, radius: gapRadius)
         }
