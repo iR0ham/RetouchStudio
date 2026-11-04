@@ -1,7 +1,7 @@
 #!/bin/bash
-# بازسازی Resources/AppIcon.icns — نشانۀ «نور استودیو».
-# کرۀ گرافیتی که مثل بیوتی‌دیش نور گرفته: کلید از بالا-چپ، ریم‌لایت سبز لیمویی
-# روی لبۀ دور، و بازتاب سرد در سایه. رنگ‌ها از Theme.swift گرفته شده‌اند.
+# بازسازی Resources/AppIcon.icns — نشانۀ «لنز استودیو».
+# حلقهٔ گرافیتی لنز با روزنۀ شش‌ضلعیِ روشن (دیافراگم) و رینگ لیمویی روی لبۀ
+# پایین-راست. رنگ‌ها از Theme.swift گرفته شده‌اند.
 #
 #   ./Resources/make-icon.sh
 set -euo pipefail
@@ -34,6 +34,8 @@ guard let ctx = CGContext(data: nil,
 ctx.scaleBy(x: scale, y: scale)
 ctx.translateBy(x: 0, y: unit)
 ctx.scaleBy(x: 1, y: -1)
+ctx.setShouldAntialias(true)
+ctx.interpolationQuality = .high
 
 let art = 824.0
 let margin = (unit - art) / 2
@@ -48,6 +50,7 @@ func c(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
 
 /// Fraction of the art box → canvas coordinate.
 func f(_ v: CGFloat) -> CGFloat { margin + v * art }
+func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: f(x), y: f(y)) }
 
 func rr(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> CGPath {
     let path = CGMutablePath()
@@ -69,16 +72,31 @@ func rr(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) ->
     return path
 }
 
+func circle(_ center: CGPoint, _ r: CGFloat) -> CGPath {
+    CGPath(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2),
+           transform: nil)
+}
+
 func fill(_ path: CGPath, _ color: CGColor) {
     ctx.addPath(path)
     ctx.setFillColor(color)
     ctx.fillPath()
 }
 
-func vgrad(_ clip: CGPath, _ from: CGPoint, _ to: CGPoint, _ stops: [(CGFloat, CGColor)]) {
+func stroke(_ path: CGPath, _ color: CGColor, _ width: CGFloat) {
+    ctx.addPath(path)
+    ctx.setStrokeColor(color)
+    ctx.setLineWidth(width)
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
+    ctx.strokePath()
+}
+
+func vgrad(_ clip: CGPath, _ from: CGPoint, _ to: CGPoint,
+           _ stops: [(CGFloat, CGColor)], evenOdd: Bool = false) {
     ctx.saveGState()
     ctx.addPath(clip)
-    ctx.clip()
+    ctx.clip(using: evenOdd ? .evenOdd : .winding)
     let gradient = CGGradient(colorsSpace: space,
                               colors: stops.map { $0.1 } as CFArray,
                               locations: stops.map { $0.0 })!
@@ -87,7 +105,8 @@ func vgrad(_ clip: CGPath, _ from: CGPoint, _ to: CGPoint, _ stops: [(CGFloat, C
     ctx.restoreGState()
 }
 
-func radial(_ center: CGPoint, _ radius: CGFloat, _ stops: [(CGFloat, CGColor)], _ clip: CGPath) {
+func radial(_ center: CGPoint, _ radius: CGFloat, _ stops: [(CGFloat, CGColor)],
+            _ clip: CGPath) {
     ctx.saveGState()
     ctx.addPath(clip)
     ctx.clip()
@@ -100,6 +119,31 @@ func radial(_ center: CGPoint, _ radius: CGFloat, _ stops: [(CGFloat, CGColor)],
     ctx.restoreGState()
 }
 
+/// Paints only the inside edge of a path, fading from `from` to `to`.
+func rimLight(_ path: CGPath, width: CGFloat, from: CGPoint, to: CGPoint,
+              color: CGColor, alpha: CGFloat = 0.9) {
+    ctx.saveGState()
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+    ctx.addPath(path)
+    ctx.clip()
+    ctx.addPath(path)
+    ctx.setLineWidth(width)
+    ctx.setLineJoin(.round)
+    ctx.setLineCap(.round)
+    ctx.replacePathWithStrokedPath()
+    ctx.clip()
+    ctx.setFillColor(color.copy(alpha: alpha) ?? color)
+    ctx.fill(CGRect(x: 0, y: 0, width: unit, height: unit))
+    ctx.setBlendMode(.destinationIn)
+    let fade = CGGradient(colorsSpace: space,
+                          colors: [c(0xFFFFFF), c(0xFFFFFF, 0.55), c(0xFFFFFF, 0)] as CFArray,
+                          locations: [0, 0.55, 1])!
+    ctx.drawLinearGradient(fade, start: from, end: to, options: [])
+    ctx.setBlendMode(.normal)
+    ctx.endTransparencyLayer()
+    ctx.restoreGState()
+}
+
 // MARK: Graphite plate
 
 let plate = rr(margin, margin, art, art, art * 0.2245)
@@ -108,84 +152,108 @@ ctx.saveGState()
 ctx.addPath(plate)
 ctx.clip()
 let body = CGGradient(colorsSpace: space,
-                      colors: [c(0x424242), c(0x262626), c(0x111111)] as CFArray,
-                      locations: [0, 0.4, 1])!
-ctx.drawLinearGradient(body, start: CGPoint(x: margin, y: margin),
-                       end: CGPoint(x: margin + art, y: margin + art),
+                      colors: [c(0x4A4E55), c(0x2A2D33), c(0x121418)] as CFArray,
+                      locations: [0, 0.45, 1])!
+ctx.drawLinearGradient(body, start: P(0.06, 0.04), end: P(0.94, 0.98),
                        options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
 ctx.restoreGState()
 
-radial(CGPoint(x: f(0.42), y: f(0.14)), art * 0.75,
-       [(0, c(0xFFFFFF, 0.09)), (1, c(0xFFFFFF, 0))], plate)
-vgrad(plate, CGPoint(x: 0, y: f(0.74)), CGPoint(x: 0, y: unit),
-      [(0, c(0x000000, 0)), (1, c(0x000000, 0.24))])
+radial(P(0.36, 0.10), art * 0.85,
+       [(0, c(0xFFFFFF, 0.10)), (1, c(0xFFFFFF, 0))], plate)
+vgrad(plate, P(0, 0.68), P(0, 1.02),
+      [(0, c(0x000000, 0)), (1, c(0x000000, 0.28))])
 ctx.addPath(rr(margin + 1.2, margin + 1.2, art - 2.4, art - 2.4, art * 0.2245 - 1.2))
-ctx.setStrokeColor(c(0xF7F7F7, 0.13))
+ctx.setStrokeColor(c(0xF7F7F7, 0.14))
 ctx.setLineWidth(1.6)
 ctx.strokePath()
 
-// MARK: The dish
+// MARK: The lens
 
-let cx = f(0.5), cy = f(0.5), radius = art * 0.335
-let box = CGRect(x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2)
-let dish = CGPath(ellipseIn: box, transform: nil)
+let center = P(0.5, 0.5)
+let outer = art * 0.345
+let ringWidth = art * 0.054
+let inner = outer - ringWidth
 
+// The lens barrel.
 ctx.saveGState()
-ctx.addPath(plate)
-ctx.clip()
-ctx.setShadow(offset: CGSize(width: 0, height: 32), blur: 56, color: c(0x000000, 0.62))
-fill(dish, c(0x161616))
+ctx.setShadow(offset: CGSize(width: 0, height: 20), blur: 46, color: c(0x000000, 0.60))
+fill(circle(center, outer), c(0x0C0E11))
 ctx.restoreGState()
 
-// Key light from above, falling into the plate.
-vgrad(dish, CGPoint(x: 0, y: cy - radius), CGPoint(x: 0, y: cy + radius),
-      [(0, c(0x9E9E9E)), (0.40, c(0x474747)), (1, c(0x141414))])
-radial(CGPoint(x: f(0.40), y: f(0.33)), art * 0.68,
-       [(0, c(0xC4C4C4)), (0.42, c(0x4A4A4A, 0.5)), (1, c(0x000000, 0))], dish)
-radial(CGPoint(x: f(0.395), y: f(0.325)), art * 0.10,
-       [(0, c(0xFFFFFF, 0.95)), (0.5, c(0xFFFFFF, 0.25)), (1, c(0xFFFFFF, 0))], dish)
+// Glass, cold and deep.
+vgrad(circle(center, inner), P(0.5, 0.22), P(0.5, 0.86),
+      [(0, c(0x1B2C39)), (0.5, c(0x0D141A)), (1, c(0x06090C))])
+radial(CGPoint(x: center.x + inner * 0.12, y: center.y + inner * 0.18),
+       inner * 0.95,
+       [(0, c(0x74D2FF, 0.20)), (0.55, c(0x74D2FF, 0.05)), (1, c(0x000000, 0))],
+       circle(center, inner))
 
-/// A lit crescent: the dish minus the same dish nudged toward the light.
-func crescent(toward offset: CGSize, _ paint: (CGContext) -> Void) {
-    let ring = CGMutablePath()
-    ring.addPath(dish)
-    ring.addPath(CGPath(ellipseIn: box.offsetBy(dx: offset.width, dy: offset.height),
-                        transform: nil))
-    ctx.saveGState()
-    ctx.addPath(plate)
-    ctx.clip()
-    ctx.addPath(ring)
-    ctx.clip(using: .evenOdd)
-    paint(ctx)
-    ctx.restoreGState()
+// Blades, seams and a hexagonal opening: the shape a lens makes.
+let hexRadius = inner * 0.60
+func around(_ radius: CGFloat, _ deg: CGFloat) -> CGPoint {
+    let a = deg * .pi / 180
+    return CGPoint(x: center.x + cos(a) * radius, y: center.y + sin(a) * radius)
 }
-
-// Chartreuse rim on the edge away from the key.
-crescent(toward: CGSize(width: -40, height: -40)) { g in
-    let rim = CGGradient(colorsSpace: space,
-                         colors: [c(0xF5FFC4), c(0xDFF57A, 0.95), c(0xDFF57A, 0)] as CFArray,
-                         locations: [0, 0.55, 1])!
-    g.drawRadialGradient(rim,
-                         startCenter: CGPoint(x: f(0.735), y: f(0.735)), startRadius: 0,
-                         endCenter: CGPoint(x: f(0.735), y: f(0.735)),
-                         endRadius: art * 0.36, options: [])
+let hex = CGMutablePath()
+for i in 0..<6 {
+    let point = around(hexRadius, 30 + CGFloat(i) * 60)
+    if i == 0 { hex.move(to: point) } else { hex.addLine(to: point) }
 }
+hex.closeSubpath()
 
-// Cool bounce back into the shadow side.
-crescent(toward: CGSize(width: 32, height: 32)) { g in
-    let bounce = CGGradient(colorsSpace: space,
-                            colors: [c(0xFFFFFF, 0.16), c(0xFFFFFF, 0)] as CFArray,
-                            locations: [0, 1])!
-    g.drawRadialGradient(bounce,
-                         startCenter: CGPoint(x: f(0.28), y: f(0.72)), startRadius: 0,
-                         endCenter: CGPoint(x: f(0.28), y: f(0.72)),
-                         endRadius: art * 0.22, options: [])
+ctx.saveGState()
+ctx.addPath(circle(center, inner))
+ctx.clip()
+// Blade faces.
+vgrad(circle(center, inner), P(0.28, 0.16), P(0.72, 0.86),
+      [(0, c(0x353B45)), (0.5, c(0x262B33)), (1, c(0x1A1E24))])
+radial(P(0.34, 0.28), inner * 1.1,
+       [(0, c(0xFFFFFF, 0.10)), (1, c(0xFFFFFF, 0))], circle(center, inner))
+radial(P(0.70, 0.70), inner * 0.9,
+       [(0, c(0xDFF57A, 0.12)), (1, c(0xDFF57A, 0))], circle(center, inner))
+
+// The glass in the opening.
+vgrad(hex, P(0.36, 0.28), P(0.64, 0.74),
+      [(0, c(0x2C4A5E)), (0.45, c(0x16262F)), (1, c(0x070B0E))])
+radial(around(0, hexRadius * 0.15), hexRadius * 1.05,
+       [(0, c(0x74D2FF, 0.22)), (0.6, c(0x74D2FF, 0.05)), (1, c(0x000000, 0))], hex)
+stroke(hex, c(0xBFE9FF, 0.16), art * 0.004)
+
+// A seam from every corner, angled like a turning shutter.
+for i in 0..<6 {
+    let corner = around(hexRadius, 30 + CGFloat(i) * 60)
+    let foot = around(inner * 0.995, 30 + CGFloat(i) * 60 + 26)
+    let seam = CGMutablePath()
+    seam.move(to: corner)
+    seam.addLine(to: foot)
+    stroke(seam, c(0x05060A, 0.55), art * 0.012)
+    let lit = CGMutablePath()
+    lit.move(to: CGPoint(x: corner.x, y: corner.y + art * 0.006))
+    lit.addLine(to: foot)
+    stroke(lit, c(0xD7E2EC, 0.10), art * 0.0025)
 }
-
-ctx.addPath(dish)
-ctx.setStrokeColor(c(0xF7F7F7, 0.10))
-ctx.setLineWidth(2)
+// The barrel throws a shadow onto the blades.
+ctx.addPath(circle(center, inner))
+ctx.setStrokeColor(c(0x000000, 0.50))
+ctx.setLineWidth(art * 0.020)
 ctx.strokePath()
+ctx.restoreGState()
+
+// Barrel face, then the chartreuse sweep on its lower right.
+let donut = CGMutablePath()
+donut.addPath(circle(center, outer))
+donut.addPath(circle(center, inner))
+vgrad(donut, P(0.06, 0.02), P(0.96, 1.0),
+      [(0, c(0x5A5F67)), (0.45, c(0x2D3138)), (1, c(0x16181C))], evenOdd: true)
+rimLight(circle(center, outer - art * 0.010), width: art * 0.026,
+         from: P(0.88, 1.02), to: P(0.02, 0.02), color: c(0xDFF57A), alpha: 0.90)
+ctx.saveGState()
+ctx.addPath(donut)
+ctx.clip(using: .evenOdd)
+stroke(circle(center, outer - 1.4), c(0xF7F7F7, 0.18), 2.2)
+// Cold bounce under the opening.
+stroke(circle(center, inner + art * 0.008), c(0xBFE9FF, 0.16), art * 0.006)
+ctx.restoreGState()
 
 // MARK: Write
 
