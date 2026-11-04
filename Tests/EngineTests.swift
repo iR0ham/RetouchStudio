@@ -763,6 +763,90 @@ if let previewMasks = processor.buildMasks(extent: localExtent, faces: [localFac
     check(false, "export-vs-preview render")
 }
 
+print("\n[13] Even Skin Tone keeps luminance and evens chroma")
+
+// Even Skin Tone used to blend the blurred copy over the original, which
+// flattened blotches but also dragged their brightness toward the blur. It now
+// takes only the blurred copy's chroma, so a darker or lighter patch keeps its
+// lightness and only its colour evens out.
+
+func channels(_ image: CGImage, normalized: CGRect) -> [(r: Double, g: Double, b: Double)] {
+    guard let data = image.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return [] }
+    let bpp = image.bitsPerPixel / 8
+    let x0 = max(0, Int(normalized.minX * CGFloat(image.width)))
+    let x1 = min(image.width, Int(normalized.maxX * CGFloat(image.width)))
+    let y0 = max(0, Int((1 - normalized.maxY) * CGFloat(image.height)))
+    let y1 = min(image.height, Int((1 - normalized.minY) * CGFloat(image.height)))
+    var pixels: [(r: Double, g: Double, b: Double)] = []
+    for y in y0..<y1 {
+        for x in x0..<x1 {
+            let i = y * image.bytesPerRow + x * bpp
+            pixels.append((Double(p[i]), Double(p[i + 1]), Double(p[i + 2])))
+        }
+    }
+    return pixels
+}
+
+func displayLuma(_ pixel: (r: Double, g: Double, b: Double)) -> Double {
+    0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b
+}
+
+/// Spatial unevenness of colour across a patch. A uniform patch has a small
+/// variation even when its own colour is strongly saturated; this is what
+/// "uneven tone" means, unlike the per-pixel channel spread which mostly
+/// tracks saturation.
+func chromaVariation(_ pixels: [(r: Double, g: Double, b: Double)]) -> Double {
+    guard !pixels.isEmpty else { return 0 }
+    func deviation(_ values: [Double]) -> Double {
+        let mean = values.reduce(0, +) / Double(values.count)
+        let variance = values.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(values.count)
+        return variance.squareRoot()
+    }
+    return deviation(pixels.map { $0.r - $0.g }) + deviation(pixels.map { $0.b - $0.g })
+}
+
+var est = Adjustments(); est.skinToneEvens = 100
+if let estOut = render(est) {
+    let patch = fRef.leftCheekRect
+    let before = channels(baseCG, normalized: patch)
+    let after = channels(estOut, normalized: patch)
+    let beforeLuma = before.map(displayLuma).reduce(0, +) / Double(max(before.count, 1))
+    let afterLuma = after.map(displayLuma).reduce(0, +) / Double(max(after.count, 1))
+    check(abs(afterLuma - beforeLuma) < 0.5,
+          "the skin patch keeps its mean luminance",
+          String(format: "%.1f → %.1f (Δ %.2f/255)", beforeLuma, afterLuma, afterLuma - beforeLuma))
+
+    let beforeVariation = chromaVariation(before), afterVariation = chromaVariation(after)
+    check(afterVariation < beforeVariation * 0.92,
+          "chroma unevenness drops measurably",
+          String(format: "variation %.2f → %.2f", beforeVariation, afterVariation))
+
+    // Luma is preserved per pixel, so even the mask feather cannot create a
+    // light or dark halo around the face.
+    let boxPixels = channels(baseCG, normalized: fRef.boundingBox)
+    let outPixels = channels(estOut, normalized: fRef.boundingBox)
+    var maxLumaShift = 0.0
+    var clipped = 0
+    for (a, b) in zip(boxPixels, outPixels) {
+        maxLumaShift = max(maxLumaShift, abs(displayLuma(a) - displayLuma(b)))
+        if max(b.r, max(b.g, b.b)) >= 255 { clipped += 1 }
+    }
+    check(maxLumaShift < 1.0,
+          "no luminance step at the mask feather",
+          String(format: "max pixel shift %.2f/255", maxLumaShift))
+    check(clipped == 0, "slider 100 does not clip", "\(clipped) clipped pixels")
+} else {
+    check(false, "Even Skin Tone render")
+}
+
+let zeroTone = SkinEngine.evenSkinTone(source, strength: 0, mask: masks.skin ?? source, scale: 1)
+if let zeroOut = processor.renderCGImage(zeroTone, scale: 1) {
+    check(meanDelta(baseCG, zeroOut) < 0.001,
+          "slider 0 is an exact no-op", String(format: "mean delta %.4f", meanDelta(baseCG, zeroOut)))
+} else {
+    check(false, "zero-strength render")
+}
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")

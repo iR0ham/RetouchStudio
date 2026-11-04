@@ -381,8 +381,9 @@ enum SkinEngine {
         guard amount > 0.001 else { return image }
         let extent = image.extent
 
-        // Blur generously in colour but keep luminance from the original by
-        // blending the blurred *chroma* back over the original luminance.
+        // Blur generously in colour. The kernel below keeps the original
+        // luminance and takes only this copy's chroma, so blotches flatten
+        // while every highlight and shadow stays where it was.
         let blurred = image.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: max(3, 9.0 * scale)])
             .cropped(to: extent)
@@ -394,11 +395,44 @@ enum SkinEngine {
             kCIInputContrastKey: 1 - 0.10 * amount
         ])
 
-        // Mix luminance from the original with colour from the flattened copy:
-        // approximate by blending at a modest strength, which preserves overall
-        // structure while removing colour blotches.
-        return blend(flattened, over: image, mask: mask, strength: amount * 0.6)
+        // A plain blend of the two images moves luminance toward the blurred
+        // copy (blotches become lighter or darker patches). Recombine instead:
+        // original luma, flattened chroma.
+        guard let kernel = evenToneKernel,
+              let chromaSwapped = kernel.apply(extent: extent,
+                                               arguments: [image, flattened]) else {
+            // Fallback: the previous blend, so a renderer without the kernel
+            // still evens tone rather than doing nothing.
+            return blend(flattened, over: image, mask: mask, strength: amount * 0.6)
+        }
+        return blend(chromaSwapped.cropped(to: extent), over: image, mask: mask,
+                     strength: amount * 0.6)
     }
+
+    /// Rebuilds a pixel from `src`'s display-space luminance and `tone`'s
+    /// display-space chroma. Luminance is exact because both luma and the
+    /// chroma offset are linear in RGB; the offset is scaled toward neutral
+    /// when the sum would leave the cube, so bright skin cannot clip.
+    private static let evenToneKernel: CIColorKernel? = {
+        let source = """
+        kernel vec4 evenSkinTone(__sample src, __sample tone)
+        {
+            vec3 s = pow(clamp(src.rgb, 0.0, 1.0), vec3(0.4545));
+            vec3 f = pow(clamp(tone.rgb, 0.0, 1.0), vec3(0.4545));
+            vec3 w = vec3(0.2126, 0.7152, 0.0722);
+            float l = dot(s, w);
+            vec3 chroma = f - vec3(dot(f, w));
+            float k = 1.0;
+            float hi = l + max(chroma.r, max(chroma.g, chroma.b));
+            float lo = l + min(chroma.r, min(chroma.g, chroma.b));
+            if (hi > 1.0) k = min(k, (1.0 - l) / max(hi - l, 0.0001));
+            if (lo < 0.0) k = min(k, l / max(l - lo, 0.0001));
+            vec3 c = vec3(l) + chroma * max(k, 0.0);
+            return vec4(pow(clamp(c, 0.0, 1.0), vec3(2.2)), src.a);
+        }
+        """
+        return CIColorKernel(source: source)
+    }()
 
     /// Lightens the under-eye area without turning it into a flat grey patch.
     ///
