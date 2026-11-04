@@ -193,6 +193,86 @@ struct Adjustments: Equatable, Codable {
 
     var isIdentity: Bool { self == .zero }
 
+    // MARK: - Field sets
+
+    /// Which retouch sliders a patch is allowed to overwrite. A zero in a
+    /// measured field is a real answer ("nothing to correct"); a field that was
+    /// never measured is the owner's and must not be cleared by accident.
+    struct RetouchField: OptionSet {
+        let rawValue: Int
+        init(rawValue: Int) { self.rawValue = rawValue }
+
+        static let smooth = RetouchField(rawValue: 1 << 0)
+        static let blemish = RetouchField(rawValue: 1 << 1)
+        static let wrinkle = RetouchField(rawValue: 1 << 2)
+        static let skinToneEvens = RetouchField(rawValue: 1 << 3)
+        static let darkCircles = RetouchField(rawValue: 1 << 4)
+        static let skinBrighten = RetouchField(rawValue: 1 << 5)
+        static let texturePreserve = RetouchField(rawValue: 1 << 6)
+        static let teethWhiten = RetouchField(rawValue: 1 << 7)
+        static let eyeBrighten = RetouchField(rawValue: 1 << 8)
+        static let eyeSharpen = RetouchField(rawValue: 1 << 9)
+        static let skinFinish = RetouchField(rawValue: 1 << 10)
+        static let shine = RetouchField(rawValue: 1 << 11)
+        static let irisEnhance = RetouchField(rawValue: 1 << 12)
+        static let lashDarken = RetouchField(rawValue: 1 << 13)
+        static let lensTint = RetouchField(rawValue: 1 << 14)
+        static let lensColor = RetouchField(rawValue: 1 << 15)
+        static let teethAlign = RetouchField(rawValue: 1 << 16)
+
+        static let all: RetouchField = [
+            .smooth, .blemish, .wrinkle, .skinToneEvens, .darkCircles,
+            .skinBrighten, .texturePreserve, .teethWhiten, .eyeBrighten,
+            .eyeSharpen, .skinFinish, .shine, .irisEnhance, .lashDarken,
+            .lensTint, .lensColor, .teethAlign,
+        ]
+
+        /// Exactly what `SmartAnalyzer.retouchValues` writes. Keep this next to
+        /// that function's assignments; the coverage test fails if they drift.
+        static let smart: RetouchField = [
+            .smooth, .blemish, .wrinkle, .skinToneEvens, .darkCircles,
+            .skinBrighten, .texturePreserve, .shine, .teethWhiten,
+            .eyeBrighten, .eyeSharpen,
+        ]
+    }
+
+    /// The same contract for global colour and light.
+    struct ColorField: OptionSet {
+        let rawValue: Int
+        init(rawValue: Int) { self.rawValue = rawValue }
+
+        static let exposure = ColorField(rawValue: 1 << 0)
+        static let contrast = ColorField(rawValue: 1 << 1)
+        static let blacks = ColorField(rawValue: 1 << 2)
+        static let whites = ColorField(rawValue: 1 << 3)
+        static let saturation = ColorField(rawValue: 1 << 4)
+        static let vibrance = ColorField(rawValue: 1 << 5)
+        static let warmth = ColorField(rawValue: 1 << 6)
+        static let clarity = ColorField(rawValue: 1 << 7)
+        static let vignette = ColorField(rawValue: 1 << 8)
+        static let splitTone = ColorField(rawValue: 1 << 9)
+        static let curveShadows = ColorField(rawValue: 1 << 10)
+        static let curveMidtones = ColorField(rawValue: 1 << 11)
+        static let curveHighlights = ColorField(rawValue: 1 << 12)
+        static let hslHue = ColorField(rawValue: 1 << 13)
+        static let hslSaturation = ColorField(rawValue: 1 << 14)
+        static let hslLuminance = ColorField(rawValue: 1 << 15)
+
+        static let all: ColorField = [
+            .exposure, .contrast, .blacks, .whites, .saturation, .vibrance,
+            .warmth, .clarity, .vignette, .splitTone, .curveShadows,
+            .curveMidtones, .curveHighlights, .hslHue, .hslSaturation,
+            .hslLuminance,
+        ]
+
+        /// What `AutoAnalyzer.autoColorLight` can assign. Vignette, split tone,
+        /// curves and HSL are taste or never measured, so they stay untouched.
+        static let autoColorLight: ColorField = [
+            .exposure, .contrast, .blacks, .whites, .saturation, .vibrance,
+            .warmth, .clarity,
+        ]
+    }
+
     // MARK: - Group views
 
     /// The retouch half, with geometry and color/light zeroed.
@@ -362,48 +442,50 @@ struct Adjustments: Equatable, Codable {
         return result
     }
 
-    /// Copy with ONLY the color/light fields taken from `patch`.
-    func applyingColorLight(_ patch: Adjustments) -> Adjustments {
+    /// Copy with ONLY the color/light fields in `fields` taken from `patch`.
+    func applyingColorLight(_ patch: Adjustments,
+                            fields: ColorField = .all) -> Adjustments {
         var result = self
-        result.exposure = patch.exposure
-        result.contrast = patch.contrast
-        result.blacks = patch.blacks
-        result.whites = patch.whites
-        result.saturation = patch.saturation
-        result.vibrance = patch.vibrance
-        result.warmth = patch.warmth
-        result.clarity = patch.clarity
-        result.vignette = patch.vignette
-        result.splitTone = patch.splitTone
-        result.curveShadows = patch.curveShadows
-        result.curveMidtones = patch.curveMidtones
-        result.curveHighlights = patch.curveHighlights
-        result.hslHue = patch.hslHue
-        result.hslSaturation = patch.hslSaturation
-        result.hslLuminance = patch.hslLuminance
+        if fields.contains(.exposure) { result.exposure = patch.exposure }
+        if fields.contains(.contrast) { result.contrast = patch.contrast }
+        if fields.contains(.blacks) { result.blacks = patch.blacks }
+        if fields.contains(.whites) { result.whites = patch.whites }
+        if fields.contains(.saturation) { result.saturation = patch.saturation }
+        if fields.contains(.vibrance) { result.vibrance = patch.vibrance }
+        if fields.contains(.warmth) { result.warmth = patch.warmth }
+        if fields.contains(.clarity) { result.clarity = patch.clarity }
+        if fields.contains(.vignette) { result.vignette = patch.vignette }
+        if fields.contains(.splitTone) { result.splitTone = patch.splitTone }
+        if fields.contains(.curveShadows) { result.curveShadows = patch.curveShadows }
+        if fields.contains(.curveMidtones) { result.curveMidtones = patch.curveMidtones }
+        if fields.contains(.curveHighlights) { result.curveHighlights = patch.curveHighlights }
+        if fields.contains(.hslHue) { result.hslHue = patch.hslHue }
+        if fields.contains(.hslSaturation) { result.hslSaturation = patch.hslSaturation }
+        if fields.contains(.hslLuminance) { result.hslLuminance = patch.hslLuminance }
         return result
     }
 
-    /// Copy with ONLY the retouch fields taken from `patch`.
-    func applyingRetouch(_ patch: Adjustments) -> Adjustments {
+    /// Copy with ONLY the retouch fields in `fields` taken from `patch`.
+    func applyingRetouch(_ patch: Adjustments,
+                         fields: RetouchField = .all) -> Adjustments {
         var result = self
-        result.smooth = patch.smooth
-        result.blemish = patch.blemish
-        result.wrinkle = patch.wrinkle
-        result.skinToneEvens = patch.skinToneEvens
-        result.darkCircles = patch.darkCircles
-        result.skinBrighten = patch.skinBrighten
-        result.texturePreserve = patch.texturePreserve
-        result.teethWhiten = patch.teethWhiten
-        result.eyeBrighten = patch.eyeBrighten
-        result.eyeSharpen = patch.eyeSharpen
-        result.skinFinish = patch.skinFinish
-        result.shine = patch.shine
-        result.irisEnhance = patch.irisEnhance
-        result.lashDarken = patch.lashDarken
-        result.lensTint = patch.lensTint
-        result.lensColor = patch.lensColor
-        result.teethAlign = patch.teethAlign
+        if fields.contains(.smooth) { result.smooth = patch.smooth }
+        if fields.contains(.blemish) { result.blemish = patch.blemish }
+        if fields.contains(.wrinkle) { result.wrinkle = patch.wrinkle }
+        if fields.contains(.skinToneEvens) { result.skinToneEvens = patch.skinToneEvens }
+        if fields.contains(.darkCircles) { result.darkCircles = patch.darkCircles }
+        if fields.contains(.skinBrighten) { result.skinBrighten = patch.skinBrighten }
+        if fields.contains(.texturePreserve) { result.texturePreserve = patch.texturePreserve }
+        if fields.contains(.teethWhiten) { result.teethWhiten = patch.teethWhiten }
+        if fields.contains(.eyeBrighten) { result.eyeBrighten = patch.eyeBrighten }
+        if fields.contains(.eyeSharpen) { result.eyeSharpen = patch.eyeSharpen }
+        if fields.contains(.skinFinish) { result.skinFinish = patch.skinFinish }
+        if fields.contains(.shine) { result.shine = patch.shine }
+        if fields.contains(.irisEnhance) { result.irisEnhance = patch.irisEnhance }
+        if fields.contains(.lashDarken) { result.lashDarken = patch.lashDarken }
+        if fields.contains(.lensTint) { result.lensTint = patch.lensTint }
+        if fields.contains(.lensColor) { result.lensColor = patch.lensColor }
+        if fields.contains(.teethAlign) { result.teethAlign = patch.teethAlign }
         return result
     }
 

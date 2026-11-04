@@ -1467,12 +1467,23 @@ final class EditorModel: ObservableObject {
     // MARK: - Adjustments
 
     func resetAll() {
+        guard hasImage else { return }
         commitAdjustments()
         adjustments = .zero
+        if !healSpots.isEmpty { healSpots.removeAll() }
         stickers.removeAll()
         selectedSticker = nil
+        analysis = AnalysisSettings()
         comparePosition = settings.comparePosition
         commitAdjustments()
+    }
+
+    /// True when every group, stamp, sticker and analysis pin matches a new
+    /// document. The Reset All menu item keys off this, not off the sliders
+    /// alone.
+    var isDocumentPristine: Bool {
+        adjustments.isIdentity && healSpots.isEmpty && stickers.isEmpty
+            && analysis == AnalysisSettings()
     }
 
     func apply(_ preset: Preset) {
@@ -1670,10 +1681,11 @@ final class EditorModel: ObservableObject {
         var appliedRetouch = Adjustments()
         if smartApplyRetouch {
             appliedRetouch = report.retouch.scaledRetouch(by: autoRetouchStrength)
-            next = next.applyingRetouch(appliedRetouch)
+            next = next.applyingRetouch(appliedRetouch, fields: .smart)
         }
         if smartApplyColorLight {
-            next = next.applyingColorLight(report.colorLight.scaledColorLight(by: autoColorStrength))
+            let patch = report.colorLight.scaledColorLight(by: autoColorStrength)
+            next = next.applyingColorLight(patch, fields: .autoColorLight)
         }
         adjustments = next
         if smartApplyHealSpots {

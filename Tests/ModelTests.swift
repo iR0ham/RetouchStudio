@@ -114,11 +114,192 @@ func testExportDoesNotSave() async {
           "a failed export leaves the dirty flag unchanged")
 }
 
+// MARK: - P0-2 / H-1
+
+/// Every retouch slider carries a distinct sentinel so a cleared field is
+/// unmistakable in the comparison.
+func sentinelAdjustments() -> Adjustments {
+    var a = Adjustments()
+    a.smooth = 11; a.blemish = 12; a.wrinkle = 13; a.skinToneEvens = 14
+    a.darkCircles = 15; a.skinBrighten = 16; a.texturePreserve = 17
+    a.teethWhiten = 18; a.eyeBrighten = 19; a.eyeSharpen = 20
+    a.skinFinish = 21; a.shine = 22; a.irisEnhance = 23; a.lashDarken = 24
+    a.lensTint = 25; a.teethAlign = 26
+    a.exposure = 31; a.contrast = 32; a.blacks = 33; a.whites = 34
+    a.saturation = 35; a.vibrance = 36; a.warmth = 37; a.clarity = 38
+    a.vignette = 39; a.splitTone = 40
+    a.curveShadows = 41; a.curveMidtones = 42; a.curveHighlights = 43
+    a.hslHue = Array(repeating: 44, count: HSLBand.allCases.count)
+    a.hslSaturation = Array(repeating: 45, count: HSLBand.allCases.count)
+    a.hslLuminance = Array(repeating: 46, count: HSLBand.allCases.count)
+    a.lipTint = 51; a.blush = 52; a.browDefine = 53
+    a.eyeSize = 61; a.noseSize = 62; a.lipSize = 63
+    a.bodySmooth = 71; a.bodySlim = 72
+    a.backgroundBlur = 81; a.backgroundTone = 82
+    a.hairColor = 91; a.hairShine = 92; a.hairVolume = 93
+    a.lookStrength = 95; a.grain = 96
+    return a
+}
+
+func changedRetouchFields(_ before: Adjustments, _ after: Adjustments) -> Adjustments.RetouchField {
+    var fields: Adjustments.RetouchField = []
+    if before.smooth != after.smooth { fields.insert(.smooth) }
+    if before.blemish != after.blemish { fields.insert(.blemish) }
+    if before.wrinkle != after.wrinkle { fields.insert(.wrinkle) }
+    if before.skinToneEvens != after.skinToneEvens { fields.insert(.skinToneEvens) }
+    if before.darkCircles != after.darkCircles { fields.insert(.darkCircles) }
+    if before.skinBrighten != after.skinBrighten { fields.insert(.skinBrighten) }
+    if before.texturePreserve != after.texturePreserve { fields.insert(.texturePreserve) }
+    if before.teethWhiten != after.teethWhiten { fields.insert(.teethWhiten) }
+    if before.eyeBrighten != after.eyeBrighten { fields.insert(.eyeBrighten) }
+    if before.eyeSharpen != after.eyeSharpen { fields.insert(.eyeSharpen) }
+    if before.skinFinish != after.skinFinish { fields.insert(.skinFinish) }
+    if before.shine != after.shine { fields.insert(.shine) }
+    if before.irisEnhance != after.irisEnhance { fields.insert(.irisEnhance) }
+    if before.lashDarken != after.lashDarken { fields.insert(.lashDarken) }
+    if before.lensTint != after.lensTint { fields.insert(.lensTint) }
+    if before.lensColor != after.lensColor { fields.insert(.lensColor) }
+    if before.teethAlign != after.teethAlign { fields.insert(.teethAlign) }
+    return fields
+}
+
+func changedColorFields(_ before: Adjustments, _ after: Adjustments) -> Adjustments.ColorField {
+    var fields: Adjustments.ColorField = []
+    if before.exposure != after.exposure { fields.insert(.exposure) }
+    if before.contrast != after.contrast { fields.insert(.contrast) }
+    if before.blacks != after.blacks { fields.insert(.blacks) }
+    if before.whites != after.whites { fields.insert(.whites) }
+    if before.saturation != after.saturation { fields.insert(.saturation) }
+    if before.vibrance != after.vibrance { fields.insert(.vibrance) }
+    if before.warmth != after.warmth { fields.insert(.warmth) }
+    if before.clarity != after.clarity { fields.insert(.clarity) }
+    if before.vignette != after.vignette { fields.insert(.vignette) }
+    if before.splitTone != after.splitTone { fields.insert(.splitTone) }
+    if before.curveShadows != after.curveShadows { fields.insert(.curveShadows) }
+    if before.curveMidtones != after.curveMidtones { fields.insert(.curveMidtones) }
+    if before.curveHighlights != after.curveHighlights { fields.insert(.curveHighlights) }
+    if before.hslHue != after.hslHue { fields.insert(.hslHue) }
+    if before.hslSaturation != after.hslSaturation { fields.insert(.hslSaturation) }
+    if before.hslLuminance != after.hslLuminance { fields.insert(.hslLuminance) }
+    return fields
+}
+
+func makeFadedImage(width: Int, height: Int) -> CGImage? {
+    guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                              bytesPerRow: 0, space: sRGB,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    ctx.setFillColor(CGColor(srgbRed: 0.47, green: 0.47, blue: 0.47, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    ctx.setFillColor(CGColor(srgbRed: 0.56, green: 0.55, blue: 0.54, alpha: 1))
+    ctx.fillEllipse(in: CGRect(x: 20, y: 20, width: CGFloat(width) - 40,
+                               height: CGFloat(height) - 40))
+    ctx.setFillColor(CGColor(srgbRed: 0.36, green: 0.35, blue: 0.34, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: CGFloat(height) * 0.4, width: CGFloat(width) * 0.3, height: 12))
+    return ctx.makeImage()
+}
+
+@MainActor
+func testSmartKeepsUnmeasuredFields() async {
+    print("\n[P0-2] Smart Analyze only writes what it measured")
+
+    let base = sentinelAdjustments()
+    let zero = Adjustments()
+
+    let retouchApplied = base.applyingRetouch(zero, fields: .smart)
+    let retouchChanged = changedRetouchFields(base, retouchApplied)
+    check(retouchChanged.isSubset(of: .smart),
+          "retouch apply leaves the owner's other fields alone",
+          "changed \(retouchChanged.rawValue & ~Adjustments.RetouchField.smart.rawValue) outside")
+    for (label, untouched) in [
+        ("skin finish", retouchApplied.skinFinish == base.skinFinish),
+        ("lens tint", retouchApplied.lensTint == base.lensTint),
+        ("lens colour", retouchApplied.lensColor == base.lensColor),
+        ("teeth align", retouchApplied.teethAlign == base.teethAlign),
+        ("iris enhance", retouchApplied.irisEnhance == base.irisEnhance),
+        ("lash darken", retouchApplied.lashDarken == base.lashDarken),
+    ] {
+        check(untouched, "\(label) survives a Smart apply")
+    }
+    check(retouchApplied.smooth == 0 && retouchApplied.blemish == 0,
+          "a measured zero is still applied")
+
+    let colorApplied = base.applyingColorLight(zero, fields: .autoColorLight)
+    let colorChanged = changedColorFields(base, colorApplied)
+    check(colorChanged.isSubset(of: .autoColorLight),
+          "color apply leaves vignette, curves, split tone and HSL alone",
+          "changed \(colorChanged.rawValue & ~Adjustments.ColorField.autoColorLight.rawValue) outside")
+
+    // The field sets must track what the analyzers actually produce.
+    let findings: [SmartAnalyzer.Finding] = [
+        .init(kind: .texture, severity: 1, detail: .texturePronounced),
+        .init(kind: .blemish, severity: 1, detail: .spots(4)),
+        .init(kind: .wrinkles, severity: 1, detail: .linesHeavy),
+        .init(kind: .darkCircles, severity: 1, detail: .underEyeStrong),
+        .init(kind: .shine, severity: 1, detail: .shineHeavy),
+        .init(kind: .unevenTone, severity: 1, detail: .tonePatchy),
+        .init(kind: .teeth, severity: 1, detail: .teethWarm),
+        .init(kind: .eyes, severity: 1, detail: .eyesDim),
+    ]
+    let retouchPatch = SmartAnalyzer.retouchValues(findings: findings, hasEyes: true,
+                                                   scleraLevel: 0.4, skinMedian: 0.40)
+    let producedRetouch = changedRetouchFields(Adjustments(), retouchPatch)
+    check(!producedRetouch.isEmpty && producedRetouch.isSubset(of: .smart),
+          "retouchValues stays inside the smart field set",
+          "produced \(producedRetouch.rawValue)")
+
+    if let cg = makeFadedImage(width: 320, height: 240), let buffer = PixelBuffer(cgImage: cg) {
+        let colorPatch = AutoAnalyzer.autoColorLight(buffer)
+        let producedColor = changedColorFields(Adjustments(), colorPatch)
+        check(!producedColor.isEmpty, "the faded fixture actually asks for a correction")
+        check(producedColor.isSubset(of: .autoColorLight),
+              "autoColorLight stays inside its field set",
+              "produced \(producedColor.rawValue)")
+    } else {
+        check(false, "faded fixture for the color coverage test")
+    }
+}
+
+// MARK: - P0-3 / H-2
+
+@MainActor
+func testResetAllClearsEverything() async {
+    print("\n[P0-3] Reset All clears the whole document in one step")
+
+    let sourceURL = workDir.appendingPathComponent("source.png")
+    let model = EditorModel()
+    model.load(url: sourceURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture reloads")
+
+    model.adjustments.smooth = 30
+    model.tapHeal(at: CGPoint(x: 0.5, y: 0.5))
+    model.tapArt(at: CGPoint(x: 0.3, y: 0.3))
+    model.analysis.isEnabled = true
+    model.analysis.setEndpoint(CGPoint(x: 0.9, y: 0.9), for: .lips)
+    check(!model.isDocumentPristine, "a document with every kind of edit is not pristine")
+
+    model.resetAll()
+    check(model.adjustments.isIdentity, "sliders are back to zero")
+    check(model.healSpots.isEmpty, "heal stamps are gone")
+    check(model.stickers.isEmpty, "stickers are gone")
+    check(model.analysis == AnalysisSettings(), "analysis overlay is back to default")
+    check(model.isDocumentPristine, "the document reads as pristine")
+
+    model.undo()
+    check(model.adjustments.smooth == 30, "one undo restores the slider")
+    check(model.healSpots.count == 1, "one undo restores the stamp")
+    check(model.stickers.count == 1, "one undo restores the sticker")
+    check(model.analysis.isEnabled && !model.analysis.endpoints.isEmpty,
+          "one undo restores the analysis pins")
+}
+
 // MARK: - runner
 
 @MainActor
 func runAll() async {
     await testExportDoesNotSave()
+    await testSmartKeepsUnmeasuredFields()
+    await testResetAllClearsEverything()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

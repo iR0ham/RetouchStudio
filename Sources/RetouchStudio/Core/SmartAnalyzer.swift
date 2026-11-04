@@ -289,10 +289,10 @@ enum SmartAnalyzer {
     /// single one from becoming the whole edit. A value of zero means the
     /// measurement found nothing to correct, which is a real answer: pressing
     /// Auto on a photo that is already clean should not repaint it.
-    private static func retouchValues(findings: [Finding],
-                                      hasEyes: Bool,
-                                      scleraLevel: Double?,
-                                      skinMedian: Double?) -> Adjustments {
+    static func retouchValues(findings: [Finding],
+                              hasEyes: Bool,
+                              scleraLevel: Double?,
+                              skinMedian: Double?) -> Adjustments {
         func severity(_ kind: Finding.Kind) -> Double {
             findings.first { $0.kind == kind }?.severity ?? 0
         }

@@ -260,7 +260,7 @@ struct RetouchStudioApp: App {
                 Divider()
                 Button(model.s.resetMenu) { model.resetAll() }
                     .keyboardShortcut("r")
-                    .disabled(!model.hasImage || model.adjustments.isIdentity)
+                    .disabled(!model.hasImage || model.isDocumentPristine)
                 Divider()
                 Toggle(model.s.showCompareMenu, isOn: $model.compareEnabled)
                 Toggle(model.s.showFaceOverlayMenu, isOn: $model.showFaceOverlay)
