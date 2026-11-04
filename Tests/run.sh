@@ -19,20 +19,28 @@ for candidate in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>
 done
 [ -n "$SDK" ] || { echo "no compatible SDK found" >&2; exit 1; }
 
-# Swift only allows top-level code in a file named main.swift, so the suite is
+# Swift only allows top-level code in a file named main.swift, so each suite is
 # copied to a scratch directory under that name before compiling.
 #
 # The app's whole source tree is linked except `App.swift` (its @main would
 # collide with main.swift and it launches the UI) and `SelfCheck.swift` (the
 # separate --selftest harness). The engine and the models share types in both
 # directions, so linking only a hand-picked subset drifts out of date.
-WORK="$(mktemp -d)"
-cp Tests/EngineTests.swift "$WORK/main.swift"
-OUT="$WORK/enginetests"
-swiftc -O -target arm64-apple-macosx14.0 -sdk "$SDK" -o "$OUT" \
-  "$WORK/main.swift" \
-  $(find Sources/RetouchStudio -name '*.swift' ! -name 'App.swift' ! -name 'SelfCheck.swift') \
-  -framework SwiftUI -framework AppKit -framework CoreImage \
-  -framework Vision -framework UniformTypeIdentifiers 2>&1 | grep -E "error:" && exit 1
+SOURCES=$(find Sources/RetouchStudio -name '*.swift' ! -name 'App.swift' ! -name 'SelfCheck.swift')
 
-"$OUT"
+run_suite() {
+  local suite="$1" name="$2"
+  local work out
+  work="$(mktemp -d)"
+  cp "$suite" "$work/main.swift"
+  out="$work/$name"
+  swiftc -O -target arm64-apple-macosx14.0 -sdk "$SDK" -o "$out" \
+    "$work/main.swift" \
+    $SOURCES \
+    -framework SwiftUI -framework AppKit -framework CoreImage \
+    -framework Vision -framework UniformTypeIdentifiers 2>&1 | grep -E "error:" && exit 1
+  "$out"
+}
+
+run_suite Tests/EngineTests.swift enginetests
+run_suite Tests/ModelTests.swift modeltests

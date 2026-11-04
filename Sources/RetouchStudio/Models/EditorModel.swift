@@ -1884,8 +1884,6 @@ final class EditorModel: ObservableObject {
         let format = effectiveExportFormat
         let quality = self.exportQuality
         let longEdge = self.exportLongEdge > 0 ? CGFloat(self.exportLongEdge) : nil
-        let exportedState = currentState
-        let exportedCrop = appliedCrop
 
         isBusy = true
         statusToken = .renderingExport
@@ -1938,9 +1936,8 @@ final class EditorModel: ObservableObject {
             if success {
                 self.showExportSheet = false
                 self.statusToken = .saved(url.lastPathComponent)
-                self.cleanState = exportedState
-                self.cleanCrop = exportedCrop
-                self.updateCleanState()
+                // An exported copy is not a saved project: the edits still
+                // live only in this window, so the clean baseline must not move.
             } else {
                 self.statusToken = .exportFailed
             }
