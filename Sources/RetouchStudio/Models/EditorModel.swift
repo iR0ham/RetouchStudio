@@ -54,6 +54,11 @@ final class EditorModel: ObservableObject {
     @Published var exportLongEdge: Int = 0 {
         didSet { settings.exportLongEdge = exportLongEdge }
     }
+    /// Ask the local upscaler for the pixels a larger long edge implies. It only
+    /// applies while that edge is above the photo's own; see `usesExportUpscale`.
+    @Published var exportAIUpscale = false {
+        didSet { settings.exportAIUpscale = exportAIUpscale }
+    }
     /// Leave GPS and camera identity out of exports.
     @Published var stripLocationMetadata = true {
         didSet { settings.stripLocationMetadata = stripLocationMetadata }
@@ -113,6 +118,48 @@ final class EditorModel: ObservableObject {
         didSet { stickersChanged() }
     }
     @Published var selectedSticker: UUID?
+    /// Generative edits produced by the local AI helper. Each one is a layer of
+    /// pixels plus an alpha; the photo itself is never rewritten.
+    @Published private(set) var aiEdits: [AIEdit] = [] {
+        didSet {
+            guard !isLoadingState else { return }
+            schedulePreview()
+            updateCleanState()
+        }
+    }
+
+    // Quick Edit
+    /// True while the canvas is waiting for the click that marks the object.
+    @Published var isAIPicking = false
+    @Published var quickEditPreset: AIQuickPreset = .removeObject
+    /// Where the owner clicked, normalized against the working (cropped) frame.
+    /// `nil` until the canvas has a point.
+    @Published private(set) var quickEditPoint: CGPoint?
+    // Mask selection. Point, brush and box are alternative ways to say where;
+    // a new point clears the mask and the first stroke clears the point, so a
+    // job always has exactly one meaning.
+    @Published var aiMaskTool: AIMaskTool = .point
+    @Published private(set) var aiMaskStrokes: [AIMaskStroke] = []
+    @Published private(set) var aiMaskBox: CGRect?
+    @Published private(set) var aiMaskRefined: CGImage?
+    @Published var aiMaskInverted = false {
+        didSet { refreshAIMaskPreview() }
+    }
+    @Published var aiMaskExpand: Double = 4
+    @Published var aiMaskFeather: Double = 2
+    /// Brush diameter as a fraction of the photo width.
+    @Published var aiMaskStrokeWidth: Double = 0.035
+    @Published var aiMaskErasing = false
+    /// Tinted selection for the canvas, derived from the mask.
+    @Published private(set) var aiMaskPreview: CGImage?
+    @Published private(set) var isRefiningMask = false
+    @Published private(set) var aiMaskMessage: String?
+    private var maskTask: Task<Void, Never>?
+    @Published private(set) var quickEditStage: QuickEditStage = .idle
+    @Published private(set) var isRunningQuickEdit = false
+    private var aiTask: Task<Void, Never>?
+    private var aiJobID: String?
+    private var quickEditCancelRequested = false
     /// The analysis overlay's switches, regions and leader ends. It is drawn in
     /// its own layer rather than folded into the photo pipeline: choosing a
     /// region must not re-run every retouch pass on the picture.
@@ -170,7 +217,7 @@ final class EditorModel: ObservableObject {
     /// What kind of job holds the busy flag. Previews may be superseded by a
     /// newer preview or by any other job; everything else is exclusive.
     private enum OperationKind {
-        case preview, load, export, batch, save, open, smart
+        case preview, load, export, batch, save, open, smart, ai
     }
 
     private struct OperationToken: Equatable {
@@ -252,6 +299,7 @@ final class EditorModel: ObservableObject {
         var adjustments = Adjustments()
         var healSpots: [HealSpot] = []
         var stickers: [Sticker] = []
+        var aiEdits: [AIEdit] = []
         var analysis = AnalysisSettings()
         var crop: CGRect?
         var selectedFaceIndex: Int?
@@ -268,8 +316,8 @@ final class EditorModel: ObservableObject {
 
     private var currentState: EditState {
         EditState(adjustments: adjustments, healSpots: healSpots,
-                  stickers: stickers, analysis: analysis, crop: appliedCrop,
-                  selectedFaceIndex: selectedFaceIndex)
+                  stickers: stickers, aiEdits: aiEdits, analysis: analysis,
+                  crop: appliedCrop, selectedFaceIndex: selectedFaceIndex)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -346,6 +394,7 @@ final class EditorModel: ObservableObject {
         adjustments = state.adjustments
         healSpots = state.healSpots
         stickers = state.stickers
+        aiEdits = state.aiEdits
         analysis = state.analysis
         applyFaceSelection(state.selectedFaceIndex)
         selectedSticker = nil
@@ -703,6 +752,7 @@ final class EditorModel: ObservableObject {
         exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
         exportQuality = settings.exportQuality
         exportLongEdge = settings.exportLongEdge
+        exportAIUpscale = settings.exportAIUpscale
         stripLocationMetadata = settings.stripLocationMetadata
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
@@ -861,6 +911,12 @@ final class EditorModel: ObservableObject {
         cropDraft = CropGeometry.full
         hasImage = true
         isPeekingOriginal = false
+        // A point marked against different pixels means nothing here.
+        quickEditPoint = nil
+        isAIPicking = false
+        quickEditStage = .idle
+        clearAIMaskContents()
+        aiMaskMessage = nil
         buildPresetThumbs()
         refreshAnalysisOverlay()
     }
@@ -888,6 +944,7 @@ final class EditorModel: ObservableObject {
         isLoadingState = true
         healSpots = project?.healSpots ?? []
         stickers = project?.stickers ?? []
+        aiEdits = project?.aiEdits ?? []
         analysis = project?.analysis ?? AnalysisSettings()
         applyFaceSelection(project?.selectedFace)
         isLoadingState = false
@@ -924,6 +981,10 @@ final class EditorModel: ObservableObject {
         } else {
             statusToken = .facesDetected(result.faces.count)
         }
+        // A project whose patch files were removed from the store must say so:
+        // silently dropping an edit would change the picture without asking.
+        let missingEdits = AICompositor.missing(aiEdits).count
+        if missingEdits > 0 { statusToken = .aiAssetsMissing(missingEdits) }
 
         // The photo was found somewhere other than the recorded path. Rewrite
         // the project once, so the next open resolves straight to it.
@@ -1059,7 +1120,8 @@ final class EditorModel: ObservableObject {
     /// True when the active tool owns the pointer over the canvas, so pan,
     /// zoom and the compare handle must stand aside.
     var toolOwnsCanvas: Bool {
-        toolMode == .crop || toolMode == .heal || toolMode == .art || toolMode == .analysis
+        toolMode == .crop || toolMode == .heal || toolMode == .art
+            || toolMode == .analysis || isAIPicking
     }
 
     /// When the app last became active. The click that brings the window
@@ -1155,6 +1217,263 @@ final class EditorModel: ObservableObject {
     private func rebuildSpotMasks() {
         let working = HealGeometry.workingSpots(healSpots, crop: appliedCrop)
         spotsPreview = sourcePreview.flatMap { processor.spotsMask(extent: $0.extent, spots: working) }
+    }
+
+    // MARK: - AI edits
+
+    var hasAIEdits: Bool { !aiEdits.isEmpty }
+    var canRemoveAIEdit: Bool { !aiEdits.isEmpty && !isOperationBlocking }
+    var aiMaskSelection: AIMaskSelection {
+        AIMaskSelection(strokes: aiMaskStrokes, box: aiMaskBox,
+                        refined: aiMaskRefined, inverted: aiMaskInverted)
+    }
+    var aiMaskHasSelection: Bool { aiMaskSelection.hasContent }
+    var canRunQuickEdit: Bool {
+        hasImage && !isRunningQuickEdit && !isOperationBlocking && !isRefiningMask
+            && (aiMaskHasSelection
+                || (quickEditPoint != nil && quickEditPreset != .healArea))
+    }
+
+    /// Starts picking: the canvas takes the pointer and the next click marks
+    /// what the preset should act on.
+    func beginQuickEdit() {
+        guard hasImage, !isOperationBlocking else {
+            statusToken = .operationBusy
+            return
+        }
+        quickEditPoint = nil
+        clearAIMaskContents()
+        aiMaskMessage = nil
+        quickEditStage = .idle
+        isAIPicking = true
+    }
+
+    func cancelQuickEditPicking() {
+        isAIPicking = false
+    }
+
+    func selectAIMaskTool(_ tool: AIMaskTool) {
+        guard hasImage, !isRunningQuickEdit, !isOperationBlocking else { return }
+        aiMaskTool = tool
+        aiMaskMessage = nil
+        if tool != .point { quickEditPoint = nil }
+        isAIPicking = true
+    }
+
+    func selectQuickEditPreset(_ preset: AIQuickPreset) {
+        guard !isRunningQuickEdit else { return }
+        quickEditPreset = preset
+        if preset == .healArea {
+            quickEditPoint = nil
+            if aiMaskTool == .point { aiMaskTool = .brush }
+        }
+    }
+
+    func placeQuickEditPoint(_ point: CGPoint) {
+        guard isAIPicking, !isRunningQuickEdit else { return }
+        clearAIMaskContents()
+        quickEditPoint = CGPoint(x: min(1, max(0, point.x)),
+                                 y: min(1, max(0, point.y)))
+        // The point is placed: give the canvas back so the owner can pan and
+        // compare before deciding to run the edit.
+        isAIPicking = false
+    }
+
+    // MARK: - Mask selection
+
+    func appendMaskStroke(_ stroke: AIMaskStroke) {
+        guard !isRunningQuickEdit else { return }
+        quickEditPoint = nil
+        aiMaskMessage = nil
+        aiMaskStrokes.append(stroke)
+        refreshAIMaskPreview()
+    }
+
+    func setMaskBox(_ box: CGRect) {
+        guard !isRunningQuickEdit else { return }
+        quickEditPoint = nil
+        aiMaskMessage = nil
+        aiMaskRefined = nil
+        aiMaskBox = box
+        refreshAIMaskPreview()
+    }
+
+    /// The box is the starting point; SAM turns it into an edge-following mask
+    /// on the same local helper. A failure leaves the box usable.
+    func refineMaskWithSAM() {
+        guard let box = aiMaskBox, !isRefiningMask, !isRunningQuickEdit,
+              let source = originalImage?.cgImage(forProposedRect: nil,
+                                                  context: nil, hints: nil),
+              let token = begin(.ai) else { return }
+        isRefiningMask = true
+        aiMaskMessage = nil
+        maskTask = Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<CGImage, Error> in
+                do { return .success(try QuickEditRunner.samMask(image: source, box: box)) }
+                catch { return .failure(error) }
+            }.value
+            guard let self else { return }
+            self.maskTask = nil
+            self.isRefiningMask = false
+            switch outcome {
+            case .success(let mask):
+                self.aiMaskRefined = mask
+                self.refreshAIMaskPreview()
+            case .failure(let error):
+                self.aiMaskMessage = self.localizedAIFailure(error)
+            }
+            self.end(token)
+        }
+    }
+
+    func clearAIMask() {
+        guard !isRunningQuickEdit else { return }
+        clearAIMaskContents()
+        aiMaskMessage = nil
+        isAIPicking = false
+    }
+
+    func clearQuickEditSelection() {
+        guard !isRunningQuickEdit else { return }
+        quickEditPoint = nil
+        clearAIMaskContents()
+        aiMaskMessage = nil
+        isAIPicking = false
+    }
+
+    private func clearAIMaskContents() {
+        aiMaskStrokes = []
+        aiMaskBox = nil
+        aiMaskRefined = nil
+        refreshAIMaskPreview()
+    }
+
+    private func refreshAIMaskPreview() {
+        guard aiMaskHasSelection, previewSize.width >= 2, previewSize.height >= 2 else {
+            aiMaskPreview = nil
+            return
+        }
+        let selection = aiMaskSelection
+        aiMaskPreview = AIMaskRenderer.mask(
+            size: previewSize, strokes: selection.strokes, box: selection.box,
+            refined: selection.refined, inverted: selection.inverted)
+            .flatMap(AIMaskRenderer.alphaMask)
+    }
+
+    /// Worker errors that mean "the machine is not set up" get a sentence the
+    /// owner can act on instead of the helper's internal wording.
+    private func localizedAIFailure(_ error: Error) -> String {
+        switch (error as? AIWorkerFailure)?.code {
+        case -32011: return L10n.current.aiModelMissing
+        case -32010: return L10n.current.aiLicenseBlocked
+        case -32602: return L10n.current.aiMaskTooLarge
+        default: return error.localizedDescription
+        }
+    }
+
+    /// Runs the selected preset against the working photo. The helper gets a
+    /// copy; its reply is stored as two files and enters history as one step,
+    /// so a long generation cannot leave a half-edit in the document.
+    func runQuickEdit() {
+        guard canRunQuickEdit,
+              let source = originalImage?.cgImage(forProposedRect: nil,
+                                                  context: nil, hints: nil),
+              let token = begin(.ai) else { return }
+        let point = quickEditPoint
+        let mask = aiMaskSelection
+        isAIPicking = false
+        isRunningQuickEdit = true
+        quickEditCancelRequested = false
+        quickEditStage = .preparing
+        statusToken = .aiWorking
+
+        let crop = appliedCrop
+        let preset = quickEditPreset
+        let prompt = preset.prompt
+        let seed = Int.random(in: 1...Int(Int32.max))
+        let dilate = Int(aiMaskExpand.rounded())
+        let feather = Int(aiMaskFeather.rounded())
+
+        aiTask = Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<AIEdit, Error> in
+                do {
+                    return .success(try QuickEditRunner.run(
+                        image: source, point: point, mask: mask, crop: crop,
+                        preset: preset, prompt: prompt, seed: seed,
+                        dilate: dilate, feather: feather,
+                        onJob: { id in
+                            Task { @MainActor in
+                                self?.aiJobID = id
+                                if self?.quickEditCancelRequested == true {
+                                    WorkerClient.shared.cancel(job: id)
+                                }
+                            }
+                        },
+                        progress: { step in
+                            Task { @MainActor in
+                                self?.quickEditStage = .denoising(step: step)
+                            }
+                        }))
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+
+            guard let self else { return }
+            self.aiTask = nil
+            self.aiJobID = nil
+            self.isRunningQuickEdit = false
+            switch outcome {
+            case .success(let edit):
+                self.quickEditStage = .finished(seconds: edit.seconds)
+                self.quickEditPoint = nil
+                self.clearAIMaskContents()
+                self.addAIEdit(edit)
+            case .failure(let error):
+                // The card carries the reason, so the status line must not
+                // keep claiming the helper is still generating.
+                self.statusToken = .none
+                if (error as? AIWorkerFailure)?.code == -32014 {
+                    self.quickEditStage = .idle
+                } else {
+                    self.quickEditStage = .failed(self.localizedAIFailure(error))
+                }
+            }
+            self.end(token)
+            // The edit landed while `.ai` still owned the pipeline, so the
+            // preview requested by `aiEdits` was refused. Paint it now.
+            if case .success = outcome { self.schedulePreview() }
+        }
+    }
+
+    /// Stops the running job at its next denoise step. The helper acknowledges
+    /// at once, so the button never appears stuck.
+    func cancelQuickEdit() {
+        guard isRunningQuickEdit else { return }
+        quickEditCancelRequested = true
+        if let id = aiJobID { WorkerClient.shared.cancel(job: id) }
+    }
+
+    /// Removes the most recent edit. Undo can bring it back, so the files stay
+    /// on disk until the edit store is pruned.
+    func removeLastAIEdit() {
+        guard canRemoveAIEdit else { return }
+        commitAdjustments()
+        aiEdits.removeLast()
+        quickEditStage = .idle
+        updateUndoFlags()
+    }
+
+    /// Records an edit whose pixels are already in the store. One history step
+    /// covers it exactly as it was before and after, so the slider debounce
+    /// cannot fold the edit into an earlier slider drag.
+    func addAIEdit(_ edit: AIEdit) {
+        commitAdjustments()
+        aiEdits.append(edit)
+        statusToken = .aiApplied
+        // The append happens after the commit above, so the toolbar needs an
+        // explicit refresh or it offers no undo for the edit it just added.
+        updateUndoFlags()
     }
 
     // MARK: - Art (stickers)
@@ -1656,6 +1975,8 @@ final class EditorModel: ObservableObject {
         let focus = focusFace
         let spots = self.spotsPreview
         let art = ArtGeometry.workingStickers(stickers, crop: appliedCrop, aspect: sourceAspect)
+        let edits = aiEdits
+        let crop = appliedCrop
         let colorSpace = self.sourceColorSpace
         let processor = self.processor
 
@@ -1668,9 +1989,10 @@ final class EditorModel: ObservableObject {
             }
 
             let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
+                let ai = AICompositor.layers(edits, crop: crop)
                 let processed = processor.process(source, adjustments: adjustments,
                                                   masks: masks, faces: faces, spots: spots,
-                                                  art: art, focus: focus)
+                                                  art: art, ai: ai, focus: focus)
                 return processor.renderCGImage(processed, scale: 1, colorSpace: colorSpace)
             }.value
 
@@ -1695,6 +2017,7 @@ final class EditorModel: ObservableObject {
         let cropChanged = appliedCrop != nil
         adjustments = .zero
         if !healSpots.isEmpty { healSpots.removeAll() }
+        if !aiEdits.isEmpty { aiEdits.removeAll() }
         stickers.removeAll()
         selectedSticker = nil
         analysis = AnalysisSettings()
@@ -1718,6 +2041,7 @@ final class EditorModel: ObservableObject {
     /// sliders alone.
     var isDocumentPristine: Bool {
         adjustments.isIdentity && healSpots.isEmpty && stickers.isEmpty
+            && aiEdits.isEmpty
             && analysis == AnalysisSettings() && appliedCrop == nil
     }
 
@@ -1975,6 +2299,7 @@ final class EditorModel: ObservableObject {
         exportFormat = ExportFormat(rawValue: settings.exportFormat) ?? .jpeg
         exportQuality = settings.exportQuality
         exportLongEdge = settings.exportLongEdge
+        exportAIUpscale = settings.exportAIUpscale
         stripLocationMetadata = settings.stripLocationMetadata
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
@@ -2076,14 +2401,48 @@ final class EditorModel: ObservableObject {
         return "\(Digits.num(Int(workingPixelSize.width))) × \(Digits.num(Int(workingPixelSize.height))) px"
     }
 
+    /// Whether the chosen edge asks for more pixels than the photo has.
+    var exportEnlargementRequested: Bool {
+        let size = workingPixelSize
+        guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return false }
+        return max(size.width, size.height) < CGFloat(exportLongEdge)
+    }
+
+    /// Whether the export can reach a larger size at all. The upscaler is a
+    /// fixed 4x pass with a 40 MP output ceiling, so both the request being an
+    /// enlargement and the photo fitting that ceiling decide this.
+    var exportUpscaleAvailable: Bool {
+        let size = workingPixelSize
+        guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return false }
+        let longest = max(size.width, size.height)
+        return longest < CGFloat(exportLongEdge) && ExportUpscale.canHandle(size)
+    }
+
+    /// The upscaling that will actually run, if any. Both the snapshot and the
+    /// size text read this, so the sheet cannot advertise something the export
+    /// will not do.
+    var usesExportUpscale: Bool { exportAIUpscale && exportUpscaleAvailable }
+
+    /// Rough wall time for the pass, from the rate measured on this machine.
+    var exportUpscaleEstimate: Int {
+        ExportUpscale.estimatedSeconds(for: workingPixelSize)
+    }
+
     /// Pixel size the export will actually write. Downscaling never enlarges a
-    /// photo, so a long-edge choice above the photo's own size is ignored.
+    /// photo; a larger long edge is only reached through the upscaler.
     var exportPixelSize: CGSize {
         let size = workingPixelSize
         guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return size }
         let longest = max(size.width, size.height)
-        guard longest > CGFloat(exportLongEdge) else { return size }
-        let scale = CGFloat(exportLongEdge) / longest
+        if longest >= CGFloat(exportLongEdge) {
+            let scale = CGFloat(exportLongEdge) / longest
+            return CGSize(width: (size.width * scale).rounded(),
+                          height: (size.height * scale).rounded())
+        }
+        guard usesExportUpscale else { return size }
+        let edge = ExportUpscale.outputLongEdge(sourceLong: longest,
+                                                requested: CGFloat(exportLongEdge))
+        let scale = edge / longest
         return CGSize(width: (size.width * scale).rounded(),
                       height: (size.height * scale).rounded())
     }
@@ -2153,6 +2512,7 @@ final class EditorModel: ObservableObject {
         return ExportSnapshot(adjustments: adjustments,
                               healSpots: healSpots,
                               stickers: stickers,
+                              aiEdits: aiEdits,
                               analysis: analysis,
                               crop: appliedCrop,
                               selectedFaceIndex: selectedFaceIndex,
@@ -2161,7 +2521,8 @@ final class EditorModel: ObservableObject {
                               longEdge: exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil,
                               stripsPrivacyMetadata: stripLocationMetadata,
                               includeStamps: includeStamps,
-                              includeAnalysis: includeAnalysis)
+                              includeAnalysis: includeAnalysis,
+                              aiUpscale: usesExportUpscale)
     }
 
     func export(to url: URL) {
@@ -2184,8 +2545,13 @@ final class EditorModel: ObservableObject {
         isExporting = true
         statusToken = .renderingExport
 
+        // A 4x pass can run for minutes, so the helper's tile count becomes the
+        // status line instead of a frozen "rendering" message.
+        let progressSink: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+            Task { @MainActor in self?.statusToken = .upscaling(done, total) }
+        }
         let job = Task.detached(priority: .userInitiated) {
-            ExportService.run(snapshot, source: source, to: url)
+            ExportService.run(snapshot, source: source, to: url, progress: progressSink)
         }
         exportJob = job
         exportTask = Task { [weak self] in
@@ -2255,6 +2621,7 @@ final class EditorModel: ObservableObject {
                               crop: appliedCrop,
                               healSpots: healSpots.isEmpty ? nil : healSpots,
                               stickers: stickers.isEmpty ? nil : stickers,
+                              aiEdits: aiEdits.isEmpty ? nil : aiEdits,
                               analysis: analysis == AnalysisSettings() ? nil : analysis,
                               selectedFace: selectedFaceIndex)
     }
@@ -2433,6 +2800,7 @@ final class EditorModel: ObservableObject {
         batchTask?.cancel()
 
         let documentAspect = sourceAspect
+        let documentURL = imageURL?.resolvingSymlinksInPath()
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
 
@@ -2455,6 +2823,7 @@ final class EditorModel: ObservableObject {
                 let outcome = await Task.detached(priority: .userInitiated) { () -> BatchOutcome in
                     Self.exportOne(url, to: folder, snapshot: snapshot,
                                    documentAspect: documentAspect,
+                                   documentURL: documentURL,
                                    processor: processor,
                                    previewMaxDimension: previewMaxDimension)
                 }.value
@@ -2492,6 +2861,7 @@ final class EditorModel: ObservableObject {
                                               to folder: URL,
                                               snapshot: ExportSnapshot,
                                               documentAspect: CGFloat,
+                                              documentURL: URL?,
                                               processor: ImageProcessor,
                                               previewMaxDimension: CGFloat) -> BatchOutcome {
         let fileAspect = ExportService.pixelAspect(of: url) ?? 0
@@ -2500,6 +2870,11 @@ final class EditorModel: ObservableObject {
                                                 fileAspect: fileAspect)
         var fileSnapshot = snapshot
         fileSnapshot.crop = useCrop ? snapshot.crop : nil
+        // A patch describes exactly the pixels it was generated from. It may
+        // travel to another file only if that file is this very photo.
+        if url.resolvingSymlinksInPath() != documentURL {
+            fileSnapshot.aiEdits = []
+        }
         let skippedCrop = snapshot.crop != nil && !useCrop
 
         guard let result = processor.load(from: url,
@@ -2514,12 +2889,24 @@ final class EditorModel: ObservableObject {
                                   photoAspect: fileAspect,
                                   colorSpace: result.colorSpace,
                                   metadata: result.metadata)
-        guard let rendered = ExportService.render(fileSnapshot, source: source) else {
+        // Upscaling was decided for the document. A file that already reaches
+        // the requested size does not need it, and one past the 4x ceiling is
+        // written at its own size rather than failing the whole batch.
+        if fileSnapshot.aiUpscale {
+            let longest = max(result.pixelSize.width, result.pixelSize.height)
+            if longest >= (fileSnapshot.longEdge ?? 0)
+                || !ExportUpscale.canHandle(result.pixelSize) {
+                fileSnapshot.aiUpscale = false
+            }
+        }
+        guard let rendered = try? ExportService.renderFinal(fileSnapshot, source: source) else {
             return BatchOutcome(saved: false, skippedCrop: false)
         }
         let out = uniqueOutputURL(for: url, in: folder, format: fileSnapshot.format)
         let saved = ExportService.write(rendered, snapshot: fileSnapshot, to: out,
-                                        colorSpace: result.colorSpace,
+                                        colorSpace: fileSnapshot.aiUpscale
+                                            ? ExportUpscale.workingColorSpace
+                                            : result.colorSpace,
                                         metadata: result.metadata)
         // A file that produced no export is a failure, not a skipped crop.
         return BatchOutcome(saved: saved, skippedCrop: skippedCrop && saved)

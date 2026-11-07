@@ -59,6 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.discardUnsavedChanges()
         return .terminateNow
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        AIWorker.terminate()
+    }
 }
 
 /// SwiftUI keeps its window delegate private, so this proxy intercepts the

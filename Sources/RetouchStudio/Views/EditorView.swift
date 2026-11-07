@@ -138,6 +138,10 @@ struct ExportSheet: View {
                 )
             }
 
+            if model.exportEnlargementRequested, !linesOnly {
+                upscaleSection
+            }
+
             if model.analysis.isEnabled {
                 analysisSection
             }
@@ -228,6 +232,40 @@ struct ExportSheet: View {
     /// have nothing to say while that mode is chosen.
     private var linesOnly: Bool {
         model.analysis.isEnabled && model.analysis.exportMode == .overlayOnly
+    }
+
+    /// The upscaler only has a job when the chosen edge is above the photo's
+    /// own size. When the photo is past its 40 MP ceiling the row stays
+    /// visible but off, with the reason in place of the description.
+    private var upscaleSection: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.s.exportUpscale)
+                    .font(Theme.Font.face(size: 12.5, weight: .medium))
+                    .foregroundStyle(model.exportUpscaleAvailable ? Theme.text : Theme.faint)
+                Text(model.exportUpscaleAvailable
+                     ? model.s.exportUpscaleDetail + " "
+                        + model.s.exportUpscaleEstimate(model.exportUpscaleEstimate)
+                     : model.s.exportUpscaleTooLarge)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle("", isOn: $model.exportAIUpscale)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(Theme.accent)
+                .focusable(false)
+                .disabled(!model.exportUpscaleAvailable)
+                .accessibilityLabel(model.s.exportUpscale)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                .fill(Theme.background)
+        )
     }
 
     /// The analysis export choices only appear once the overlay is on, so the

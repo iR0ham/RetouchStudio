@@ -29,9 +29,13 @@ enum StatusToken: Equatable {
     case smartReady
     case smartApplied
     case smartAppliedReport([String])
+    case aiWorking
+    case aiApplied
+    case aiAssetsMissing(Int)
     case settingsReset
     case recentMissing(String)
     case renderingExport
+    case upscaling(Int, Int)
     case saved(String)
     case exportFailed
     case exportCancelled

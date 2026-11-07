@@ -20,6 +20,7 @@ struct ToolPanel: View {
                 }
 
                 smartCard
+                aiCard
                 statusCard
             }
             .padding(.vertical, 2)
@@ -95,6 +96,211 @@ struct ToolPanel: View {
         .padding(16)
         .background(CardBackground())
         .animation(Motion.smooth, value: model.smartReport != nil)
+    }
+
+    // MARK: - AI Quick Edit
+
+    /// The local generative card. It is a separate tool from the measured Auto
+    /// tools above it, and it says so: one click marks the area, one job runs
+    /// at a time, and every reply is a layer with its own alpha.
+    private var aiCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeader(title: model.s.aiSection,
+                       subtitle: model.s.aiQuickEdit,
+                       icon: "wand.and.stars",
+                       tint: Theme.accent)
+
+            Text(model.quickEditPreset.instruction)
+                .font(Theme.Font.face(size: 10.5))
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if model.isRunningQuickEdit {
+                if case .denoising(let step) = model.quickEditStage {
+                    ProgressView(value: Double(min(step, 4)), total: 4)
+                        .progressViewStyle(.linear)
+                        .tint(Theme.accent)
+                }
+
+                Text(model.quickEditStage.text)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.accent)
+                    .contentTransition(.numericText())
+                    .animation(Motion.snappy, value: model.quickEditStage)
+
+                SecondaryButton(title: model.s.aiCancelEdit,
+                                icon: "xmark.circle") {
+                    model.cancelQuickEdit()
+                }
+            } else {
+                presetRow
+                toolRow
+
+                if model.aiMaskTool == .brush && model.aiMaskHasSelection {
+                    maskSlider(title: model.s.aiMaskBrushSize,
+                               value: $model.aiMaskStrokeWidth, range: 0.005...0.15,
+                               percent: true)
+                    PresetChip(title: model.s.aiMaskErase,
+                               isActive: model.aiMaskErasing) {
+                        model.aiMaskErasing.toggle()
+                    }
+                }
+
+                if model.isRefiningMask {
+                    Text(model.s.aiMaskSnapping)
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.accent)
+                } else if let message = model.aiMaskMessage {
+                    Text(message)
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if case .failed(let message) = model.quickEditStage {
+                    Text(message)
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if model.aiMaskHasSelection || model.quickEditPoint != nil {
+                    if model.aiMaskHasSelection && model.aiMaskBox != nil
+                        && model.aiMaskRefined == nil && !model.isRefiningMask {
+                        SecondaryButton(title: model.s.aiMaskSnap,
+                                        icon: "lasso") {
+                            model.refineMaskWithSAM()
+                        }
+                    }
+                    FilledButton(title: model.s.aiRunEdit,
+                                 icon: "sparkles",
+                                 tone: .lime,
+                                 enabled: model.canRunQuickEdit) {
+                        model.runQuickEdit()
+                    }
+                    SecondaryButton(title: model.s.aiMaskClear,
+                                    icon: "xmark.circle") {
+                        model.clearQuickEditSelection()
+                    }
+
+                    if model.aiMaskHasSelection {
+                        PresetChip(title: model.s.aiMaskInvert,
+                                   isActive: model.aiMaskInverted) {
+                            model.aiMaskInverted.toggle()
+                        }
+                        maskSlider(title: model.s.aiMaskExpand,
+                                   value: $model.aiMaskExpand, range: 0...32)
+                        maskSlider(title: model.s.aiMaskFeather,
+                                   value: $model.aiMaskFeather, range: 0...8)
+                    }
+                } else if model.isAIPicking {
+                    Text(pickingHint)
+                        .font(Theme.Font.label)
+                        .foregroundStyle(Theme.accent)
+                        .fixedSize(horizontal: false, vertical: true)
+                    SecondaryButton(title: model.s.aiCancelEdit,
+                                    icon: "xmark.circle") {
+                        model.cancelQuickEditPicking()
+                    }
+                } else {
+                    FilledButton(title: model.quickEditPreset.title,
+                                 icon: "wand.and.stars",
+                                 tone: .lime,
+                                 enabled: model.hasImage && !model.isOperationBlocking) {
+                        model.beginQuickEdit()
+                    }
+                    if case .finished(let seconds) = model.quickEditStage {
+                        Text(model.s.aiStageFinished(seconds))
+                            .font(Theme.Font.face(size: 10.5))
+                            .foregroundStyle(Theme.positive)
+                    }
+                }
+            }
+
+            if model.hasAIEdits {
+                Hairline()
+                HStack {
+                    Text(model.s.aiEditCount)
+                        .font(Theme.Font.label)
+                        .foregroundStyle(Theme.text)
+                    Spacer(minLength: 6)
+                    Text(Digits.num(model.aiEdits.count))
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.accent)
+                        .contentTransition(.numericText())
+                        .animation(Motion.snappy, value: model.aiEdits.count)
+                }
+                SecondaryButton(title: model.s.aiRemoveLastEdit,
+                                icon: "arrow.uturn.backward",
+                                enabled: model.canRemoveAIEdit) {
+                    model.removeLastAIEdit()
+                }
+            }
+
+            HStack(spacing: 6) {
+                Icon(name: "lock.shield", size: 10.5)
+                    .foregroundStyle(Theme.faint)
+                Text(model.s.aiLocalNote)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .background(CardBackground())
+        .animation(Motion.smooth, value: model.isRunningQuickEdit)
+        .animation(Motion.smooth, value: model.aiMaskHasSelection)
+    }
+
+    private var presetRow: some View {
+        HStack(spacing: 6) {
+            ForEach(AIQuickPreset.allCases) { preset in
+                PresetChip(title: preset.title,
+                           isActive: model.quickEditPreset == preset) {
+                    model.selectQuickEditPreset(preset)
+                }
+            }
+        }
+    }
+
+    private var toolRow: some View {
+        HStack(spacing: 6) {
+            ForEach(AIMaskTool.allCases) { tool in
+                PresetChip(title: tool.title,
+                           isActive: model.aiMaskTool == tool) {
+                    model.selectAIMaskTool(tool)
+                }
+            }
+        }
+    }
+
+    private var pickingHint: String {
+        switch model.aiMaskTool {
+        case .point: return model.s.aiSelectHint
+        case .brush: return model.s.aiMaskHint
+        case .box: return model.s.aiMaskBoxHint
+        }
+    }
+
+    private func maskSlider(title: String,
+                            value: Binding<Double>,
+                            range: ClosedRange<Double>,
+                            percent: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(title.uppercased())
+                    .font(Theme.Font.section)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.muted)
+                Spacer(minLength: 6)
+                Text(percent
+                     ? Digits.percent(Int((value.wrappedValue * 100).rounded()))
+                     : "\(Digits.num(Int(value.wrappedValue.rounded()))) px")
+                    .font(Theme.Font.value)
+                    .foregroundStyle(Theme.text)
+            }
+            Slider(value: value, in: range, step: percent ? 0.005 : 1)
+                .controlSize(.mini)
+                .tint(Theme.accent)
+        }
     }
 
     private func strengthRow(title: String,

@@ -233,6 +233,9 @@ final class PersianL10n: L10n {
         "رتوش خودکار: " + (measures.isEmpty ? [autoSaidClean] : measures).joined(separator: "، ") + "."
     }
     override var renderingExport: String { "در حال ساخت خروجی با کیفیت کامل…" }
+    override func upscaling(_ done: Int, _ total: Int) -> String {
+        "بزرگ‌نمایی کاشی \(Digits.num(done)) از \(Digits.num(total))…"
+    }
     override func saved(_ name: String) -> String { "\(name) ذخیره شد" }
     override var exportFailed: String { "خروجی ذخیره نشد." }
     override var exportCancelled: String { "خروجی لغو شد." }
@@ -454,6 +457,21 @@ final class PersianL10n: L10n {
     override func exportSize(_ info: String) -> String { "خروجی: \(info)" }
     override func originalSize(_ info: String) -> String { "اندازهٔ اصلی: \(info)" }
     override func suggestedName(_ name: String) -> String { "نام پیشنهادی: \(name)" }
+    override var exportUpscale: String { "بزرگ‌نمایی هوشمند ۴×" }
+    override var exportUpscaleDetail: String {
+        "جزئیات را با مدل محلی Swin2SR اضافه می‌کند و سپس تا ضلع انتخابی کوچک می‌کند. هیچ چیزی از این مک خارج نمی‌شود."
+    }
+    override var exportUpscaleTooLarge: String {
+        "این عکس برای بزرگ‌نمایی ۴× بزرگ است. سقف خروجی ۴۰ مگاپیکسل، یعنی حدود ۲٫۵ مگاپیکسل ورودی است."
+    }
+    override func exportUpscaleEstimate(_ seconds: Int) -> String {
+        let minutes = max(1, Int((Double(seconds) / 60).rounded()))
+        return "حدود \(Digits.num(minutes)) دقیقه روی این مک."
+    }
+    override var exportUpscaleUnavailable: String {
+        "دستیار هوش مصنوعی محلی نصب نیست، بنابراین از بازنمونه‌برداری استاندارد استفاده می‌شود."
+    }
+    override var exportUpscaleFailed: String { "بزرگ‌نمایی کامل نشد." }
     override var cancel: String { "انصراف" }
     override var save: String { "ذخیره…" }
     override var saveExport: String { "ذخیرهٔ خروجی…" }
@@ -858,5 +876,84 @@ final class PersianL10n: L10n {
     }
     override func smartFaceLabel(_ index: Int) -> String {
         "\(smartFaceSection) \(Digits.num(index + 1))"
+    }
+
+    // MARK: - AI
+
+    override var aiSection: String { "ویرایش هوش مصنوعی" }
+    override var aiQuickEdit: String { "ویرایش سریع" }
+    override var aiRemoveObject: String { "حذف شیء" }
+    override var aiRemoveObjectHelp: String {
+        "روی شیء در عکس کلیک کن. هوش مصنوعی فقط همان ناحیه را بازسازی می‌کند و بقیهٔ پیکسل‌ها دست‌نخورده می‌مانند."
+    }
+    override var aiSelectHint: String { "روی شیئی که باید حذف شود کلیک کن" }
+    override var aiMaskPoint: String { "نقطه" }
+    override var aiMaskBrush: String { "قلم‌مو" }
+    override var aiMaskBox: String { "کادر" }
+    override var aiMaskClear: String { "پاک کردن" }
+    override var aiMaskErase: String { "پاک‌کن" }
+    override var aiMaskBrushSize: String { "اندازهٔ قلم‌مو" }
+    override var aiMaskExpand: String { "گسترش" }
+    override var aiMaskFeather: String { "نرمی لبه" }
+    override var aiMaskInvert: String { "معکوس" }
+    override var aiMaskSnap: String { "چسبیدن به لبه‌ها" }
+    override var aiMaskSnapping: String { "در حال یافتن لبه‌ها…" }
+    override var aiMaskHint: String { "روی چیزی که باید تغییر کند بکش" }
+    override var aiMaskBoxHint: String { "دور ناحیه را بکش" }
+    override var aiHealArea: String { "ترمیم ناحیهٔ کوچک" }
+    override var aiHealAreaHelp: String {
+        "روی یک لکهٔ کوچک بکش. مدل ترمیم محلی آن را در کمتر از یک ثانیه از بافت اطراف پر می‌کند."
+    }
+    override var aiMaskFailed: String { "آماده‌سازی انتخاب ممکن نشد." }
+    override var aiMaskTooLarge: String {
+        "این انتخاب برای این ابزار بزرگ است. «حذف شیء» یا ناحیهٔ کوچک‌تری را انتخاب کن."
+    }
+    override var aiModelMissing: String {
+        "مدل‌های محلی هوش مصنوعی نصب نیستند. مراحل نصب را در بخش هوش مصنوعی تنظیمات ببین."
+    }
+    override var aiLicenseBlocked: String {
+        "این مدل هوش مصنوعی برای استفاده روی این مک مجاز اعلام نشده."
+    }
+    override var aiRunEdit: String { "اجرای ویرایش" }
+    override var aiCancelEdit: String { "لغو" }
+    override var aiTryAgain: String { "ویرایش ناحیهٔ دیگر" }
+    override var aiEditCount: String { "ویرایش‌های هوش مصنوعی" }
+    override var aiRemoveLastEdit: String { "حذف آخرین ویرایش هوش مصنوعی" }
+    override var aiLocalNote: String { "روی همین مک اجرا می‌شود. چیزی آپلود نمی‌شود." }
+    override var aiHelperMissing: String {
+        "دستیار محلی هوش مصنوعی نصب نیست. مراحل نصب را در بخش هوش مصنوعی تنظیمات ببین."
+    }
+    override var aiHelperStopped: String {
+        "دستیار محلی هوش مصنوعی پاسخ نمی‌دهد. برای راه‌اندازی دوباره، ویرایش را از نو اجرا کن."
+    }
+    override var aiHelperWriteFailed: String {
+        "ارتباط با دستیار محلی هوش مصنوعی برقرار نشد. برای راه‌اندازی دوباره، ویرایش را از نو اجرا کن."
+    }
+    override var aiTooLarge: String {
+        "این ناحیه برای یک ویرایش محلی بزرگ است. شیء کوچک‌تری انتخاب کن."
+    }
+    override var aiBadReply: String { "دستیار هوش مصنوعی نتیجهٔ غیرمنتظره‌ای برگرداند." }
+    override var aiMissingAssets: String {
+        "پیکسل‌های یکی از ویرایش‌های هوش مصنوعی پیدا نشد و نمایش داده نمی‌شود. ویرایش را دوباره انجام بده یا حذفش کن."
+    }
+    override func aiAssetsMissing(_ count: Int) -> String {
+        count == 1
+            ? aiMissingAssets
+            : "پیکسل‌های \(Digits.num(count)) ویرایش هوش مصنوعی پیدا نشد و نمایش داده نمی‌شوند."
+    }
+    override var aiWorking: String { "در حال ساخت ویرایش روی این مک…" }
+    override var aiApplied: String { "ویرایش هوش مصنوعی اعمال شد" }
+    override var aiStageIdle: String { "آماده" }
+    override var aiStagePreparing: String { "آماده‌سازی عکس…" }
+    override var aiStageStarting: String { "راه‌اندازی دستیار هوش مصنوعی…" }
+    override var aiStageWaiting: String {
+        "در حال ساخت. روی این مک چند ثانیه تا حدود یک دقیقه طول می‌کشد."
+    }
+    override func aiStageDenoising(_ step: Int, of total: Int) -> String {
+        "در حال ساخت — گام \(Digits.num(step)) از \(Digits.num(total))"
+    }
+    override func aiStageFinished(_ seconds: Double) -> String {
+        let value = String(format: "%.0f", seconds.rounded())
+        return "در \(Digits.convert(value)) ثانیه انجام شد"
     }
 }

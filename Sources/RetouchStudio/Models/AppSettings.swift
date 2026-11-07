@@ -18,6 +18,7 @@ final class AppSettings: ObservableObject {
         static let exportFormat = "jpeg"
         static let exportQuality = 0.92
         static let exportLongEdge = 0
+        static let exportAIUpscale = false
         static let healBrushPercent = 1.6
         static let showFaceOverlay = false
         static let stripLocationMetadata = true
@@ -30,6 +31,7 @@ final class AppSettings: ObservableObject {
         static let exportFormat = "settings.exportFormat"
         static let exportQuality = "settings.exportQuality"
         static let exportLongEdge = "settings.exportLongEdge"
+        static let exportAIUpscale = "settings.exportAIUpscale"
         static let healBrushPercent = "settings.healBrushPercent"
         static let showFaceOverlay = "settings.showFaceOverlay"
         static let recovery = "settings.recoveryEnabled"
@@ -57,6 +59,10 @@ final class AppSettings: ObservableObject {
     /// Longest exported edge in pixels; 0 keeps the original size.
     @Published var exportLongEdge: Int {
         didSet { store.set(exportLongEdge, forKey: Key.exportLongEdge) }
+    }
+    /// Let the local upscaler produce the pixels a larger long edge asks for.
+    @Published var exportAIUpscale: Bool {
+        didSet { store.set(exportAIUpscale, forKey: Key.exportAIUpscale) }
     }
     @Published var healBrushPercent: Double {
         didSet { store.set(healBrushPercent, forKey: Key.healBrushPercent) }
@@ -91,6 +97,9 @@ final class AppSettings: ObservableObject {
         exportFormat = store.string(forKey: Key.exportFormat) ?? Defaults.exportFormat
         exportQuality = min(1, max(0.4, anyDouble(Key.exportQuality, Defaults.exportQuality)))
         exportLongEdge = max(0, store.integer(forKey: Key.exportLongEdge))
+        exportAIUpscale = store.object(forKey: Key.exportAIUpscale) == nil
+            ? Defaults.exportAIUpscale
+            : store.bool(forKey: Key.exportAIUpscale)
         healBrushPercent = max(0.4, anyDouble(Key.healBrushPercent, Defaults.healBrushPercent))
         showFaceOverlay = store.object(forKey: Key.showFaceOverlay) == nil
             ? Defaults.showFaceOverlay
@@ -112,6 +121,7 @@ final class AppSettings: ObservableObject {
         exportFormat = Defaults.exportFormat
         exportQuality = Defaults.exportQuality
         exportLongEdge = Defaults.exportLongEdge
+        exportAIUpscale = Defaults.exportAIUpscale
         healBrushPercent = Defaults.healBrushPercent
         showFaceOverlay = Defaults.showFaceOverlay
         recoveryEnabled = true

@@ -6,7 +6,9 @@ import UniformTypeIdentifiers
 /// modified; the project records how it should be edited so the work can be
 /// resumed later.
 struct RetouchProject: Codable {
-    static let currentVersion = 1
+    /// v2 added AI edits. A v1 project still opens: every later field decodes
+    /// as `nil` and means "off".
+    static let currentVersion = 2
     static let fileExtension = "retouch"
 
     /// The app declares this type in Info.plist, so the panel filters to real
@@ -41,6 +43,9 @@ struct RetouchProject: Codable {
     /// Placed stickers, again in original-photo coordinates. `nil` keeps older
     /// project files and older readers working unchanged.
     var stickers: [Sticker]? = nil
+    /// Saved AI patches, referencing files in the app's own edit store. `nil`
+    /// means the project predates them.
+    var aiEdits: [AIEdit]? = nil
     /// The face-analysis overlay, including which areas were chosen and where
     /// the leader ends were dragged. `nil` leaves the tool off, as it was
     /// before the tool existed.
@@ -52,7 +57,7 @@ struct RetouchProject: Codable {
     private enum CodingKeys: String, CodingKey {
         case version, imagePath, imageBookmark, adjustments, exportFormat,
              exportQuality, exportLongEdge, autoRetouchStrength,
-             autoColorStrength, crop, healSpots, stickers, analysis,
+             autoColorStrength, crop, healSpots, stickers, aiEdits, analysis,
              selectedFace
     }
 
@@ -61,7 +66,8 @@ struct RetouchProject: Codable {
          exportQuality: Double, exportLongEdge: Int? = nil,
          autoRetouchStrength: Double, autoColorStrength: Double? = nil,
          crop: CGRect? = nil, healSpots: [HealSpot]? = nil,
-         stickers: [Sticker]? = nil, analysis: AnalysisSettings? = nil,
+         stickers: [Sticker]? = nil, aiEdits: [AIEdit]? = nil,
+         analysis: AnalysisSettings? = nil,
          selectedFace: Int? = nil) {
         self.imagePath = imagePath
         self.imageBookmark = imageBookmark
@@ -74,6 +80,7 @@ struct RetouchProject: Codable {
         self.crop = crop
         self.healSpots = healSpots
         self.stickers = stickers
+        self.aiEdits = aiEdits
         self.analysis = analysis
         self.selectedFace = selectedFace
     }
@@ -94,6 +101,7 @@ struct RetouchProject: Codable {
         crop = try c.decodeIfPresent(CGRect.self, forKey: .crop)
         healSpots = try c.decodeIfPresent([HealSpot].self, forKey: .healSpots)
         stickers = try c.decodeIfPresent([Sticker].self, forKey: .stickers)
+        aiEdits = try c.decodeIfPresent([AIEdit].self, forKey: .aiEdits)
         analysis = try c.decodeIfPresent(AnalysisSettings.self, forKey: .analysis)
         selectedFace = try c.decodeIfPresent(Int.self, forKey: .selectedFace)
     }

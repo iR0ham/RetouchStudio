@@ -228,6 +228,9 @@ class L10n {
         "Auto Retouch: " + (measures.isEmpty ? [autoSaidClean] : measures).joined(separator: ", ") + "."
     }
     var renderingExport: String { "Rendering full-quality export…" }
+    func upscaling(_ done: Int, _ total: Int) -> String {
+        "Upscaling \(Digits.num(done)) of \(Digits.num(total)) tiles…"
+    }
     func saved(_ name: String) -> String { "Saved \(name)" }
     var exportFailed: String { "Could not save the export." }
     var exportCancelled: String { "Export cancelled." }
@@ -437,6 +440,21 @@ class L10n {
     func exportSize(_ info: String) -> String { "Output: \(info)" }
     func originalSize(_ info: String) -> String { "Original size: \(info)" }
     func suggestedName(_ name: String) -> String { "Suggested name: \(name)" }
+    var exportUpscale: String { "AI upscale 4×" }
+    var exportUpscaleDetail: String {
+        "Adds detail with the local Swin2SR model, then trims to the chosen edge. Nothing leaves this Mac."
+    }
+    var exportUpscaleTooLarge: String {
+        "This photo is too large for a 4× pass. The limit is 40 MP of output, about 2.5 MP in."
+    }
+    func exportUpscaleEstimate(_ seconds: Int) -> String {
+        let minutes = max(1, Int((Double(seconds) / 60).rounded()))
+        return "About \(Digits.num(minutes)) min on this Mac."
+    }
+    var exportUpscaleUnavailable: String {
+        "The local AI helper is not installed, so the standard resampler is used."
+    }
+    var exportUpscaleFailed: String { "The upscaler could not finish." }
     var cancel: String { "Cancel" }
     var save: String { "Save…" }
     var saveExport: String { "Save Export…" }
@@ -610,9 +628,13 @@ class L10n {
         case .smartReady: return smartReady
         case .smartApplied: return smartApplied
         case .smartAppliedReport(let measures): return smartAppliedReport(measures)
+        case .aiWorking: return aiWorking
+        case .aiApplied: return aiApplied
+        case .aiAssetsMissing(let count): return aiAssetsMissing(count)
         case .settingsReset: return settingsResetStatus
         case .recentMissing(let name): return recentMissing(name)
         case .renderingExport: return renderingExport
+        case .upscaling(let done, let total): return upscaling(done, total)
         case .saved(let name): return saved(name)
         case .exportFailed: return exportFailed
         case .exportCancelled: return exportCancelled
@@ -896,5 +918,94 @@ class L10n {
     }
     func smartFaceLabel(_ index: Int) -> String {
         "\(smartFaceSection) \(Digits.num(index + 1))"
+    }
+
+    // MARK: - AI
+
+    var aiSection: String { "AI Edit" }
+    var aiQuickEdit: String { "Quick Edit" }
+    var aiRemoveObject: String { "Remove object" }
+    var aiRemoveObjectHelp: String {
+        "Click the object on the photo. The AI rebuilds only that area and leaves every other pixel as it was."
+    }
+    var aiSelectHint: String { "Click the object you want gone" }
+    var aiMaskPoint: String { "Point" }
+    var aiMaskBrush: String { "Brush" }
+    var aiMaskBox: String { "Box" }
+    var aiMaskClear: String { "Clear" }
+    var aiMaskErase: String { "Erase" }
+    var aiMaskBrushSize: String { "Brush size" }
+    var aiMaskExpand: String { "Expand" }
+    var aiMaskFeather: String { "Feather" }
+    var aiMaskInvert: String { "Invert" }
+    var aiMaskSnap: String { "Snap to edges" }
+    var aiMaskSnapping: String { "Finding the edges…" }
+    var aiMaskHint: String { "Paint over what should change" }
+    var aiMaskBoxHint: String { "Drag around the area" }
+    var aiHealArea: String { "Heal small area" }
+    var aiHealAreaHelp: String {
+        "Paint over a small spot. The local inpaint model fills it from the nearby texture in under a second."
+    }
+    var aiMaskFailed: String { "Could not prepare the selection." }
+    var aiMaskTooLarge: String {
+        "That selection is too large for this tool. Use Remove object or a smaller area."
+    }
+    var aiModelMissing: String {
+        "The local AI models are not installed. See the AI section of Settings for the setup steps."
+    }
+    var aiLicenseBlocked: String {
+        "This AI model is not cleared for use on this Mac."
+    }
+    var aiRunEdit: String { "Run edit" }
+    var aiCancelEdit: String { "Cancel" }
+    var aiTryAgain: String { "Edit another area" }
+    var aiEditCount: String { "AI edits" }
+    var aiRemoveLastEdit: String { "Remove the last AI edit" }
+    var aiLocalNote: String { "Runs on this Mac. Nothing is uploaded." }
+    var aiHelperMissing: String {
+        "The local AI helper is not installed. See the AI section of Settings for the setup steps."
+    }
+    var aiHelperStopped: String {
+        "The local AI helper stopped responding. Run the edit again to restart it."
+    }
+    var aiHelperWriteFailed: String {
+        "Could not reach the local AI helper. Run the edit again to restart it."
+    }
+    var aiTooLarge: String {
+        "That area is too large for a local edit. Select a smaller object."
+    }
+    var aiBadReply: String { "The AI helper returned an unexpected result." }
+    var aiMissingAssets: String {
+        "An AI edit is missing its pixels, so it is not being shown. Reopen the edit or remove it."
+    }
+    func aiAssetsMissing(_ count: Int) -> String {
+        count == 1
+            ? aiMissingAssets
+            : "\(Digits.num(count)) AI edits are missing their pixels, so they are not being shown."
+    }
+    var aiWorking: String { "Generating the edit on this Mac…" }
+    var aiApplied: String { "AI edit applied" }
+    var aiStageIdle: String { "Ready" }
+    var aiStagePreparing: String { "Preparing the photo…" }
+    var aiStageStarting: String { "Starting the AI helper…" }
+    var aiStageWaiting: String {
+        "Generating. This takes a few seconds to about a minute on this Mac."
+    }
+    func aiStageDenoising(_ step: Int, of total: Int) -> String {
+        "Generating — step \(Digits.num(step)) of \(Digits.num(total))"
+    }
+    func aiStageFinished(_ seconds: Double) -> String {
+        let value = String(format: "%.0f", seconds.rounded())
+        return "Done in \(Digits.convert(value)) s"
+    }
+    func quickEditStatus(_ stage: QuickEditStage) -> String {
+        switch stage {
+        case .idle: return aiStageIdle
+        case .preparing: return aiStagePreparing
+        case .starting: return aiStageStarting
+        case .denoising(let step): return aiStageDenoising(step, of: 4)
+        case .finished(let seconds): return aiStageFinished(seconds)
+        case .failed(let message): return message
+        }
     }
 }

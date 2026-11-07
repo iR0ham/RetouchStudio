@@ -836,7 +836,436 @@ func testPrivacySettingDefaults() async {
     check(reopened.stripLocationMetadata, "Restore Defaults turns the strip back on")
 }
 
+// MARK: - Phase 2: AI edits
+
+/// A solid RGBA image, used as synthetic patch pixels.
+func solidImage(width: Int, height: Int,
+                red: CGFloat, green: CGFloat, blue: CGFloat) -> CGImage? {
+    guard let ctx = CGContext(data: nil, width: width, height: height,
+                              bitsPerComponent: 8, bytesPerRow: 0, space: sRGB,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    ctx.setFillColor(CGColor(srgbRed: red, green: green, blue: blue, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    return ctx.makeImage()
+}
+
+/// Stages a real pair of files in the edit store: solid patch pixels and an
+/// alpha that is opaque only in a centered inset. The inset is the same
+/// fraction the worker's dilation leaves inside its rectangle.
+func storedAIEdit(box: CGRect, inset: CGFloat = 0.25) -> AIEdit? {
+    let side = 64
+    guard let patch = solidImage(width: side, height: side, red: 0.92, green: 0.16, blue: 0.08)
+    else { return nil }
+    let gray = CGColorSpaceCreateDeviceGray()
+    guard let alphaContext = CGContext(data: nil, width: side, height: side,
+                                       bitsPerComponent: 8, bytesPerRow: 0,
+                                       space: gray,
+                                       bitmapInfo: CGImageAlphaInfo.none.rawValue)
+    else { return nil }
+    alphaContext.setFillColor(gray: 0, alpha: 1)
+    alphaContext.fill(CGRect(x: 0, y: 0, width: side, height: side))
+    alphaContext.setFillColor(gray: 1, alpha: 1)
+    let insetPixels = CGFloat(side) * inset
+    alphaContext.fill(CGRect(x: insetPixels, y: insetPixels,
+                             width: CGFloat(side) - 2 * insetPixels,
+                             height: CGFloat(side) - 2 * insetPixels))
+    guard let alpha = alphaContext.makeImage() else { return nil }
+
+    let patchURL = workDir.appendingPathComponent("patch-\(UUID().uuidString).png")
+    let alphaURL = workDir.appendingPathComponent("alpha-\(UUID().uuidString).png")
+    guard writePNG(patch, to: patchURL), writePNG(alpha, to: alphaURL) else { return nil }
+    let id = UUID()
+    guard let files = try? AIEditStore.adopt(id: id, patch: patchURL, alpha: alphaURL)
+    else { return nil }
+    return AIEdit(id: id,
+                  preset: "removeObject", prompt: "test", seed: 1,
+                  patchFile: files.patch, alphaFile: files.alpha,
+                  box: box, imagePixels: CGSize(width: side, height: side))
+}
+
+func rgbaBytes(_ image: CGImage) -> [UInt8]? {
+    var data = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    guard let ctx = CGContext(data: &data, width: image.width, height: image.height,
+                              bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                              space: sRGB,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    return data
+}
+
+func ciBytes(_ image: CIImage, width: Int, height: Int) -> [UInt8]? {
+    guard let cg = ImageProcessor.shared.context.createCGImage(
+        image, from: CGRect(x: 0, y: 0, width: width, height: height),
+        format: .RGBA8, colorSpace: sRGB) else { return nil }
+    return rgbaBytes(cg)
+}
+
+/// Counts changed pixels outside the authorized box and inside the opaque
+/// part of the alpha. `rgbaBytes` dumps rows top-first, the same order as the
+/// document's top-left coordinates, so no flip is needed.
+func aiDiffStats(_ a: [UInt8], _ b: [UInt8], width: Int, height: Int,
+                 box: CGRect, alphaBox: CGRect) -> (outside: Int, insideAlpha: Int) {
+    var outside = 0
+    var insideAlpha = 0
+    for row in 0..<height {
+        let y = (Double(row) + 0.5) / Double(height)
+        for column in 0..<width {
+            let x = (Double(column) + 0.5) / Double(width)
+            let offset = (row * width + column) * 4
+            let changed = a[offset] != b[offset]
+                || a[offset + 1] != b[offset + 1]
+                || a[offset + 2] != b[offset + 2]
+            guard changed else { continue }
+            let point = CGPoint(x: x, y: y)
+            if !box.contains(point) {
+                outside += 1
+            } else if alphaBox.contains(point) {
+                insideAlpha += 1
+            }
+        }
+    }
+    return (outside, insideAlpha)
+}
+
+@MainActor
+func testAIEditBoundaries() async {
+    print("\n[P2-1] an AI edit changes only its alpha inside the authorized box")
+
+    let box = CGRect(x: 0.25, y: 0.30, width: 0.40, height: 0.30)
+    guard let edit = storedAIEdit(box: box) else {
+        check(false, "the edit files are staged")
+        return
+    }
+    defer { AIEditStore.remove(edit) }
+
+    let layers = AICompositor.layers([edit], crop: nil)
+    check(layers.count == 1, "the layer resolves from the store")
+
+    // The same edit at preview size and at twice that size must cover the same
+    // fraction of the frame: the app can re-composite at export size.
+    for (width, height) in [(480, 600), (960, 1200)] {
+        guard let source = makeImage(width: width, height: height) else {
+            check(false, "fixture \(width)×\(height)")
+            continue
+        }
+        let extent = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+        let base = CIImage(cgImage: source).cropped(to: extent)
+        let out = AICompositor.apply(layers, to: base, extent: extent)
+        guard let a = rgbaBytes(source), let b = ciBytes(out, width: width, height: height) else {
+            check(false, "render \(width)×\(height)")
+            continue
+        }
+
+        let alphaBox = box.insetBy(dx: box.width * 0.25, dy: box.height * 0.25)
+        let stats = aiDiffStats(a, b, width: width, height: height,
+                                box: box, alphaBox: alphaBox)
+        let expected = alphaBox.width * alphaBox.height * Double(width * height)
+        check(stats.outside == 0,
+              "\(width)×\(height): byte-identical outside the box",
+              "\(stats.outside) px")
+        check(Double(stats.insideAlpha) > expected * 0.9,
+              "\(width)×\(height): the alpha area is edited",
+              "\(stats.insideAlpha) of \(Int(expected)) px")
+    }
+
+    // A crop narrows the working frame; the edit's photo coordinates must move
+    // with it instead of staying at the same place on screen.
+    let moved = AICompositor.workingBox(CGRect(x: 0.5, y: 0.5, width: 0.25, height: 0.25),
+                                        crop: CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5))
+    check(moved == CGRect(x: 0.5, y: 0.5, width: 0.5, height: 0.5),
+          "a box maps through the crop", "\(moved)")
+}
+
+@MainActor
+func testAIProjectRoundTrip() async {
+    print("\n[P2-2] a project carries its AI edits and reports missing pixels")
+
+    guard let edit = storedAIEdit(box: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3)) else {
+        check(false, "the edit files are staged")
+        return
+    }
+    defer { AIEditStore.remove(edit) }
+
+    let project = RetouchProject(imagePath: "/tmp/photo.jpg",
+                                 adjustments: Adjustments(),
+                                 exportFormat: "png", exportQuality: 0.9,
+                                 autoRetouchStrength: 70, aiEdits: [edit])
+    guard let encoded = try? JSONEncoder().encode(project),
+          let decoded = try? JSONDecoder().decode(RetouchProject.self, from: encoded) else {
+        check(false, "the project encodes and decodes")
+        return
+    }
+    check(decoded.version == RetouchProject.currentVersion && decoded.version >= 2,
+          "the project is written at the current version")
+    check(decoded.aiEdits == [edit], "every AI edit survives the round trip")
+
+    // A file written before AI edits existed has no key at all. It must open
+    // with the tool off, not fail.
+    guard var object = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    else {
+        check(false, "the project is valid JSON")
+        return
+    }
+    object.removeValue(forKey: "aiEdits")
+    object["version"] = 1
+    guard let legacy = try? JSONSerialization.data(withJSONObject: object),
+          let old = try? JSONDecoder().decode(RetouchProject.self, from: legacy) else {
+        check(false, "a version-1 project still decodes")
+        return
+    }
+    check(old.aiEdits == nil, "an older project opens with no AI edits")
+
+    AIEditStore.remove(edit)
+    check(AICompositor.missing([edit]).count == 1, "a removed edit is reported")
+    check(AICompositor.layers([edit], crop: nil).isEmpty,
+          "a removed edit is not composited")
+}
+
+@MainActor
+func testAIEditUndoAndExport() async {
+    print("\n[P2-3] an AI edit is one undo step and reaches the export")
+
+    let sourceURL = workDir.appendingPathComponent("ai-source.png")
+    check(makeImage(width: 480, height: 600).map { writePNG($0, to: sourceURL) } ?? false,
+          "fixture written")
+
+    let model = EditorModel()
+    model.exportFormat = .png
+    model.load(url: sourceURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture loads")
+
+    let baseURL = workDir.appendingPathComponent("ai-base.png")
+    model.export(to: baseURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: baseURL.path) && !model.isBusy
+    }, "baseline export finishes")
+    check(model.isDocumentPristine, "the baseline is pristine")
+
+    let box = CGRect(x: 0.30, y: 0.35, width: 0.40, height: 0.30)
+    guard let edit = storedAIEdit(box: box) else {
+        check(false, "the edit files are staged")
+        return
+    }
+    defer { AIEditStore.remove(edit) }
+
+    model.addAIEdit(edit)
+    check(model.aiEdits.count == 1 && !model.isDocumentPristine,
+          "the edit joins the document")
+    check(model.canUndo, "the toolbar offers undo for the new edit")
+    check(await waitUntil { !model.isBusy }, "the preview settles")
+
+    let editedURL = workDir.appendingPathComponent("ai-edited.png")
+    model.export(to: editedURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: editedURL.path) && !model.isBusy
+    }, "edited export finishes")
+
+    guard let base = readImage(baseURL), let edited = readImage(editedURL),
+          let a = rgbaBytes(base), let b = rgbaBytes(edited) else {
+        check(false, "both exports decode")
+        return
+    }
+    let alphaBox = box.insetBy(dx: box.width * 0.25, dy: box.height * 0.25)
+    let stats = aiDiffStats(a, b, width: 480, height: 600, box: box, alphaBox: alphaBox)
+    check(stats.outside == 0,
+          "the export is byte-identical outside the authorized box",
+          "\(stats.outside) px")
+    let expected = alphaBox.width * alphaBox.height * 480 * 600
+    check(Double(stats.insideAlpha) > expected * 0.9,
+          "the edit is present in the exported file",
+          "\(stats.insideAlpha) of \(Int(expected)) px")
+
+    // Undo has to be pixel-stable, not only a list change: the undone document
+    // must export exactly what it exported before the edit existed.
+    model.undo()
+    check(model.aiEdits.isEmpty, "one undo removes the edit")
+    let undoneURL = workDir.appendingPathComponent("ai-undone.png")
+    model.export(to: undoneURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: undoneURL.path) && !model.isBusy
+    }, "undone export finishes")
+    if let undone = readImage(undoneURL).flatMap(rgbaBytes) {
+        let undoneStats = aiDiffStats(a, undone, width: 480, height: 600,
+                                      box: box, alphaBox: alphaBox)
+        check(undoneStats.outside == 0 && undoneStats.insideAlpha == 0,
+              "undo restores the earlier pixels exactly")
+    } else {
+        check(false, "the undone export decodes")
+    }
+
+    model.redo()
+    check(model.aiEdits.count == 1, "redo restores it")
+    let redoneURL = workDir.appendingPathComponent("ai-redone.png")
+    model.export(to: redoneURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: redoneURL.path) && !model.isBusy
+    }, "redone export finishes")
+    if let redone = readImage(redoneURL).flatMap(rgbaBytes) {
+        // The redone document must export the same bytes the first edited
+        // export produced, not merely "some edit somewhere".
+        let diff = zip(b, redone).lazy.filter { $0 != $1 }.count
+        check(diff == 0, "redo reproduces the edited pixels", "\(diff) bytes differ")
+    } else {
+        check(false, "the redone export decodes")
+    }
+
+    model.removeLastAIEdit()
+    check(model.aiEdits.isEmpty, "the last edit can be removed")
+}
+
+// MARK: - Phase 3: selection masks
+
+func grayLevel(_ image: CGImage, x: Int, y: Int) -> Int? {
+    guard let data = image.dataProvider?.data as Data? else { return nil }
+    let offset = y * image.bytesPerRow + x
+    guard offset >= 0, offset < data.count else { return nil }
+    return Int(data[offset])
+}
+
+func alphaLevel(_ image: CGImage, x: Int, y: Int) -> Int? {
+    let width = image.width, height = image.height
+    guard let ctx = CGContext(data: nil, width: width, height: height,
+                              bitsPerComponent: 8, bytesPerRow: width * 4,
+                              space: sRGB,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    guard let raw = ctx.data else { return nil }
+    return Int(raw.load(fromByteOffset: y * width * 4 + x * 4 + 3, as: UInt8.self))
+}
+
+func isWhite(_ level: Int?) -> Bool { (level ?? -1) >= 250 }
+func isBlack(_ level: Int?) -> Bool { (level ?? 256) <= 5 }
+
+@MainActor
+func testAIMaskRenderer() async {
+    print("\n[P3] the selection mask keeps its orientation, erase and invert")
+
+    let size = CGSize(width: 100, height: 100)
+    // Normalized top-left box: white pixels must land in the top-left corner,
+    // even though CGContext counts rows from the bottom.
+    let box = CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)
+    guard let boxMask = AIMaskRenderer.mask(size: size, strokes: [], box: box,
+                                            refined: nil, inverted: false) else {
+        check(false, "box mask renders")
+        return
+    }
+    check(boxMask.width == 100 && boxMask.height == 100, "the mask matches the photo size")
+    check(isWhite(grayLevel(boxMask, x: 20, y: 15)), "the box is white at the top-left")
+    check(isBlack(grayLevel(boxMask, x: 20, y: 90)), "the same column is black at the bottom")
+    check(isBlack(grayLevel(boxMask, x: 80, y: 20)), "the same row is black at the right")
+
+    // A brush point at the center of the photo, one tenth of the width across.
+    let dot = AIMaskStroke(points: [CGPoint(x: 0.5, y: 0.5)], width: 0.1, erase: false)
+    guard let dotMask = AIMaskRenderer.mask(size: size, strokes: [dot], box: nil,
+                                            refined: nil, inverted: false) else {
+        check(false, "stroke mask renders")
+        return
+    }
+    check(isWhite(grayLevel(dotMask, x: 50, y: 50)), "a brush dot is white where it was drawn")
+    check(isBlack(grayLevel(dotMask, x: 50, y: 20)), "the dot does not leak upward")
+    check(isBlack(grayLevel(dotMask, x: 20, y: 50)), "the dot does not leak sideways")
+
+    // Erasing must carve the previous coverage back to black.
+    let wipe = AIMaskStroke(points: [CGPoint(x: 0.5, y: 0.3), CGPoint(x: 0.5, y: 0.7)],
+                            width: 0.2, erase: true)
+    guard let erased = AIMaskRenderer.mask(size: size, strokes: [dot, wipe], box: nil,
+                                           refined: nil, inverted: false) else {
+        check(false, "erase mask renders")
+        return
+    }
+    check(isBlack(grayLevel(erased, x: 50, y: 50)), "an erase stroke clears the dot")
+
+    // Invert swaps what may change without moving anything else.
+    guard let inverted = AIMaskRenderer.mask(size: size, strokes: [], box: box,
+                                             refined: nil, inverted: true) else {
+        check(false, "inverted mask renders")
+        return
+    }
+    check(isBlack(grayLevel(inverted, x: 20, y: 15)), "invert clears the box")
+    check(isWhite(grayLevel(inverted, x: 80, y: 80)), "invert fills the rest")
+
+    guard let alpha = AIMaskRenderer.alphaMask(boxMask) else {
+        check(false, "the preview alpha plane renders")
+        return
+    }
+    check(alphaLevel(alpha, x: 20, y: 15) == 255, "the preview is opaque inside the box")
+    check(alphaLevel(alpha, x: 80, y: 80) == 0, "the preview is clear outside the box")
+}
+
+@MainActor
+func testQuickEditSelectionGating() async {
+    print("\n[P3] Quick Edit needs a selection, and heal needs a mask")
+
+    let url = workDir.appendingPathComponent("mask-gating.png")
+    guard let image = makeImage(width: 640, height: 480), writePNG(image, to: url) else {
+        check(false, "mask-gating fixture")
+        return
+    }
+    let model = EditorModel()
+    model.load(url: url)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture loads")
+
+    check(!model.canRunQuickEdit, "no run without a point or a mask")
+
+    model.beginQuickEdit()
+    check(model.isAIPicking, "begin starts picking")
+    model.placeQuickEditPoint(CGPoint(x: 0.5, y: 0.5))
+    check(model.canRunQuickEdit, "a point is enough for Remove object")
+    check(model.aiMaskPreview == nil, "a point alone paints no mask")
+
+    model.selectQuickEditPreset(.healArea)
+    check(model.quickEditPoint == nil, "switching to heal drops the point")
+    check(!model.canRunQuickEdit, "heal cannot run from a point")
+    check(model.aiMaskTool == .brush, "heal selects the brush")
+
+    model.selectAIMaskTool(.brush)
+    model.appendMaskStroke(AIMaskStroke(
+        points: [CGPoint(x: 0.4, y: 0.4), CGPoint(x: 0.6, y: 0.6)],
+        width: 0.04, erase: false))
+    check(model.canRunQuickEdit, "a stroke enables heal")
+    check(model.aiMaskPreview != nil, "the stroke paints a preview")
+    check(model.aiMaskPreview?.width == Int(model.previewSize.width),
+          "the preview plane matches the preview size")
+
+    model.aiMaskInverted = true
+    check(model.aiMaskPreview != nil, "inverting keeps the preview")
+    model.aiMaskInverted = false
+
+    model.clearAIMask()
+    check(!model.aiMaskHasSelection, "Clear empties the mask")
+    check(!model.canRunQuickEdit, "Clear disables Run again")
+    check(model.aiMaskPreview == nil, "Clear removes the preview")
+}
+
 // MARK: - runner
+
+@MainActor
+func testExportUpscalePolicy() async {
+    print("\n[P4-1] the upscaler's limits match what the helper will accept")
+
+    // Swin2SR is fixed at 4x and the helper refuses more than 40 MP out, so a
+    // full pass is only offered up to 2.5 MP in. Both numbers live here so the
+    // sheet can refuse in the same terms before a job is queued.
+    check(ExportUpscale.factor == 4, "the pass is four times the pixels per axis")
+    check(ExportUpscale.canHandle(CGSize(width: 1500, height: 1500)),
+          "2.25 MP fits the 4x ceiling", "\(6000 * 6000) px out")
+    check(!ExportUpscale.canHandle(CGSize(width: 1600, height: 1600)),
+          "the first size past 2.5 MP is refused", "\(6400 * 6400) px out")
+    check(ExportUpscale.canHandle(CGSize(width: 400, height: 300)),
+          "a small photo is accepted")
+    check(!ExportUpscale.canHandle(CGSize(width: 0, height: 300)),
+          "an empty size is refused")
+
+    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: 4096) == 4000,
+          "4x wins when the request is above it", "1000 -> 4000")
+    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: 2048) == 2048,
+          "the requested edge wins below 4x", "1000 -> 2048")
+    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: nil) == 4000,
+          "no request means the full 4x")
+}
 
 @MainActor
 func runAll() async {
@@ -850,6 +1279,12 @@ func runAll() async {
     await testOperationCoordination()
     await testPreviewStaysAtPreviewResolution()
     await testPrivacySettingDefaults()
+    await testAIEditBoundaries()
+    await testAIProjectRoundTrip()
+    await testAIEditUndoAndExport()
+    await testAIMaskRenderer()
+    await testQuickEditSelectionGating()
+    await testExportUpscalePolicy()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

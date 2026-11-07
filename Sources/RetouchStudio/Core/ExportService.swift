@@ -10,6 +10,9 @@ struct ExportSnapshot: Equatable {
     var adjustments = Adjustments()
     var healSpots: [HealSpot] = []
     var stickers: [Sticker] = []
+    /// AI patches already stored on disk. They are document edits, not stamps:
+    /// they always describe this photo, so a batch clears them for other files.
+    var aiEdits: [AIEdit] = []
     var analysis = AnalysisSettings()
     /// Crop in normalized photo coordinates with a top-left origin.
     var crop: CGRect?
@@ -28,6 +31,10 @@ struct ExportSnapshot: Equatable {
     var includeStamps = true
     /// The analysis callouts. Off for batch work unless asked for.
     var includeAnalysis = true
+    /// Run the rendered photo through the local 4x upscaler before writing.
+    /// Only meaningful when the requested size is larger than the photo; the
+    /// UI hides the switch otherwise.
+    var aiUpscale = false
 }
 
 /// One image's pixels and measurements, as `ImageProcessor.load` reports them.
@@ -50,6 +57,49 @@ struct RenderedExport {
     var carriesSourceMetadata: Bool
 }
 
+/// What the local upscaler can promise, decided before a job is queued.
+///
+/// Swin2SR is a fixed 4x model and the helper refuses to build an output above
+/// 40 megapixels (`UPSCALE_MAX_OUTPUT`), which bounds a full 4x pass to a
+/// 2.5 MP source on this machine. Mirroring both numbers here means the sheet
+/// can say no in the same terms the helper would use.
+enum ExportUpscale {
+    static let factor: CGFloat = 4
+    static let maxOutputPixels = 40_000_000
+
+    /// The intermediate copy and the written file both use sRGB. The helper
+    /// works on untagged 8-bit pixels, so handing it wide-gamut values and
+    /// then tagging the result the same way would shift every colour.
+    static let workingColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+
+    static func canHandle(_ size: CGSize) -> Bool {
+        guard size.width >= 1, size.height >= 1 else { return false }
+        let width = Int((size.width * factor).rounded())
+        let height = Int((size.height * factor).rounded())
+        return width * height <= maxOutputPixels
+    }
+
+    /// The long edge actually written: 4x the photo, but never past the edge
+    /// the owner picked.
+    static func outputLongEdge(sourceLong: CGFloat, requested: CGFloat?) -> CGFloat {
+        let quadrupled = sourceLong * factor
+        guard let requested, requested > 0 else { return quadrupled }
+        return min(quadrupled, requested)
+    }
+
+    /// Measured on this Mac (M3, 16 GB, MPS) with the default 256 px tiles:
+    /// 28 tiles, 150 s for a 900x1600 photo, whose 4x output is 23 MP. That is
+    /// about 6.5 s per megapixel of output. This only feeds the sheet's
+    /// estimate; the helper's own tile report is the measured truth while a
+    /// job runs.
+    static let secondsPerOutputMegapixel = 6.5
+
+    static func estimatedSeconds(for size: CGSize) -> Int {
+        let megapixels = (size.width * factor) * (size.height * factor) / 1_000_000
+        return Int((megapixels * secondsPerOutputMegapixel).rounded())
+    }
+}
+
 enum ExportService {
 
     /// How a one-photo export ended. `cancelled` is distinct from `failed`
@@ -62,12 +112,24 @@ enum ExportService {
     /// before the expensive render and again before the file is committed, so
     /// a cancelled export leaves no photo behind even though Core Image itself
     /// does not stop early.
-    static func run(_ snapshot: ExportSnapshot, source: ExportSource, to url: URL) -> Outcome {
+    static func run(_ snapshot: ExportSnapshot, source: ExportSource, to url: URL,
+                    progress: ((Int, Int) -> Void)? = nil) -> Outcome {
         if Task.isCancelled { return .cancelled }
-        guard let rendered = render(snapshot, source: source) else { return .failed }
+        let rendered: RenderedExport?
+        do {
+            rendered = try renderFinal(snapshot, source: source, progress: progress)
+        } catch {
+            // A cancelled upscale is the owner's doing, not a failure.
+            return Task.isCancelled || (error as? AIWorkerFailure)?.code == -32014
+                ? .cancelled : .failed
+        }
+        guard let rendered else { return .failed }
         if Task.isCancelled { return .cancelled }
+        // The upscaler hands back sRGB pixels, so an upscaled file is written
+        // with the profile those pixels were produced in.
+        let colorSpace = snapshot.aiUpscale ? ExportUpscale.workingColorSpace : source.colorSpace
         let wrote = write(rendered, snapshot: snapshot, to: url,
-                          colorSpace: source.colorSpace, metadata: source.metadata)
+                          colorSpace: colorSpace, metadata: source.metadata)
         return wrote ? .saved : .failed
     }
 
@@ -94,7 +156,10 @@ enum ExportService {
     }
 
     /// The one rendering path. Both entry points call this and then `write`.
-    static func render(_ snapshot: ExportSnapshot, source: ExportSource) -> RenderedExport? {
+    /// `applyAnalysis` is false for the first half of an upscaled export: the
+    /// callouts belong on the enlarged photo, not inside the model's input.
+    static func render(_ snapshot: ExportSnapshot, source: ExportSource,
+                       applyAnalysis: Bool = true) -> RenderedExport? {
         let processor = ImageProcessor.shared
         let crop = snapshot.crop
 
@@ -128,34 +193,110 @@ enum ExportService {
                                           aspect: source.photoAspect)
             : []
 
-        let focus = snapshot.selectedFaceIndex
-            .flatMap { source.faces.indices.contains($0) ? source.faces[$0] : nil }
+        let focus = focusFace(snapshot, faces: source.faces)
 
         var rendered = processor.process(source.image, adjustments: snapshot.adjustments,
                                          masks: masks, faces: source.faces,
-                                         spots: spots, art: art, focus: focus)
+                                         spots: spots, art: art,
+                                         ai: AICompositor.layers(snapshot.aiEdits, crop: crop),
+                                         focus: focus)
 
+        guard applyAnalysis, snapshot.includeAnalysis, snapshot.analysis.isEnabled,
+              !source.faces.isEmpty else {
+            return RenderedExport(image: rendered, carriesSourceMetadata: true)
+        }
+        return analysisApplied(snapshot, image: rendered, faces: source.faces, focus: focus)
+    }
+
+    /// What actually gets written. With AI upscaling on, the photo is rendered
+    /// at its own size, enlarged by the helper, and only then given its
+    /// callouts: anything drawn before the job would be reinterpreted by the
+    /// model instead of staying crisp.
+    static func renderFinal(_ snapshot: ExportSnapshot,
+                            source: ExportSource,
+                            progress: ((Int, Int) -> Void)? = nil) throws -> RenderedExport? {
+        guard snapshot.aiUpscale else { return render(snapshot, source: source) }
+        guard let base = render(snapshot, source: source, applyAnalysis: false) else {
+            return nil
+        }
+        let enlarged = try upscale(base.image, progress: progress)
         guard snapshot.includeAnalysis, snapshot.analysis.isEnabled, !source.faces.isEmpty
-        else { return RenderedExport(image: rendered, carriesSourceMetadata: true) }
+        else { return RenderedExport(image: enlarged, carriesSourceMetadata: true) }
+        return analysisApplied(snapshot, image: enlarged, faces: source.faces,
+                               focus: focusFace(snapshot, faces: source.faces))
+    }
 
+    private static func focusFace(_ snapshot: ExportSnapshot,
+                                  faces: [FaceGeometry]) -> FaceGeometry? {
+        snapshot.selectedFaceIndex
+            .flatMap { faces.indices.contains($0) ? faces[$0] : nil }
+    }
+
+    /// The callouts at whatever size the image already has. Face geometry is
+    /// normalized, so the same call lands on the original and on a 4x upscale.
+    private static func analysisApplied(_ snapshot: ExportSnapshot, image: CIImage,
+                                        faces: [FaceGeometry],
+                                        focus: FaceGeometry?) -> RenderedExport? {
         switch snapshot.analysis.exportMode {
         case .onPhoto:
-            rendered = AnalysisRenderer.apply(rendered, faces: source.faces,
-                                              settings: snapshot.analysis, focus: focus)
+            return RenderedExport(image: AnalysisRenderer.apply(image, faces: faces,
+                                                                settings: snapshot.analysis,
+                                                                focus: focus),
+                                  carriesSourceMetadata: true)
         case .poster:
-            rendered = AnalysisRenderer.poster(rendered, faces: source.faces,
-                                               settings: snapshot.analysis, focus: focus)
+            return RenderedExport(image: AnalysisRenderer.poster(image, faces: faces,
+                                                                 settings: snapshot.analysis,
+                                                                 focus: focus),
+                                  carriesSourceMetadata: true)
         case .overlayOnly:
             // Lines on transparency, for the owner to place over a photo of
             // their own in whatever layout tool they use.
-            guard let lines = AnalysisRenderer.render(size: rendered.extent.size,
-                                                      faces: source.faces,
+            guard let lines = AnalysisRenderer.render(size: image.extent.size,
+                                                      faces: faces,
                                                       settings: snapshot.analysis,
                                                       focus: focus)
             else { return nil }
             return RenderedExport(image: CIImage(cgImage: lines), carriesSourceMetadata: false)
         }
-        return RenderedExport(image: rendered, carriesSourceMetadata: true)
+    }
+
+    /// Runs one upscale job through the local helper and reads the result back
+    /// into memory. The working copy is deleted; the helper trims its own job
+    /// folders. Cancelling the surrounding task cancels the job as well.
+    private static func upscale(_ image: CIImage,
+                                progress: ((Int, Int) -> Void)?) throws -> CIImage {
+        guard ExportUpscale.canHandle(image.extent.size) else {
+            throw AIWorkerFailure(code: -32602, message: L10n.current.exportUpscaleTooLarge)
+        }
+        try AIWorker.ensureRunning()
+        let copy = try AIWorker.writeUpscaleSource(image)
+        defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+
+        let id = try WorkerClient.shared.submit("upscale", ["image": ["path": copy.path]])
+        let reply: [String: Any]
+        do {
+            reply = try WorkerClient.shared.wait(
+                job: id, timeout: 1500,
+                cancelled: { Task.isCancelled },
+                fields: { update in
+                    // The helper reports tiles finished, not a percentage; the
+                    // status line shows the same count so a long pass is
+                    // visibly moving.
+                    guard let done = update["tile"] as? Int,
+                          let total = update["tiles"] as? Int else { return }
+                    progress?(done, total)
+                })
+        } catch {
+            WorkerClient.shared.cancel(job: id)
+            throw error
+        }
+        guard let payload = reply["result"] as? [String: Any],
+              let path = payload["output"] as? String,
+              let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw AIWorkerFailure(code: -32603, message: L10n.current.exportUpscaleFailed)
+        }
+        return CIImage(cgImage: decoded)
     }
 
     /// Writes through a temporary file in the destination folder and moves it

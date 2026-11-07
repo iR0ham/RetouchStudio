@@ -171,17 +171,17 @@ struct CompareCanvas: View {
                     .clipShape(RoundedRectangle(cornerRadius: sheetRadius, style: .continuous))
                     .position(center)
 
-                if model.toolMode == .crop {
+                if model.toolMode == .crop && !model.isAIPicking {
                     CropOverlay(model: model, displayed: displayed)
                         .position(center)
                 }
 
-                if model.toolMode == .heal {
+                if model.toolMode == .heal && !model.isAIPicking {
                     HealOverlay(model: model, displayed: displayed)
                         .position(center)
                 }
 
-                if model.toolMode == .art {
+                if model.toolMode == .art && !model.isAIPicking {
                     ArtOverlay(model: model, displayed: displayed)
                         .position(center)
                 }
@@ -199,8 +199,16 @@ struct CompareCanvas: View {
                         .allowsHitTesting(false)
                 }
 
-                if model.toolMode == .analysis && !model.isPeekingOriginal {
+                if model.toolMode == .analysis && !model.isPeekingOriginal && !model.isAIPicking {
                     AnalysisOverlay(model: model, displayed: displayed)
+                        .position(center)
+                }
+
+                // Quick Edit owns the pointer only while it is picking, so the
+                // canvas keeps panning and comparing at every other time.
+                if (model.isAIPicking || model.quickEditPoint != nil
+                    || model.aiMaskHasSelection) && !model.isPeekingOriginal {
+                    AISelectOverlay(model: model, displayed: displayed)
                         .position(center)
                 }
 

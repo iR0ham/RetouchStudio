@@ -720,6 +720,7 @@ final class ImageProcessor {
                  faces: [FaceGeometry] = [],
                  spots: SpotHealing? = nil,
                  art: [Sticker] = [],
+                 ai: [AILayer] = [],
                  focus: FaceGeometry? = nil) -> CIImage {
         let extent = source.extent
         // Every radius is expressed relative to image size so the preview and
@@ -735,6 +736,14 @@ final class ImageProcessor {
             for pass in spots.passes {
                 image = SkinEngine.healSpots(image, mask: pass.mask, radius: pass.radius)
             }
+        }
+
+        // 0b) AI edits replace pixels only where their alpha allows. They are
+        //     blended after manual healing so a stamp can repair an edit, and
+        //     before every skin pass so the automatic work still applies on
+        //     top of the new pixels.
+        if !ai.isEmpty {
+            image = AICompositor.apply(ai, to: image, extent: extent)
         }
 
         // 1) Local retouch runs first, while the masks still line up with the
