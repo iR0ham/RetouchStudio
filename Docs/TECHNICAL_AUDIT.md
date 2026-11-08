@@ -5,6 +5,7 @@
 **Audit date:** 2026-11-04
 **Auditor's constraint:** No source file was modified, refactored or rewritten. This document is the only artifact created.
 **Post-audit addendum (2026-11-04):** §14 records the disposition of every Critical and High finding and of the P1/P2 items in the companion plan, with commit hashes and test names. The findings below remain as written in the audited snapshot.
+**Phase 5 addendum (2026-11-07):** the shipping app now bundles a local Python helper runtime inside `Contents/Resources/Worker`. The statement in §… that there are “no third-party dependencies at any layer” describes the audited snapshot and no longer covers the shipping bundle; the current dependency inventory is in [`AI_RUNTIME.md`](AI_RUNTIME.md) §6. The network audit for the bundled build is in [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md).
 **Companion brief:** The task refers to an existing "Project Brief". At the start of the audit no such document existed in the repository (a tree-wide search returned no `*.md`, `README`, `docs/`, or brief of any kind). This audit therefore stands alone and reconstructs intent from source, comments and the verified behaviour of the build.
 
 ---
