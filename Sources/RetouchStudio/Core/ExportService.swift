@@ -272,6 +272,9 @@ enum ExportService {
         let copy = try AIWorker.writeUpscaleSource(image)
         defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
 
+        var used = false
+        ModelActivity.shared.begin(.swin)
+        defer { ModelActivity.shared.finish(.swin, used: used) }
         let id = try WorkerClient.shared.submit("upscale", ["image": ["path": copy.path]])
         let reply: [String: Any]
         do {
@@ -286,6 +289,7 @@ enum ExportService {
                           let total = update["tiles"] as? Int else { return }
                     progress?(done, total)
                 })
+            used = true
         } catch {
             WorkerClient.shared.cancel(job: id)
             throw error

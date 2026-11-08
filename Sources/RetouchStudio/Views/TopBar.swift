@@ -27,6 +27,11 @@ struct TopBar: View {
                       help: model.s.redoHelp,
                       enabled: model.canRedo) { model.redo() }
 
+            barButton("questionmark.circle",
+                      help: TutorialCopy.current.buttonHelp) {
+                InfoWindows.shared.showTutorial()
+            }
+
             exportPill
         }
         .padding(.horizontal, 8)

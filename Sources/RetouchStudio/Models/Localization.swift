@@ -546,6 +546,70 @@ class L10n {
         "Resets the starting values. The photo that is open keeps its current sliders."
     }
     var settingsResetStatus: String { "Preferences reset to defaults." }
+
+    // AI models
+    var settingsModels: String { "AI MODELS" }
+    var settingsModelsNote: String {
+        "Downloading a model needs the internet once; after that every tool runs offline."
+    }
+    var settingsModelsManage: String { "Manage Models…" }
+    var modelsTitle: String { "AI Models" }
+    var modelsOfflineNote: String {
+        "Models run on this Mac. Nothing is uploaded, and no model is downloaded without your approval."
+    }
+    var modelsInstalled: String { "Installed" }
+    var modelsMissing: String { "Not installed" }
+    var modelsDownload: String { "Download…" }
+    var modelsDownloadAgain: String { "Download again…" }
+    var modelsVerify: String { "Verify" }
+    var modelsRemove: String { "Remove…" }
+    var modelsClose: String { "Done" }
+    var modelsChecking: String { "Checking…" }
+    var modelsVerified: String { "Checksums match." }
+    func modelsVerifyFailed(_ file: String) -> String { "Checksum mismatch: \(file)" }
+    func modelsDownloadTitle(_ name: String) -> String { "Download \(name)?" }
+    func modelsDownloadBody(files: Int, size: String, license: String) -> String {
+        let count = files == 1 ? "1 file" : "\(files) files"
+        return "\(count), \(size). License: \(license). This is the only step that uses the internet."
+    }
+    var modelsDownloadAction: String { "Download" }
+    var modelsCancel: String { "Cancel" }
+    func modelsDownloading(_ percent: Int) -> String { "Downloading… \(percent)%" }
+    func modelsDownloaded(_ name: String) -> String { "\(name) is installed." }
+    var modelsDownloadCancelled: String { "Download cancelled. Nothing was installed." }
+    var modelsDownloadFailed: String { "The download did not finish. Nothing was installed." }
+    func modelsRemoveTitle(_ name: String) -> String { "Remove \(name)?" }
+    var modelsRemoveBody: String {
+        "The model files are deleted from this Mac. You can download them again later."
+    }
+    var modelsRemoveAction: String { "Remove" }
+    func modelsRemoved(_ name: String) -> String { "\(name) was removed." }
+    var modelsSizeUnknown: String { "Size unknown" }
+    var modelsHelperMissing: String { "The AI helper is not available on this Mac." }
+    func modelsTaskName(_ task: String) -> String {
+        switch task {
+        case "segmentation": return "Selection"
+        case "upscaling": return "Upscaling"
+        case "inpainting": return "Healing"
+        case "generative-edit": return "Object removal"
+        default: return task
+        }
+    }
+    func modelsUsedFor(_ action: String) -> String { "Used for: \(action)" }
+    var modelsInUse: String { "In use" }
+    var modelsNeverUsed: String { "Not used yet" }
+    func modelsLastUsed(_ when: String) -> String { "Last used: \(when)" }
+    var modelsJustNow: String { "just now" }
+    func modelsMinutesAgo(_ count: Int) -> String {
+        count == 1 ? "1 minute ago" : "\(count) minutes ago"
+    }
+    func modelsHoursAgo(_ count: Int) -> String {
+        count == 1 ? "1 hour ago" : "\(count) hours ago"
+    }
+    func modelsDaysAgo(_ count: Int) -> String {
+        count == 1 ? "1 day ago" : "\(count) days ago"
+    }
+
     var aboutTitle: String { "About Retouch Studio" }
     var aboutTagline: String { "Portrait retouching, measured." }
     var aboutVersion: String { "Version" }
@@ -951,7 +1015,7 @@ class L10n {
         "That selection is too large for this tool. Use Remove object or a smaller area."
     }
     var aiModelMissing: String {
-        "The local AI models are not installed. See the AI section of Settings for the setup steps."
+        "The local AI models are not installed. Open Settings → Manage Models… to download them."
     }
     var aiLicenseBlocked: String {
         "This AI model is not cleared for use on this Mac."

@@ -115,11 +115,17 @@ enum QuickEditRunner {
             throw AIWorkerFailure(code: -32002, message: L10n.current.aiSelectHint)
         }
 
+        let model: AIModelID = preset.engine == "patch" ? .flux : .migan
+        var used = false
+        ModelActivity.shared.begin(model)
+        defer { ModelActivity.shared.finish(model, used: used) }
+
         let id = try WorkerClient.shared.submit("patch_edit", params)
         onJob(id)
         let started = Date()
         let reply = try WorkerClient.shared.wait(job: id, timeout: timeout,
                                                  progress: { step, _ in progress(step) })
+        used = true
         let seconds = Date().timeIntervalSince(started)
 
         guard let payload = reply["result"] as? [String: Any],
@@ -178,11 +184,15 @@ enum QuickEditRunner {
         let y0 = min(max(0, box.minY), 1) * copy.size.height
         let x1 = min(max(x0 + 1, box.maxX * copy.size.width), copy.size.width)
         let y1 = min(max(y0 + 1, box.maxY * copy.size.height), copy.size.height)
+        var used = false
+        ModelActivity.shared.begin(.sam)
+        defer { ModelActivity.shared.finish(.sam, used: used) }
         let id = try WorkerClient.shared.submit("mask", [
             "image": ["path": copy.url.path],
             "box": [x0, y0, x1, y1],
         ])
         let reply = try WorkerClient.shared.wait(job: id, timeout: 120)
+        used = true
         guard let payload = reply["result"] as? [String: Any],
               let path = payload["mask"] as? String,
               let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),

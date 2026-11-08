@@ -29,11 +29,19 @@ final class InfoWindows {
         }
     }
 
+    func showTutorial() {
+        let copy = TutorialCopy.current
+        show(id: "tutorial", title: copy.windowTitle, size: NSSize(width: 980, height: 720)) {
+            TutorialView()
+        }
+    }
+
     /// A language switch in the menu reaches the editor instantly, but the
     /// panels hold a snapshot, so they have to be rebuilt by hand.
     func relocaliseOpenPanels() {
         if windows["about"] != nil { showAbout() }
         if windows["help"] != nil { showHelp() }
+        if windows["tutorial"] != nil { showTutorial() }
     }
 
     private func show<V: View>(id: String,

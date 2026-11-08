@@ -50,8 +50,19 @@ swiftc "${FLAGS[@]}" $(find Sources -name '*.swift') \
   -framework Vision -framework UniformTypeIdentifiers
 
 echo "→ ساخت بسته‌ی اپ…"
+# The helper runtime is ~1.6 GB. Keep it out of the delete/rebuild cycle; the
+# bundler's stamp decides whether anything actually has to be copied again.
+WORKER_CACHE="build/Worker.cache"
+mkdir -p build
+if [ -d "$APP_BUNDLE/Contents/Resources/Worker" ]; then
+  rm -rf "$WORKER_CACHE"
+  mv "$APP_BUNDLE/Contents/Resources/Worker" "$WORKER_CACHE"
+fi
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+if [ -d "$WORKER_CACHE" ]; then
+  mv "$WORKER_CACHE" "$APP_BUNDLE/Contents/Resources/Worker"
+fi
 cp "$OUT_DIR/$BINARY_NAME" "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
 cp Resources/Info.plist "$APP_BUNDLE/Contents/Info.plist"
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
@@ -73,6 +84,11 @@ if [ -d Resources/Fonts ]; then
 else
   echo "  ! warning: Resources/Fonts missing; Persian text will fall back to the system font."
 fi
+
+# Python interpreter, wheels and the worker package, so the app does not depend
+# on this checkout or on Homebrew. Model weights stay out: they are downloaded
+# by explicit consent.
+Tools/bundle-worker.sh "$APP_BUNDLE" ${RETOUCH_REBUNDLE:+--force}
 
 # امضای ad-hoc تا مک بدون هشدار بازش کند
 codesign --force --sign - "$APP_BUNDLE" >/dev/null 2>&1 || echo "  (بدون امضا ادامه می‌دهیم)"

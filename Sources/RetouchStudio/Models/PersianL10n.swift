@@ -562,6 +562,75 @@ final class PersianL10n: L10n {
         "مقادیر اولیه برمی‌گردند. عکسی که باز است همان اسلایدرهای فعلی را نگه می‌دارد."
     }
     override var settingsResetStatus: String { "ترجیحات به حالت اولیه برگشتند." }
+
+    // AI models
+    override var settingsModels: String { "مدل‌های هوش مصنوعی" }
+    override var settingsModelsNote: String {
+        "دانلود مدل یک‌بار به اینترنت نیاز دارد؛ بعد از آن همهٔ ابزارها آفلاین کار می‌کنند."
+    }
+    override var settingsModelsManage: String { "مدیریت مدل‌ها…" }
+    override var modelsTitle: String { "مدل‌های هوش مصنوعی" }
+    override var modelsOfflineNote: String {
+        "مدل‌ها روی همین مک اجرا می‌شوند. چیزی آپلود نمی‌شود و هیچ مدلی بدون تأیید شما دانلود نمی‌شود."
+    }
+    override var modelsInstalled: String { "نصب‌شده" }
+    override var modelsMissing: String { "نصب نشده" }
+    override var modelsDownload: String { "دانلود…" }
+    override var modelsDownloadAgain: String { "دانلود دوباره…" }
+    override var modelsVerify: String { "بررسی" }
+    override var modelsRemove: String { "حذف…" }
+    override var modelsClose: String { "تمام" }
+    override var modelsChecking: String { "در حال بررسی…" }
+    override var modelsVerified: String { "چک‌سام مطابقت دارد." }
+    override func modelsVerifyFailed(_ file: String) -> String {
+        "چک‌سام مطابقت ندارد: \(file)"
+    }
+    override func modelsDownloadTitle(_ name: String) -> String { "دانلود \(name)؟" }
+    override func modelsDownloadBody(files: Int, size: String, license: String) -> String {
+        "\(files) فایل، \(size). مجوز: \(license). این تنها مرحله‌ای است که از اینترنت استفاده می‌کند."
+    }
+    override var modelsDownloadAction: String { "دانلود" }
+    override var modelsCancel: String { "انصراف" }
+    override func modelsDownloading(_ percent: Int) -> String {
+        "در حال دانلود… \(Digits.num(percent))٪"
+    }
+    override func modelsDownloaded(_ name: String) -> String { "\(name) نصب شد." }
+    override var modelsDownloadCancelled: String { "دانلود لغو شد. چیزی نصب نشد." }
+    override var modelsDownloadFailed: String { "دانلود کامل نشد. چیزی نصب نشد." }
+    override func modelsRemoveTitle(_ name: String) -> String { "حذف \(name)؟" }
+    override var modelsRemoveBody: String {
+        "فایل‌های مدل از این مک حذف می‌شوند. بعداً می‌توانید دوباره دانلودشان کنید."
+    }
+    override var modelsRemoveAction: String { "حذف" }
+    override func modelsRemoved(_ name: String) -> String { "\(name) حذف شد." }
+    override var modelsSizeUnknown: String { "اندازه نامعلوم" }
+    override var modelsHelperMissing: String {
+        "دستیار هوش مصنوعی روی این مک در دسترس نیست."
+    }
+    override func modelsTaskName(_ task: String) -> String {
+        switch task {
+        case "segmentation": return "انتخاب"
+        case "upscaling": return "بزرگ‌نمایی"
+        case "inpainting": return "ترمیم"
+        case "generative-edit": return "حذف شیء"
+        default: return task
+        }
+    }
+    override func modelsUsedFor(_ action: String) -> String { "کاربرد: \(action)" }
+    override var modelsInUse: String { "در حال استفاده" }
+    override var modelsNeverUsed: String { "هنوز استفاده نشده" }
+    override func modelsLastUsed(_ when: String) -> String { "آخرین استفاده: \(when)" }
+    override var modelsJustNow: String { "همین حالا" }
+    override func modelsMinutesAgo(_ count: Int) -> String {
+        "\(Digits.num(count)) دقیقه پیش"
+    }
+    override func modelsHoursAgo(_ count: Int) -> String {
+        "\(Digits.num(count)) ساعت پیش"
+    }
+    override func modelsDaysAgo(_ count: Int) -> String {
+        "\(Digits.num(count)) روز پیش"
+    }
+
     override var aboutTitle: String { "دربارهٔ Retouch Studio" }
     override var aboutTagline: String { "رتوش پرتره، با اندازه‌گیری." }
     override var aboutVersion: String { "نسخه" }
@@ -909,7 +978,7 @@ final class PersianL10n: L10n {
         "این انتخاب برای این ابزار بزرگ است. «حذف شیء» یا ناحیهٔ کوچک‌تری را انتخاب کن."
     }
     override var aiModelMissing: String {
-        "مدل‌های محلی هوش مصنوعی نصب نیستند. مراحل نصب را در بخش هوش مصنوعی تنظیمات ببین."
+        "مدل‌های محلی هوش مصنوعی نصب نیستند. از تنظیمات → مدیریت مدل‌ها… دانلودشان کن."
     }
     override var aiLicenseBlocked: String {
         "این مدل هوش مصنوعی برای استفاده روی این مک مجاز اعلام نشده."

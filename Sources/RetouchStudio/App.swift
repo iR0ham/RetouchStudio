@@ -14,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func attach(model: EditorModel) {
         self.model = model
+        // Warm start behind the first paint. A missing or damaged helper is
+        // reported by the edit itself; this check exists so a stopped helper is
+        // noticed before the owner waits on a job that cannot start.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.5) {
+            AIWorker.selfTestAtLaunch()
+        }
         // Finder can deliver the open event before the window appears, so an
         // early URL waits here until the model exists.
         if let pendingURL {
@@ -209,7 +215,9 @@ struct RetouchStudioApp: App {
             }
             CommandGroup(replacing: .help) {
                 // macOS reserves ⌘? for the Help menu's own search field, so
-                // this item is reachable from the menu only.
+                // these items are reachable from the menu only.
+                Button(TutorialCopy.current.menuTitle) { InfoWindows.shared.showTutorial() }
+                Divider()
                 Button(model.s.helpTitle) { InfoWindows.shared.showHelp() }
             }
             CommandGroup(replacing: .undoRedo) {

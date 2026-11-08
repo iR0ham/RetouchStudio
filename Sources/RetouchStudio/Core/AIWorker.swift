@@ -35,14 +35,56 @@ enum AIWorker {
     }
 
     private static var launched: Process?
+    private static let launchLock = NSRecursiveLock()
+
+    /// Which app process started the running helper. A helper whose app is gone
+    /// is stale: the next launch stops it so its socket and temporary paths are
+    /// the ones this process will use.
+    private struct HelperOwner: Codable {
+        let appPID: Int32
+        let workerPID: Int32
+        let models: String
+
+        static var url: URL {
+            supportDirectory.appendingPathComponent("helper-owner.json")
+        }
+
+        static func load() -> HelperOwner? {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(HelperOwner.self, from: data)
+        }
+
+        static func record(appPID: Int32, workerPID: Int32) {
+            let owner = HelperOwner(appPID: appPID, workerPID: workerPID,
+                                    models: modelsDirectory.path)
+            if let data = try? JSONEncoder().encode(owner) { try? data.write(to: url) }
+        }
+
+        static func removeIfOwned(by pid: Int32 = getpid()) {
+            guard let owner = load(), owner.appPID == pid else { return }
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
 
     // MARK: - Running the helper
+
+    /// The interpreter and worker that ship inside the app. A release bundle
+    /// has them; a source or QA build falls back to the checkout below.
+    static var bundledRoot: URL? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let root = resources.appendingPathComponent("Worker", isDirectory: true)
+        let python = root.appendingPathComponent("bin/python3")
+        return FileManager.default.isExecutableFile(atPath: python.path) ? root : nil
+    }
 
     private static func interpreter() -> URL? {
         let manager = FileManager.default
         if let override = ProcessInfo.processInfo.environment["RETOUCH_AI_PYTHON"] {
             let url = URL(fileURLWithPath: override)
             return manager.isExecutableFile(atPath: url.path) ? url : nil
+        }
+        if let bundled = bundledRoot {
+            return bundled.appendingPathComponent("bin/python3")
         }
         var candidates = [supportDirectory.appendingPathComponent("venv/bin/python3")]
         if let repo = repositoryRoot() {
@@ -62,16 +104,57 @@ enum AIWorker {
             let url = URL(fileURLWithPath: override, isDirectory: true)
             return FileManager.default.fileExists(atPath: url.path) ? url : nil
         }
+        if let bundled = bundledRoot { return bundled }
         let local = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("RetouchStudio-Phase0/worker", isDirectory: true)
         return FileManager.default.fileExists(atPath: local.path) ? local : nil
+    }
+
+    /// Environment for a helper process. A bundled runtime also needs its
+    /// site-packages and its framework home; a checkout uses the venv instead.
+    private static func workerEnvironment(root: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        var paths = [root.path]
+        if let bundled = bundledRoot,
+           root.standardizedFileURL == bundled.standardizedFileURL {
+            paths.append(bundled.appendingPathComponent("site-packages").path)
+            environment["PYTHONHOME"] = frameworkHome(in: bundled)?.path
+            environment["PYTHONNOUSERSITE"] = "1"
+            // The runtime lives inside the sealed app. A .pyc written at launch
+            // adds a file the signature never covered, so the whole bundle stops
+            // verifying; keep bytecode in memory instead.
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        }
+        environment["PYTHONPATH"] = paths.joined(separator: ":")
+        environment["PYTHONUNBUFFERED"] = "1"
+        return environment
+    }
+
+    private static func frameworkHome(in root: URL) -> URL? {
+        let versions = root.appendingPathComponent("Python.framework/Versions", isDirectory: true)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: versions.path),
+              let newest = names.filter({ !$0.hasPrefix(".") })
+                  .max(by: { $0.compare($1, options: .numeric) == .orderedAscending })
+        else { return nil }
+        return versions.appendingPathComponent(newest, isDirectory: true)
     }
 
     /// True when the helper can be started on this machine at all.
     static var isInstalled: Bool { interpreter() != nil && repositoryRoot() != nil }
 
     static func ensureRunning() throws {
-        if WorkerClient.shared.isAvailable() { return }
+        launchLock.lock()
+        defer { launchLock.unlock() }
+
+        if WorkerClient.shared.isAvailable(), adoptRunningHelper() { return }
+        if WorkerClient.shared.isReachable() {
+            // Alive but did not answer in time: a warm-up or a heavy job. It
+            // must not be replaced, or the socket it owns would be pulled out
+            // from under the running work.
+            if waitForHelper() { return }
+            throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperWriteFailed)
+        }
+        if let process = launched, !process.isRunning { launched = nil }
         guard let python = interpreter(), let root = repositoryRoot() else {
             throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperMissing)
         }
@@ -92,10 +175,7 @@ enum AIWorker {
             "--allow-root", workingDirectory.path,
             "--allow-root", modelsDirectory.path,
         ]
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONPATH"] = root.path
-        environment["PYTHONUNBUFFERED"] = "1"
-        process.environment = environment
+        process.environment = workerEnvironment(root: root)
         let log = supportDirectory.appendingPathComponent("worker.log")
         try manager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         if !manager.fileExists(atPath: log.path) {
@@ -108,12 +188,105 @@ enum AIWorker {
 
         let deadline = Date().addingTimeInterval(25)
         while Date() < deadline {
-            if WorkerClient.shared.isAvailable() { return }
+            if WorkerClient.shared.isAvailable() { break }
             if !process.isRunning { break }
             Thread.sleep(forTimeInterval: 0.25)
         }
         if !WorkerClient.shared.isAvailable() {
             throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperMissing)
+        }
+        HelperOwner.record(appPID: getpid(), workerPID: process.processIdentifier)
+        cleanStaleWorkingCopies()
+    }
+
+    /// True when the helper answering on the socket should be reused. A helper
+    /// whose owning app has exited is stopped first: its exit unlinks the
+    /// socket, so the replacement has to wait for it to be gone.
+    private static func adoptRunningHelper() -> Bool {
+        guard let owner = HelperOwner.load() else { return true }
+        if owner.appPID == getpid() { return true }
+        if kill(owner.appPID, 0) == 0 { return true }
+
+        // Avoid the transport retry inside this probe: this is the restart path.
+        let key = "RetouchStudio.restoringHelper"
+        Thread.current.threadDictionary[key] = true
+        _ = try? WorkerClient.shared.call("shutdown", timeout: 2)
+        Thread.current.threadDictionary.removeObject(forKey: key)
+
+        let deadline = Date().addingTimeInterval(5)
+        while kill(owner.workerPID, 0) == 0 && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if kill(owner.workerPID, 0) == 0 { return true }
+        HelperOwner.removeIfOwned(by: owner.appPID)
+        return false
+    }
+
+    /// The launch self-test: the helper answers, its catalog loads, and every
+    /// installed file is the right size. Hashing weights would take minutes on
+    /// the 4.6 GB model, so that stays in `models verify`; this is the check
+    /// that has to be quick enough to run behind the first paint.
+    static func selfTestAtLaunch() {
+        guard isInstalled else { return }
+        do {
+            try ensureRunning()
+            let reply = try WorkerClient.shared.call("health", timeout: 15) as? [String: Any] ?? [:]
+            let models = reply["models"] as? [[String: Any]] ?? []
+            let installed = models.filter { $0["installed"] as? Bool == true }.count
+            let ok = reply["ok"] as? Bool ?? false
+            NSLog("[RetouchStudio] AI self-test: helper ready, %d installed model(s), health %@",
+                  installed, ok ? "ok" : "degraded")
+        } catch {
+            NSLog("[RetouchStudio] AI self-test: %@", error.localizedDescription)
+        }
+    }
+
+    /// Called after a transport failure. If the helper this app started has
+    /// stopped, a fresh one starts now, so the next attempt does not fail the
+    /// same way. A helper the owner launched by hand is not restarted here;
+    /// `ensureRunning` finds it by its socket or starts ours.
+    @discardableResult
+    static func restartIfStopped() -> Bool {
+        launchLock.lock()
+        defer { launchLock.unlock() }
+        if let process = launched {
+            if process.isRunning { return true }
+            launched = nil
+            try? FileManager.default.removeItem(atPath: WorkerClient.socketPath)
+        } else if WorkerClient.shared.isReachable() {
+            // Started outside this app and still listening: slow, not gone.
+            return waitForHelper()
+        }
+        do {
+            try ensureRunning()
+            return true
+        } catch {
+            NSLog("[RetouchStudio] AI helper restart failed: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    private static func waitForHelper(timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if WorkerClient.shared.isAvailable() { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        } while Date() < deadline
+        return false
+    }
+
+    /// Copy folders left by a previous run. Only stale ones go, so a working
+    /// copy another window is still using is never touched.
+    private static func cleanStaleWorkingCopies(olderThan age: TimeInterval = 86_400) {
+        let manager = FileManager.default
+        let cutoff = Date().addingTimeInterval(-age)
+        guard let items = try? manager.contentsOfDirectory(
+            at: workingDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return }
+        for item in items {
+            let modified = (try? item.resourceValues(forKeys: [.contentModificationDateKey]))
+                .flatMap(\.contentModificationDate) ?? .distantPast
+            if modified < cutoff { try? manager.removeItem(at: item) }
         }
     }
 
@@ -126,6 +299,7 @@ enum AIWorker {
             if process.isRunning { process.terminate() }
         }
         launched = nil
+        HelperOwner.removeIfOwned()
     }
 
     /// Quit-time stop. A child process outlives the app unless it is signalled,
@@ -134,6 +308,26 @@ enum AIWorker {
         guard let process = launched, process.isRunning else { return }
         process.terminate()
         launched = nil
+        HelperOwner.removeIfOwned()
+    }
+
+    // MARK: - Model tool
+
+    /// Starts the worker's model CLI in a separate process. Downloads live
+    /// outside the server on purpose: the server has no network code, and the
+    /// owner starts a transfer only by pressing the button that shows the
+    /// manifest first.
+    static func launchModelTool(_ arguments: [String]) throws -> Process {
+        guard let python = interpreter(), let root = repositoryRoot() else {
+            throw AIWorkerFailure(code: -32000, message: L10n.current.modelsHelperMissing)
+        }
+        try FileManager.default.createDirectory(at: modelsDirectory,
+                                                withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = python
+        process.arguments = ["-m", "retouch_ai_worker"] + arguments
+        process.environment = workerEnvironment(root: root)
+        return process
     }
 
     // MARK: - Working copies

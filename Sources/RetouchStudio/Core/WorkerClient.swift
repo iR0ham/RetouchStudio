@@ -33,6 +33,27 @@ final class WorkerClient {
 
     func call(_ method: String, _ params: [String: Any] = [:],
               timeout: TimeInterval = 20) throws -> Any {
+        do {
+            return try callOnce(method, params, timeout: timeout)
+        } catch let failure as AIWorkerFailure where failure.code == -32000 {
+            // A connection that never opened is the one failure worth retrying:
+            // the helper may have crashed since the last call. The thread flag
+            // stops the launch probe itself from recursing through here.
+            let key = "RetouchStudio.restoringHelper"
+            let thread = Thread.current.threadDictionary
+            guard thread[key] == nil else { throw failure }
+            guard AIWorker.isInstalled else {
+                throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperMissing)
+            }
+            thread[key] = true
+            defer { thread.removeObject(forKey: key) }
+            guard AIWorker.restartIfStopped() else { throw failure }
+            return try callOnce(method, params, timeout: timeout)
+        }
+    }
+
+    private func callOnce(_ method: String, _ params: [String: Any],
+                          timeout: TimeInterval) throws -> Any {
         let payload: [String: Any] = ["jsonrpc": "2.0", "id": 1,
                                       "method": method, "params": params]
         let data = try JSONSerialization.data(withJSONObject: payload)
@@ -106,13 +127,23 @@ final class WorkerClient {
 
     // MARK: - Transport
 
-    private func exchange(_ request: Data, timeout: TimeInterval) throws -> Data {
+    /// Whether something is listening, without asking it anything. A helper
+    /// busy inside a heavy job still accepts a connection, so this is what the
+    /// restart path uses to tell "gone" apart from "slow".
+    func isReachable() -> Bool {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            throw AIWorkerFailure(code: -32000, message: "could not open a socket")
-        }
+        guard fd >= 0 else { return false }
         defer { close(fd) }
+        guard var address = try? unixAddress() else { return false }
+        let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+        return withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, size) == 0
+            }
+        }
+    }
 
+    private func unixAddress() throws -> sockaddr_un {
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let path = WorkerClient.socketPath
@@ -125,6 +156,17 @@ final class WorkerClient {
                 _ = strcpy(chars, path)
             }
         }
+        return address
+    }
+
+    private func exchange(_ request: Data, timeout: TimeInterval) throws -> Data {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw AIWorkerFailure(code: -32000, message: "could not open a socket")
+        }
+        defer { close(fd) }
+
+        var address = try unixAddress()
         var seconds = timeval(tv_sec: Int(timeout), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &seconds, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &seconds, socklen_t(MemoryLayout<timeval>.size))

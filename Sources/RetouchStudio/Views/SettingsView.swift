@@ -6,6 +6,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: EditorModel
     @ObservedObject private var settings = AppSettings.shared
+    @State private var showModels = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -14,6 +15,7 @@ struct SettingsView: View {
                 autoSection
                 exportSection
                 toolsSection
+                modelsSection
                 recoverySection
                 footer
             }
@@ -24,6 +26,9 @@ struct SettingsView: View {
         .background(SettingsWindowTitle(title: model.s.settingsWindowTitle))
         .preferredColorScheme(.dark)
         .environment(\.layoutDirection, model.language.layoutDirection)
+        .sheet(isPresented: $showModels) {
+            ModelManagerView(editor: model)
+        }
     }
 
     // MARK: - Language
@@ -163,6 +168,34 @@ struct SettingsView: View {
                     .accessibilityLabel(model.s.settingsFaceOverlay)
             }
             .padding(.vertical, 2)
+        }
+    }
+
+    // MARK: - Models
+
+    private var modelsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(model.s.settingsModels)
+            Text(model.s.settingsModelsNote)
+                .font(Theme.Font.caption)
+                .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                showModels = true
+            } label: {
+                Text(model.s.settingsModelsManage)
+                    .font(Theme.Font.face(size: 11.5, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                            .fill(Theme.inset)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle(dip: 0.95))
         }
     }
 
