@@ -152,7 +152,7 @@ Sources/RetouchStudio/
   Views/               editor, inspector, tool panels, overlays, settings
 Resources/             Info.plist, app icon, Vazir fonts (OFL)
 Tests/                 engine and model suites plus run.sh harness
-Tools/                 bundle-worker.sh (optional Python runtime), make-dmg.sh
+Tools/                 bundle-worker.sh (optional Python runtime), make-dmg.sh, make-runtime.sh
 Docs/                  AI runtime, privacy audit, technical audit, release notes
 build.sh               compile + assemble + sign + self-test
 ```

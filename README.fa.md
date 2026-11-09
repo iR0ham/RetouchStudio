@@ -152,7 +152,7 @@ Sources/RetouchStudio/
   Views/               ویرایشگر، بازرس، پنل ابزارها، لایه‌ها، تنظیمات
 Resources/             Info.plist، آیکن اپ، فونت‌های وزیر (OFL)
 Tests/                 مجموعه‌های موتور و مدل به‌همراه هارنس run.sh
-Tools/                 bundle-worker.sh (runtime اختیاری پایتون)، make-dmg.sh
+Tools/                 bundle-worker.sh (runtime اختیاری پایتون)، make-dmg.sh، make-runtime.sh
 Docs/                  runtime هوش مصنوعی، ممیزی حریم خصوصی، ممیزی فنی، یادداشت‌های انتشار
 build.sh               کامپایل + بسته‌بندی + امضا + خودآزمون
 ```
