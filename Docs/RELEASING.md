@@ -1,6 +1,6 @@
 # Releasing Retouch Studio
 
-This is the checklist for turning the working tree into a public build. It is written for the current state of the project: universal (Apple silicon and Intel), ad-hoc signed, with an optional local AI helper and downloaded model weights. The helper itself is Apple-silicon-only.
+This is the checklist for turning the working tree into a public build. It is written for the current state of the project: universal (Apple silicon and Intel), ad-hoc signed, with an optional local AI helper. Release builds ship without the helper: the app downloads its runtime (about 390 MB) only when the owner asks, then downloads model weights separately. A build with the worker bundled is still supported for offline use. The helper itself is Apple-silicon-only.
 
 ## 1. Public identity
 
@@ -40,7 +40,7 @@ The build itself runs the engine self-test (`--selftest`) and stops if it fails;
 ## 4. Build and verify
 
 ```bash
-RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=42 ./build.sh release   # universal by default
+RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=42 RETOUCH_SKIP_WORKER=1 ./build.sh release   # light universal app
 codesign --verify --deep --strict "Retouch Studio.app"
 lipo -archs "Retouch Studio.app/Contents/MacOS/RetouchStudio"   # arm64 x86_64
 "Retouch Studio.app/Contents/MacOS/RetouchStudio" --selftest --out /tmp/rs-selftest
@@ -51,12 +51,12 @@ The build runs the self-test natively and, on an Apple-silicon machine with Rose
 Check the bundle contents:
 
 ```bash
-du -sh "Retouch Studio.app"                                # ~1.3–1.6 GB with the helper, ~30 MB without
+du -sh "Retouch Studio.app"                                # ~16 MB light universal; ~1.3–1.6 GB with the helper
 ls "Retouch Studio.app/Contents/Resources/Worker"          # only if the helper was bundled; Apple-silicon runtime
 find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only
 ```
 
-Model weights must not appear inside the bundle. They belong in `~/Library/Application Support/RetouchStudio/AI/models` after the owner approves a download.
+Model weights must not appear inside the bundle. They belong in `~/Library/Application Support/RetouchStudio/AI/models` after the owner approves a download. The on-demand runtime, when installed, lives beside them in `~/Library/Application Support/RetouchStudio/AI/runtime`.
 
 ## 5. Signing and notarization
 
@@ -72,20 +72,28 @@ xcrun notarytool submit RetouchStudio.zip --keychain-profile <profile> --wait
 xcrun stapler staple "Retouch Studio.app"
 ```
 
-Until then, release notes must state that the build is ad-hoc signed, universal (AI needs Apple silicon), and opened with **right-click → Open** on first launch.
+Until then, release notes must state that the build is ad-hoc signed, light (the AI runtime is a separate download on Apple silicon), and opened with **right-click → Open** on first launch.
 
 ## 6. Package and publish
 
-The two disk images are built separately, because the AI helper only ships with the Apple-silicon one:
+The two disk images are light builds, because the AI helper is downloaded on demand. The runtime archive is cut from a helper build first:
 
 ```bash
-RETOUCH_ARCH=arm64 ./build.sh release
+RETOUCH_ARCH=arm64 ./build.sh release                 # helper build, source available
+./Tools/make-runtime.sh "Retouch Studio.app/Contents/Resources/Worker"
+                                         # RetouchStudio-1.0.0-ai-runtime-arm64.zip + checksum
+```
+
+Copy the printed byte count and SHA256 into `Sources/RetouchStudio/Core/AIRuntime.swift` (`RUNTIME_BYTES`, `RUNTIME_SHA256`) and rebuild before cutting the images; the app refuses an archive whose size or hash differs.
+
+```bash
+RETOUCH_ARCH=arm64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 ./Tools/make-dmg.sh                                  # RetouchStudio-1.0.0-arm64.dmg
 
 RETOUCH_ARCH=x86_64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 ./Tools/make-dmg.sh                                  # RetouchStudio-1.0.0-x86_64.dmg
 
-./build.sh release                                   # universal app for the zip
+RETOUCH_ARCH=universal RETOUCH_SKIP_WORKER=1 ./build.sh release
 ditto -c -k --keepParent "Retouch Studio.app" "RetouchStudio-1.0.0-universal.zip"
 shasum -a 256 "RetouchStudio-1.0.0-universal.zip" > "RetouchStudio-1.0.0-universal.zip.sha256"
 
@@ -95,32 +103,33 @@ gh release create v1.0.0 \
   "RetouchStudio-1.0.0-arm64.dmg" "RetouchStudio-1.0.0-arm64.dmg.sha256" \
   "RetouchStudio-1.0.0-x86_64.dmg" "RetouchStudio-1.0.0-x86_64.dmg.sha256" \
   "RetouchStudio-1.0.0-universal.zip" "RetouchStudio-1.0.0-universal.zip.sha256" \
+  "RetouchStudio-1.0.0-ai-runtime-arm64.zip" "RetouchStudio-1.0.0-ai-runtime-arm64.zip.sha256" \
   --title "Retouch Studio 1.0.0" --notes-file Docs/RELEASE_NOTES_1.0.0.md
 ```
 
-Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 image carries the helper and full AI; the x86_64 image omits it and is much smaller because the helper cannot run there. The universal zip stays as a single-download alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
+Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 and x86_64 images are the same light editor; the runtime archive is an Apple-silicon-only extra fetched by the app after consent, and the universal zip is a single-file alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
 
 Release notes should include:
 
 - what changed, and the minimum macOS version (14.0);
-- that the build is universal and ad-hoc signed, with first-launch instructions;
-- that the editor runs on Intel while the AI tools require Apple silicon;
-- whether the AI helper is bundled and that models are downloaded separately;
-- the SHA256 of the archive;
-- a link to `PRIVACY_AUDIT.md` for the no-cloud claim.
+- that the build is ad-hoc signed, with first-launch instructions;
+- that the editor runs on Intel while the AI tools require Apple silicon and a downloaded runtime;
+- that the runtime is about 390 MB, downloaded from the release page after its size and SHA256 are shown, and that models are downloaded separately;
+- the SHA256 of every archive;
+- a link to `PRIVACY_AUDIT.md` for the network claim.
 
 ## 7. Post-publish checks
 
 - Download the DMG from the release page, verify its checksum, mount it, drag the app to Applications and launch it from a different account or folder. Repeat once with the zip.
 - Open a photo, run one Auto Retouch, export, and reopen the saved `.retouch` project.
-- If the helper is bundled: approve/download a model, run one AI job, and repeat the idle socket check described in `PRIVACY_AUDIT.md` §5.
+- Approve the runtime download from **Settings → Manage Models…**, watch it verify the SHA256 and install, then confirm the helper answers and a model downloads and runs one AI job. Repeat the idle socket check described in `PRIVACY_AUDIT.md` §5.
 - Confirm the About window and Settings show the stamped version.
 
 ## 8. Known limitations to repeat in the release notes
 
 1. Ad-hoc signature, no notarization — Gatekeeper asks once on other Macs.
 2. No clean-machine install has been tested on a second physical Mac.
-3. The helper adds ~1.3–1.6 GB before any model download and is Apple-silicon-only; on Intel the editor works and AI is unavailable.
+3. The AI runtime is an optional ~390 MB download on Apple silicon (about 1.3 GB unpacked); models add tens of megabytes to several gigabytes on top. Intel has no AI.
 4. Windows and Linux are not supported by this codebase.
-5. The worker source lives outside this repository; a build from a fresh clone without it produces an app whose AI tools report the helper as missing.
+5. The worker source lives outside this repository; a build from a fresh clone without it produces a light app whose AI tools offer the runtime download.
 6. Downloaded models range from tens of megabytes to several gigabytes under Application Support; removing the app and that folder is the documented uninstall.

@@ -43,7 +43,7 @@ final class WorkerClient {
             let thread = Thread.current.threadDictionary
             guard thread[key] == nil else { throw failure }
             guard AIWorker.isInstalled else {
-                throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperMissing)
+                throw AIWorkerFailure(code: -32000, message: AIWorker.missingHelperMessage)
             }
             thread[key] = true
             defer { thread.removeObject(forKey: key) }

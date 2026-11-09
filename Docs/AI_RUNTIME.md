@@ -1,10 +1,10 @@
 # Retouch Studio — Local AI Runtime
 
-**Applies to:** the packaged helper runtime in `Retouch Studio.app`. Measurements below were taken with the 2.1 (build 3) development build, before the first public release (`app.retouchstudio.mac`, 1.0.0).
-**Target:** macOS 14.0 or later. The app is universal (arm64 + x86_64); the bundled helper is an Apple-silicon (arm64) runtime, so AI tools are unavailable on Intel. Measured on a MacBook Air M3 with 16 GB.
+**Applies to:** the local AI helper, whether it is bundled inside `Retouch Studio.app` or installed from the on-demand runtime archive. Measurements below were taken with the 2.1 (build 3) development build, before the first public release (`app.retouchstudio.mac`, 1.0.0).
+**Target:** macOS 14.0 or later. The app is universal (arm64 + x86_64); the helper is an Apple-silicon (arm64) runtime, so AI tools are unavailable on Intel. Measured on a MacBook Air M3 with 16 GB.
 **Related:** [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md), [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md)
 
-The app and its AI helper are one self-contained bundle. Everything that runs — the retouching engine, the Python helper, PyTorch, Transformers, ONNX Runtime and MLX — is inside the app. Model weights are the only thing downloaded, and only after the owner approves the exact manifest.
+The helper is self-contained. A full build carries it inside the app; the 1.0.0 release ships a light app and downloads the same runtime once, with consent, into Application Support. Everything that runs — the retouching engine, the Python helper, PyTorch, Transformers, ONNX Runtime and MLX — is local. The runtime archive and the model weights are the only downloads, each after the owner approves the exact file, size and SHA256.
 
 ---
 
@@ -13,9 +13,11 @@ The app and its AI helper are one self-contained bundle. Everything that runs �
 | Component | Location | Size |
 |---|---|---|
 | App, engine and UI | `Contents/MacOS/RetouchStudio` | 5.9 MB |
-| Python 3.13.15 + wheels + helper | `Contents/Resources/Worker/` | ~1.29 GiB |
+| Light release app (per architecture / universal) | `Retouch Studio.app` | ~3.5–4 MB / ~16 MB |
+| Python 3.13.15 + wheels + helper (full build) | `Contents/Resources/Worker/` | ~1.29 GiB |
+| Runtime archive (light build, downloaded on demand) | `~/Library/Application Support/RetouchStudio/AI/runtime/` | 388,277,063 bytes zipped, ~1.29 GiB installed |
 | Typeface (Vazirmatn, SIL OFL) | `Contents/Resources/Fonts/` | ~496 KB |
-| **Whole app bundle** | | **~1.31 GiB** |
+| **Whole full app bundle** | | **~1.31 GiB** |
 | Model weights | Not shipped; downloaded by consent | 28 MB – 4.6 GB |
 
 Download sizes from the catalog: FLUX.2 klein 4B q4 — 4.6 GB; SAM 2.1 tiny — ~298 MB on disk; Swin2SR x4 — 48.5 MB; MI-GAN — 28.1 MB. The app works with any subset; a missing model produces a clear “open Manage Models” message instead of a failed job.
@@ -33,8 +35,8 @@ The worker is the framework interpreter copied from Homebrew Python 3.13.15, wit
    xattr -dr com.apple.quarantine "/Applications/Retouch Studio.app"
    ```
 
-3. Open **Settings (⌘,) → Manage Models…**, pick the models you need, and approve the download sheet. The sheet lists file count, total size, license and states that this is the only step that uses the internet.
-4. When the download finishes, the app is fully usable offline.
+3. Open **Settings (⌘,) → Manage Models…**. On Apple silicon the first card offers the AI runtime: its sheet shows the archive name, its size and its SHA256, and nothing is fetched before it is approved. After the download verifies and installs, pick the models you need and approve their download sheet. The sheet lists file count, total size and license. These approved downloads are the only steps that use the internet.
+4. When the downloads finish, the app is fully usable offline.
 
 There are no launch agents, no background daemons and no login items. The helper starts with the app, lives inside the app bundle, and stops when the app quits normally. After a crash it is left running (or replaced) by the next launch, as described in [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md) §3.
 
@@ -54,7 +56,7 @@ After the models are installed:
 
 - opening a photo, all twelve retouch tools, Auto Retouch, masking, AI edits, 4× upscaling and export are local;
 - the helper communicates with the app over a Unix socket in `~/Library/Application Support/RetouchStudio/AI/worker.sock`;
-- no network API exists in the app, and the helper's only networking is the downloader (`Downloads` is a separate command that requires consent).
+- the app's only network API is the runtime downloader (`AIRuntimeInstaller`), which fetches that one archive after consent and checks its SHA256; the helper's only networking is the model downloader (`Downloads` is a separate command that requires consent).
 
 This was measured, not assumed: see [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md) §3 — zero TCP/UDP endpoints while idle and during a real upscale job, and exactly two HTTPS connections during an approved download.
 
@@ -67,6 +69,7 @@ If a model file is damaged, `Manage Models… → Verify` reports the mismatched
 | Path | Contents |
 |---|---|
 | `~/Library/Application Support/RetouchStudio/AI/models/` | Installed model weights |
+| `~/Library/Application Support/RetouchStudio/AI/runtime/` | The on-demand helper runtime (light builds) |
 | `~/Library/Application Support/RetouchStudio/AI/jobs/` | Helper working copies and job outputs (cleaned up over time) |
 | `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
 | `~/Library/Application Support/RetouchStudio/AI/helper-owner.json` | Which app instance owns the running helper |
@@ -87,7 +90,7 @@ Projects and originals are never modified in place; exports are written where th
    rm -rf "$HOME/Library/Application Support/RetouchStudio"
    ```
 
-   This removes downloaded models, job working copies, the consent record, the owner record and logs. Nothing else is installed — no preference panes, no launch agents, no system extensions.
+   This removes the downloaded runtime, models, job working copies, the consent record, the owner record and logs. Nothing else is installed — no preference panes, no launch agents, no system extensions.
 
 To keep the models but remove everything else, delete everything in that folder except `AI/models`.
 

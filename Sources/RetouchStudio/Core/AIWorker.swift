@@ -83,6 +83,15 @@ enum AIWorker {
         #endif
     }
 
+    /// The runtime the owner downloaded on demand for a light build. It lives
+    /// in Application Support and is only used when the full app did not carry
+    /// a helper of its own.
+    static var installedRoot: URL? {
+        let root = AIRuntime.installDirectory
+        return AIRuntime.isInstalled && FileManager.default.isExecutableFile(
+            atPath: root.appendingPathComponent("bin/python3").path) ? root : nil
+    }
+
     private static func interpreter() -> URL? {
         let manager = FileManager.default
         if let override = ProcessInfo.processInfo.environment["RETOUCH_AI_PYTHON"] {
@@ -91,6 +100,9 @@ enum AIWorker {
         }
         if let bundled = bundledRoot {
             return bundled.appendingPathComponent("bin/python3")
+        }
+        if let installed = installedRoot {
+            return installed.appendingPathComponent("bin/python3")
         }
         var candidates = [supportDirectory.appendingPathComponent("venv/bin/python3")]
         if let repo = repositoryRoot() {
@@ -113,6 +125,7 @@ enum AIWorker {
             return FileManager.default.fileExists(atPath: url.path) ? url : nil
         }
         if let bundled = bundledRoot { return bundled }
+        if let installed = installedRoot { return installed }
         for start in [Bundle.main.executableURL,
                       URL(fileURLWithPath: FileManager.default.currentDirectoryPath)] {
             guard let start else { continue }
@@ -143,6 +156,11 @@ enum AIWorker {
             // adds a file the signature never covered, so the whole bundle stops
             // verifying; keep bytecode in memory instead.
             environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        } else if let installed = installedRoot,
+                  root.standardizedFileURL == installed.standardizedFileURL {
+            paths.append(installed.appendingPathComponent("site-packages").path)
+            environment["PYTHONHOME"] = frameworkHome(in: installed)?.path
+            environment["PYTHONNOUSERSITE"] = "1"
         }
         environment["PYTHONPATH"] = paths.joined(separator: ":")
         environment["PYTHONUNBUFFERED"] = "1"
@@ -161,6 +179,14 @@ enum AIWorker {
     /// True when the helper can be started on this machine at all.
     static var isInstalled: Bool { interpreter() != nil && repositoryRoot() != nil }
 
+    /// The message an AI tool shows when it cannot start the helper. A light
+    /// build points at the runtime download; Intel has no runtime to offer.
+    static var missingHelperMessage: String {
+        if AIRuntime.package == nil { return L10n.current.aiRuntimeIntelUnavailable }
+        if installedRoot == nil && bundledRoot == nil { return L10n.current.aiRuntimeNotInstalled }
+        return L10n.current.aiHelperMissing
+    }
+
     static func ensureRunning() throws {
         launchLock.lock()
         defer { launchLock.unlock() }
@@ -175,7 +201,7 @@ enum AIWorker {
         }
         if let process = launched, !process.isRunning { launched = nil }
         guard let python = interpreter(), let root = repositoryRoot() else {
-            throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperMissing)
+            throw AIWorkerFailure(code: -32000, message: missingHelperMessage)
         }
         let manager = FileManager.default
         try manager.createDirectory(at: jobsDirectory, withIntermediateDirectories: true)
@@ -212,7 +238,7 @@ enum AIWorker {
             Thread.sleep(forTimeInterval: 0.25)
         }
         if !WorkerClient.shared.isAvailable() {
-            throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperMissing)
+            throw AIWorkerFailure(code: -32000, message: missingHelperMessage)
         }
         HelperOwner.record(appPID: getpid(), workerPID: process.processIdentifier)
         cleanStaleWorkingCopies()

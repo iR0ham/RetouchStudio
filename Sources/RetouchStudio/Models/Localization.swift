@@ -639,6 +639,33 @@ class L10n {
     func modelsRemoved(_ name: String) -> String { "\(name) was removed." }
     var modelsSizeUnknown: String { "Size unknown" }
     var modelsHelperMissing: String { "The AI helper is not available on this Mac." }
+
+    var aiRuntimeTitle: String { "AI runtime" }
+    var aiRuntimeInstalledChip: String { "Installed" }
+    var aiRuntimeMissingChip: String { "Not installed" }
+    var aiRuntimeBody: String {
+        "The AI tools need a local helper runtime, about 390 MB. The app downloads it only after showing the file, its size and its SHA256 and receiving your approval."
+    }
+    var aiRuntimeInstall: String { "Download runtime" }
+    var aiRuntimeDownloadTitle: String { "Download the AI runtime?" }
+    func aiRuntimeDownloadBody(file: String, size: String, hash: String) -> String {
+        "This downloads \(file) (\(size)) from github.com and verifies its SHA256 (\(hash)) before installing it. Model weights are still downloaded separately, after their own approval."
+    }
+    var aiRuntimeDownloading: String { "Downloading the runtime…" }
+    var aiRuntimeVerifying: String { "Verifying the download…" }
+    var aiRuntimeInstalling: String { "Installing the runtime…" }
+    var aiRuntimeDownloadFailed: String { "The runtime did not download. Nothing was installed." }
+    var aiRuntimeChecksumFailed: String {
+        "The downloaded file did not match its SHA256. Nothing was installed."
+    }
+    var aiRuntimeExtractFailed: String { "The runtime could not be unpacked. Nothing was installed." }
+    var aiRuntimeInstalledNote: String { "Installed — models can be downloaded now." }
+    var aiRuntimeNotInstalled: String {
+        "The AI runtime is not installed. Download it in Settings → AI models, then try again."
+    }
+    var aiRuntimeIntelUnavailable: String {
+        "The AI helper runs only on Apple silicon. This Intel Mac uses the full editor without AI."
+    }
     func modelsTaskName(_ task: String) -> String {
         switch task {
         case "segmentation": return "Selection"

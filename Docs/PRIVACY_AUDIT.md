@@ -12,6 +12,8 @@ This audit answers one requirement from the Phase 0 specification:
 
 The result is a measured claim, not an assertion about intent: every scenario below was executed on the shipping bundle and the sockets of the app and its helper were sampled while it ran.
 
+> **Update for the 1.0.0 light release (2026-11-09).** The public 1.0.0 build no longer bundles the helper; it fetches the runtime on demand. `Sources/RetouchStudio/Core/AIRuntimeInstaller.swift` adds the app's first networking API: an ephemeral `URLSession` that downloads one fixed archive, `https://github.com/iR0ham/RetouchStudio/releases/download/v1.0.0/RetouchStudio-1.0.0-ai-runtime-arm64.zip`, only after the model manager's alert shows the file name, its size and its SHA256. The downloaded archive must match that SHA256 before it is extracted, and a mismatch or failed unzip installs nothing. The runtime is installed under `~/Library/Application Support/RetouchStudio/AI/runtime`. The static inventory in §2.1 therefore describes the audited 2.1 build, not the 1.0.0 release; every other conclusion below still applies, and the runtime transfer is a single explicitly approved download like the model downloader.
+
 ---
 
 ## 1. Scope
@@ -28,7 +30,9 @@ Image editing, masking, upscaling and export all happen in the app or in the hel
 
 ## 2. Static inventory
 
-### 2.1 The app has no network API
+### 2.1 The audited 2.1 app had no network API
+
+(For the 1.0.0 runtime downloader, see the update at the top of this document.)
 
 Every framework imported by the app:
 
@@ -170,4 +174,4 @@ The downloader prints a JSON progress object on stderr for every chunk; the last
 | Explicit consent before model downloads | **Pass** — manifest hash shown and required; checksum verified; staged and atomic |
 | Offline after installation | **Pass** — edit, upscale and export need no network (scenario B) |
 
-The only outbound connections this build can make are the HTTPS transfers of a model download that the owner approved, after the exact manifest was displayed.
+The only outbound connections the audited 2.1 build can make are the HTTPS transfers of a model download that the owner approved, after the exact manifest was displayed. The 1.0.0 light build adds one more, equally explicit transfer: the SHA256-verified runtime archive described in the update at the top, requested from a single fixed release URL.

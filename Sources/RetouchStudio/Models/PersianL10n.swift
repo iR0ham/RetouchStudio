@@ -654,6 +654,32 @@ final class PersianL10n: L10n {
     override var modelsRemoveAction: String { "حذف" }
     override func modelsRemoved(_ name: String) -> String { "\(name) حذف شد." }
     override var modelsSizeUnknown: String { "اندازه نامعلوم" }
+    override var aiRuntimeTitle: String { "دستیار هوش مصنوعی" }
+    override var aiRuntimeInstalledChip: String { "نصب شده" }
+    override var aiRuntimeMissingChip: String { "نصب نیست" }
+    override var aiRuntimeBody: String {
+        "ابزارهای هوش مصنوعی به یک دستیار محلی، حدود ۳۹۰ مگابایت، نیاز دارند. اپ آن را فقط بعد از نمایش فایل، حجم و SHA256 و تأیید شما دانلود می‌کند."
+    }
+    override var aiRuntimeInstall: String { "دانلود دستیار" }
+    override var aiRuntimeDownloadTitle: String { "دستیار هوش مصنوعی دانلود شود؟" }
+    override func aiRuntimeDownloadBody(file: String, size: String, hash: String) -> String {
+        "فایل \(file) (\(size)) از github.com دانلود می‌شود و SHA256 آن (\(hash)) پیش از نصب بررسی می‌شود. وزن مدل‌ها همچنان جداگانه و با تأیید خودشان دانلود می‌شوند."
+    }
+    override var aiRuntimeDownloading: String { "در حال دانلود دستیار…" }
+    override var aiRuntimeVerifying: String { "در حال بررسی دانلود…" }
+    override var aiRuntimeInstalling: String { "در حال نصب دستیار…" }
+    override var aiRuntimeDownloadFailed: String { "دستیار دانلود نشد. چیزی نصب نشد." }
+    override var aiRuntimeChecksumFailed: String {
+        "فایل دانلودشده با SHA256 مطابقت ندارد. چیزی نصب نشد."
+    }
+    override var aiRuntimeExtractFailed: String { "دستیار باز نشد. چیزی نصب نشد." }
+    override var aiRuntimeInstalledNote: String { "نصب شد — حالا می‌توانی مدل‌ها را دانلود کنی." }
+    override var aiRuntimeNotInstalled: String {
+        "دستیار هوش مصنوعی نصب نیست. از تنظیمات → مدل‌های AI دانلودش کن و دوباره تلاش کن."
+    }
+    override var aiRuntimeIntelUnavailable: String {
+        "دستیار هوش مصنوعی فقط روی Apple silicon اجرا می‌شود. این مک اینتل ویرایشگر کامل را بدون AI دارد."
+    }
     override var modelsHelperMissing: String {
         "دستیار هوش مصنوعی روی این مک در دسترس نیست."
     }

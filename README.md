@@ -39,8 +39,8 @@ The screenshots use an AI-generated fictional portrait. No personal photo is inc
 
 ## Requirements
 
-- macOS 14 Sonoma or later on Apple silicon or Intel. Releases are published as separate Apple-silicon (arm64) and Intel (x86_64) disk images, plus a universal zip archive.
-- AI tools require Apple silicon: the arm64 download carries the helper, while the Intel download leaves it out. On Intel the editor, analysis and export work fully; the AI tools report the helper as unavailable.
+- macOS 14 Sonoma or later on Apple silicon or Intel. Releases are published as separate Apple-silicon (arm64) and Intel (x86_64) disk images, plus a light universal zip archive.
+- AI tools require Apple silicon. The download is the same light app on both architectures: on Apple silicon **Settings → Manage Models…** offers the local helper runtime (about 390 MB, SHA256-verified, from this repository's release) after showing the file and its checksum, then each model separately after its own approval. On Intel the editor, analysis and export work fully; the AI tools report that the runtime is unavailable.
 - To run a release build: nothing else. The app is self-contained.
 - To build from source: Xcode Command Line Tools (`xcode-select --install`). Xcode itself is not required; `build.sh` compiles directly with `swiftc`.
 
@@ -48,7 +48,7 @@ Windows and Linux are not supported: the interface is built on SwiftUI/AppKit an
 
 ## Run a release build
 
-1. Download the disk image for this Mac — `RetouchStudio-1.0.0-arm64.dmg` for Apple silicon, `RetouchStudio-1.0.0-x86_64.dmg` for Intel — open it and drag `Retouch Studio.app` to Applications. The arm64 image includes the AI helper; the Intel image is the editor only. A universal zip archive is published beside them for anyone who prefers one.
+1. Download the disk image for this Mac — `RetouchStudio-1.0.0-arm64.dmg` for Apple silicon, `RetouchStudio-1.0.0-x86_64.dmg` for Intel — open it and drag `Retouch Studio.app` to Applications. The app is about 3.5–4 MB. The optional AI runtime (about 390 MB) and the model weights are downloaded later from **Settings → Manage Models…**, each after showing the file, its size and its SHA256. A light universal zip archive is published beside the images for anyone who prefers one.
 2. First launch: right-click the app and choose **Open**, or allow it under **System Settings → Privacy & Security → Open Anyway**. Release builds are ad-hoc signed and not notarized, so Gatekeeper asks once. See [`Docs/RELEASING.md`](Docs/RELEASING.md) for why and what comes next.
 
 ## Build from source
@@ -85,17 +85,30 @@ Debug build (no optimisation):
 Package the built app as a drag-to-Applications disk image (the name follows the built architecture):
 
 ```bash
+RETOUCH_ARCH=arm64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 ./Tools/make-dmg.sh                      # RetouchStudio-<version>-arm64.dmg + checksum
 
 RETOUCH_ARCH=x86_64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 ./Tools/make-dmg.sh                      # RetouchStudio-<version>-x86_64.dmg + checksum
 ```
 
+The on-demand runtime archive is cut from a helper build, before the app is rebuilt without it:
+
+```bash
+RETOUCH_ARCH=arm64 ./build.sh release    # bundles Worker/ inside the app
+./Tools/make-runtime.sh "Retouch Studio.app/Contents/Resources/Worker"
+                                         # RetouchStudio-<version>-ai-runtime-arm64.zip + checksum
+```
+
+`make-runtime.sh` prints the byte count and SHA256 to keep in `AIRuntime.swift`; the app refuses an archive whose hash or size does not match.
+
 ## The local AI helper is optional
 
-The AI tools (remove object, heal area, reimagine, 4× upscale) are executed by a local Python worker. Its source lives in a separate checkout, and the bundler copies a relocatable interpreter plus the required wheels into `Retouch Studio.app/Contents/Resources/Worker` (about 1.3–1.6 GB). Model weights are never bundled; they are downloaded at runtime, after an explicit confirmation, into Application Support.
+The AI tools (remove object, heal area, reimagine, 4× upscale) run in a local Python worker. Release builds do not carry it: the app is a few megabytes, and **Settings → Manage Models…** offers the helper runtime (about 390 MB) after showing the file name, its size and its SHA256. The app downloads that archive from this repository's release page, verifies the hash, and installs it under `~/Library/Application Support/RetouchStudio/AI/runtime`. Models are downloaded separately, again after their own manifest is approved.
 
-Without the worker the app still builds and runs; AI tools simply report that the helper is not installed. The bundled runtime is Apple-silicon-only, so an Intel Mac uses the editor without AI even when the helper is present in the bundle; a source checkout with a matching environment can still supply it.
+A build can also carry the helper inside the app, which copies a relocatable interpreter plus the required wheels into `Contents/Resources/Worker` (about 1.3–1.6 GB). Model weights are never bundled either way.
+
+Without the helper the editor still runs; AI tools say how to install it. The helper is Apple-silicon-only, so an Intel Mac uses the editor without AI.
 
 ```bash
 ./build.sh release                                   # bundle the helper if it can be found
@@ -104,7 +117,7 @@ RETOUCH_WORKER_ROOT=/path/to/worker \
 RETOUCH_SKIP_WORKER=1 ./build.sh release             # app only, helper skipped
 ```
 
-At runtime a source checkout is found by walking up from the executable to a folder containing `worker/retouch_ai_worker`; `RETOUCH_AI_WORKER_ROOT` and `RETOUCH_AI_PYTHON` override that. Details, dependency versions and model licences are in [`Docs/AI_RUNTIME.md`](Docs/AI_RUNTIME.md).
+At runtime the app prefers a helper packaged inside the app, then the runtime installed on demand under Application Support, then a source checkout found by walking up from the executable to a folder containing `worker/retouch_ai_worker`; `RETOUCH_AI_WORKER_ROOT` and `RETOUCH_AI_PYTHON` override that. Details, dependency versions and model licences are in [`Docs/AI_RUNTIME.md`](Docs/AI_RUNTIME.md).
 
 ## Tests
 
@@ -121,8 +134,9 @@ The worker has its own Python suite (`unittest`); see `Docs/AI_RUNTIME.md`.
 
 ## Privacy
 
-- The app links no networking API. Image analysis, editing, upscaling and export are entirely local.
-- The only network use in the whole product is the model downloader, and it runs only after the owner approves the exact manifest (file list, size, SHA256).
+- Image analysis, editing, upscaling and export are entirely local; nothing is uploaded.
+- The only network use in the whole product is two explicit downloads: the optional AI runtime archive, and the model weights. Both are requested by the owner after the exact file list, size and SHA256 are shown, and both are verified before installation.
+- The runtime is fetched once from this repository's release page; the app has no other outbound address, no telemetry and no background requests.
 - GPS and camera identity are removed from exported copies.
 - No telemetry, no analytics, no crash reporting service.
 
