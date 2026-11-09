@@ -15,3 +15,6 @@ Tests/Fixtures/portraits/
 # Editor / tooling
 .vscode/
 .idea/
+
+# Release packages
+*.dmg

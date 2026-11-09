@@ -77,16 +77,19 @@ Until then, release notes must state that the build is ad-hoc signed, universal 
 ## 6. Package and publish
 
 ```bash
+./Tools/make-dmg.sh                                  # DMG + checksum
 ditto -c -k --keepParent "Retouch Studio.app" "RetouchStudio-1.0.0-universal.zip"
 shasum -a 256 "RetouchStudio-1.0.0-universal.zip" > "RetouchStudio-1.0.0-universal.zip.sha256"
 
 git tag -a v1.0.0 -m "Retouch Studio 1.0.0"
 git push origin main --tags
-gh release create v1.0.0 "RetouchStudio-1.0.0-universal.zip" "RetouchStudio-1.0.0-universal.zip.sha256" \
+gh release create v1.0.0 \
+  "RetouchStudio-1.0.0-universal.dmg" "RetouchStudio-1.0.0-universal.dmg.sha256" \
+  "RetouchStudio-1.0.0-universal.zip" "RetouchStudio-1.0.0-universal.zip.sha256" \
   --title "Retouch Studio 1.0.0" --notes-file Docs/RELEASE_NOTES_1.0.0.md
 ```
 
-`ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
+The DMG is the primary download: it holds the universal app next to an `Applications` symlink, so both Apple-silicon and Intel users drag one icon to install. The zip is kept as a plain alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
 
 Release notes should include:
 
@@ -99,7 +102,7 @@ Release notes should include:
 
 ## 7. Post-publish checks
 
-- Download the archive from the release page, verify the checksum, unzip with Finder/ditto, and launch it from a different account or folder.
+- Download the DMG from the release page, verify its checksum, mount it, drag the app to Applications and launch it from a different account or folder. Repeat once with the zip.
 - Open a photo, run one Auto Retouch, export, and reopen the saved `.retouch` project.
 - If the helper is bundled: approve/download a model, run one AI job, and repeat the idle socket check described in `PRIVACY_AUDIT.md` §5.
 - Confirm the About window and Settings show the stamped version.

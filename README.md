@@ -1,5 +1,7 @@
 # Retouch Studio
 
+**English** · [فارسی](README.fa.md)
+
 A native macOS portrait-retouching studio with a bilingual English/Persian interface. Everything — analysis, retouching, masking, upscaling and export — runs on the machine. There is no cloud service, no account and no automatic upload.
 
 Built with SwiftUI, Core Image and Vision, and shipped as a self-contained `.app` that does not need Xcode, Homebrew or a separate Python install.
@@ -46,9 +48,8 @@ Windows and Linux are not supported: the interface is built on SwiftUI/AppKit an
 
 ## Run a release build
 
-1. Download and unzip `Retouch Studio.app`.
-2. Move it to `/Applications`.
-3. First launch: right-click the app and choose **Open**, or allow it under **System Settings → Privacy & Security → Open Anyway**. Release builds are ad-hoc signed and not notarized, so Gatekeeper asks once. See [`Docs/RELEASING.md`](Docs/RELEASING.md) for why and what comes next.
+1. Download `RetouchStudio-1.0.0-universal.dmg` (one universal disk image for Apple silicon and Intel), open it and drag `Retouch Studio.app` to Applications. A zip archive is published beside it for anyone who prefers one.
+2. First launch: right-click the app and choose **Open**, or allow it under **System Settings → Privacy & Security → Open Anyway**. Release builds are ad-hoc signed and not notarized, so Gatekeeper asks once. See [`Docs/RELEASING.md`](Docs/RELEASING.md) for why and what comes next.
 
 ## Build from source
 
@@ -79,6 +80,12 @@ Debug build (no optimisation):
 
 ```bash
 ./build.sh debug
+```
+
+Package the built app as a drag-to-Applications disk image:
+
+```bash
+./Tools/make-dmg.sh                      # RetouchStudio-<version>-universal.dmg + checksum
 ```
 
 ## The local AI helper is optional
@@ -128,7 +135,7 @@ Sources/RetouchStudio/
   Views/               editor, inspector, tool panels, overlays, settings
 Resources/             Info.plist, app icon, Vazir fonts (OFL)
 Tests/                 engine and model suites plus run.sh harness
-Tools/                 bundle-worker.sh (optional Python runtime)
+Tools/                 bundle-worker.sh (optional Python runtime), make-dmg.sh
 Docs/                  AI runtime, privacy audit, technical audit, release notes
 build.sh               compile + assemble + sign + self-test
 ```

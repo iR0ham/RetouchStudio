@@ -19,17 +19,20 @@ First public release. A native, local-first portrait retouching studio for Apple
 
 ## Install
 
-1. Download `RetouchStudio-1.0.0-universal.zip` and its `.sha256` file.
-2. Verify the archive: `shasum -a 256 -c RetouchStudio-1.0.0-universal.zip.sha256`.
-3. Unzip with Finder or `ditto`, then move `Retouch Studio.app` to `/Applications`.
+1. Download `RetouchStudio-1.0.0-universal.dmg` and its `.sha256` file.
+2. Verify the image: `shasum -a 256 -c RetouchStudio-1.0.0-universal.dmg.sha256`.
+3. Open the disk image and drag `Retouch Studio.app` to the Applications folder.
 4. First launch: right-click the app and choose **Open**, or allow it under **System Settings → Privacy & Security → Open Anyway**.
+
+Prefer a plain archive? `RetouchStudio-1.0.0-universal.zip` is published beside the DMG; verify it the same way and unzip with Finder or `ditto`. Both packages hold the same universal app, so one download serves Apple silicon and Intel.
 
 This build is ad-hoc signed and not notarized, so Gatekeeper asks once. No account, subscription or network connection is needed to use the editor.
 
-SHA256 of `RetouchStudio-1.0.0-universal.zip`:
+Checksums:
 
 ```
-8a51d028fa6cfb9c75a880d35bd44f116421f87aee7c5b75b5205873ce4b41f2
+23de31d51aca1d18a689d22eb7d8ad1b815af6a43f66d9c73ba8caab6f921147  RetouchStudio-1.0.0-universal.dmg
+8a51d028fa6cfb9c75a880d35bd44f116421f87aee7c5b75b5205873ce4b41f2  RetouchStudio-1.0.0-universal.zip
 ```
 
 ## Local AI
