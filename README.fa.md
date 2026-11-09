@@ -39,8 +39,8 @@
 
 ## پیش‌نیازها
 
-- macOS 14 Sonoma یا جدیدتر روی Apple silicon یا Intel. نسخهٔ منتشرشده یونیورسال است (arm64 + x86_64).
-- ابزارهای AI به Apple silicon نیاز دارند: دستیار باندل‌شده یک runtime مخصوص Apple silicon است. روی Intel ویرایشگر، تحلیل و خروجی کامل کار می‌کنند و ابزارهای AI اعلام می‌کنند که دستیار در دسترس نیست.
+- macOS 14 Sonoma یا جدیدتر روی Apple silicon یا Intel. نسخه‌ها به‌صورت دو دیسک‌ایمیج جدا منتشر می‌شوند — arm64 برای Apple silicon و x86_64 برای Intel — به‌همراه یک آرشیو zip یونیورسال.
+- ابزارهای AI به Apple silicon نیاز دارند: نسخهٔ arm64 دستیار را همراه دارد و نسخهٔ Intel بدون آن ساخته شده است. روی Intel ویرایشگر، تحلیل و خروجی کامل کار می‌کنند و ابزارهای AI اعلام می‌کنند که دستیار در دسترس نیست.
 - برای اجرای نسخهٔ آماده: هیچ چیز دیگری لازم نیست. اپ خودکفاست.
 - برای ساخت از سورس: Xcode Command Line Tools (`xcode-select --install`). خود Xcode لازم نیست؛ `build.sh` مستقیماً با `swiftc` کامپایل می‌کند.
 
@@ -48,7 +48,7 @@
 
 ## اجرای نسخهٔ آماده
 
-1. فایل `RetouchStudio-1.0.0-universal.dmg` را دانلود کنید، باز کنید و `Retouch Studio.app` را به پوشهٔ Applications بکشید. (آرشیو zip هم برای کسانی که DMG نمی‌خواهند در دسترس است.)
+1. دیسک‌ایمیج مناسب همین مک را دانلود کنید — `RetouchStudio-1.0.0-arm64.dmg` برای Apple silicon یا `RetouchStudio-1.0.0-x86_64.dmg` برای Intel — باز کنید و `Retouch Studio.app` را به پوشهٔ Applications بکشید. نسخهٔ arm64 دستیار AI را همراه دارد؛ نسخهٔ Intel فقط ویرایشگر است. یک آرشیو zip یونیورسال هم برای کسانی که آرشیو ساده می‌خواهند در دسترس است.
 2. اولین اجرا: روی اپ راست‌کلیک کنید و **Open** را بزنید، یا آن را از **System Settings → Privacy & Security → Open Anyway** مجاز کنید. نسخه‌های منتشرشده امضای ad-hoc دارند و notarize نشده‌اند، بنابراین Gatekeeper یک‌بار سؤال می‌کند. دلیل و ادامهٔ مسیر در [`Docs/RELEASING.md`](Docs/RELEASING.md) آمده است.
 
 ## ساخت از سورس
@@ -82,10 +82,13 @@ RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=1 ./build.sh release
 ./build.sh debug
 ```
 
-صفحهٔ نصب DMG:
+صفحهٔ نصب DMG (نام فایل از معماری ساخته‌شده پیروی می‌کند):
 
 ```bash
-./Tools/make-dmg.sh                      # RetouchStudio-<version>-universal.dmg + checksum
+./Tools/make-dmg.sh                      # RetouchStudio-<version>-arm64.dmg + checksum
+
+RETOUCH_ARCH=x86_64 RETOUCH_SKIP_WORKER=1 ./build.sh release
+./Tools/make-dmg.sh                      # RetouchStudio-<version>-x86_64.dmg + checksum
 ```
 
 ## دستیار محلی هوش مصنوعی اختیاری است

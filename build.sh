@@ -142,6 +142,11 @@ if [ -z "$WORKER_VENV" ]; then
   fi
 fi
 if [ "${RETOUCH_SKIP_WORKER:-}" = "1" ]; then
+  # Park a cached runtime instead of shipping it, so a later build can reuse it.
+  if [ -d "$APP_BUNDLE/Contents/Resources/Worker" ]; then
+    rm -rf "$WORKER_CACHE"
+    mv "$APP_BUNDLE/Contents/Resources/Worker" "$WORKER_CACHE"
+  fi
   echo "  · helper runtime skipped (RETOUCH_SKIP_WORKER=1)"
 elif [ -d "$WORKER_ROOT/retouch_ai_worker" ] && [ -x "$WORKER_VENV/bin/python3" ]; then
   RETOUCH_WORKER_ROOT="$WORKER_ROOT" RETOUCH_WORKER_VENV="$WORKER_VENV" \

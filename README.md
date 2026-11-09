@@ -39,8 +39,8 @@ The screenshots use an AI-generated fictional portrait. No personal photo is inc
 
 ## Requirements
 
-- macOS 14 Sonoma or later on Apple silicon or Intel. The release is a universal (arm64 + x86_64) app.
-- AI tools require Apple silicon: the bundled helper is an Apple-silicon runtime. On Intel the editor, analysis and export work fully; the AI tools report the helper as unavailable.
+- macOS 14 Sonoma or later on Apple silicon or Intel. Releases are published as separate Apple-silicon (arm64) and Intel (x86_64) disk images, plus a universal zip archive.
+- AI tools require Apple silicon: the arm64 download carries the helper, while the Intel download leaves it out. On Intel the editor, analysis and export work fully; the AI tools report the helper as unavailable.
 - To run a release build: nothing else. The app is self-contained.
 - To build from source: Xcode Command Line Tools (`xcode-select --install`). Xcode itself is not required; `build.sh` compiles directly with `swiftc`.
 
@@ -48,7 +48,7 @@ Windows and Linux are not supported: the interface is built on SwiftUI/AppKit an
 
 ## Run a release build
 
-1. Download `RetouchStudio-1.0.0-universal.dmg` (one universal disk image for Apple silicon and Intel), open it and drag `Retouch Studio.app` to Applications. A zip archive is published beside it for anyone who prefers one.
+1. Download the disk image for this Mac — `RetouchStudio-1.0.0-arm64.dmg` for Apple silicon, `RetouchStudio-1.0.0-x86_64.dmg` for Intel — open it and drag `Retouch Studio.app` to Applications. The arm64 image includes the AI helper; the Intel image is the editor only. A universal zip archive is published beside them for anyone who prefers one.
 2. First launch: right-click the app and choose **Open**, or allow it under **System Settings → Privacy & Security → Open Anyway**. Release builds are ad-hoc signed and not notarized, so Gatekeeper asks once. See [`Docs/RELEASING.md`](Docs/RELEASING.md) for why and what comes next.
 
 ## Build from source
@@ -82,10 +82,13 @@ Debug build (no optimisation):
 ./build.sh debug
 ```
 
-Package the built app as a drag-to-Applications disk image:
+Package the built app as a drag-to-Applications disk image (the name follows the built architecture):
 
 ```bash
-./Tools/make-dmg.sh                      # RetouchStudio-<version>-universal.dmg + checksum
+./Tools/make-dmg.sh                      # RetouchStudio-<version>-arm64.dmg + checksum
+
+RETOUCH_ARCH=x86_64 RETOUCH_SKIP_WORKER=1 ./build.sh release
+./Tools/make-dmg.sh                      # RetouchStudio-<version>-x86_64.dmg + checksum
 ```
 
 ## The local AI helper is optional

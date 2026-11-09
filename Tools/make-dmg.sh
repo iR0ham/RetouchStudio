@@ -8,7 +8,14 @@ APP="Retouch Studio.app"
 [ -d "$APP" ] || { echo "✗ \"$APP\" پیدا نشد؛ اول ./build.sh release را اجرا کنید." >&2; exit 1; }
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
-NAME="RetouchStudio-${VERSION}-universal"
+ARCHS=$(lipo -archs "$APP/Contents/MacOS/RetouchStudio")
+case "$ARCHS" in
+  *arm64*x86_64*|*x86_64*arm64*) SUFFIX=universal ;;
+  *arm64*) SUFFIX=arm64 ;;
+  *x86_64*) SUFFIX=x86_64 ;;
+  *) echo "✗ معماری ناشناخته: $ARCHS" >&2; exit 1 ;;
+esac
+NAME="RetouchStudio-${VERSION}-${SUFFIX}"
 
 STAGE=$(mktemp -d /tmp/retouch-dmg.XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
@@ -22,5 +29,5 @@ hdiutil create -volname "Retouch Studio $VERSION" \
 
 shasum -a 256 "$NAME.dmg" > "$NAME.dmg.sha256"
 
-echo "✓ ساخته شد: $NAME.dmg"
+echo "✓ ساخته شد: $NAME.dmg  ($ARCHS)"
 echo "  checksum: $NAME.dmg.sha256"

@@ -76,20 +76,29 @@ Until then, release notes must state that the build is ad-hoc signed, universal 
 
 ## 6. Package and publish
 
+The two disk images are built separately, because the AI helper only ships with the Apple-silicon one:
+
 ```bash
-./Tools/make-dmg.sh                                  # DMG + checksum
+RETOUCH_ARCH=arm64 ./build.sh release
+./Tools/make-dmg.sh                                  # RetouchStudio-1.0.0-arm64.dmg
+
+RETOUCH_ARCH=x86_64 RETOUCH_SKIP_WORKER=1 ./build.sh release
+./Tools/make-dmg.sh                                  # RetouchStudio-1.0.0-x86_64.dmg
+
+./build.sh release                                   # universal app for the zip
 ditto -c -k --keepParent "Retouch Studio.app" "RetouchStudio-1.0.0-universal.zip"
 shasum -a 256 "RetouchStudio-1.0.0-universal.zip" > "RetouchStudio-1.0.0-universal.zip.sha256"
 
 git tag -a v1.0.0 -m "Retouch Studio 1.0.0"
 git push origin main --tags
 gh release create v1.0.0 \
-  "RetouchStudio-1.0.0-universal.dmg" "RetouchStudio-1.0.0-universal.dmg.sha256" \
+  "RetouchStudio-1.0.0-arm64.dmg" "RetouchStudio-1.0.0-arm64.dmg.sha256" \
+  "RetouchStudio-1.0.0-x86_64.dmg" "RetouchStudio-1.0.0-x86_64.dmg.sha256" \
   "RetouchStudio-1.0.0-universal.zip" "RetouchStudio-1.0.0-universal.zip.sha256" \
   --title "Retouch Studio 1.0.0" --notes-file Docs/RELEASE_NOTES_1.0.0.md
 ```
 
-The DMG is the primary download: it holds the universal app next to an `Applications` symlink, so both Apple-silicon and Intel users drag one icon to install. The zip is kept as a plain alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
+Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 image carries the helper and full AI; the x86_64 image omits it and is much smaller because the helper cannot run there. The universal zip stays as a single-download alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
 
 Release notes should include:
 
