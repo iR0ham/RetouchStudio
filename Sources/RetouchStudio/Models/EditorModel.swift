@@ -2661,7 +2661,9 @@ final class EditorModel: ObservableObject {
     func suggestedFileName() -> String {
         let base = (imageName as NSString).deletingPathExtension
         let name = base.isEmpty ? "retouched" : "\(base)-retouched"
-        guard analysis.isEnabled else {
+        // A file name that says "analysis" promises callouts the export cannot
+        // draw when Vision found no face.
+        guard analysis.isEnabled, !faces.isEmpty else {
             return "\(name).\(exportFormat.fileExtension)"
         }
         switch analysis.exportMode {
@@ -2676,7 +2678,8 @@ final class EditorModel: ObservableObject {
 
     /// PNG because an overlay-only export is lines on transparency.
     private var effectiveExportFormat: ExportFormat {
-        analysis.isEnabled && analysis.exportMode == .overlayOnly ? .png : exportFormat
+        analysis.isEnabled && analysis.exportMode == .overlayOnly && !faces.isEmpty
+            ? .png : exportFormat
     }
 
     func saveExport() {

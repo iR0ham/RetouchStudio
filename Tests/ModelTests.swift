@@ -1407,6 +1407,27 @@ func testOrientationKeepsEditsAttached() async {
           "undo removes the straighten")
 }
 
+// MARK: - M-12
+
+/// An analysis export is lines over a face. With no face there is nothing to
+/// draw, so the suggested name must not promise an analysis artifact.
+@MainActor
+func testAnalysisExportNeedsFace() async {
+    print("\n[M-12] the analysis export waits for a detected face")
+
+    let model = EditorModel()
+    model.analysis.isEnabled = true
+    model.analysis.exportMode = .overlayOnly
+    model.exportFormat = .jpeg
+
+    check(model.faces.isEmpty, "no faces before a photo is open")
+    let name = model.suggestedFileName()
+    check(!name.lowercased().contains("analysis"),
+          "the suggested name does not promise analysis", name)
+    check(name.hasSuffix(".\(model.exportFormat.fileExtension)"),
+          "the ordinary format is kept without a face", name)
+}
+
 @MainActor
 func runAll() async {
     await testExportDoesNotSave()
@@ -1427,6 +1448,7 @@ func runAll() async {
     await testQuickEditSelectionGating()
     await testFullFrameReimagine()
     await testExportUpscalePolicy()
+    await testAnalysisExportNeedsFace()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

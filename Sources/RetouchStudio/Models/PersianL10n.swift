@@ -412,6 +412,9 @@ final class PersianL10n: L10n {
     }
     override var analysisExportMode: String { "خروجی" }
     override var analysisMargin: String { "حاشیه" }
+    override var analysisNeedsFace: String {
+        "چهره‌ای تشخیص داده نشد، پس لایهٔ آنالیز کشیده نمی‌شود. این نسخه به‌صورت عکس معمولی ذخیره می‌شود."
+    }
 
     override func analysisRegionTitle(_ region: AnalysisRegion) -> String {
         switch region {

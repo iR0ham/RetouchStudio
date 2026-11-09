@@ -401,6 +401,9 @@ class L10n {
     }
     var analysisExportMode: String { "Export as" }
     var analysisMargin: String { "Margin" }
+    var analysisNeedsFace: String {
+        "No face was detected, so the analysis cannot be drawn. This copy is saved as an ordinary photo."
+    }
 
     func analysisRegionTitle(_ region: AnalysisRegion) -> String {
         switch region {
