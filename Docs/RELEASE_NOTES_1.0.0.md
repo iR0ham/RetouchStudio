@@ -26,6 +26,12 @@ First public release. A native, local-first portrait retouching studio for Apple
 
 This build is ad-hoc signed and not notarized, so Gatekeeper asks once. No account, subscription or network connection is needed to use the editor.
 
+SHA256 of `RetouchStudio-1.0.0-universal.zip`:
+
+```
+8a51d028fa6cfb9c75a880d35bd44f116421f87aee7c5b75b5205873ce4b41f2
+```
+
 ## Local AI
 
 If this archive includes the helper runtime, the AI tools work on Apple silicon after the models are downloaded. The helper is an Apple-silicon runtime; on Intel the AI tools report that it is unavailable. The download sheet lists every file, its size and its SHA256 before anything is fetched; approving it is the only action in the app that uses the internet. Model weights are not part of this archive and are stored under `~/Library/Application Support/RetouchStudio/AI/models`. Without the helper, the rest of the editor works normally and the AI tools report that the helper is not installed.
