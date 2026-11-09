@@ -57,7 +57,7 @@ These are fixable without touching the engine, and they are the P0/P1 items of �
 |---|---|---|
 | Engine tests | `./Tests/run.sh` | **PASS** — all 7 groups, exit 0 |
 | Build + synthetic self-test | `./build.sh` | **exit 0** — 154 checks passed, 0 failed, `SELFTEST: PASS` |
-| Real-photo self-test | `./build/bin/RetouchStudio --selftest --face "$HOME/Documents/image test/IMG_7196.JPG" --out /tmp/rs-audit-face` | **exit 0** — 166 checks passed, 0 failed, `SELFTEST: PASS` |
+| Real-photo self-test | `./build/bin/RetouchStudio --selftest --face "$HOME/Pictures/portrait.jpg" --out /tmp/rs-audit-face` | **exit 0** — 166 checks passed, 0 failed, `SELFTEST: PASS` |
 
 The real-photo output was written to `/tmp/rs-audit-face` and no private photo was copied into the repository, per the project's privacy constraint.
 
@@ -633,7 +633,7 @@ Gaps:
 
 ### 7.1 Project schema
 
-`RetouchProject` (`Project.swift`) is a JSON document with an exported UTI (`local.retouchstudio.project`, conforming to `public.json`) and a `version` field currently `1`.
+`RetouchProject` (`Project.swift`) is a JSON document with an exported UTI (`app.retouchstudio.project`, conforming to `public.json`) and a `version` field currently `1`.
 
 Fields: `imagePath`, `adjustments`, `exportFormat`, `exportQuality`, `exportLongEdge`, `autoRetouchStrength`, `autoColorStrength`, `crop`, `healSpots`, `stickers`, `analysis`. Optional fields decode as `nil` for older files. Unknown fields are ignored by `JSONDecoder`.
 
@@ -759,7 +759,7 @@ Recommendation: default to stripping GPS and personal EXIF fields on export, or 
 
 ### 8.6 Private portrait fixtures
 
-The project's own privacy rule is that the owner's personal photos in `~/Documents/image test` must never be copied into the repository or published. During this audit:
+The project's own privacy rule is that the owner's personal photos in `~/Pictures/private-portraits` must never be copied into the repository or published. During this audit:
 
 - A real photo was read **in place** for the optional self-test.
 - All generated outputs were written to `/tmp/rs-audit-face`.
@@ -803,7 +803,7 @@ All three commands were run on 2026-11-04 against the audited working tree. Logs
 # 154 ✓ / 0 ✗
 
 ./build/bin/RetouchStudio --selftest \
-  --face "$HOME/Documents/image test/IMG_7196.JPG" \
+  --face "$HOME/Pictures/portrait.jpg" \
   --out /tmp/rs-audit-face
 # exit 0
 # SELFTEST: PASS
@@ -1713,7 +1713,7 @@ All commands were run on 2026-11-04 against the audited working tree. Logs are t
 |---|---|---|
 | Engine regression | `./Tests/run.sh` | **exit 0**; 33 ✓ / 0 ✗; `ENGINE TESTS: PASS` (7 groups) |
 | Synthetic self-test | `./build/bin/RetouchStudio --selftest --out /tmp/rs-audit-13-synth` | **exit 0**; 154 ✓ / 0 ✗; `SELFTEST: PASS` |
-| Real-photo self-test | `./build/bin/RetouchStudio --selftest --face "$HOME/Documents/image test/IMG_7196.JPG" --out /tmp/rs-audit-13-face` | **exit 0**; 166 ✓ / 0 ✗; `SELFTEST: PASS`; 2268×4032, 1 face, teeth/sclera/iris/lash masks present |
+| Real-photo self-test | `./build/bin/RetouchStudio --selftest --face "$HOME/Pictures/portrait.jpg" --out /tmp/rs-audit-13-face` | **exit 0**; 166 ✓ / 0 ✗; `SELFTEST: PASS`; 2268×4032, 1 face, teeth/sclera/iris/lash masks present |
 
 The real-photo output was written to `/tmp/rs-audit-13-face`; no private photo was copied into the repository. The logs are `/tmp/rs-audit-13-engine.log`, `/tmp/rs-audit-13-synth.log` and `/tmp/rs-audit-13-face.log`.
 
@@ -1951,7 +1951,7 @@ Run on `stabilization` at `1169f1f`, 2026-11-04:
 |---|---|
 | `./Tests/run.sh` | `ENGINE TESTS: PASS` (sections 1–16); `MODEL TESTS: PASS` (P0-1…P2-6) |
 | `./build.sh` | App bundle built; built-in self-test passed |
-| Packaged `--selftest --face "$HOME/Documents/image test/IMG_8264.JPG"` | `SELFTEST: PASS`, including the new privacy check |
+| Packaged `--selftest --face "$HOME/Pictures/portrait-2.jpg"` | `SELFTEST: PASS`, including the new privacy check |
 | Settings window, live | "Remove location and camera info" visible and on; toggled off and back on; the saved preference read back as `1` |
 
 The private portrait was read in place; no private fixture, export or log was

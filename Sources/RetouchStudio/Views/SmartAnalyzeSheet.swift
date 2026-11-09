@@ -268,6 +268,7 @@ private struct ReportLabel: View {
                 .font(Theme.Font.section)
                 .tracking(0.6)
                 .foregroundStyle(Theme.faint)
+                .help(title)
             Spacer(minLength: 4)
             if let trailing {
                 Text(trailing)

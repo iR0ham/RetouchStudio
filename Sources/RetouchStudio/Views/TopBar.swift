@@ -80,7 +80,8 @@ struct TopBar: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle(dip: 0.93))
-        .help(mode.shortcutKey.map { "\(mode.title)  ·  \($0)" } ?? mode.title)
+        .help(mode.shortcutKey.map { "\(mode.title) — \(mode.subtitle)  ·  \($0)" }
+                ?? "\(mode.title) — \(mode.subtitle)")
         .accessibilityLabel(mode.title)
         .accessibilityHint(mode.shortcutKey.map { $0 } ?? "")
         .accessibilityAddTraits(active ? .isSelected : [])
@@ -113,6 +114,7 @@ struct TopBar: View {
                 .animation(Motion.snappy, value: model.hasUnsavedChanges)
                 .help(model.hasUnsavedChanges ? model.s.edited : "")
         }
+        .help(model.hasImage ? model.imageName : model.s.noImageOpen)
         .animation(Motion.smooth, value: model.isBusy)
     }
 

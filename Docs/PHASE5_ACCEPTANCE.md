@@ -5,7 +5,7 @@
 **Build:** `Retouch Studio.app` 2.1 (build 3), `local.retouchstudio.app`, assembled by `./build.sh release`
 **Environment:** MacBook Air M3, 16 GB RAM, macOS 26.6.2 (arm64)
 **Related:** [`AI_RUNTIME.md`](AI_RUNTIME.md), [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md)
-**Worker suite:** 57 tests, `~/RetouchStudio-Phase0/worker`
+**Worker suite:** 57 tests, in the separate worker checkout (outside this repository).
 
 Every item marked **Pass** below was executed on the build named above. Items that could not be executed on this machine are marked **Not verified** and are not claimed as done.
 
@@ -91,7 +91,7 @@ A real 4× upscale of a 64×64 test image through the packaged runtime: output 2
 1. **Notarization is impossible in this project as it stands.** The app is ad-hoc signed. Public distribution needs an Apple Developer ID certificate and `notarytool` submission; neither exists here. The app runs on this Mac and on Macs where the owner approves the first launch.
 2. **No second physical Mac was used.** Relocation was verified locally by copying the bundle to `/tmp`; a true clean-machine install (fresh account, no Homebrew, Gatekeeper path) remains a release follow-up.
 3. **Bundle size.** The runtime is ~1.3 GiB before models. This is the cost of shipping a Python helper; Phase 6 (native migration) is the long-term answer and is explicitly gated on quality parity.
-4. **Worker source lives outside this repository.** Builds depend on `~/RetouchStudio-Phase0/worker` (or `RETOUCH_WORKER_ROOT`). Moving it in-repo is recommended but was not part of this task.
+4. **Worker source lives outside this repository.** The helper is bundled when `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` point at a separate checkout. Builds do not require it: without the helper the app still compiles and runs, and the AI tools report it as missing. Moving the worker in-repo is recommended but was not part of this task.
 5. **Disk use.** Downloaded models are 28 MB–4.6 GB depending on selection; they are user data under Application Support and are removed by the documented uninstall.
 
 ---
@@ -102,10 +102,10 @@ A real 4× upscale of a 64×64 test image through the packaged runtime: output 2
 ./build.sh release
 codesign --verify --deep --strict "Retouch Studio.app"
 ./Tests/run.sh
-cd ~/RetouchStudio-Phase0/worker && ../.venv/bin/python -m unittest discover -s tests
+cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests
 
 # Runtime checks
-RETOUCH_AI_MODELS="$HOME/RetouchStudio-Phase0/models" \
+RETOUCH_AI_MODELS="/path/to/models" \
   "Retouch Studio.app/Contents/MacOS/RetouchStudio" &
 # then: lsof audit, health RPC, upscale job — see PRIVACY_AUDIT.md §5
 ```

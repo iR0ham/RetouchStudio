@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct CompareCanvas: View {
     @ObservedObject var model: EditorModel
@@ -107,20 +106,6 @@ struct CompareCanvas: View {
         )
         .shadow(color: .black.opacity(0.30), radius: 12, y: 5)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget) { providers in
-            guard let provider = providers.first else { return false }
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                var url: URL?
-                if let data = item as? Data {
-                    url = URL(dataRepresentation: data, relativeTo: nil)
-                } else if let itemURL = item as? URL {
-                    url = itemURL
-                }
-                guard let url else { return }
-                DispatchQueue.main.async { model.requestLoad(url: url) }
-            }
-            return true
-        }
     }
 
     // MARK: - Canvas

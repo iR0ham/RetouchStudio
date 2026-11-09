@@ -17,7 +17,7 @@ original image and the `.retouch` v1 format are all preserved.
 
 - Do not discard, overwrite, reset, clean or stash-drop any existing work.
 - Do not commit without explicit approval.
-- Do not touch `~/Documents/image test` content, and never add it to git.
+- Do not touch `~/Pictures/private-portraits` content, and never add it to git.
 - Every edit lands on a branch created after P0-4, never directly on `main`.
 - A task is not "done" until its acceptance test has been run and its evidence
   is quoted in the task note. Fixes are re-tested, not assumed.
@@ -367,7 +367,7 @@ No `#if DEBUG` branches in behaviour: tests drive the same code paths as the UI.
   reused for geometry and mask assertions.
 - New synthetic fixtures: 3:2 canvas, high-resolution 3000 px canvas, two-face
   canvas, landmarkless face (Vision-free constructed `FaceGeometry`).
-- Real-photo validation uses the private set in `~/Documents/image test` only
+- Real-photo validation uses the private set in `~/Pictures/private-portraits` only
   through `--selftest --face`, never copied into the repo. Any committed
   fixture must be synthetic or CC0.
 

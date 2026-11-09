@@ -10,6 +10,9 @@ struct AILayer {
     let box: CGRect
     let patch: CIImage
     let alpha: CIImage
+    /// Turn the patch needs so it faces the same way as the photo. The files on
+    /// disk are never rewritten; the document records the turn instead.
+    let orientation: DocumentOrientation
 }
 
 /// Composites AI edits into the pipeline as strict layers.
@@ -50,7 +53,8 @@ enum AICompositor {
                   let alpha = image(AIEditStore.alphaURL(edit)) else { return nil }
             let box = workingBox(edit.box, crop: crop)
             guard box.width > 0, box.height > 0 else { return nil }
-            return AILayer(box: box, patch: patch, alpha: alpha)
+            return AILayer(box: box, patch: patch, alpha: alpha,
+                           orientation: edit.patchOrientation ?? .identity)
         }
     }
 
@@ -60,8 +64,8 @@ enum AICompositor {
         for layer in layers {
             let rect = pixelRect(layer.box, extent: extent)
             guard rect.width >= 1, rect.height >= 1 else { continue }
-            let patch = scaled(layer.patch, to: rect)
-            let alpha = scaled(layer.alpha, to: rect)
+            let patch = scaled(oriented(layer.patch, by: layer.orientation), to: rect)
+            let alpha = scaled(oriented(layer.alpha, by: layer.orientation), to: rect)
             let blended: CIImage
             if let filter = CIFilter(name: "CIBlendWithMask") {
                 filter.setValue(patch, forKey: kCIInputImageKey)
@@ -111,6 +115,21 @@ enum AICompositor {
         lock.lock()
         cache.removeAllObjects()
         lock.unlock()
+    }
+
+    /// Turns the patch into the document's frame. Core Image's y-axis points
+    /// up, so a clockwise visual turn is a negative mathematical angle.
+    static func oriented(_ image: CIImage, by orientation: DocumentOrientation) -> CIImage {
+        guard !orientation.isIdentity else { return image }
+        let radians = CGFloat(orientation.rotationDegrees * .pi / 180)
+        var transform = CGAffineTransform(rotationAngle: -radians)
+        if orientation.flipped {
+            transform = transform.concatenating(CGAffineTransform(scaleX: -1, y: 1))
+        }
+        let turned = image.transformed(by: transform)
+        let bounds = turned.extent
+        return turned.transformed(by: CGAffineTransform(translationX: -bounds.minX,
+                                                        y: -bounds.minY))
     }
 
     private static func scaled(_ image: CIImage, to rect: CGRect) -> CIImage {

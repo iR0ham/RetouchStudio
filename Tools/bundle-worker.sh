@@ -16,8 +16,18 @@ WORKER_ROOT="${RETOUCH_WORKER_ROOT:-$HOME/RetouchStudio-Phase0/worker}"
 VENV="${RETOUCH_WORKER_VENV:-$HOME/RetouchStudio-Phase0/.venv}"
 DEST="$APP/Contents/Resources/Worker"
 
-[ -d "$WORKER_ROOT/retouch_ai_worker" ] || { echo "worker source not found: $WORKER_ROOT" >&2; exit 1; }
-[ -x "$VENV/bin/python3" ] || { echo "venv not found: $VENV" >&2; exit 1; }
+[ -d "$WORKER_ROOT/retouch_ai_worker" ] || {
+  echo "worker source not found: $WORKER_ROOT" >&2
+  echo "  Set RETOUCH_WORKER_ROOT to the folder that contains retouch_ai_worker/." >&2
+  echo "  A build without the helper is also valid: set RETOUCH_SKIP_WORKER=1." >&2
+  exit 1
+}
+[ -x "$VENV/bin/python3" ] || {
+  echo "worker venv not found: $VENV" >&2
+  echo "  Set RETOUCH_WORKER_VENV to a Python environment with the worker requirements." >&2
+  echo "  A build without the helper is also valid: set RETOUCH_SKIP_WORKER=1." >&2
+  exit 1
+}
 
 BASE_PREFIX="$("$VENV/bin/python3" -c 'import sys; print(sys.base_prefix)')"
 FRAMEWORK="$(cd "$BASE_PREFIX/../.." && pwd)"   # .../Python.framework

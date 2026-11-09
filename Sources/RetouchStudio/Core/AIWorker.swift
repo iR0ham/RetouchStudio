@@ -71,10 +71,16 @@ enum AIWorker {
     /// The interpreter and worker that ship inside the app. A release bundle
     /// has them; a source or QA build falls back to the checkout below.
     static var bundledRoot: URL? {
+        #if arch(x86_64)
+        // The bundled helper is an Apple-silicon runtime; an Intel Mac cannot
+        // execute it. A source checkout with a matching environment still works.
+        return nil
+        #else
         guard let resources = Bundle.main.resourceURL else { return nil }
         let root = resources.appendingPathComponent("Worker", isDirectory: true)
         let python = root.appendingPathComponent("bin/python3")
         return FileManager.default.isExecutableFile(atPath: python.path) ? root : nil
+        #endif
     }
 
     private static func interpreter() -> URL? {
@@ -97,17 +103,30 @@ enum AIWorker {
         return candidates.first { manager.isExecutableFile(atPath: $0.path) }
     }
 
-    /// The source checkout, when the app is running next to one. A packaged app
-    /// carries the helper inside its bundle instead, which Phase 5 adds.
+    /// The worker package when the app runs next to a source checkout. A
+    /// packaged app carries the helper inside its bundle instead. A checkout is
+    /// found by walking up from the executable until `worker/retouch_ai_worker`
+    /// appears; `RETOUCH_AI_WORKER_ROOT` overrides the search.
     private static func repositoryRoot() -> URL? {
         if let override = ProcessInfo.processInfo.environment["RETOUCH_AI_WORKER_ROOT"] {
             let url = URL(fileURLWithPath: override, isDirectory: true)
             return FileManager.default.fileExists(atPath: url.path) ? url : nil
         }
         if let bundled = bundledRoot { return bundled }
-        let local = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("RetouchStudio-Phase0/worker", isDirectory: true)
-        return FileManager.default.fileExists(atPath: local.path) ? local : nil
+        for start in [Bundle.main.executableURL,
+                      URL(fileURLWithPath: FileManager.default.currentDirectoryPath)] {
+            guard let start else { continue }
+            var directory = start.hasDirectoryPath ? start : start.deletingLastPathComponent()
+            for _ in 0..<6 {
+                let worker = directory.appendingPathComponent("worker", isDirectory: true)
+                let package = worker.appendingPathComponent("retouch_ai_worker", isDirectory: true)
+                if FileManager.default.fileExists(atPath: package.path) { return worker }
+                let parent = directory.deletingLastPathComponent()
+                if parent.path == directory.path { break }
+                directory = parent
+            }
+        }
+        return nil
     }
 
     /// Environment for a helper process. A bundled runtime also needs its

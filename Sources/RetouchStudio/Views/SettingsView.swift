@@ -17,6 +17,7 @@ struct SettingsView: View {
                 toolsSection
                 modelsSection
                 recoverySection
+                developerSection
                 footer
             }
             .padding(22)
@@ -35,7 +36,7 @@ struct SettingsView: View {
 
     private var languageSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(model.s.settingsLanguage)
+            sectionTitle(model.s.settingsLanguage, help: model.s.settingsLanguageHelp)
 
             HStack(spacing: 2) {
                 ForEach(AppLanguage.allCases, id: \.self) { language in
@@ -55,6 +56,7 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(PressableButtonStyle(dip: 0.96))
+                    .help(language.title)
                 }
             }
             .padding(3)
@@ -69,7 +71,7 @@ struct SettingsView: View {
 
     private var autoSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(model.s.settingsAuto)
+            sectionTitle(model.s.settingsAuto, help: model.s.settingsAutoNote)
             Text(model.s.settingsAutoNote)
                 .font(Theme.Font.caption)
                 .foregroundStyle(Theme.faint)
@@ -78,9 +80,11 @@ struct SettingsView: View {
             percentRow(model.s.autoRetouch,
                        value: $model.autoRetouchStrength,
                        tint: Theme.sky)
+                .help(model.s.autoRetouchHelp)
             percentRow(model.s.autoColorLight,
                        value: $model.autoColorStrength,
                        tint: Theme.accent)
+                .help(model.s.autoColorLightHelp)
         }
     }
 
@@ -88,7 +92,7 @@ struct SettingsView: View {
 
     private var exportSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(model.s.settingsExport)
+            sectionTitle(model.s.settingsExport, help: model.s.settingsExportHelp)
 
             HStack(spacing: 2) {
                 ForEach(ExportFormat.allCases) { format in
@@ -121,6 +125,7 @@ struct SettingsView: View {
                            value: Binding(get: { model.exportQuality * 100 },
                                           set: { model.exportQuality = $0 / 100 }),
                            tint: Theme.accent)
+                    .help("\(model.s.quality) — \(model.s.sliderHint(.exportQuality))")
             }
 
             HStack(alignment: .top, spacing: 12) {
@@ -139,6 +144,7 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .tint(Theme.accent)
                     .accessibilityLabel(model.s.settingsStripMetadata)
+                    .help(model.s.settingsStripMetadataNote)
             }
             .padding(.vertical, 2)
         }
@@ -148,7 +154,7 @@ struct SettingsView: View {
 
     private var toolsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(model.s.settingsTools)
+            sectionTitle(model.s.settingsTools, help: model.s.settingsToolsHelp)
 
             row(model.s.settingsBrush,
                 detail: "\(Digits.num(model.healBrushPixels)) px") {
@@ -166,6 +172,7 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .tint(Theme.accent)
                     .accessibilityLabel(model.s.settingsFaceOverlay)
+                    .help(model.s.settingsFaceOverlay)
             }
             .padding(.vertical, 2)
         }
@@ -175,7 +182,7 @@ struct SettingsView: View {
 
     private var modelsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(model.s.settingsModels)
+            sectionTitle(model.s.settingsModels, help: model.s.settingsModelsNote)
             Text(model.s.settingsModelsNote)
                 .font(Theme.Font.caption)
                 .foregroundStyle(Theme.faint)
@@ -194,6 +201,7 @@ struct SettingsView: View {
                             .fill(Theme.inset)
                     )
                     .contentShape(Rectangle())
+                    .help(model.s.settingsModelsNote)
             }
             .buttonStyle(PressableButtonStyle(dip: 0.95))
         }
@@ -203,7 +211,7 @@ struct SettingsView: View {
 
     private var recoverySection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(model.s.settingsRecovery)
+            sectionTitle(model.s.settingsRecovery, help: model.s.settingsRecoveryNote)
 
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -221,7 +229,42 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .tint(Theme.accent)
                     .accessibilityLabel(model.s.settingsRecoveryToggle)
+                    .help(model.s.settingsRecoveryNote)
             }
+        }
+    }
+
+    // MARK: - Developer
+
+    /// Identity and the running build. The blank fields in `DeveloperProfile`
+    /// are simply left out, so the card stays honest until they are filled in.
+    private var developerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle(model.s.settingsDeveloper, help: model.s.settingsDeveloperHelp)
+
+            VStack(spacing: 0) {
+                detailRow(model.s.aboutDeveloper, DeveloperProfile.name)
+                if !DeveloperProfile.role.isEmpty {
+                    Hairline()
+                    detailRow(model.s.aboutDeveloperRole, DeveloperProfile.role)
+                }
+                if !DeveloperProfile.email.isEmpty {
+                    Hairline()
+                    detailRow(model.s.aboutContact, DeveloperProfile.email)
+                }
+                if !DeveloperProfile.website.isEmpty {
+                    Hairline()
+                    detailRow(model.s.aboutWebsite, DeveloperProfile.website)
+                }
+                Hairline()
+                detailRow(model.s.aboutVersion, DeveloperProfile.versionLine)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.panel)
+            )
         }
     }
 
@@ -245,6 +288,7 @@ struct SettingsView: View {
                             .fill(Theme.inset)
                     )
                     .contentShape(Rectangle())
+                    .help(model.s.settingsResetNote)
             }
             .buttonStyle(PressableButtonStyle(dip: 0.95))
         }
@@ -253,11 +297,27 @@ struct SettingsView: View {
 
     // MARK: - Pieces
 
-    private func sectionTitle(_ text: String) -> some View {
+    private func sectionTitle(_ text: String, help: String? = nil) -> some View {
         Text(text)
             .font(Theme.Font.section)
             .tracking(0.6)
             .foregroundStyle(Theme.faint)
+            .help(help ?? text)
+    }
+
+    private func detailRow(_ title: String, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(Theme.Font.face(size: 11.5))
+                .foregroundStyle(Theme.muted)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(Theme.Font.value)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.vertical, 7)
     }
 
     private func percentRow(_ title: String, value: Binding<Double>, tint: Color) -> some View {

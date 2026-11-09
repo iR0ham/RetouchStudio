@@ -63,6 +63,12 @@ final class EditorModel: ObservableObject {
     @Published var stripLocationMetadata = true {
         didSet { settings.stripLocationMetadata = stripLocationMetadata }
     }
+    /// Signature burned into exported copies. Held in preferences rather than
+    /// the project: it describes how this owner publishes, not how this photo
+    /// was retouched.
+    @Published var watermark = WatermarkSettings.disabled {
+        didSet { settings.watermark = watermark }
+    }
 
     // Batch export
     @Published var showBatchSheet = false
@@ -132,6 +138,9 @@ final class EditorModel: ObservableObject {
     /// True while the canvas is waiting for the click that marks the object.
     @Published var isAIPicking = false
     @Published var quickEditPreset: AIQuickPreset = .removeObject
+    /// The owner's own words for a Reimagine. Empty means "use the preset's
+    /// sentence", which is what the masked presets always do.
+    @Published var quickEditPrompt = ""
     /// Where the owner clicked, normalized against the working (cropped) frame.
     /// `nil` until the canvas has a point.
     @Published private(set) var quickEditPoint: CGPoint?
@@ -189,6 +198,12 @@ final class EditorModel: ObservableObject {
     /// Pixel size of the working (possibly cropped) image, used for aspect math
     /// and the crop size readout.
     @Published private(set) var workingPixelSize: CGSize = .zero
+    /// Turn baked into the current pixels. Stored edits describe this frame, so
+    /// changing it rewrites their coordinates before the reload.
+    @Published private(set) var documentOrientation: DocumentOrientation = .identity
+    /// Size of the upright source before any crop, the frame orientation
+    /// changes are mapped through.
+    private(set) var sourcePixelSize: CGSize = .zero
     /// True when the sliders differ from the state that was loaded or last
     /// exported, which is what the discard prompt is about.
     @Published private(set) var hasUnsavedChanges = false
@@ -302,6 +317,7 @@ final class EditorModel: ObservableObject {
         var aiEdits: [AIEdit] = []
         var analysis = AnalysisSettings()
         var crop: CGRect?
+        var orientation = DocumentOrientation.identity
         var selectedFaceIndex: Int?
     }
 
@@ -317,7 +333,8 @@ final class EditorModel: ObservableObject {
     private var currentState: EditState {
         EditState(adjustments: adjustments, healSpots: healSpots,
                   stickers: stickers, aiEdits: aiEdits, analysis: analysis,
-                  crop: appliedCrop, selectedFaceIndex: selectedFaceIndex)
+                  crop: appliedCrop, orientation: documentOrientation,
+                  selectedFaceIndex: selectedFaceIndex)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -390,6 +407,7 @@ final class EditorModel: ObservableObject {
     /// off the main actor without touching the history stack.
     private func restore(_ state: EditState) {
         let cropChanged = state.crop != appliedCrop
+        let orientationChanged = state.orientation != documentOrientation
         let selectionChanged = state.selectedFaceIndex != selectedFaceIndex
         adjustments = state.adjustments
         healSpots = state.healSpots
@@ -403,8 +421,9 @@ final class EditorModel: ObservableObject {
             if hasImage { schedulePreview() }
         }
         updateCleanState()
-        guard cropChanged else { return }
+        guard cropChanged || orientationChanged else { return }
         appliedCrop = state.crop
+        documentOrientation = state.orientation
         cropAspect = .free
         cropDraft = CropGeometry.full
         reloadCropped(restoring: true)
@@ -754,6 +773,7 @@ final class EditorModel: ObservableObject {
         exportLongEdge = settings.exportLongEdge
         exportAIUpscale = settings.exportAIUpscale
         stripLocationMetadata = settings.stripLocationMetadata
+        watermark = settings.watermark
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
         comparePosition = settings.comparePosition
@@ -769,15 +789,35 @@ final class EditorModel: ObservableObject {
 
     func openImage() {
         guard !refuseIfBlocking() else { return }
+        // Ask before the picker. Asking after it put a modal alert on top of the
+        // window the panel had just left, which read as a jump and threw the
+        // chosen file away if the owner backed out.
+        guard confirmDiscardIfNeeded() else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = s.choosePhotoToRetouch
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        // Ask only once a replacement is actually chosen, not before the panel.
-        guard confirmDiscardIfNeeded() else { return }
-        load(url: url)
+        present(panel) { [weak self] url in
+            self?.load(url: url)
+        }
+    }
+
+    /// Attaches the picker to the editor window so it slides in as a sheet
+    /// instead of appearing as a separate app-modal window in the middle of the
+    /// screen. A window that already carries a sheet (the export panel, for
+    /// example) falls back to the modal loop.
+    private func present(_ panel: NSOpenPanel, then action: @escaping (URL) -> Void) {
+        let window = NSApp.windows.first { $0.identifier?.rawValue == "editor" }
+        guard let window, window.attachedSheet == nil else {
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            action(url)
+            return
+        }
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            action(url)
+        }
     }
 
     /// Entry point for drag-and-drop and for Finder / Open With.
@@ -807,6 +847,11 @@ final class EditorModel: ObservableObject {
         alert.messageText = s.unsavedTitle
         alert.informativeText = s.unsavedMessage
         alert.alertStyle = .warning
+        // Save first, the way a document window behaves: a detour through the
+        // save panel must not cost the edits either.
+        let save = alert.addButton(withTitle: s.saveBeforeClosing)
+        save.keyEquivalent = "s"
+        save.keyEquivalentModifierMask = .command
         let discard = alert.addButton(withTitle: s.discardChanges)
         discard.hasDestructiveAction = true
         // The first button inherits Return as its key equivalent; clear it so
@@ -825,7 +870,13 @@ final class EditorModel: ObservableObject {
         let response = alert.runModal()
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         if response == .abort { alert.window.orderOut(nil) }
-        return response == .alertFirstButtonReturn
+        if response == .alertFirstButtonReturn {
+            saveProject()
+            // A cancelled save panel leaves the document dirty, so the close
+            // or load that asked stays cancelled rather than dropping the work.
+            return !hasUnsavedChanges
+        }
+        return response == .alertSecondButtonReturn
     }
 
     /// The user confirmed they are done with these adjustments, so the current
@@ -860,10 +911,12 @@ final class EditorModel: ObservableObject {
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
         let crop = project?.crop
+        let orientation = project?.orientation ?? .identity
 
         loadTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
-                processor.load(from: url, previewMaxDimension: previewMaxDimension, crop: crop)
+                processor.load(from: url, previewMaxDimension: previewMaxDimension,
+                               crop: crop, orientation: orientation)
             }.value
 
             guard let self, self.generation == generation else { return }
@@ -906,6 +959,7 @@ final class EditorModel: ObservableObject {
                               size: NSSize(width: result.preview.width, height: result.preview.height))
         previewSize = CGSize(width: result.preview.width, height: result.preview.height)
         workingPixelSize = result.pixelSize
+        sourcePixelSize = result.sourcePixelSize
         imageName = result.fileName
         imageURL = result.url
         cropDraft = CropGeometry.full
@@ -915,6 +969,7 @@ final class EditorModel: ObservableObject {
         quickEditPoint = nil
         isAIPicking = false
         quickEditStage = .idle
+        quickEditPrompt = ""
         clearAIMaskContents()
         aiMaskMessage = nil
         buildPresetThumbs()
@@ -935,9 +990,11 @@ final class EditorModel: ObservableObject {
             autoColorStrength = project.autoColorStrength ?? 100
             adjustments = project.adjustments
             appliedCrop = project.crop
+            documentOrientation = project.orientation ?? .identity
         } else {
             adjustments = .zero
             appliedCrop = nil
+            documentOrientation = .identity
         }
         // Loading is not an edit: the stamps arrive with the project, so they are
         // installed without the change handling a user stamp needs.
@@ -1065,12 +1122,88 @@ final class EditorModel: ObservableObject {
         reloadCropped(restoring: false)
     }
 
-    /// Re-reads the source with the current crop and rebuilds masks and previews.
-    /// History is never touched here: a crop is already an undo step, and an
-    /// undo that changes it calls back in with `restoring` so the restored
-    /// analysis pins survive the re-load. `generation` makes a slow reload from
-    /// an older undo lose to the newer one.
-    private func reloadCropped(restoring: Bool) {
+    // MARK: - Orientation
+
+    var straightenAngle: Double { documentOrientation.angle }
+    var canOrient: Bool { hasImage && !isBusy }
+
+    func rotateClockwise() {
+        applyOrientation(documentOrientation.rotatedClockwise(), status: .rotated)
+    }
+
+    func rotateCounterClockwise() {
+        applyOrientation(documentOrientation.rotatedCounterClockwise(), status: .rotated)
+    }
+
+    func flipHorizontally() {
+        applyOrientation(documentOrientation.flippedHorizontally(), status: .flipped)
+    }
+
+    func setStraightenAngle(_ degrees: Double) {
+        let clamped = min(DocumentOrientation.maxStraighten,
+                          max(-DocumentOrientation.maxStraighten, degrees))
+        applyOrientation(documentOrientation.straightened(to: clamped), status: .straightened)
+    }
+
+    /// Bakes a new orientation into the pixels and rewrites every stored edit
+    /// from the old frame into the new one. The turn is one undo step: history
+    /// keeps the coordinates and the orientation together, so undoing it needs
+    /// no second mapping.
+    private func applyOrientation(_ target: DocumentOrientation, status: StatusToken) {
+        guard hasImage, !isBusy, target != documentOrientation else { return }
+        let base = sourcePixelSize
+        guard base.width >= 1, base.height >= 1 else { return }
+        let delta = DocumentOrientation.compose(target, over: documentOrientation.inverted)
+        commitAdjustments()
+
+        isLoadingState = true
+        if let crop = appliedCrop {
+            // The crop window belongs to the frame, not to the pixels: a
+            // straighten turns the photo under it the way every editor does.
+            // Quarter turns and flips move it exactly, so only the angle is
+            // left out of this mapping.
+            let window = DocumentOrientation(quarterTurns: delta.quarterTurns,
+                                             flipped: delta.flipped)
+            let mapped = CropGeometry.clamped(window.mapRect(crop, base: base))
+            appliedCrop = CropGeometry.isFull(mapped) ? nil : mapped
+        }
+        healSpots = healSpots.map {
+            HealSpot(center: delta.mapPoint($0.center, base: base),
+                     radius: delta.mapShortSideFraction($0.radius, base: base))
+        }
+        stickers = stickers.map { sticker in
+            var mapped = sticker
+            mapped.center = delta.mapPoint(sticker.center, base: base)
+            mapped.size = Double(delta.mapShortSideFraction(CGFloat(sticker.size), base: base))
+            return mapped
+        }
+        aiEdits = aiEdits.map { edit in
+            var mapped = edit
+            mapped.box = delta.mapRect(edit.box, base: base)
+            mapped.patchOrientation = DocumentOrientation.compose(
+                delta, over: edit.patchOrientation ?? .identity)
+            return mapped
+        }
+        // Leader ends were pinned against the old frame; the automatic layout
+        // re-flows onto the turned face as part of the same step.
+        if !analysis.endpoints.isEmpty { analysis.resetEndpoints() }
+        if !analysis.anchors.isEmpty { analysis.resetAnchors() }
+        documentOrientation = target
+        cropAspect = .free
+        cropDraft = CropGeometry.full
+        isLoadingState = false
+
+        commitAdjustments()
+        updateCleanState()
+        reloadCropped(restoring: false, status: status)
+    }
+
+    /// Re-reads the source with the current crop and orientation, and rebuilds
+    /// masks and previews. History is never touched here: a crop or a turn is
+    /// already an undo step, and an undo that changes it calls back in with
+    /// `restoring` so the restored analysis pins survive the re-load.
+    /// `generation` makes a slow reload from an older undo lose to the newer one.
+    private func reloadCropped(restoring: Bool, status: StatusToken? = nil) {
         guard let imageURL else { return }
         guard let token = begin(.load) else {
             statusToken = .operationBusy
@@ -1080,6 +1213,7 @@ final class EditorModel: ObservableObject {
         generation += 1
         let generation = self.generation
         let crop = appliedCrop
+        let orientation = documentOrientation
         let selection = selectedFaceIndex
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
@@ -1089,7 +1223,8 @@ final class EditorModel: ObservableObject {
 
         loadTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
-                processor.load(from: url, previewMaxDimension: previewMaxDimension, crop: crop)
+                processor.load(from: url, previewMaxDimension: previewMaxDimension,
+                               crop: crop, orientation: orientation)
             }.value
 
             guard let self, self.generation == generation else { return }
@@ -1108,11 +1243,11 @@ final class EditorModel: ObservableObject {
             self.rebuildSpotMasks()
             self.updateCleanState()
             self.end(token)
-            if selection != nil || !self.healSpots.isEmpty || !self.stickers.isEmpty {
-                self.schedulePreview()
-            }
+            let hasEdits = self.adjustments != .zero || selection != nil
+                || !self.healSpots.isEmpty || !self.stickers.isEmpty || !self.aiEdits.isEmpty
+            if hasEdits { self.schedulePreview() }
             if !restoring {
-                self.statusToken = crop == nil ? .cropReset : .cropApplied
+                self.statusToken = status ?? (crop == nil ? .cropReset : .cropApplied)
             }
         }
     }
@@ -1139,13 +1274,14 @@ final class EditorModel: ObservableObject {
         isPeekingOriginal = false
     }
 
-    /// Picks a tool from a bare number key. Only the ten numbered tools map;
-    /// the art tool keeps its button.
+    /// Picks a tool from a bare key. The number row covers the first ten and
+    /// the two keys beside it reach art and analysis.
     @discardableResult
     func selectTool(shortcut key: String) -> Bool {
         let numbers: [String: Int] = [
             "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
             "6": 6, "7": 7, "8": 8, "9": 9, "0": 10,
+            "-": 11, "−": 11, "=": 12, "+": 12,
             "۱": 1, "۲": 2, "۳": 3, "۴": 4, "۵": 5,
             "۶": 6, "۷": 7, "۸": 8, "۹": 9, "۰": 10,
         ]
@@ -1230,7 +1366,8 @@ final class EditorModel: ObservableObject {
     var aiMaskHasSelection: Bool { aiMaskSelection.hasContent }
     var canRunQuickEdit: Bool {
         hasImage && !isRunningQuickEdit && !isOperationBlocking && !isRefiningMask
-            && (aiMaskHasSelection
+            && (quickEditPreset.isFullFrame
+                || aiMaskHasSelection
                 || (quickEditPoint != nil && quickEditPreset != .healArea))
     }
 
@@ -1263,7 +1400,13 @@ final class EditorModel: ObservableObject {
     func selectQuickEditPreset(_ preset: AIQuickPreset) {
         guard !isRunningQuickEdit else { return }
         quickEditPreset = preset
-        if preset == .healArea {
+        if preset.isFullFrame {
+            // Reimagine redraws the frame; a leftover mask would only confuse
+            // the overlay, so the canvas goes back to a plain photo.
+            quickEditPoint = nil
+            clearAIMaskContents()
+            isAIPicking = false
+        } else if preset == .healArea {
             quickEditPoint = nil
             if aiMaskTool == .point { aiMaskTool = .brush }
         }
@@ -1389,7 +1532,11 @@ final class EditorModel: ObservableObject {
 
         let crop = appliedCrop
         let preset = quickEditPreset
-        let prompt = preset.prompt
+        let fullFrame = preset.isFullFrame
+        // Only Reimagine takes the owner's words. The masked presets keep
+        // their own instruction so an old prompt cannot change their meaning.
+        let custom = quickEditPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = fullFrame && !custom.isEmpty ? custom : preset.prompt
         let seed = Int.random(in: 1...Int(Int32.max))
         let dilate = Int(aiMaskExpand.rounded())
         let feather = Int(aiMaskFeather.rounded())
@@ -1400,6 +1547,7 @@ final class EditorModel: ObservableObject {
                     return .success(try QuickEditRunner.run(
                         image: source, point: point, mask: mask, crop: crop,
                         preset: preset, prompt: prompt, seed: seed,
+                        fullFrame: fullFrame,
                         dilate: dilate, feather: feather,
                         onJob: { id in
                             Task { @MainActor in
@@ -1826,6 +1974,39 @@ final class EditorModel: ObservableObject {
                 set: { self.setBackgroundFillColor($0) })
     }
 
+    /// Copies a chosen photo into the backdrop store and attaches it to this
+    /// document. The original file is read once here, so an unreadable choice
+    /// is refused before the document changes.
+    func chooseBackdropImage() {
+        guard hasImage else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = s.chooseBackdropMessage
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard CIImage(contentsOf: url,
+                      options: [CIImageOption.applyOrientationProperty: true]) != nil else {
+            statusToken = .backdropFailed
+            return
+        }
+        do {
+            let name = try BackdropStore.store(url)
+            adjustments.backgroundImage = name
+            adjustments.backgroundImageName = url.lastPathComponent
+            adjustments.backgroundImageAmount = 100
+        } catch {
+            statusToken = .backdropFailed
+        }
+    }
+
+    func clearBackdropImage() {
+        guard !adjustments.backgroundImage.isEmpty else { return }
+        adjustments.backgroundImage = ""
+        adjustments.backgroundImageName = ""
+        adjustments.backgroundImageAmount = 100
+    }
+
     // MARK: - Zoom and pan
 
     /// Zoom limits. Fit (1×) up to 400%, which is what the UI exposes.
@@ -2015,6 +2196,7 @@ final class EditorModel: ObservableObject {
         guard hasImage, !refuseIfBlocking() else { return }
         commitAdjustments()
         let cropChanged = appliedCrop != nil
+        let frameChanged = cropChanged || documentOrientation != .identity
         adjustments = .zero
         if !healSpots.isEmpty { healSpots.removeAll() }
         if !aiEdits.isEmpty { aiEdits.removeAll() }
@@ -2024,8 +2206,9 @@ final class EditorModel: ObservableObject {
         applyFaceSelection(nil)
         refreshAnalysisOverlay()
         comparePosition = settings.comparePosition
-        if cropChanged {
+        if frameChanged {
             appliedCrop = nil
+            documentOrientation = .identity
             cropAspect = .free
             cropDraft = CropGeometry.full
         }
@@ -2033,7 +2216,7 @@ final class EditorModel: ObservableObject {
         // so one ⌘Z returns the whole document.
         commitAdjustments()
         updateCleanState()
-        if cropChanged { reloadCropped(restoring: false) }
+        if frameChanged { reloadCropped(restoring: false) }
     }
 
     /// True when every group, stamp, sticker, analysis pin and the framing
@@ -2043,6 +2226,7 @@ final class EditorModel: ObservableObject {
         adjustments.isIdentity && healSpots.isEmpty && stickers.isEmpty
             && aiEdits.isEmpty
             && analysis == AnalysisSettings() && appliedCrop == nil
+            && documentOrientation == .identity
     }
 
     func apply(_ preset: Preset) {
@@ -2301,6 +2485,7 @@ final class EditorModel: ObservableObject {
         exportLongEdge = settings.exportLongEdge
         exportAIUpscale = settings.exportAIUpscale
         stripLocationMetadata = settings.stripLocationMetadata
+        watermark = settings.watermark
         healBrushPercent = settings.healBrushPercent
         showFaceOverlay = settings.showFaceOverlay
         language = settings.language
@@ -2515,6 +2700,7 @@ final class EditorModel: ObservableObject {
                               aiEdits: aiEdits,
                               analysis: analysis,
                               crop: appliedCrop,
+                              orientation: documentOrientation,
                               selectedFaceIndex: selectedFaceIndex,
                               format: effectiveExportFormat,
                               quality: exportQuality,
@@ -2522,7 +2708,8 @@ final class EditorModel: ObservableObject {
                               stripsPrivacyMetadata: stripLocationMetadata,
                               includeStamps: includeStamps,
                               includeAnalysis: includeAnalysis,
-                              aiUpscale: usesExportUpscale)
+                              aiUpscale: usesExportUpscale,
+                              watermark: watermark)
     }
 
     func export(to url: URL) {
@@ -2623,7 +2810,8 @@ final class EditorModel: ObservableObject {
                               stickers: stickers.isEmpty ? nil : stickers,
                               aiEdits: aiEdits.isEmpty ? nil : aiEdits,
                               analysis: analysis == AnalysisSettings() ? nil : analysis,
-                              selectedFace: selectedFaceIndex)
+                              selectedFace: selectedFaceIndex,
+                              orientation: documentOrientation.isIdentity ? nil : documentOrientation)
     }
 
     private func writeProject(to url: URL) {
@@ -2874,12 +3062,15 @@ final class EditorModel: ObservableObject {
         // travel to another file only if that file is this very photo.
         if url.resolvingSymlinksInPath() != documentURL {
             fileSnapshot.aiEdits = []
+            // The turn belongs to this photo's frame, not to another file.
+            fileSnapshot.orientation = .identity
         }
         let skippedCrop = snapshot.crop != nil && !useCrop
 
         guard let result = processor.load(from: url,
                                           previewMaxDimension: previewMaxDimension,
-                                          crop: fileSnapshot.crop) else {
+                                          crop: fileSnapshot.crop,
+                                          orientation: fileSnapshot.orientation) else {
             return BatchOutcome(saved: false, skippedCrop: false)
         }
         // Each file builds its own set inside the renderer, one file at a time.

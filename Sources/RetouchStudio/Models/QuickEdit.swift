@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 enum AIQuickPreset: String, CaseIterable, Identifiable, Codable {
     case removeObject
     case healArea
+    case reimagine
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum AIQuickPreset: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .removeObject: return L10n.current.aiRemoveObject
         case .healArea: return L10n.current.aiHealArea
+        case .reimagine: return L10n.current.aiReimagine
         }
     }
 
@@ -23,6 +25,7 @@ enum AIQuickPreset: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .removeObject: return L10n.current.aiRemoveObjectHelp
         case .healArea: return L10n.current.aiHealAreaHelp
+        case .reimagine: return L10n.current.aiReimagineHelp
         }
     }
 
@@ -31,10 +34,16 @@ enum AIQuickPreset: String, CaseIterable, Identifiable, Codable {
     /// semantic removal needs the generative model.
     var engine: String {
         switch self {
-        case .removeObject: return "patch"
+        case .removeObject, .reimagine: return "patch"
         case .healArea: return "inpaint"
         }
     }
+
+    /// Reimagine redraws the whole frame from the prompt, so it needs no mask
+    /// or point. The other two act only on what the owner marks.
+    var isFullFrame: Bool { self == .reimagine }
+
+    var needsSelection: Bool { !isFullFrame }
 
     var prompt: String {
         switch self {
@@ -44,6 +53,9 @@ enum AIQuickPreset: String, CaseIterable, Identifiable, Codable {
         case .healArea:
             return "Continue the surrounding texture and lighting over the selected area: "
                 + "photorealistic, seamless"
+        case .reimagine:
+            return "Reimagine this photograph with the requested change, keeping the subject "
+                + "recognisable: same framing, same lighting, photorealistic"
         }
     }
 }
@@ -83,6 +95,7 @@ enum QuickEditRunner {
 
     static func run(image: CGImage, point: CGPoint?, mask: AIMaskSelection,
                     crop: CGRect?, preset: AIQuickPreset, prompt: String, seed: Int,
+                    fullFrame: Bool = false,
                     dilate: Int = 4, feather: Int = 2,
                     onJob: (String) -> Void = { _ in },
                     progress: @escaping (Int) -> Void) throws -> AIEdit {
@@ -101,7 +114,12 @@ enum QuickEditRunner {
             "dilate": dilate,
             "feather": feather,
         ]
-        if mask.hasContent {
+        if fullFrame {
+            // The helper draws the whole frame from the prompt and ignores a
+            // mask entirely; asking for it explicitly is what makes a large
+            // masked edit and a deliberate reimagine different requests.
+            params["full_frame"] = true
+        } else if mask.hasContent {
             guard let plane = AIMaskRenderer.mask(
                 size: copy.size, strokes: mask.strokes, box: mask.box,
                 refined: mask.refined, inverted: mask.inverted) else {
@@ -128,17 +146,47 @@ enum QuickEditRunner {
         used = true
         let seconds = Date().timeIntervalSince(started)
 
-        guard let payload = reply["result"] as? [String: Any],
-              (payload["mode"] as? String) == "patch",
+        guard let payload = reply["result"] as? [String: Any] else {
+            throw AIWorkerFailure(code: -32603, message: L10n.current.aiBadReply)
+        }
+        let mode = payload["mode"] as? String
+
+        // A whole-frame render replaces the picture on purpose. It arrives as
+        // one opaque layer over the working frame, so undo and export use the
+        // same layer machinery as every other edit.
+        if mode == "full-frame" {
+            guard let outputPath = payload["output"] as? String else {
+                throw AIWorkerFailure(code: -32603, message: L10n.current.aiBadReply)
+            }
+            // The worker redrew the whole original, so the layer covers the
+            // whole original. The compositor maps that box through any crop,
+            // which keeps the visible window aligned with what was generated.
+            let editID = UUID()
+            let files = try AIEditStore.adopt(
+                id: editID,
+                patch: URL(fileURLWithPath: outputPath),
+                alpha: try writeOpaqueAlpha(size: copy.size, beside: copy.url))
+            return AIEdit(id: editID,
+                          preset: preset.rawValue,
+                          prompt: prompt,
+                          seed: seed,
+                          patchFile: files.patch,
+                          alphaFile: files.alpha,
+                          box: CGRect(x: 0, y: 0, width: 1, height: 1),
+                          imagePixels: copy.size,
+                          seconds: seconds,
+                          outsidePixelsIdentical: false)
+        }
+
+        guard mode == "patch",
               let box = payload["box"] as? [Int], box.count == 4,
               let size = payload["image_size"] as? [Int], size.count == 2,
               let patchPath = payload["patch"] as? String,
               let alphaPath = payload["alpha"] as? String else {
-            // The worker routes anything above 6 % of the frame to a whole-frame
-            // render; this sheet only promises a local edit, so it says so
-            // instead of quietly replacing the picture.
-            if let payload = reply["result"] as? [String: Any],
-               let mode = payload["mode"] as? String, mode == "full-frame" {
+            // A masked edit the helper routed to a whole-frame render is not
+            // what this sheet promised, so it says so instead of replacing the
+            // picture. Reimagine asks for that path explicitly above.
+            if mode == "full-frame" {
                 throw AIWorkerFailure(code: -32002, message: L10n.current.aiTooLarge)
             }
             throw AIWorkerFailure(code: -32603, message: L10n.current.aiBadReply)
@@ -203,12 +251,35 @@ enum QuickEditRunner {
     }
 
     private static func writeMask(_ mask: CGImage, beside copy: URL) throws -> URL {
-        let url = copy.deletingLastPathComponent().appendingPathComponent("mask.png")
+        try writePNG(mask, to: copy.deletingLastPathComponent().appendingPathComponent("mask.png"))
+    }
+
+    /// A whole-frame render has no mask of its own; the editor still needs an
+    /// alpha layer beside the patch, so it gets one that covers every pixel.
+    private static func writeOpaqueAlpha(size: CGSize, beside copy: URL) throws -> URL {
+        let width = max(1, Int(size.width.rounded()))
+        let height = max(1, Int(size.height.rounded()))
+        guard let context = CGContext(data: nil, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: width,
+                                      space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
+            throw AIWorkerFailure(code: -32000, message: L10n.current.aiMaskFailed)
+        }
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let alpha = context.makeImage() else {
+            throw AIWorkerFailure(code: -32000, message: L10n.current.aiMaskFailed)
+        }
+        return try writePNG(alpha, to: copy.deletingLastPathComponent()
+            .appendingPathComponent("alpha.png"))
+    }
+
+    private static func writePNG(_ image: CGImage, to url: URL) throws -> URL {
         guard let destination = CGImageDestinationCreateWithURL(
             url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
             throw AIWorkerFailure(code: -32000, message: L10n.current.aiMaskFailed)
         }
-        CGImageDestinationAddImage(destination, mask, nil)
+        CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else {
             throw AIWorkerFailure(code: -32000, message: L10n.current.aiMaskFailed)
         }

@@ -137,6 +137,7 @@ struct TutorialView: View {
                         .foregroundStyle(Theme.faint)
                 }
                 .buttonStyle(.plain)
+                .help(copy.clearSearch)
             }
         }
         .padding(.horizontal, 10)
@@ -312,6 +313,7 @@ struct TutorialView: View {
                 .font(Theme.Font.section)
                 .tracking(0.6)
                 .foregroundStyle(Theme.faint)
+                .help(copy.shortcutTitle)
 
             VStack(spacing: 0) {
                 ForEach(Array(copy.shortcuts.enumerated()), id: \.offset) { index, row in

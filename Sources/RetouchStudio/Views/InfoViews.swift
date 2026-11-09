@@ -17,7 +17,7 @@ final class InfoWindows {
 
     func showAbout() {
         let s = L10n.current
-        show(id: "about", title: s.aboutTitle, size: NSSize(width: 380, height: 470)) {
+        show(id: "about", title: s.aboutTitle, size: NSSize(width: 420, height: 640)) {
             AboutView()
         }
     }
@@ -92,9 +92,6 @@ final class InfoWindows {
 // MARK: - About
 
 struct AboutView: View {
-    private var info: [String: Any] { Bundle.main.infoDictionary ?? [:] }
-    private var version: String { info["CFBundleShortVersionString"] as? String ?? "2.1" }
-    private var build: String { info["CFBundleVersion"] as? String ?? "1" }
     private var appIcon: NSImage {
         NSApp.applicationIconImage ?? NSImage(named: NSImage.applicationIconName) ?? NSImage()
     }
@@ -118,19 +115,31 @@ struct AboutView: View {
                 .foregroundStyle(Theme.muted)
                 .padding(.top, 3)
 
-            Text("\(L10n.current.aboutVersion) \(version) (\(build))")
+            Text("\(L10n.current.aboutVersion) \(DeveloperProfile.versionLine)")
                 .font(Theme.Font.value)
                 .foregroundStyle(Theme.faint)
                 .padding(.top, 10)
+
+            Text(L10n.current.aboutDescription)
+                .font(Theme.Font.face(size: 11.5))
+                .foregroundStyle(Theme.muted)
+                .lineSpacing(3)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 34)
+                .padding(.top, 16)
 
             Hairline()
                 .padding(.horizontal, 34)
                 .padding(.vertical, 18)
 
             VStack(spacing: 8) {
-                infoRow(L10n.current.aboutDeveloper, L10n.current.aboutDeveloperName)
+                infoRow(L10n.current.aboutDeveloper, DeveloperProfile.name)
+                if !DeveloperProfile.role.isEmpty {
+                    infoRow(L10n.current.aboutDeveloperRole, DeveloperProfile.role)
+                }
                 infoRow(L10n.current.aboutCopyright,
-                        "\(L10n.current.aboutCopyrightLine) · \(L10n.current.aboutRights)")
+                        "\(DeveloperProfile.copyrightLine) · \(L10n.current.aboutRights)")
             }
             .padding(.horizontal, 34)
 
@@ -158,7 +167,7 @@ struct AboutView: View {
             .keyboardShortcut(.cancelAction)
             .padding(.bottom, 22)
         }
-        .frame(width: 380, height: 470)
+        .frame(width: 420, height: 640)
         .background(Theme.background)
         .preferredColorScheme(.dark)
     }
@@ -282,5 +291,6 @@ struct HelpView: View {
             .font(Theme.Font.section)
             .tracking(0.6)
             .foregroundStyle(Theme.faint)
+            .help(text)
     }
 }

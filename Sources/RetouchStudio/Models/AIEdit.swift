@@ -24,6 +24,10 @@ struct AIEdit: Codable, Equatable, Identifiable {
     /// The job image's pixel size. Used to keep the two files' true aspect when
     /// a project is reopened at a different preview size.
     var imagePixels: CGSize
+    /// Turn applied to the two files since they were written. Rotating the
+    /// document must rotate the edit with it; the rasters stay untouched on
+    /// disk so undo can point the same bytes back the other way.
+    var patchOrientation: DocumentOrientation? = nil
     var createdAt: Date = Date()
 
     /// How long the worker took, kept for the record and the status line.

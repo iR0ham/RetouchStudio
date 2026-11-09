@@ -153,6 +153,15 @@ final class PersianL10n: L10n {
     override var backgroundFill: String { "رنگ پُر پس‌زمینه" }
     override var backgroundFillColor: String { "رنگ پُرکننده" }
     override var backgroundRemove: String { "حذف پس‌زمینه" }
+    override var backdropImageTitle: String { "تصویر پس‌زمینه" }
+    override var chooseBackdrop: String { "انتخاب تصویر…" }
+    override var chooseBackdropMessage: String { "یک تصویر برای پس‌زمینه انتخاب کنید" }
+    override var backdropStrength: String { "شدت پس‌زمینه" }
+    override var backdropClearHelp: String { "حذف تصویر پس‌زمینهٔ انتخابی" }
+    override var backdropNote: String {
+        "تصویر داخل برنامه کپی می‌شود، پس اگر فایل اصلی جابه‌جا شود پروژه باز هم کار می‌کند."
+    }
+    override var backdropFailed: String { "این تصویر به‌عنوان پس‌زمینه خوانده نشد." }
     override var backgroundRemoveNote: String {
         "حذف پس‌زمینه آن را شفاف می‌کند. PNG و TIFF شفافیت را نگه می‌دارند؛ JPEG آن را روی سفید می‌نویسد."
     }
@@ -189,6 +198,7 @@ final class PersianL10n: L10n {
     override var doubleClickHint: String {
         "برای بازنشانی فقط همان افکت، دوبار روی اسلایدر کلیک کن"
     }
+    override func sliderHint(_ hint: SliderHint) -> String { hint.persian }
 
     // MARK: - Face status
 
@@ -251,6 +261,7 @@ final class PersianL10n: L10n {
         "این عکس ویرایش‌هایی دارد که در پروژه ذخیره یا خروجی گرفته نشده. اگر ادامه دهی، از دست می‌روند."
     }
     override var discardChanges: String { "دور ریختن تغییرات" }
+    override var saveBeforeClosing: String { "ذخیرهٔ پروژه" }
 
     // MARK: - Projects
 
@@ -312,6 +323,15 @@ final class PersianL10n: L10n {
     override var applyingCrop: String { "در حال اعمال برش…" }
     override var cropApplied: String { "برش اعمال شد." }
     override var cropReset: String { "برش به قاب اصلی برگشت." }
+    override var rotated: String { "عکس چرخید." }
+    override var flipped: String { "عکس آینه شد." }
+    override var straightened: String { "تراز اعمال شد." }
+    override var orientationLabel: String { "جهت" }
+    override var rotateLeft: String { "چپ" }
+    override var rotateRight: String { "راست" }
+    override var flipHorizontal: String { "آینه" }
+    override var straightenLabel: String { "تراز" }
+    override var levelAction: String { "افقی" }
 
     // MARK: - Healing brush
 
@@ -387,6 +407,9 @@ final class PersianL10n: L10n {
     override var faceSelectionAuto: String { "خودکار" }
     override func faceSelectionName(_ index: Int) -> String { "چهرهٔ \(Digits.num(index + 1))" }
     override var analysisExportSection: String { "آنالیز چهره" }
+    override var analysisExportSectionHelp: String {
+        "انتخاب می‌کند که لایهٔ آنالیز چهره روی خروجی کشیده شود و چگونه."
+    }
     override var analysisExportMode: String { "خروجی" }
     override var analysisMargin: String { "حاشیه" }
 
@@ -451,8 +474,12 @@ final class PersianL10n: L10n {
     // MARK: - Export sheet
 
     override var format: String { "قالب" }
+    override var formatHelp: String { "قالب فایل خروجی را انتخاب می‌کند." }
     override var quality: String { "کیفیت" }
     override var exportLongEdge: String { "ضلع بلند" }
+    override var exportLongEdgeHelp: String {
+        "بلندترین ضلع را محدود می‌کند. گزینهٔ اصلی اندازهٔ خود عکس را نگه می‌دارد."
+    }
     override var exportOriginal: String { "اصلی" }
     override func exportSize(_ info: String) -> String { "خروجی: \(info)" }
     override func originalSize(_ info: String) -> String { "اندازهٔ اصلی: \(info)" }
@@ -478,6 +505,24 @@ final class PersianL10n: L10n {
     override var exportFullQuality: String {
         "خروجی همیشه با کیفیت و اندازهٔ کامل اصلی نوشته می‌شود."
     }
+    override var watermarkSection: String { "واترمارک" }
+    override var watermarkText: String { "متن" }
+    override var watermarkTextPlaceholder: String { "نام یا ©" }
+    override var watermarkOpacity: String { "شفافیت" }
+    override var watermarkSize: String { "اندازه" }
+    override var watermarkNote: String {
+        "فقط روی نسخهٔ ذخیره‌شده کشیده می‌شود؛ پیش‌نمایش دست‌نخورده می‌ماند."
+    }
+    override func watermarkPosition(_ position: WatermarkSettings.Position) -> String {
+        switch position {
+        case .topLeft: return "بالا چپ"
+        case .topRight: return "بالا راست"
+        case .bottomLeft: return "پایین چپ"
+        case .bottomRight: return "پایین راست"
+        case .center: return "وسط"
+        }
+    }
+    override var histogramLabel: String { "هیستوگرام" }
 
     // MARK: - Menus
 
@@ -540,16 +585,21 @@ final class PersianL10n: L10n {
     override var settingsTitle: String { "تنظیمات" }
     override var settingsWindowTitle: String { "\(settingsTitle) \(appName)" }
     override var settingsLanguage: String { "زبان" }
+    override var settingsLanguageHelp: String { "زبان رابط برنامه را انتخاب کن." }
     override var settingsAuto: String { "خودکار" }
     override var settingsAutoNote: String {
         "اینکه از هر اصلاح اندازه‌گیری‌شده چقدر اعمال شود."
     }
     override var settingsExport: String { "خروجی" }
+    override var settingsExportHelp: String {
+        "قالب، کیفیت و مشخصات فایل برای نسخه‌های ذخیره‌شده."
+    }
     override var settingsStripMetadata: String { "حذف موقعیت مکانی و مشخصات دوربین" }
     override var settingsStripMetadataNote: String {
         "GPS، نام مالک دوربین، شمارهٔ سریال و یادداشت‌ها از خروجی حذف می‌شوند. جهت، پروفایل رنگ و ابعاد حفظ می‌شوند."
     }
     override var settingsTools: String { "ابزارها" }
+    override var settingsToolsHelp: String { "اندازهٔ قلم ترمیم و نمایش کادر چهره." }
     override var settingsRecovery: String { "بازیابی" }
     override var settingsRecoveryToggle: String { "یک نسخهٔ بازیابی از کار ذخیره‌نشده نگه دار" }
     override var settingsRecoveryNote: String {
@@ -633,13 +683,22 @@ final class PersianL10n: L10n {
 
     override var aboutTitle: String { "دربارهٔ Retouch Studio" }
     override var aboutTagline: String { "رتوش پرتره، با اندازه‌گیری." }
+    override var aboutDescription: String {
+        "Retouch Studio یک برنامهٔ رتوش پرترهٔ محلی برای مک است. اول عکس را می‌سنجد — پوست، چشم‌ها، دندان‌ها، مو، نور و کادر — تا ویرایش خودکار فقط همان چیزی را تغییر دهد که اندازه‌گیری‌ها توجیه می‌کنند؛ بعد دوازده ابزار در اختیارتان می‌گذارد: پوست، درمان، اصلاح فرم، چشم و دندان، آرایش، رنگ و نور، ظاهرها، برش، بدن، پس‌زمینه، برچسب‌ها و تحلیل. هر تغییری غیرمخرب است: می‌توانید آن را برگردانید، نشست را به‌صورت پروژهٔ .retouch ذخیره کنید یا با کیفیت کامل خروجی بگیرید."
+    }
     override var aboutVersion: String { "نسخه" }
     override var aboutDeveloper: String { "توسعه‌دهنده" }
+    override var aboutDeveloperRole: String { "نقش" }
+    override var aboutDeveloperRoleValue: String { "طراحی و توسعه" }
+    override var aboutContact: String { "تماس" }
+    override var aboutWebsite: String { "وب‌سایت" }
     override var aboutCopyright: String { "کپی‌رایت" }
     override var aboutRights: String { "تمامی حقوق محفوظ است." }
-    override var aboutEngine: String { "ساخته‌شده با Core Image و Vision، کاملاً روی همین مک." }
-    override var aboutDeveloperName: String { "Roham" }
-    override var aboutCopyrightLine: String { "© 2026 Roham" }
+    override var aboutEngine: String {
+        "همه‌چیز روی همین مک اجرا می‌شود — بدون حساب، بدون آپلود و بدون جمع‌آوری آمار. ساخته‌شده با SwiftUI، Core Image و Vision؛ دستیار اختیاری هوش مصنوعی روی Apple silicon کار می‌کند."
+    }
+    override var settingsDeveloper: String { "توسعه‌دهنده" }
+    override var settingsDeveloperHelp: String { "سازندهٔ برنامه و نسخهٔ در حال اجرا." }
     override var helpTitle: String { "راهنمای Retouch Studio" }
     override var helpIntro: String {
         "یک پرتره باز کن، با تحلیل هوشمند بخوانش و بعد با دست خودت تنظیم کن. همه چیز روی همین مک انجام می‌شود — هیچ عکسی آپلود نمی‌شود."
@@ -715,6 +774,8 @@ final class PersianL10n: L10n {
         case .analysis: return analysisSubtitle
         }
     }
+
+    override var presetsHint: String { "نقطهٔ شروع برای پوست، فرم و رنگ" }
 
     override func panelTitle(_ panel: Panel) -> String {
         switch panel {
@@ -903,7 +964,7 @@ final class PersianL10n: L10n {
     override var closeButton: String { "بستن" }
     override var healingBrush: String { "قلم‌موی ترمیم" }
     override var brushSize: String { "اندازه" }
-    override var brushShortcutHint: String { "نکته: با [ و ] اندازهٔ قلم را تغییر بده" }
+    override var brushShortcutHint: String { "قطر قلم ترمیم را تعیین می‌کند. با [ و ] هم تغییر می‌کند." }
     override var stamps: String { "مهرها" }
     override var clearStamps: String { "پاک کردن مهرها" }
     override var cropTool: String { "برش" }
@@ -972,6 +1033,16 @@ final class PersianL10n: L10n {
     override var aiHealArea: String { "ترمیم ناحیهٔ کوچک" }
     override var aiHealAreaHelp: String {
         "روی یک لکهٔ کوچک بکش. مدل ترمیم محلی آن را در کمتر از یک ثانیه از بافت اطراف پر می‌کند."
+    }
+    override var aiReimagine: String { "بازآفرینی" }
+    override var aiReimagineHelp: String {
+        "تغییر را توصیف کن. هوش مصنوعی کل کادر را از روی حرف تو از نو می‌کشد — سوژه شناخته‌شدنی می‌ماند، اما همهٔ پیکسل‌ها تازه‌اند."
+    }
+    override var aiRunReimagine: String { "بازآفرینی عکس" }
+    override var aiPromptLabel: String { "تغییر را توصیف کن" }
+    override var aiPromptPlaceholder: String { "مثلاً نور ساعت طلایی، حال‌وهوای فیلمی نرم" }
+    override var aiPromptNote: String {
+        "کل عکس از نو ساخته می‌شود. قلم‌مو، نقطه و کادر اینجا کاربردی ندارند."
     }
     override var aiMaskFailed: String { "آماده‌سازی انتخاب ممکن نشد." }
     override var aiMaskTooLarge: String {

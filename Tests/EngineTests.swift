@@ -1139,6 +1139,302 @@ for (name, format) in [("stripped.png", ExportFormat.png), ("stripped.tif", .tif
           "\(image.bitsPerComponent)-bit")
 }
 
+// MARK: - Orientation
+
+print("\n[O1] orientation maps coordinates and pixels the same way")
+func orientationFixture(width: Int, height: Int) -> CIImage {
+    let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                        bytesPerRow: 0, space: sRGB,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(width) / 2, height: CGFloat(height)))
+    ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: CGFloat(width) / 2, y: 0,
+                    width: CGFloat(width) / 2, height: CGFloat(height)))
+    return CIImage(cgImage: ctx.makeImage()!)
+}
+
+func pixel(_ image: CGImage, x: Int, yFromTop: Int) -> (r: Double, g: Double, b: Double, a: Double) {
+    guard let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else {
+        return (0, 0, 0, 0)
+    }
+    let offset = yFromTop * image.bytesPerRow + x * 4
+    return (Double(bytes[offset]) / 255, Double(bytes[offset + 1]) / 255,
+            Double(bytes[offset + 2]) / 255, Double(bytes[offset + 3]) / 255)
+}
+
+let base = CGSize(width: 200, height: 100)
+let quarters = DocumentOrientation(quarterTurns: 1)
+check(quarters.outputSize(base: base) == CGSize(width: 100, height: 200),
+      "a quarter turn swaps the frame's sides")
+let topLeft = quarters.mapPoint(CGPoint(x: 0, y: 0), base: base)
+let bottomLeft = quarters.mapPoint(CGPoint(x: 0, y: 1), base: base)
+check(abs(topLeft.x - 1) < 0.0001 && abs(topLeft.y) < 0.0001,
+      "the old top-left lands on the new top-right", "\(topLeft)")
+check(abs(bottomLeft.x) < 0.0001 && abs(bottomLeft.y) < 0.0001,
+      "the old bottom-left lands on the new top-left", "\(bottomLeft)")
+
+let roundTrip = quarters.rotatedClockwise().rotatedClockwise().rotatedClockwise()
+let original = CGPoint(x: 0.23, y: 0.71)
+let back = roundTrip.mapPoint(original, base: base)
+check(roundTrip == .identity
+        && abs(back.x - original.x) < 0.0001 && abs(back.y - original.y) < 0.0001,
+      "four clockwise turns are the identity")
+
+let mirrored = DocumentOrientation(flipped: true).flippedHorizontally()
+check(mirrored == .identity, "two flips are the identity")
+let flippedPoint = DocumentOrientation(flipped: true)
+    .mapPoint(CGPoint(x: 0.1, y: 0.3), base: base)
+check(abs(flippedPoint.x - 0.9) < 0.0001 && abs(flippedPoint.y - 0.3) < 0.0001,
+      "a flip moves the point across the centre line", "\(flippedPoint)")
+
+let topRightQuarter = CGRect(x: 0.5, y: 0, width: 0.5, height: 0.5)
+let mappedCrop = quarters.mapRect(topRightQuarter, base: base)
+check(abs(mappedCrop.minX - 0.5) < 0.0001 && abs(mappedCrop.minY - 0.5) < 0.0001
+        && abs(mappedCrop.width - 0.5) < 0.0001 && abs(mappedCrop.height - 0.5) < 0.0001,
+      "a crop rectangle turns with the frame", "\(mappedCrop)")
+
+let straight = DocumentOrientation(angle: 12)
+let centre = straight.mapPoint(CGPoint(x: 0.5, y: 0.5), base: base)
+check(abs(centre.x - 0.5) < 0.0001 && abs(centre.y - 0.5) < 0.0001,
+      "straighten keeps the centre fixed")
+check(straight.mapShortSideFraction(0.1, base: base) > 0.1,
+      "straighten enlarges a stamp fraction by the same scale as the pixels",
+      "\(straight.mapShortSideFraction(0.1, base: base))")
+check(straight.coverScale(base: base) > 1,
+      "the cover scale is above one so no corner goes transparent")
+
+if let turned = processor.renderCGImage(quarters.applied(to: orientationFixture(width: 40, height: 20)), scale: 1) {
+    let top = pixel(turned, x: 10, yFromTop: 5)
+    let bottom = pixel(turned, x: 10, yFromTop: 35)
+    check(turned.width == 20 && turned.height == 40,
+          "the turned pixels have the swapped size")
+    check(top.r > 0.8 && top.b < 0.2,
+          "the old left half is the new top half (clockwise)", "\(top)")
+    check(bottom.b > 0.8 && bottom.r < 0.2,
+          "the old right half is the new bottom half", "\(bottom)")
+} else {
+    check(false, "quarter turn render")
+}
+
+if let flippedImage = processor.renderCGImage(
+        DocumentOrientation(flipped: true).applied(to: orientationFixture(width: 40, height: 20)),
+        scale: 1) {
+    let left = pixel(flippedImage, x: 5, yFromTop: 10)
+    let right = pixel(flippedImage, x: 35, yFromTop: 10)
+    check(left.b > 0.8 && left.r < 0.2 && right.r > 0.8 && right.b < 0.2,
+          "a flip moves the left half to the right", "L\(left) R\(right)")
+} else {
+    check(false, "flip render")
+}
+
+if let straightened = processor.renderCGImage(straight.applied(to: orientationFixture(width: 40, height: 20)), scale: 1) {
+    let corner = pixel(straightened, x: 0, yFromTop: 0)
+    check(straightened.width == 40 && straightened.height == 20 && corner.a > 0.99,
+          "straighten keeps the frame size and covers the corner", "\(corner)")
+} else {
+    check(false, "straighten render")
+}
+
+if let patchTurned = processor.renderCGImage(
+        AICompositor.oriented(orientationFixture(width: 40, height: 20),
+                              by: DocumentOrientation(quarterTurns: 1)),
+        scale: 1) {
+    let top = pixel(patchTurned, x: patchTurned.width / 2, yFromTop: 5)
+    check(top.r > 0.8 && top.b < 0.2,
+          "an AI patch turns with the photo", "\(top)")
+} else {
+    check(false, "patch turn render")
+}
+
+let encoded = try? JSONEncoder().encode(DocumentOrientation(quarterTurns: 1, flipped: true, angle: -7.5))
+let decoded = encoded.flatMap { try? JSONDecoder().decode(DocumentOrientation.self, from: $0) }
+check(decoded == DocumentOrientation(quarterTurns: 1, flipped: true, angle: -7.5),
+      "orientation survives a project write and read")
+
+// MARK: - Watermark
+
+print("\n[W1] the watermark lands where it is asked and nowhere else")
+
+func solidFixture(width: Int, height: Int, value: CGFloat = 0.5) -> CIImage {
+    CIImage(color: CIColor(red: value, green: value, blue: value, alpha: 1))
+        .cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
+}
+
+func brightPixels(_ image: CGImage, x: Range<Int>, y: Range<Int>) -> Int {
+    var count = 0
+    for row in y {
+        for column in x where pixel(image, x: column, yFromTop: row).r > 0.65 {
+            count += 1
+        }
+    }
+    return count
+}
+
+let watermarkCanvas = solidFixture(width: 400, height: 300)
+let mark = WatermarkSettings(enabled: true, text: "Retouch",
+                             position: .bottomRight, opacity: 1, sizePercent: 6)
+if let plain = processor.renderCGImage(watermarkCanvas, scale: 1),
+   let marked = processor.renderCGImage(WatermarkRenderer.apply(mark, to: watermarkCanvas), scale: 1) {
+    let corner = brightPixels(marked, x: 250..<400, y: 200..<300)
+    let farSide = brightPixels(marked, x: 0..<150, y: 0..<150)
+    check(corner > 30, "the signature is drawn in the chosen corner", "\(corner) px")
+    check(farSide == 0 && brightPixels(plain, x: 250..<400, y: 200..<300) == 0,
+          "the rest of the photo is untouched", "\(farSide) px")
+} else {
+    check(false, "watermark render")
+}
+
+var topLeftMark = mark
+topLeftMark.position = .topLeft
+if let marked = processor.renderCGImage(WatermarkRenderer.apply(topLeftMark, to: watermarkCanvas), scale: 1) {
+    check(brightPixels(marked, x: 0..<150, y: 0..<120) > 30
+          && brightPixels(marked, x: 250..<400, y: 200..<300) == 0,
+          "the position control moves the signature")
+} else {
+    check(false, "watermark position render")
+}
+
+var blank = mark
+blank.text = "   "
+if let plain = processor.renderCGImage(watermarkCanvas, scale: 1),
+   let marked = processor.renderCGImage(WatermarkRenderer.apply(blank, to: watermarkCanvas), scale: 1) {
+    check(brightPixels(marked, x: 0..<400, y: 0..<300) == 0
+          && plain.width == marked.width,
+          "a blank signature draws nothing")
+} else {
+    check(false, "blank watermark render")
+}
+
+var off = mark
+off.enabled = false
+if let marked = processor.renderCGImage(WatermarkRenderer.apply(off, to: watermarkCanvas), scale: 1) {
+    check(brightPixels(marked, x: 0..<400, y: 0..<300) == 0,
+          "the switch turns the signature off")
+} else {
+    check(false, "disabled watermark render")
+}
+
+let watermarkEncoded = try? JSONEncoder().encode(mark)
+let watermarkDecoded = watermarkEncoded.flatMap {
+    try? JSONDecoder().decode(WatermarkSettings.self, from: $0)
+}
+check(watermarkDecoded == mark, "watermark preferences survive a settings write and read")
+
+// MARK: - Histogram
+
+print("\n[W2] the histogram reads the preview's tones")
+
+func twoToneFixture(width: Int, height: Int, dark: CGFloat, light: CGFloat) -> CGImage {
+    let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                            bytesPerRow: 0, space: sRGB,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.setFillColor(CGColor(srgbRed: dark, green: dark, blue: dark, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: CGFloat(width) / 2, height: CGFloat(height)))
+    context.setFillColor(CGColor(srgbRed: light, green: light, blue: light, alpha: 1))
+    context.fill(CGRect(x: CGFloat(width) / 2, y: 0,
+                        width: CGFloat(width) / 2, height: CGFloat(height)))
+    return context.makeImage()!
+}
+
+let histogramImage = NSImage(cgImage: twoToneFixture(width: 400, height: 300,
+                                                     dark: 0.05, light: 0.95),
+                             size: NSSize(width: 400, height: 300))
+let histogram = HistogramSampler.bins(from: histogramImage)
+check(histogram.red.count == 64 && histogram.luma.count == 64,
+      "the histogram has 64 bins per channel")
+check(histogram.luma[0...8].reduce(0, +) > 0
+      && histogram.luma[50...62].reduce(0, +) > 0,
+      "both a dark and a bright tone are counted",
+      histogram.luma.enumerated().filter { $0.element > 0 }.map { "\($0.offset)" }.joined(separator: ","))
+check(histogram.red == histogram.green && histogram.green == histogram.blue,
+      "a neutral image produces equal channel shapes")
+
+// MARK: - Backdrop replacement
+
+print("\n[B1] a chosen backdrop covers the frame and keeps the subject")
+
+func personMaskFixture(width: Int, height: Int) -> CIImage {
+    let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                            bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),
+                            bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+    context.setFillColor(CGColor(gray: 0, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+    context.setFillColor(CGColor(gray: 1, alpha: 1))
+    context.fill(CGRect(x: CGFloat(width) * 0.3, y: CGFloat(height) * 0.3,
+                        width: CGFloat(width) * 0.4, height: CGFloat(height) * 0.4))
+    return CIImage(cgImage: context.makeImage()!)
+}
+
+let subjectCanvas = CIImage(color: CIColor(red: 1, green: 0, blue: 0, alpha: 1))
+    .cropped(to: CGRect(x: 0, y: 0, width: 200, height: 100))
+let backdropCanvas = CIImage(color: CIColor(red: 0, green: 0, blue: 1, alpha: 1))
+    .cropped(to: CGRect(x: 0, y: 0, width: 100, height: 100))
+let personMask = personMaskFixture(width: 200, height: 100)
+
+if let replaced = processor.renderCGImage(
+        SceneEngine.replaceBackground(subjectCanvas, person: personMask,
+                                      backdrop: backdropCanvas, amount: 100),
+        scale: 1) {
+    let corner = pixel(replaced, x: 10, yFromTop: 10)
+    let centre = pixel(replaced, x: 100, yFromTop: 50)
+    check(corner.b > 0.8 && corner.r < 0.2,
+          "the backdrop covers the background", "\(corner)")
+    check(centre.r > 0.8 && centre.b < 0.2,
+          "the subject is kept", "\(centre)")
+} else {
+    check(false, "backdrop render")
+}
+
+if let untouched = processor.renderCGImage(
+        SceneEngine.replaceBackground(subjectCanvas, person: personMask,
+                                      backdrop: backdropCanvas, amount: 0),
+        scale: 1) {
+    let corner = pixel(untouched, x: 10, yFromTop: 10)
+    check(corner.r > 0.8 && corner.b < 0.2, "zero strength leaves the photo alone", "\(corner)")
+} else {
+    check(false, "backdrop strength render")
+}
+
+if let filled = processor.renderCGImage(
+        SceneEngine.aspectFill(backdropCanvas,
+                               to: CGRect(x: 0, y: 0, width: 200, height: 100)),
+        scale: 1) {
+    let corner = pixel(filled, x: 5, yFromTop: 5)
+    check(corner.b > 0.8 && corner.a > 0.99,
+          "aspect fill covers the frame without bars", "\(corner)")
+} else {
+    check(false, "aspect fill render")
+}
+
+var backdropAdjustments = Adjustments()
+backdropAdjustments.backgroundImage = "abc.png"
+backdropAdjustments.backgroundImageName = "studio.png"
+backdropAdjustments.backgroundImageAmount = 65
+let backdropRoundTrip = (try? JSONEncoder().encode(backdropAdjustments))
+    .flatMap { try? JSONDecoder().decode(Adjustments.self, from: $0) }
+check(backdropRoundTrip == backdropAdjustments,
+      "a backdrop choice survives a project write and read")
+
+if let png = NSBitmapImageRep(cgImage: twoToneFixture(width: 40, height: 30,
+                                                     dark: 0.2, light: 0.8))
+        .representation(using: .png, properties: [:]) {
+    let temporary = FileManager.default.temporaryDirectory
+        .appendingPathComponent("backdrop-\(UUID().uuidString).png")
+    try? png.write(to: temporary)
+    if let storedName = try? BackdropStore.store(temporary) {
+        let stored = BackdropStore.url(for: storedName)
+        check(stored != nil && BackdropStore.image(named: storedName) != nil,
+              "the chosen file is copied into the backdrop store")
+        if let stored { try? FileManager.default.removeItem(at: stored) }
+    } else {
+        check(false, "backdrop store copy")
+    }
+    try? FileManager.default.removeItem(at: temporary)
+} else {
+    check(false, "backdrop fixture png")
+}
+
 print("\n" + String(repeating: "-", count: 60))
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")

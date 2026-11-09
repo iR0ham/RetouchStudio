@@ -8,11 +8,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+TARGET_ARCH="${RETOUCH_ARCH:-$(uname -m)}"
+case "$TARGET_ARCH" in
+  arm64|x86_64) ;;
+  *) echo "RETOUCH_ARCH باید arm64 یا x86_64 باشد." >&2; exit 1 ;;
+esac
+
 SDK=""
 for candidate in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>/dev/null | sort -Vr); do
   probe=$(mktemp -d)
   printf 'import SwiftUI\nstruct P: View { @State var v = 1; var body: some View { Text("\\(v)") } }\n' > "$probe/p.swift"
-  if swiftc -typecheck -target arm64-apple-macosx14.0 -sdk "$candidate" "$probe/p.swift" >/dev/null 2>&1; then
+  if swiftc -typecheck -target "${TARGET_ARCH}-apple-macosx14.0" -sdk "$candidate" "$probe/p.swift" >/dev/null 2>&1; then
     SDK="$candidate"; rm -rf "$probe"; break
   fi
   rm -rf "$probe"
@@ -34,7 +40,7 @@ run_suite() {
   work="$(mktemp -d)"
   cp "$suite" "$work/main.swift"
   out="$work/$name"
-  swiftc -O -target arm64-apple-macosx14.0 -sdk "$SDK" -o "$out" \
+  swiftc -O -target "${TARGET_ARCH}-apple-macosx14.0" -sdk "$SDK" -o "$out" \
     "$work/main.swift" \
     $SOURCES \
     -framework SwiftUI -framework AppKit -framework CoreImage \

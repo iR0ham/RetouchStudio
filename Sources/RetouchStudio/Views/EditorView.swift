@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EditorView: View {
     @ObservedObject var model: EditorModel
@@ -20,6 +21,13 @@ struct EditorView: View {
         .padding(.bottom, Theme.Metrics.gutter)
         .frame(minWidth: 1120, minHeight: 700)
         .background(Theme.background)
+        // A drop anywhere on the shell opens the file. The canvas keeps the
+        // highlight so the destination still reads as the stage.
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget) { providers in
+            guard let provider = providers.first else { return false }
+            load(provider)
+            return true
+        }
         .tint(Theme.accent)
         .preferredColorScheme(.dark)
         .environment(\.layoutDirection, model.language.layoutDirection)
@@ -55,6 +63,29 @@ struct EditorView: View {
             model.refreshDefaultStatus()
         }
     }
+
+    /// Finder hands the file over as URL data, but the provider is allowed to
+    /// deliver a URL or a string instead, so all three are accepted. A browser
+    /// drag is rejected: it has the URL shape but no file behind it.
+    private func load(_ provider: NSItemProvider) {
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            let url: URL?
+            if let data = item as? Data {
+                url = URL(dataRepresentation: data, relativeTo: nil)
+            } else if let itemURL = item as? URL {
+                url = itemURL
+            } else if let string = item as? String {
+                url = URL(string: string)
+            } else {
+                url = nil
+            }
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
+            let isProject = url.pathExtension.lowercased() == RetouchProject.fileExtension
+            let isImage = UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
+            guard isProject || isImage else { return }
+            DispatchQueue.main.async { model.requestOpen(url: url) }
+        }
+    }
 }
 
 // MARK: - Export
@@ -81,6 +112,7 @@ struct ExportSheet: View {
                     .font(Theme.Font.section)
                     .tracking(0.6)
                     .foregroundStyle(Theme.faint)
+                    .help(model.s.formatHelp)
                 formatPicker
             }
             .opacity(linesOnly ? 0.4 : 1)
@@ -104,6 +136,7 @@ struct ExportSheet: View {
                 }
                 .opacity(linesOnly ? 0.4 : 1)
                 .disabled(linesOnly)
+                .help("\(model.s.quality) — \(model.s.sliderHint(.exportQuality))")
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -137,6 +170,7 @@ struct ExportSheet: View {
                         .fill(Theme.background)
                 )
             }
+            .help(model.s.exportLongEdgeHelp)
 
             if model.exportEnlargementRequested, !linesOnly {
                 upscaleSection
@@ -145,6 +179,8 @@ struct ExportSheet: View {
             if model.analysis.isEnabled {
                 analysisSection
             }
+
+            watermarkSection
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.s.originalSize(model.imageInfo))
@@ -259,6 +295,7 @@ struct ExportSheet: View {
                 .focusable(false)
                 .disabled(!model.exportUpscaleAvailable)
                 .accessibilityLabel(model.s.exportUpscale)
+                .help(model.s.exportUpscaleDetail)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -276,6 +313,7 @@ struct ExportSheet: View {
                 .font(Theme.Font.section)
                 .tracking(0.6)
                 .foregroundStyle(Theme.faint)
+                .help(model.s.analysisExportSectionHelp)
 
             VStack(spacing: 2) {
                 ForEach(AnalysisExportMode.allCases) { mode in
@@ -311,10 +349,77 @@ struct ExportSheet: View {
 
             if model.analysis.exportMode == .poster {
                 ParameterRow(title: model.s.analysisMargin,
+                             hint: model.s.sliderHint(.analysisMargin),
                              value: model.analysisMarginBinding,
                              range: 4...30)
             }
         }
+    }
+
+    /// A signature for saved copies. The editor preview stays clean, so the
+    /// note says so and the controls appear only once the switch is on.
+    private var watermarkSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(model.s.watermarkSection.uppercased())
+                    .font(Theme.Font.section)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.faint)
+                    .help(model.s.watermarkNote)
+                Spacer()
+                Toggle("", isOn: $model.watermark.enabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(Theme.accent)
+                    .focusable(false)
+                    .accessibilityLabel(model.s.watermarkSection)
+            }
+
+            if model.watermark.enabled {
+                TextField(model.s.watermarkTextPlaceholder, text: $model.watermark.text)
+                    .textFieldStyle(.plain)
+                    .font(Theme.Font.face(size: 12))
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Theme.background)
+                    )
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4),
+                                         count: 3),
+                          spacing: 4) {
+                    ForEach(WatermarkSettings.Position.allCases) { position in
+                        PresetChip(title: model.s.watermarkPosition(position),
+                                   isActive: model.watermark.position == position) {
+                            model.watermark.position = position
+                        }
+                    }
+                }
+
+                ParameterRow(title: model.s.watermarkOpacity,
+                             hint: model.s.sliderHint(.watermarkOpacity),
+                             value: Binding(get: { model.watermark.opacity },
+                                            set: { model.watermark.opacity = $0 }),
+                             range: 0.05...1,
+                             onReset: { model.watermark.opacity = 0.65 })
+                ParameterRow(title: model.s.watermarkSize,
+                             hint: model.s.sliderHint(.watermarkSize),
+                             value: Binding(get: { model.watermark.sizePercent },
+                                            set: { model.watermark.sizePercent = $0 }),
+                             range: 1...10,
+                             onReset: { model.watermark.sizePercent = 3 })
+
+                Text(model.s.watermarkNote)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .opacity(linesOnly ? 0.4 : 1)
+        .disabled(linesOnly)
+        .animation(Motion.snappy, value: model.watermark.enabled)
     }
 
     private var formatPicker: some View {

@@ -34,12 +34,12 @@ enum ToolMode: String, CaseIterable, Identifiable {
         L10n.current.toolSubtitle(self)
     }
 
-    /// The bare number that picks this tool, in the order of the bar. The art
-    /// tool is deliberately left without one: it is the eleventh case and the
-    /// row only has ten number keys.
+    /// The bare key that picks this tool, in the order of the bar: 1–0 for the
+    /// first ten, then the two keys beside them for art and analysis.
     var shortcutKey: String? {
-        guard let index = Self.allCases.firstIndex(of: self), index < 10 else { return nil }
-        return index == 9 ? "0" : String(index + 1)
+        let keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="]
+        guard let index = Self.allCases.firstIndex(of: self), index < keys.count else { return nil }
+        return keys[index]
     }
 
     var icon: String {

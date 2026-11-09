@@ -19,7 +19,7 @@ The result is a measured claim, not an assertion about intent: every scenario be
 | Layer | Source | Runs as |
 |---|---|---|
 | App | `Sources/RetouchStudio/` (SwiftUI) | `Retouch Studio.app/Contents/MacOS/RetouchStudio` |
-| Helper | `RetouchStudio-Phase0/worker/retouch_ai_worker/` (the separate Phase 0 checkout the bundler copies from) | `Contents/Resources/Worker/.../Python -m retouch_ai_worker serve` |
+| Helper | `worker/retouch_ai_worker/` (the separate checkout the bundler copies from) | `Contents/Resources/Worker/.../Python -m retouch_ai_worker serve` |
 | Downloader | `retouch_ai_worker/downloads.py` | Same interpreter, started by the app only after consent |
 
 Image editing, masking, upscaling and export all happen in the app or in the helper. No other process is launched by the app. The helper is a child of the app and is recorded in `~/Library/Application Support/RetouchStudio/AI/helper-owner.json`.
@@ -78,7 +78,7 @@ lsof -nP -a -p <app-pid>,<helper-pid> -iTCP -iUDP
 
 `lsof` reports every TCP/UDP endpoint owned by the process, including listening sockets and established connections. Each sample below is the deduplicated set of lines collected over the whole window. The sampler script is reproduced in §5.
 
-The app was launched directly with `RETOUCH_AI_MODELS=~/RetouchStudio-Phase0/models` so the helper had real weights for the edit scenario.
+The app was launched directly with `RETOUCH_AI_MODELS=/path/to/models` so the helper had real weights for the edit scenario.
 
 ### 3.2 Results
 
@@ -133,7 +133,7 @@ After the fix, the signature verified cleanly **after** an idle launch, **after*
 ```bash
 # Build and launch
 ./build.sh release
-RETOUCH_AI_MODELS="$HOME/RetouchStudio-Phase0/models" \
+RETOUCH_AI_MODELS="/path/to/models" \
   "Retouch Studio.app/Contents/MacOS/RetouchStudio" &
 
 APP=$(pgrep -x RetouchStudio | head -1)

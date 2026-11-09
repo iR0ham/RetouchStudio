@@ -22,6 +22,7 @@ final class AppSettings: ObservableObject {
         static let healBrushPercent = 1.6
         static let showFaceOverlay = false
         static let stripLocationMetadata = true
+        static let watermark = WatermarkSettings.disabled
     }
 
     private enum Key {
@@ -36,6 +37,7 @@ final class AppSettings: ObservableObject {
         static let showFaceOverlay = "settings.showFaceOverlay"
         static let recovery = "settings.recoveryEnabled"
         static let stripLocationMetadata = "settings.stripLocationMetadata"
+        static let watermark = "settings.watermark"
     }
 
     private let store: UserDefaults
@@ -80,6 +82,13 @@ final class AppSettings: ObservableObject {
     @Published var stripLocationMetadata: Bool {
         didSet { store.set(stripLocationMetadata, forKey: Key.stripLocationMetadata) }
     }
+    /// The signature drawn on exported copies. Stored as one JSON blob so the
+    /// five fields stay in step and a new field later can decode with defaults.
+    @Published var watermark: WatermarkSettings = .disabled {
+        didSet {
+            store.set(try? JSONEncoder().encode(watermark), forKey: Key.watermark)
+        }
+    }
     /// The interface language. The global `AppLanguage.current` follows it, so
     /// the font tokens and the About/Help windows read the same answer.
     @Published var language: AppLanguage = AppLanguage.current {
@@ -112,6 +121,9 @@ final class AppSettings: ObservableObject {
         stripLocationMetadata = store.object(forKey: Key.stripLocationMetadata) == nil
             ? Defaults.stripLocationMetadata
             : store.bool(forKey: Key.stripLocationMetadata)
+        watermark = store.data(forKey: Key.watermark)
+            .flatMap { try? JSONDecoder().decode(WatermarkSettings.self, from: $0) }
+            ?? Defaults.watermark
     }
 
     func resetToDefaults() {
@@ -126,6 +138,7 @@ final class AppSettings: ObservableObject {
         showFaceOverlay = Defaults.showFaceOverlay
         recoveryEnabled = true
         stripLocationMetadata = Defaults.stripLocationMetadata
+        watermark = Defaults.watermark
         language = .english
     }
 }

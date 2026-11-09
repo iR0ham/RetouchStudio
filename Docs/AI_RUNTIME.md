@@ -1,7 +1,7 @@
 # Retouch Studio — Local AI Runtime
 
-**Applies to:** `Retouch Studio.app` 2.1 (build 3), bundle identifier `local.retouchstudio.app`
-**Target:** macOS 14.0 or later, Apple silicon (arm64); built and measured on a MacBook Air M3 with 16 GB
+**Applies to:** the packaged helper runtime in `Retouch Studio.app`. Measurements below were taken with the 2.1 (build 3) development build, before the first public release (`app.retouchstudio.mac`, 1.0.0).
+**Target:** macOS 14.0 or later. The app is universal (arm64 + x86_64); the bundled helper is an Apple-silicon (arm64) runtime, so AI tools are unavailable on Intel. Measured on a MacBook Air M3 with 16 GB.
 **Related:** [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md), [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md)
 
 The app and its AI helper are one self-contained bundle. Everything that runs — the retouching engine, the Python helper, PyTorch, Transformers, ONNX Runtime and MLX — is inside the app. Model weights are the only thing downloaded, and only after the owner approves the exact manifest.
@@ -129,7 +129,7 @@ The corresponding license texts ship inside each wheel's `.dist-info` directory 
 | simple-lama-inpainting | 0.1.0 | Apache-2.0 |
 | matplotlib, fsspec, protobuf | 3.11.2 / 2026.9.0 / 7.36.2 | PSF-style / BSD-3-Clause / BSD-3-Clause |
 
-The complete pinned list is `RetouchStudio-Phase0/worker/requirements.lock`.
+The complete pinned list is `worker/requirements.lock`.
 
 ### 6.3 Models
 
@@ -146,21 +146,23 @@ Weights are downloaded, never redistributed inside the app. Each download is ver
 
 ## 7. Building from source
 
-Prerequisites: macOS with Xcode Command Line Tools, Homebrew Python 3.13, and the Phase 0 checkout at `~/RetouchStudio-Phase0` (worker source, venv and, for tests, the model weights).
+Prerequisites: macOS 14 or later with Xcode Command Line Tools. The local AI helper is optional and lives in a separate worker checkout with a Python 3.13 virtual environment.
 
 ```bash
-./build.sh release            # compiles, bundles the runtime, runs the engine self-test, signs ad-hoc
-RETOUCH_REBUNDLE=1 ./build.sh release   # force a fresh copy of the Python runtime
+./build.sh release            # compiles, bundles the helper when it is reachable, runs the engine self-test, signs ad-hoc
+RETOUCH_SKIP_WORKER=1 ./build.sh release   # app only; the AI tools report the helper as missing
+RETOUCH_REBUNDLE=1 ./build.sh release      # force a fresh copy of the Python runtime
 ./Tests/run.sh                # engine + model tests
-cd ~/RetouchStudio-Phase0/worker && ../.venv/bin/python -m unittest discover -s tests   # 57 worker tests
+cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # 57 worker tests
 ```
 
 Overrides used by the bundler:
 
-- `RETOUCH_WORKER_ROOT` — worker source directory (default `~/RetouchStudio-Phase0/worker`)
-- `RETOUCH_WORKER_VENV` — Python environment with the wheels (default `~/RetouchStudio-Phase0/.venv`)
+- `RETOUCH_WORKER_ROOT` — worker source directory; defaults to `./worker` when present
+- `RETOUCH_WORKER_VENV` — Python environment with the wheels; defaults to `./.venv` when present
+- `RETOUCH_SKIP_WORKER=1` — build the app without the helper runtime
 - `RETOUCH_REBUNDLE=1` — ignore the runtime stamp and copy the interpreter again
 
 `Tools/bundle-worker.sh` keeps a stamp of the Python version, the worker source hash and the wheel list in `Worker/.stamp`; an unchanged runtime is reused across builds. It refuses to finish if any Mach-O still refers to `/opt/homebrew`, if a symlink in the runtime is broken, or if a required signature step fails.
 
-> **Build dependency to note:** the worker source currently lives only in `~/RetouchStudio-Phase0/worker`, not in this repository. Building the app from a fresh clone requires that folder (or `RETOUCH_WORKER_ROOT` pointing at a copy). Moving `worker/` and `requirements.lock` into this repository would make the build self-contained; it is listed as a follow-up, not done here.
+> **The worker source is a separate checkout.** It is not part of this repository. Point `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` at it to bundle the helper. Without them the app still builds and runs; the AI tools simply report that the helper is not installed. Moving `worker/` and `requirements.lock` into this repository would make the build self-contained; it is listed as a follow-up.

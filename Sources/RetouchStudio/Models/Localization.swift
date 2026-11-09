@@ -149,6 +149,15 @@ class L10n {
     var backgroundFill: String { "Background Fill" }
     var backgroundFillColor: String { "Fill Color" }
     var backgroundRemove: String { "Remove Background" }
+    var backdropImageTitle: String { "Backdrop Image" }
+    var chooseBackdrop: String { "Choose Image…" }
+    var chooseBackdropMessage: String { "Choose an image for the background" }
+    var backdropStrength: String { "Backdrop Strength" }
+    var backdropClearHelp: String { "Remove the chosen backdrop" }
+    var backdropNote: String {
+        "The image is copied into the app, so the project still works if the original moves."
+    }
+    var backdropFailed: String { "That image could not be read as a backdrop." }
     var backgroundRemoveNote: String {
         "Removal makes the background transparent. PNG and TIFF keep that; JPEG writes it onto white."
     }
@@ -186,6 +195,8 @@ class L10n {
     var doubleClickHint: String {
         "Double-click a slider to reset just that effect"
     }
+    /// The one-line explanation shown when a slider is hovered.
+    func sliderHint(_ hint: SliderHint) -> String { hint.english }
 
     // Face status
     var noFaceDetected: String { "No face detected" }
@@ -245,6 +256,9 @@ class L10n {
         "This photo has edits that haven't been saved to a project or exported. If you continue, they will be lost."
     }
     var discardChanges: String { "Discard Changes" }
+    /// Offered in the unsaved-changes alert, so closing is never a choice
+    /// between losing the work and cancelling.
+    var saveBeforeClosing: String { "Save Project" }
 
     // Projects
     var saveProjectMenu: String { "Save Project" }
@@ -303,6 +317,15 @@ class L10n {
     var applyingCrop: String { "Applying crop…" }
     var cropApplied: String { "Crop applied." }
     var cropReset: String { "Crop reset to the original framing." }
+    var rotated: String { "Photo rotated." }
+    var flipped: String { "Photo flipped." }
+    var straightened: String { "Straighten applied." }
+    var orientationLabel: String { "Orientation" }
+    var rotateLeft: String { "Left" }
+    var rotateRight: String { "Right" }
+    var flipHorizontal: String { "Flip" }
+    var straightenLabel: String { "Straighten" }
+    var levelAction: String { "Level" }
 
     // Healing brush
     var healCleared: String { "Healing stamps cleared." }
@@ -373,6 +396,9 @@ class L10n {
     var faceSelectionAuto: String { "Auto" }
     func faceSelectionName(_ index: Int) -> String { "Face \(Digits.num(index + 1))" }
     var analysisExportSection: String { "Face analysis" }
+    var analysisExportSectionHelp: String {
+        "Chooses whether the face overlay is drawn on the export, and how."
+    }
     var analysisExportMode: String { "Export as" }
     var analysisMargin: String { "Margin" }
 
@@ -434,8 +460,12 @@ class L10n {
 
     // Export sheet
     var format: String { "Format" }
+    var formatHelp: String { "Chooses the file type for the export." }
     var quality: String { "Quality" }
     var exportLongEdge: String { "Long edge" }
+    var exportLongEdgeHelp: String {
+        "Caps the longest side. Original keeps the photo at its own size."
+    }
     var exportOriginal: String { "Original" }
     func exportSize(_ info: String) -> String { "Output: \(info)" }
     func originalSize(_ info: String) -> String { "Original size: \(info)" }
@@ -461,6 +491,24 @@ class L10n {
     var exportFullQuality: String {
         "Exports are always written at the full quality and size of the original."
     }
+    var watermarkSection: String { "Watermark" }
+    var watermarkText: String { "Text" }
+    var watermarkTextPlaceholder: String { "Name or ©" }
+    var watermarkOpacity: String { "Opacity" }
+    var watermarkSize: String { "Size" }
+    var watermarkNote: String {
+        "Drawn on saved copies only; the editor preview stays clean."
+    }
+    func watermarkPosition(_ position: WatermarkSettings.Position) -> String {
+        switch position {
+        case .topLeft: return "Top left"
+        case .topRight: return "Top right"
+        case .bottomLeft: return "Bottom left"
+        case .bottomRight: return "Bottom right"
+        case .center: return "Center"
+        }
+    }
+    var histogramLabel: String { "Histogram" }
 
     // Menus
     var retouchMenu: String { "Retouch" }
@@ -524,16 +572,21 @@ class L10n {
     /// its own so the title bar follows the switch like the rest of the text.
     var settingsWindowTitle: String { "\(appName) \(settingsTitle)" }
     var settingsLanguage: String { "LANGUAGE" }
+    var settingsLanguageHelp: String { "Choose the language of the interface." }
     var settingsAuto: String { "AUTO" }
     var settingsAutoNote: String {
         "How much of each measured fix Smart Analyze applies."
     }
     var settingsExport: String { "EXPORT" }
+    var settingsExportHelp: String {
+        "File format, quality and metadata for saved copies."
+    }
     var settingsStripMetadata: String { "Remove location and camera info" }
     var settingsStripMetadataNote: String {
         "Leaves GPS, camera owner, serial numbers and comments out of exports. Orientation, colour profile and size are kept."
     }
     var settingsTools: String { "TOOLS" }
+    var settingsToolsHelp: String { "Healing brush size and the face overlay." }
     var settingsRecovery: String { "RECOVERY" }
     var settingsRecoveryToggle: String { "Keep a recovery copy of unsaved work" }
     var settingsRecoveryNote: String {
@@ -612,13 +665,22 @@ class L10n {
 
     var aboutTitle: String { "About Retouch Studio" }
     var aboutTagline: String { "Portrait retouching, measured." }
+    var aboutDescription: String {
+        "Retouch Studio is a local-first portrait retoucher for macOS. It measures the photo first — skin, eyes, teeth, hair, light and framing — so automatic edits only move what the measurements justify, then puts twelve tools in your hands: skin, healing, reshape, eyes and teeth, makeup, colour and light, looks, crop, body, background, stickers and analysis. Every change is non-destructive: undo it, save the session as a .retouch project, or export at full quality."
+    }
     var aboutVersion: String { "Version" }
     var aboutDeveloper: String { "Developer" }
+    var aboutDeveloperRole: String { "Role" }
+    var aboutDeveloperRoleValue: String { "Design and development" }
+    var aboutContact: String { "Contact" }
+    var aboutWebsite: String { "Website" }
     var aboutCopyright: String { "Copyright" }
     var aboutRights: String { "All rights reserved." }
-    var aboutEngine: String { "Built with Core Image and Vision, entirely on this Mac." }
-    var aboutDeveloperName: String { "Roham" }
-    var aboutCopyrightLine: String { "© 2026 Roham" }
+    var aboutEngine: String {
+        "Everything runs on this Mac — no account, no upload and no telemetry. Built with SwiftUI, Core Image and Vision; the optional AI helper runs on Apple silicon."
+    }
+    var settingsDeveloper: String { "DEVELOPER" }
+    var settingsDeveloperHelp: String { "Who built the app, and the running version." }
     var helpTitle: String { "Retouch Studio Help" }
     var helpIntro: String {
         "Open a portrait, read it with Smart Analyze, then fine-tune by hand. Everything runs on this Mac — no photos are uploaded."
@@ -680,6 +742,9 @@ class L10n {
         case .applyingCrop: return applyingCrop
         case .cropReset: return cropReset
         case .cropApplied: return cropApplied
+        case .rotated: return rotated
+        case .flipped: return flipped
+        case .straightened: return straightened
         case .healCleared: return healCleared
         case .healStampRemoved: return healStampRemoved
         case .healStampAdded(let count): return healStampAdded(count)
@@ -696,6 +761,7 @@ class L10n {
         case .aiApplied: return aiApplied
         case .aiAssetsMissing(let count): return aiAssetsMissing(count)
         case .settingsReset: return settingsResetStatus
+        case .backdropFailed: return backdropFailed
         case .recentMissing(let name): return recentMissing(name)
         case .renderingExport: return renderingExport
         case .upscaling(let done, let total): return upscaling(done, total)
@@ -750,6 +816,8 @@ class L10n {
         case .analysis: return analysisSubtitle
         }
     }
+
+    var presetsHint: String { "Starting points for skin, shape and color" }
 
     func panelTitle(_ panel: Panel) -> String {
         switch panel {
@@ -938,7 +1006,7 @@ class L10n {
     var closeButton: String { "Close" }
     var healingBrush: String { "Healing Brush" }
     var brushSize: String { "Size" }
-    var brushShortcutHint: String { "Tip: [ and ] change the brush size" }
+    var brushShortcutHint: String { "Sets the heal brush diameter. [ and ] change it too." }
     var stamps: String { "Stamps" }
     var clearStamps: String { "Clear Stamps" }
     var cropTool: String { "Crop" }
@@ -1009,6 +1077,16 @@ class L10n {
     var aiHealArea: String { "Heal small area" }
     var aiHealAreaHelp: String {
         "Paint over a small spot. The local inpaint model fills it from the nearby texture in under a second."
+    }
+    var aiReimagine: String { "Reimagine" }
+    var aiReimagineHelp: String {
+        "Describe the change. The AI redraws the whole frame from your words — the subject stays recognisable, but every pixel is new."
+    }
+    var aiRunReimagine: String { "Reimagine photo" }
+    var aiPromptLabel: String { "Describe the change" }
+    var aiPromptPlaceholder: String { "e.g. golden hour light, soft film look" }
+    var aiPromptNote: String {
+        "The whole photo is regenerated. Brush, Point and Box do not apply here."
     }
     var aiMaskFailed: String { "Could not prepare the selection." }
     var aiMaskTooLarge: String {

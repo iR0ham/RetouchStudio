@@ -1902,7 +1902,7 @@ enum SelfCheck {
                 kCGImagePropertyGPSLongitudeRef: "E"
             ],
             kCGImagePropertyExifDictionary: [
-                kCGImagePropertyExifCameraOwnerName: "Roham",
+                kCGImagePropertyExifCameraOwnerName: "iRoham",
                 kCGImagePropertyExifBodySerialNumber: "BODY-123",
                 kCGImagePropertyExifLensSerialNumber: "LENS-456",
                 kCGImagePropertyExifUserComment: "private note",
@@ -1961,7 +1961,7 @@ enum SelfCheck {
         let keptExif = kept[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
         let keptTIFF = kept[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
         let keptIdentity = kept[kCGImagePropertyGPSDictionary] != nil
-            && (keptExif[kCGImagePropertyExifCameraOwnerName] as? String) == "Roham"
+            && (keptExif[kCGImagePropertyExifCameraOwnerName] as? String) == "iRoham"
             && (keptExif[kCGImagePropertyExifBodySerialNumber] as? String) == "BODY-123"
             && (keptTIFF[kCGImagePropertyTIFFArtist] as? String) == "Retouch SelfTest"
 

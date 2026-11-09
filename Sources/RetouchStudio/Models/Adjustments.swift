@@ -188,6 +188,11 @@ struct Adjustments: Equatable, Codable {
     var backgroundFill: Double = 0      // 0...100
     var backgroundFillColor: MakeupColor = MakeupColor(hue: 0, saturation: 0, value: 0.96)
     var backgroundRemove: Bool = false
+    /// A stored backdrop image, drawn behind the subject when set. The file
+    /// name lives in `BackdropStore`; the original name is only for the UI.
+    var backgroundImage: String = ""
+    var backgroundImageName: String = ""
+    var backgroundImageAmount: Double = 100 // 0...100
 
     static let zero = Adjustments()
 
@@ -395,6 +400,9 @@ struct Adjustments: Equatable, Codable {
         a.backgroundFill = backgroundFill
         a.backgroundFillColor = backgroundFillColor
         a.backgroundRemove = backgroundRemove
+        a.backgroundImage = backgroundImage
+        a.backgroundImageName = backgroundImageName
+        a.backgroundImageAmount = backgroundImageAmount
         return a
     }
 
@@ -572,6 +580,9 @@ struct Adjustments: Equatable, Codable {
         result.backgroundFill = patch.backgroundFill
         result.backgroundFillColor = patch.backgroundFillColor
         result.backgroundRemove = patch.backgroundRemove
+        result.backgroundImage = patch.backgroundImage
+        result.backgroundImageName = patch.backgroundImageName
+        result.backgroundImageAmount = patch.backgroundImageAmount
         return result
     }
 }
@@ -667,6 +678,7 @@ extension Adjustments {
         case hslHue, hslSaturation, hslLuminance
         case lensTint, lensColor, teethAlign, hairVolume
         case backgroundFill, backgroundFillColor, backgroundRemove
+        case backgroundImage, backgroundImageName, backgroundImageAmount
         // Written by the palette-only builds; read to migrate old projects.
         case lipShadeID, blushShadeID
     }
@@ -778,6 +790,9 @@ extension Adjustments {
         backgroundFillColor = color(.backgroundFillColor,
                                     fallback: MakeupColor(hue: 0, saturation: 0, value: 0.96))
         backgroundRemove = flag(.backgroundRemove)
+        backgroundImage = text(.backgroundImage)
+        backgroundImageName = text(.backgroundImageName)
+        backgroundImageAmount = amount(.backgroundImageAmount)
     }
 
     /// Written by hand because the legacy shade identifiers are decode-only:
@@ -815,6 +830,9 @@ extension Adjustments {
         ]
         for (key, value) in amounts { try c.encode(value, forKey: key) }
         try c.encode(backgroundRemove, forKey: .backgroundRemove)
+        try c.encode(backgroundImage, forKey: .backgroundImage)
+        try c.encode(backgroundImageName, forKey: .backgroundImageName)
+        try c.encode(backgroundImageAmount, forKey: .backgroundImageAmount)
         try c.encode(lookID, forKey: .lookID)
         try c.encode(lipColor, forKey: .lipColor)
         try c.encode(blushColor, forKey: .blushColor)

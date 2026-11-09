@@ -11,7 +11,7 @@ enum RecoveryStore {
                                             in: .userDomainMask)[0]
         // Keyed by bundle, so a test build can never hand its recovery copy to
         // the app the owner is working in.
-        let id = Bundle.main.bundleIdentifier ?? "local.retouchstudio.app"
+        let id = Bundle.main.bundleIdentifier ?? "app.retouchstudio.mac"
         return base.appendingPathComponent("Retouch Studio/Recovery/\(id)", isDirectory: true)
     }
 

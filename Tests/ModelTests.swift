@@ -1238,6 +1238,82 @@ func testQuickEditSelectionGating() async {
     check(!model.aiMaskHasSelection, "Clear empties the mask")
     check(!model.canRunQuickEdit, "Clear disables Run again")
     check(model.aiMaskPreview == nil, "Clear removes the preview")
+
+    // Reimagine is the one preset that redraws the frame, so it must not be
+    // held to the selection rule the other two live by.
+    model.beginQuickEdit()
+    model.placeQuickEditPoint(CGPoint(x: 0.5, y: 0.5))
+    model.selectQuickEditPreset(.reimagine)
+    check(model.quickEditPreset.isFullFrame && !model.quickEditPreset.needsSelection,
+          "reimagine is a full-frame preset")
+    check(model.quickEditPoint == nil && !model.isAIPicking,
+          "switching to reimagine drops the point and the picking mode")
+    check(model.canRunQuickEdit, "reimagine runs without a selection")
+    model.selectQuickEditPreset(.removeObject)
+    check(!model.canRunQuickEdit, "a masked preset still needs a selection")
+}
+
+/// A full-frame edit is one opaque layer over the whole frame: every pixel is
+/// new, and undo still has to restore the earlier bytes exactly.
+@MainActor
+func testFullFrameReimagine() async {
+    print("\n[P5] a full-frame edit covers the picture and undoes in one step")
+
+    let url = workDir.appendingPathComponent("reimagine-source.png")
+    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: url) else {
+        check(false, "reimagine fixture")
+        return
+    }
+    let model = EditorModel()
+    model.exportFormat = .png
+    model.load(url: url)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture loads")
+
+    let baseURL = workDir.appendingPathComponent("reimagine-base.png")
+    model.export(to: baseURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: baseURL.path) && !model.isBusy
+    }, "baseline export finishes")
+
+    guard let edit = storedAIEdit(box: CGRect(x: 0, y: 0, width: 1, height: 1), inset: 0)
+    else {
+        check(false, "the full-frame edit files are staged")
+        return
+    }
+    defer { AIEditStore.remove(edit) }
+
+    model.addAIEdit(edit)
+    check(await waitUntil { !model.isBusy }, "the preview settles")
+
+    let editedURL = workDir.appendingPathComponent("reimagine-edited.png")
+    model.export(to: editedURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: editedURL.path) && !model.isBusy
+    }, "edited export finishes")
+
+    guard let base = readImage(baseURL), let edited = readImage(editedURL),
+          let a = rgbaBytes(base), let b = rgbaBytes(edited) else {
+        check(false, "both exports decode")
+        return
+    }
+    let changed = zip(a, b).lazy.enumerated().filter { $0.offset % 4 != 3 && $0.element.0 != $0.element.1 }.count
+    let total = 480 * 600 * 3
+    check(Double(changed) > Double(total) * 0.9,
+          "the edit reaches the whole frame", "\(changed) of \(total) channels")
+
+    model.undo()
+    check(model.aiEdits.isEmpty, "one undo removes the full-frame edit")
+    let undoneURL = workDir.appendingPathComponent("reimagine-undone.png")
+    model.export(to: undoneURL)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: undoneURL.path) && !model.isBusy
+    }, "undone export finishes")
+    if let undone = readImage(undoneURL).flatMap(rgbaBytes) {
+        let diff = zip(a, undone).lazy.filter { $0 != $1 }.count
+        check(diff == 0, "undo restores the whole frame exactly", "\(diff) bytes differ")
+    } else {
+        check(false, "the undone export decodes")
+    }
 }
 
 // MARK: - runner
@@ -1267,12 +1343,77 @@ func testExportUpscalePolicy() async {
           "no request means the full 4x")
 }
 
+// MARK: - Orientation
+
+@MainActor
+func testOrientationKeepsEditsAttached() async {
+    print("\n[R1] rotating and flipping keep every edit on its pixel")
+
+    let sourceURL = workDir.appendingPathComponent("orientation-source.png")
+    check(makeImage(width: 480, height: 600).map { writePNG($0, to: sourceURL) } ?? false,
+          "fixture written")
+
+    let model = EditorModel()
+    model.load(url: sourceURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "fixture loads")
+    check(model.workingPixelSize == CGSize(width: 480, height: 600), "starts portrait")
+
+    model.tapHeal(at: CGPoint(x: 0.25, y: 0.25))
+    model.tapArt(at: CGPoint(x: 0.75, y: 0.75))
+    check(await waitUntil { !model.isBusy }, "stamp preview settles")
+
+    model.cropDraft = CGRect(x: 0, y: 0, width: 0.5, height: 0.5)
+    model.applyCrop()
+    check(await waitUntil { !model.isBusy && model.appliedCrop != nil },
+          "a top-left crop is applied")
+    check(abs((model.appliedCrop?.width ?? 0) - 0.5) < 0.001, "the crop is the quarter asked for")
+
+    model.rotateClockwise()
+    check(await waitUntil { !model.isBusy && model.documentOrientation.quarterTurns == 1 },
+          "the frame turns clockwise")
+    check(model.workingPixelSize == CGSize(width: 300, height: 240),
+          "the cropped working frame swapped sides", "\(model.workingPixelSize)")
+    let turnedCrop = model.appliedCrop ?? .zero
+    check(abs(turnedCrop.minX - 0.5) < 0.001 && abs(turnedCrop.minY) < 0.001
+            && abs(turnedCrop.width - 0.5) < 0.001 && abs(turnedCrop.height - 0.5) < 0.001,
+          "the top-left crop moved to the top-right", "\(turnedCrop)")
+    let healed = model.healSpots.first?.center ?? .zero
+    check(abs(healed.x - 0.75) < 0.001 && abs(healed.y - 0.25) < 0.001,
+          "the healing stamp turned with the photo", "\(healed)")
+    let art = model.stickers.first?.center ?? .zero
+    check(abs(art.x - 0.25) < 0.001 && abs(art.y - 0.75) < 0.001,
+          "the sticker turned with the photo", "\(art)")
+
+    model.undo()
+    check(await waitUntil { !model.isBusy && model.documentOrientation == .identity },
+          "one undo puts the frame back")
+    check(model.workingPixelSize == CGSize(width: 240, height: 300),
+          "the cropped portrait frame is back")
+    check(abs((model.healSpots.first?.center.x ?? 0) - 0.25) < 0.001,
+          "the stamp is back on its original pixel")
+
+    let radiusBefore = model.healSpots.first?.radius ?? 0
+    model.setStraightenAngle(12)
+    check(await waitUntil { !model.isBusy && abs(model.straightenAngle - 12) < 0.01 },
+          "the straighten slider commits one turn")
+    check(model.workingPixelSize == CGSize(width: 240, height: 300),
+          "straighten keeps the frame size")
+    let grownRadius = model.healSpots.first?.radius ?? 0
+    check(radiusBefore > 0 && grownRadius > radiusBefore,
+          "the stamp grows with the upscaled pixels", "\(radiusBefore) -> \(grownRadius)")
+
+    model.undo()
+    check(await waitUntil { !model.isBusy && model.documentOrientation == .identity },
+          "undo removes the straighten")
+}
+
 @MainActor
 func runAll() async {
     await testExportDoesNotSave()
     await testSmartKeepsUnmeasuredFields()
     await testResetAllClearsEverything()
     await testCropIsUndoable()
+    await testOrientationKeepsEditsAttached()
     await testBatchMatchesSingleExport()
     await testProjectRelink()
     await testProjectVersionGuard()
@@ -1284,6 +1425,7 @@ func runAll() async {
     await testAIEditUndoAndExport()
     await testAIMaskRenderer()
     await testQuickEditSelectionGating()
+    await testFullFrameReimagine()
     await testExportUpscalePolicy()
 
     print("\n" + String(repeating: "-", count: 60))

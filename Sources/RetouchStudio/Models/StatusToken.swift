@@ -17,6 +17,9 @@ enum StatusToken: Equatable {
     case applyingCrop
     case cropReset
     case cropApplied
+    case rotated
+    case flipped
+    case straightened
     case healCleared
     case healStampRemoved
     case healStampAdded(Int)
@@ -33,6 +36,7 @@ enum StatusToken: Equatable {
     case aiApplied
     case aiAssetsMissing(Int)
     case settingsReset
+    case backdropFailed
     case recentMissing(String)
     case renderingExport
     case upscaling(Int, Int)

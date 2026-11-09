@@ -7,14 +7,14 @@ import UniformTypeIdentifiers
 /// resumed later.
 struct RetouchProject: Codable {
     /// v2 added AI edits. A v1 project still opens: every later field decodes
-    /// as `nil` and means "off".
-    static let currentVersion = 2
+    /// as `nil` and means "off". v3 added the frame orientation.
+    static let currentVersion = 3
     static let fileExtension = "retouch"
 
     /// The app declares this type in Info.plist, so the panel filters to real
     /// project files instead of any JSON.
     static var contentType: UTType {
-        UTType(exportedAs: "local.retouchstudio.project", conformingTo: .json)
+        UTType(exportedAs: "app.retouchstudio.project", conformingTo: .json)
     }
 
     var version = currentVersion
@@ -36,6 +36,9 @@ struct RetouchProject: Codable {
     /// Normalized top-left crop applied to the original photo, if any. Projects
     /// written before crop existed decode as `nil`.
     var crop: CGRect? = nil
+    /// Turns, mirror and straighten already baked into the pixels. `nil` means
+    /// the photo opens upright, as every project before orientation did.
+    var orientation: DocumentOrientation? = nil
     /// Manual healing stamps, in the same original-photo coordinates as `crop`.
     /// Empty is written as `nil` so older projects and older readers are
     /// unaffected.
@@ -58,7 +61,7 @@ struct RetouchProject: Codable {
         case version, imagePath, imageBookmark, adjustments, exportFormat,
              exportQuality, exportLongEdge, autoRetouchStrength,
              autoColorStrength, crop, healSpots, stickers, aiEdits, analysis,
-             selectedFace
+             selectedFace, orientation
     }
 
     init(imagePath: String, imageBookmark: Data? = nil,
@@ -68,7 +71,8 @@ struct RetouchProject: Codable {
          crop: CGRect? = nil, healSpots: [HealSpot]? = nil,
          stickers: [Sticker]? = nil, aiEdits: [AIEdit]? = nil,
          analysis: AnalysisSettings? = nil,
-         selectedFace: Int? = nil) {
+         selectedFace: Int? = nil,
+         orientation: DocumentOrientation? = nil) {
         self.imagePath = imagePath
         self.imageBookmark = imageBookmark
         self.adjustments = adjustments
@@ -83,6 +87,7 @@ struct RetouchProject: Codable {
         self.aiEdits = aiEdits
         self.analysis = analysis
         self.selectedFace = selectedFace
+        self.orientation = orientation
     }
 
     /// Decoded by hand so a project written before the version key existed
@@ -99,6 +104,7 @@ struct RetouchProject: Codable {
         autoRetouchStrength = try c.decode(Double.self, forKey: .autoRetouchStrength)
         autoColorStrength = try c.decodeIfPresent(Double.self, forKey: .autoColorStrength)
         crop = try c.decodeIfPresent(CGRect.self, forKey: .crop)
+        orientation = try c.decodeIfPresent(DocumentOrientation.self, forKey: .orientation)
         healSpots = try c.decodeIfPresent([HealSpot].self, forKey: .healSpots)
         stickers = try c.decodeIfPresent([Sticker].self, forKey: .stickers)
         aiEdits = try c.decodeIfPresent([AIEdit].self, forKey: .aiEdits)

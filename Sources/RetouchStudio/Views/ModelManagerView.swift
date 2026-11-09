@@ -328,5 +328,6 @@ struct ModelManagerView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle(dip: 0.95))
+        .help(title)
     }
 }

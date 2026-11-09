@@ -134,84 +134,12 @@ struct ToolPanel: View {
                 }
             } else {
                 presetRow
-                toolRow
 
-                if model.aiMaskTool == .brush && model.aiMaskHasSelection {
-                    maskSlider(title: model.s.aiMaskBrushSize,
-                               value: $model.aiMaskStrokeWidth, range: 0.005...0.15,
-                               percent: true)
-                    PresetChip(title: model.s.aiMaskErase,
-                               isActive: model.aiMaskErasing) {
-                        model.aiMaskErasing.toggle()
-                    }
-                }
-
-                if model.isRefiningMask {
-                    Text(model.s.aiMaskSnapping)
-                        .font(Theme.Font.face(size: 10.5))
-                        .foregroundStyle(Theme.accent)
-                } else if let message = model.aiMaskMessage {
-                    Text(message)
-                        .font(Theme.Font.face(size: 10.5))
-                        .foregroundStyle(Theme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if case .failed(let message) = model.quickEditStage {
-                    Text(message)
-                        .font(Theme.Font.face(size: 10.5))
-                        .foregroundStyle(Theme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if model.aiMaskHasSelection || model.quickEditPoint != nil {
-                    if model.aiMaskHasSelection && model.aiMaskBox != nil
-                        && model.aiMaskRefined == nil && !model.isRefiningMask {
-                        SecondaryButton(title: model.s.aiMaskSnap,
-                                        icon: "lasso") {
-                            model.refineMaskWithSAM()
-                        }
-                    }
-                    FilledButton(title: model.s.aiRunEdit,
-                                 icon: "sparkles",
-                                 tone: .lime,
-                                 enabled: model.canRunQuickEdit) {
-                        model.runQuickEdit()
-                    }
-                    SecondaryButton(title: model.s.aiMaskClear,
-                                    icon: "xmark.circle") {
-                        model.clearQuickEditSelection()
-                    }
-
-                    if model.aiMaskHasSelection {
-                        PresetChip(title: model.s.aiMaskInvert,
-                                   isActive: model.aiMaskInverted) {
-                            model.aiMaskInverted.toggle()
-                        }
-                        maskSlider(title: model.s.aiMaskExpand,
-                                   value: $model.aiMaskExpand, range: 0...32)
-                        maskSlider(title: model.s.aiMaskFeather,
-                                   value: $model.aiMaskFeather, range: 0...8)
-                    }
-                } else if model.isAIPicking {
-                    Text(pickingHint)
-                        .font(Theme.Font.label)
-                        .foregroundStyle(Theme.accent)
-                        .fixedSize(horizontal: false, vertical: true)
-                    SecondaryButton(title: model.s.aiCancelEdit,
-                                    icon: "xmark.circle") {
-                        model.cancelQuickEditPicking()
-                    }
+                if model.quickEditPreset.isFullFrame {
+                    promptField
+                    reimagineRun
                 } else {
-                    FilledButton(title: model.quickEditPreset.title,
-                                 icon: "wand.and.stars",
-                                 tone: .lime,
-                                 enabled: model.hasImage && !model.isOperationBlocking) {
-                        model.beginQuickEdit()
-                    }
-                    if case .finished(let seconds) = model.quickEditStage {
-                        Text(model.s.aiStageFinished(seconds))
-                            .font(Theme.Font.face(size: 10.5))
-                            .foregroundStyle(Theme.positive)
-                    }
+                    maskedControls
                 }
             }
 
@@ -261,6 +189,141 @@ struct ToolPanel: View {
         }
     }
 
+    /// The two masked presets: they act only on what the owner marks, so the
+    /// card walks them from picking to running to clearing.
+    private var maskedControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            toolRow
+
+            if model.aiMaskTool == .brush && model.aiMaskHasSelection {
+                maskSlider(title: model.s.aiMaskBrushSize,
+                           hint: model.s.sliderHint(.aiBrushSize),
+                           value: $model.aiMaskStrokeWidth, range: 0.005...0.15,
+                           percent: true)
+                PresetChip(title: model.s.aiMaskErase,
+                           isActive: model.aiMaskErasing) {
+                    model.aiMaskErasing.toggle()
+                }
+            }
+
+            if model.isRefiningMask {
+                Text(model.s.aiMaskSnapping)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.accent)
+            } else if let message = model.aiMaskMessage {
+                Text(message)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if case .failed(let message) = model.quickEditStage {
+                Text(message)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if model.aiMaskHasSelection || model.quickEditPoint != nil {
+                if model.aiMaskHasSelection && model.aiMaskBox != nil
+                    && model.aiMaskRefined == nil && !model.isRefiningMask {
+                    SecondaryButton(title: model.s.aiMaskSnap,
+                                    icon: "lasso") {
+                        model.refineMaskWithSAM()
+                    }
+                }
+                FilledButton(title: model.s.aiRunEdit,
+                             icon: "sparkles",
+                             tone: .lime,
+                             enabled: model.canRunQuickEdit) {
+                    model.runQuickEdit()
+                }
+                SecondaryButton(title: model.s.aiMaskClear,
+                                icon: "xmark.circle") {
+                    model.clearQuickEditSelection()
+                }
+
+                if model.aiMaskHasSelection {
+                    PresetChip(title: model.s.aiMaskInvert,
+                               isActive: model.aiMaskInverted) {
+                        model.aiMaskInverted.toggle()
+                    }
+                    maskSlider(title: model.s.aiMaskExpand,
+                               hint: model.s.sliderHint(.aiMaskExpand),
+                               value: $model.aiMaskExpand, range: 0...32)
+                    maskSlider(title: model.s.aiMaskFeather,
+                               hint: model.s.sliderHint(.aiMaskFeather),
+                               value: $model.aiMaskFeather, range: 0...8)
+                }
+            } else if model.isAIPicking {
+                Text(pickingHint)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(Theme.accent)
+                    .fixedSize(horizontal: false, vertical: true)
+                SecondaryButton(title: model.s.aiCancelEdit,
+                                icon: "xmark.circle") {
+                    model.cancelQuickEditPicking()
+                }
+            } else {
+                FilledButton(title: model.quickEditPreset.title,
+                             icon: "wand.and.stars",
+                             tone: .lime,
+                             enabled: model.hasImage && !model.isOperationBlocking) {
+                    model.beginQuickEdit()
+                }
+                if case .finished(let seconds) = model.quickEditStage {
+                    Text(model.s.aiStageFinished(seconds))
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.positive)
+                }
+            }
+        }
+    }
+
+    private var promptField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(model.s.aiPromptLabel.uppercased())
+                .font(Theme.Font.section)
+                .tracking(0.6)
+                .foregroundStyle(Theme.muted)
+                .help(model.s.aiPromptLabel)
+            TextField(model.s.aiPromptPlaceholder, text: $model.quickEditPrompt)
+                .textFieldStyle(.plain)
+                .font(Theme.Font.face(size: 11))
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Theme.background)
+                )
+            Text(model.s.aiPromptNote)
+                .font(Theme.Font.caption)
+                .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var reimagineRun: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if case .failed(let message) = model.quickEditStage {
+                Text(message)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            FilledButton(title: model.s.aiRunReimagine,
+                         icon: "sparkles",
+                         tone: .lime,
+                         enabled: model.canRunQuickEdit) {
+                model.runQuickEdit()
+            }
+            if case .finished(let seconds) = model.quickEditStage {
+                Text(model.s.aiStageFinished(seconds))
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.positive)
+            }
+        }
+    }
+
     private var toolRow: some View {
         HStack(spacing: 6) {
             ForEach(AIMaskTool.allCases) { tool in
@@ -281,6 +344,7 @@ struct ToolPanel: View {
     }
 
     private func maskSlider(title: String,
+                            hint: String,
                             value: Binding<Double>,
                             range: ClosedRange<Double>,
                             percent: Bool = false) -> some View {
@@ -301,6 +365,7 @@ struct ToolPanel: View {
                 .controlSize(.mini)
                 .tint(Theme.accent)
         }
+        .help("\(title) — \(hint)")
     }
 
     private func strengthRow(title: String,
@@ -455,6 +520,7 @@ private struct HealCard: View {
 
 private struct CropCard: View {
     @ObservedObject var model: EditorModel
+    @State private var straighten: Double = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -468,6 +534,7 @@ private struct CropCard: View {
                     .font(Theme.Font.section)
                     .tracking(0.6)
                     .foregroundStyle(Theme.muted)
+                    .help(model.s.cropAspectLabel)
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4),
                           spacing: 6) {
@@ -478,6 +545,54 @@ private struct CropCard: View {
                         }
                     }
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(model.s.orientationLabel)
+                    .font(Theme.Font.section)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.muted)
+                    .help(model.s.orientationLabel)
+
+                HStack(spacing: 6) {
+                    SecondaryButton(title: model.s.rotateLeft,
+                                    icon: "rotate.left",
+                                    enabled: model.canOrient) {
+                        model.rotateCounterClockwise()
+                    }
+                    SecondaryButton(title: model.s.rotateRight,
+                                    icon: "rotate.right",
+                                    enabled: model.canOrient) {
+                        model.rotateClockwise()
+                    }
+                    SecondaryButton(title: model.s.flipHorizontal,
+                                    icon: "flip.horizontal",
+                                    enabled: model.canOrient) {
+                        model.flipHorizontally()
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    Text(model.s.straightenLabel)
+                        .font(Theme.Font.label)
+                        .foregroundStyle(Theme.text)
+                    Spacer(minLength: 6)
+                    Text(Digits.convert(String(format: "%+.1f°", straighten)))
+                        .font(Theme.Font.value)
+                        .monospacedDigit()
+                        .foregroundStyle(abs(straighten) < 0.05 ? Theme.faint : Theme.accent)
+                }
+
+                BipolarSlider(value: $straighten,
+                              range: -DocumentOrientation.maxStraighten...DocumentOrientation.maxStraighten,
+                              step: 0.1) {
+                    model.setStraightenAngle(straighten)
+                }
+                .onAppear { straighten = model.straightenAngle }
+                .onChange(of: model.straightenAngle) { _, value in
+                    if abs(value - straighten) > 0.01 { straighten = value }
+                }
+                .help("\(model.s.straightenLabel) — \(model.s.sliderHint(.straighten))")
             }
 
             VStack(alignment: .leading, spacing: 6) {

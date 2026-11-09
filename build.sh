@@ -15,12 +15,24 @@ APP_BUNDLE="$APP_NAME.app"
 BINARY_NAME="RetouchStudio"
 OUT_DIR="build/bin"
 
+# One universal bundle serves both Apple silicon and Intel. The AI helper is an
+# Apple-silicon runtime, so AIWorker disables it on the Intel slice.
+case "${RETOUCH_ARCH:-universal}" in
+  arm64) ARCHS=(arm64) ;;
+  x86_64|intel) ARCHS=(x86_64) ;;
+  universal) ARCHS=(arm64 x86_64) ;;
+  *)
+    echo "✗ RETOUCH_ARCH باید arm64، x86_64 یا universal باشد." >&2
+    exit 1
+    ;;
+esac
+
 # --- پیدا کردن SDK سازگار (آنی که ماکروهای SwiftUI را دارد) ---
 SDK=""
 for candidate in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>/dev/null | sort -Vr); do
   probe=$(mktemp -d)
   printf 'import SwiftUI\nstruct P: View { @State var v = 1; var body: some View { Text("\\(v)") } }\n' > "$probe/p.swift"
-  if swiftc -typecheck -target arm64-apple-macosx14.0 -sdk "$candidate" "$probe/p.swift" >/dev/null 2>&1; then
+  if swiftc -typecheck -target "${ARCHS[0]}-apple-macosx14.0" -sdk "$candidate" "$probe/p.swift" >/dev/null 2>&1; then
     SDK="$candidate"
     rm -rf "$probe"
     break
@@ -34,20 +46,31 @@ if [ -z "$SDK" ]; then
   exit 1
 fi
 
-echo "→ کامپایل پروژه ($CONFIG) با SDK: $(basename "$SDK")"
+echo "→ کامپایل پروژه ($CONFIG، ${ARCHS[*]}) با SDK: $(basename "$SDK")"
 mkdir -p "$OUT_DIR"
 
-FLAGS=(-target arm64-apple-macosx14.0 -sdk "$SDK" -o "$OUT_DIR/$BINARY_NAME")
+FLAGS=(-sdk "$SDK")
 if [ "$CONFIG" = "release" ]; then
   FLAGS+=(-O -whole-module-optimization)
 else
   FLAGS+=(-Onone -g)
 fi
+SOURCES=$(find Sources -name '*.swift')
 
-# shellcheck disable=SC2046
-swiftc "${FLAGS[@]}" $(find Sources -name '*.swift') \
-  -framework SwiftUI -framework AppKit -framework CoreImage \
-  -framework Vision -framework UniformTypeIdentifiers
+for ARCH in "${ARCHS[@]}"; do
+  # shellcheck disable=SC2046,SC2086
+  swiftc "${FLAGS[@]}" -target "${ARCH}-apple-macosx14.0" \
+    -o "$OUT_DIR/$BINARY_NAME-$ARCH" $SOURCES \
+    -framework SwiftUI -framework AppKit -framework CoreImage \
+    -framework Vision -framework UniformTypeIdentifiers
+done
+
+if [ ${#ARCHS[@]} -eq 1 ]; then
+  mv "$OUT_DIR/$BINARY_NAME-${ARCHS[0]}" "$OUT_DIR/$BINARY_NAME"
+else
+  lipo -create -output "$OUT_DIR/$BINARY_NAME" \
+    "$OUT_DIR/$BINARY_NAME-arm64" "$OUT_DIR/$BINARY_NAME-x86_64"
+fi
 
 echo "→ ساخت بسته‌ی اپ…"
 # The helper runtime is ~1.6 GB. Keep it out of the delete/rebuild cycle; the
@@ -65,6 +88,19 @@ if [ -d "$WORKER_CACHE" ]; then
 fi
 cp "$OUT_DIR/$BINARY_NAME" "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
 cp Resources/Info.plist "$APP_BUNDLE/Contents/Info.plist"
+
+# Optional release stamping, so a public build does not have to edit a source
+# file: RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=1 ./build.sh
+PLIST="$APP_BUNDLE/Contents/Info.plist"
+if [ -n "${RETOUCH_VERSION:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RETOUCH_VERSION" "$PLIST"
+fi
+if [ -n "${RETOUCH_BUILD:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RETOUCH_BUILD" "$PLIST"
+fi
+APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")
+APP_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST")
+
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 
 # App icon. Regenerate with Resources/make-icon.sh if the design changes.
@@ -87,8 +123,33 @@ fi
 
 # Python interpreter, wheels and the worker package, so the app does not depend
 # on this checkout or on Homebrew. Model weights stay out: they are downloaded
-# by explicit consent.
-Tools/bundle-worker.sh "$APP_BUNDLE" ${RETOUCH_REBUNDLE:+--force}
+# by explicit consent. A checkout without the private worker still builds; the
+# AI tools then report that the helper is not installed.
+WORKER_ROOT="${RETOUCH_WORKER_ROOT:-}"
+if [ -z "$WORKER_ROOT" ]; then
+  if [ -d "$PWD/worker/retouch_ai_worker" ]; then
+    WORKER_ROOT="$PWD/worker"
+  else
+    WORKER_ROOT="$HOME/RetouchStudio-Phase0/worker"
+  fi
+fi
+WORKER_VENV="${RETOUCH_WORKER_VENV:-}"
+if [ -z "$WORKER_VENV" ]; then
+  if [ -x "$PWD/.venv/bin/python3" ]; then
+    WORKER_VENV="$PWD/.venv"
+  else
+    WORKER_VENV="$HOME/RetouchStudio-Phase0/.venv"
+  fi
+fi
+if [ "${RETOUCH_SKIP_WORKER:-}" = "1" ]; then
+  echo "  · helper runtime skipped (RETOUCH_SKIP_WORKER=1)"
+elif [ -d "$WORKER_ROOT/retouch_ai_worker" ] && [ -x "$WORKER_VENV/bin/python3" ]; then
+  RETOUCH_WORKER_ROOT="$WORKER_ROOT" RETOUCH_WORKER_VENV="$WORKER_VENV" \
+    Tools/bundle-worker.sh "$APP_BUNDLE" ${RETOUCH_REBUNDLE:+--force}
+else
+  echo "  ! helper runtime not bundled — AI tools will be unavailable."
+  echo "    Set RETOUCH_WORKER_ROOT and RETOUCH_WORKER_VENV, or RETOUCH_SKIP_WORKER=1 to silence this."
+fi
 
 # امضای ad-hoc تا مک بدون هشدار بازش کند
 codesign --force --sign - "$APP_BUNDLE" >/dev/null 2>&1 || echo "  (بدون امضا ادامه می‌دهیم)"
@@ -104,5 +165,22 @@ else
   exit 1
 fi
 
-echo "✓ آماده است: $(pwd)/$APP_BUNDLE"
+# A universal build is only useful on Intel if the Intel slice passes the same
+# self-test. Rosetta can execute that slice here; a real Intel Mac runs it
+# natively, so this is a CPU check, not a GPU benchmark.
+if [ ${#ARCHS[@]} -gt 1 ] && [ "$(uname -m)" = "arm64" ] \
+   && arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+  mkdir -p build/selftest-intel
+  if arch -x86_64 "$OUT_DIR/$BINARY_NAME" --selftest --out build/selftest-intel \
+       > build/selftest-intel/selftest.log 2>&1; then
+    echo "  ✓ خودآزمون پردازش روی بخش Intel هم پاس شد"
+  else
+    echo "✗ خودآزمون بخش Intel خطا داد — بیلد متوقف شد." >&2
+    echo "  جزئیات: build/selftest-intel/selftest.log" >&2
+    tail -n 30 build/selftest-intel/selftest.log >&2 || true
+    exit 1
+  fi
+fi
+
+echo "✓ آماده است: $(pwd)/$APP_BUNDLE  —  نسخهٔ $APP_VERSION ($APP_BUILD)"
 echo "  اجرا:  open \"$(pwd)/$APP_BUNDLE\""

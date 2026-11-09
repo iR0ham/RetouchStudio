@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.retouchstudio.app</string>
+	<string>app.retouchstudio.mac</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -19,15 +19,15 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.1</string>
+	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>1</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.photography</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Roham. All rights reserved.</string>
+	<string>© 2026 iRoham. All rights reserved.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>ATSApplicationFontsPath</key>
@@ -55,7 +55,7 @@
 			<string>Editor</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>local.retouchstudio.project</string>
+				<string>app.retouchstudio.project</string>
 			</array>
 		</dict>
 	</array>
@@ -63,7 +63,7 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>local.retouchstudio.project</string>
+			<string>app.retouchstudio.project</string>
 			<key>UTTypeDescription</key>
 			<string>Retouch Studio Project</string>
 			<key>UTTypeConformsTo</key>

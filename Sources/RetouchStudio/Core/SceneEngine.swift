@@ -331,6 +331,45 @@ enum SceneEngine {
         return SkinEngine.blend(layer, over: image, mask: background, strength: strength)
     }
 
+    /// A chosen photo behind the subject. It is scaled to cover the frame
+    /// (cropping the overflow, never leaving bars) and blended through the same
+    /// feathered inverse person mask as the solid fill, so swapping backdrops
+    /// does not change the subject edge.
+    static func replaceBackground(_ image: CIImage,
+                                  person: CIImage,
+                                  backdrop: CIImage,
+                                  amount: Double) -> CIImage {
+        let strength = min(1, max(0, amount / 100))
+        guard strength > 0.001 else { return image }
+        let extent = image.extent
+        let shortSide = min(extent.width, extent.height)
+        guard shortSide > 8 else { return image }
+
+        let layer = aspectFill(backdrop, to: extent)
+        let background = person.applyingFilter("CIColorInvert").cropped(to: extent)
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [
+                kCIInputRadiusKey: max(2, shortSide * 0.006)
+            ])
+            .cropped(to: extent)
+
+        return SkinEngine.blend(layer, over: image, mask: background, strength: strength)
+    }
+
+    /// Covers `extent` completely at the backdrop's own aspect: the shorter
+    /// side is fitted and the longer one is cropped, symmetric about the
+    /// centre.
+    static func aspectFill(_ image: CIImage, to extent: CGRect) -> CIImage {
+        let source = image.extent
+        guard source.width > 1, source.height > 1 else { return image.cropped(to: extent) }
+        let scale = max(extent.width / source.width, extent.height / source.height)
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let centred = scaled.transformed(by: CGAffineTransform(
+            translationX: extent.midX - scaled.extent.midX,
+            y: extent.midY - scaled.extent.midY))
+        return centred.cropped(to: extent)
+    }
+
     /// Makes everything the subject does not occupy transparent. The person
     /// mask is softened before it becomes alpha, so the cut-out edge is
     /// feathered rather than a hard cut, and the extent is kept so composition

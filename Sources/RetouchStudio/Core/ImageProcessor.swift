@@ -6,7 +6,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 enum ExportFormat: String, CaseIterable, Identifiable {
-    case jpeg, png, tiff
+    case jpeg, png, tiff, heic
 
     var id: String { rawValue }
 
@@ -15,6 +15,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .jpeg: return "JPEG"
         case .png: return "PNG"
         case .tiff: return "TIFF"
+        case .heic: return "HEIC"
         }
     }
 
@@ -23,6 +24,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .jpeg: return "jpg"
         case .png: return "png"
         case .tiff: return "tif"
+        case .heic: return "heic"
         }
     }
 
@@ -31,10 +33,12 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .jpeg: return .jpeg
         case .png: return .png
         case .tiff: return .tiff
+        case .heic: return .heic
         }
     }
 
-    var supportsQuality: Bool { self == .jpeg }
+    /// Formats that carry a compression slider.
+    var supportsQuality: Bool { self == .jpeg || self == .heic }
 }
 
 /// Every mask the pipeline needs, for one image size. Each mask is
@@ -104,6 +108,9 @@ struct LoadResult {
     var originalPreview: CGImage
     var preview: CGImage
     var pixelSize: CGSize
+    /// Size of the upright source before any crop. Orientation changes and
+    /// sticker/analysis coordinates are mapped against this frame.
+    var sourcePixelSize: CGSize
     var fileName: String
     var url: URL
     /// Working color space of the source. Previews and exports are rendered in
@@ -137,13 +144,19 @@ final class ImageProcessor {
     // MARK: - Loading
 
     /// `crop` is normalized with a top-left origin, matching the crop overlay.
-    /// The crop is applied to the pixels before analysis, so faces, masks and
-    /// the preview all describe the cropped image.
-    func load(from url: URL, previewMaxDimension: CGFloat, crop: CGRect? = nil) -> LoadResult? {
+    /// `orientation` is baked in before the crop, so both describe the same
+    /// upright frame the owner sees. The crop is applied to the pixels before
+    /// analysis, so faces, masks and the preview all describe the cropped image.
+    func load(from url: URL, previewMaxDimension: CGFloat, crop: CGRect? = nil,
+              orientation: DocumentOrientation = .identity) -> LoadResult? {
         guard let (image, colorSpace, metadata) = loadCGImageWithColorSpace(url: url) else { return nil }
 
-        let imageExtent = CGRect(x: 0, y: 0, width: image.width, height: image.height)
-        var full = CIImage(cgImage: image).cropped(to: imageExtent)
+        var full = CIImage(cgImage: image)
+            .cropped(to: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        full = orientation.applied(to: full)
+
+        let imageExtent = CGRect(origin: .zero, size: full.extent.size)
+        let sourcePixelSize = full.extent.size
 
         if let crop, !CropGeometry.isFull(crop) {
             // Convert top-left view coordinates into Core Image's bottom-left
@@ -201,6 +214,7 @@ final class ImageProcessor {
                           originalPreview: originalPreview,
                           preview: preview,
                           pixelSize: extent.size,
+                          sourcePixelSize: sourcePixelSize,
                           fileName: url.lastPathComponent,
                           url: url,
                           colorSpace: colorSpace,
@@ -975,6 +989,14 @@ final class ImageProcessor {
                                                color: a.backgroundFillColor,
                                                amount: a.backgroundFill)
         }
+        // A chosen backdrop is a stronger statement than a solid fill, so it
+        // sits on top of one if both are set.
+        if !a.backgroundImage.isEmpty, let person = masks?.person,
+           let backdrop = BackdropStore.image(named: a.backgroundImage) {
+            image = SceneEngine.replaceBackground(image, person: person,
+                                                  backdrop: backdrop,
+                                                  amount: a.backgroundImageAmount)
+        }
         if a.backgroundRemove, let person = masks?.person {
             image = SceneEngine.removeBackground(image, person: person)
         }
@@ -1124,7 +1146,7 @@ final class ImageProcessor {
                metadata: [CFString: Any] = [:],
                stripPrivacyMetadata: Bool = true,
                maxDimension: CGFloat? = nil) -> Bool {
-        let ciFormat: CIFormat = format == .jpeg ? .RGBA8 : .RGBA16
+        let ciFormat: CIFormat = format.supportsQuality ? .RGBA8 : .RGBA16
         var output = image
         if let maxDimension, maxDimension > 0 {
             let longest = max(image.extent.width, image.extent.height)
@@ -1132,11 +1154,12 @@ final class ImageProcessor {
                 output = scaled
             }
         }
-        // A removed background is transparent, and JPEG has no alpha channel:
-        // flatten onto white so the file has a real backdrop instead of the
-        // black pixels an ignored alpha channel would leave behind.
+        // A removed background is transparent, and neither JPEG nor HEIC has a
+        // dependable alpha channel here: flatten onto white so the file has a
+        // real backdrop instead of the black pixels an ignored alpha would
+        // leave behind.
         var flattened = output
-        if format == .jpeg {
+        if format == .jpeg || format == .heic {
             let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1))
                 .cropped(to: output.extent)
             flattened = output.composited(over: white)

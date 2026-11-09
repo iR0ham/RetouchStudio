@@ -50,6 +50,7 @@ struct TutorialCopy {
     let intro: String
     let localNote: String
     let searchPlaceholder: String
+    let clearSearch: String
     let noResults: String
     let previous: String
     let next: String
@@ -70,6 +71,7 @@ struct TutorialCopy {
         intro: "A complete walkthrough of every part of the app, including each of the four AI paths. Read it once, then keep it open beside your first portrait.",
         localNote: "Everything here happens on this Mac. Nothing is uploaded.",
         searchPlaceholder: "Search the tutorial",
+        clearSearch: "Clear the search",
         noResults: "No section matches that search.",
         previous: "Previous",
         next: "Next",
@@ -84,7 +86,7 @@ struct TutorialCopy {
             ("⌘R", "Reset all adjustments"),
             ("⌘+ / ⌘− / ⌘0", "Zoom in / out / fit"),
             ("Space", "Hold to see the original"),
-            ("1 – 0", "Pick a tool"),
+            ("1 – 0, −, =", "Pick a tool"),
             ("⌘W", "Close window"),
             ("⌘,", "Settings"),
         ],
@@ -96,7 +98,7 @@ struct TutorialCopy {
                     step("Open a photo",
                          "Press ⌘O, choose Open, or drop an image on the canvas. The app reads any format macOS can open, at full resolution."),
                     step("Pick a tool",
-                         "The top bar holds twelve tools. Number keys 1–0 jump to the first ten; click the pills for the rest."),
+                         "The top bar holds twelve tools. Number keys 1–0 pick the first ten, and − and = pick art and analysis."),
                     step("Adjust on the right",
                          "The inspector follows the active tool. The left column keeps Smart Analyze, presets and AI Edit within reach."),
                     step("Undo freely",
@@ -439,6 +441,7 @@ struct TutorialCopy {
         intro: "راهنمای کامل همهٔ بخش‌های برنامه، از جمله هر چهار مسیر هوش مصنوعی. یک‌بار بخوانید و بعد کنار اولین پرتره باز نگه دارید.",
         localNote: "همهٔ این‌ها روی همین مک انجام می‌شود. چیزی آپلود نمی‌شود.",
         searchPlaceholder: "جستجو در آموزش",
+        clearSearch: "پاک کردن جستجو",
         noResults: "هیچ بخشی با این جستجو پیدا نشد.",
         previous: "قبلی",
         next: "بعدی",
@@ -453,7 +456,7 @@ struct TutorialCopy {
             ("⌘R", "بازنشانی همهٔ تنظیمات"),
             ("⌘+ / ⌘− / ⌘0", "بزرگ‌نمایی / کوچک‌نمایی / اندازهٔ پنجره"),
             ("Space", "نگه دارید تا عکس اصلی دیده شود"),
-            ("۱ – ۰", "انتخاب ابزار"),
+            ("۱ – ۰، −، =", "انتخاب ابزار"),
             ("⌘W", "بستن پنجره"),
             ("⌘,", "تنظیمات"),
         ],
@@ -465,7 +468,7 @@ struct TutorialCopy {
                     step("یک عکس باز کنید",
                          "⌘O را بزنید، Open را انتخاب کنید یا عکس را روی بوم رها کنید. برنامه هر قالبی را که مک می‌خواند، با کیفیت کامل باز می‌کند."),
                     step("یک ابزار انتخاب کنید",
-                         "نوار بالا دوازده ابزار دارد. کلیدهای ۱ تا ۰ ده ابزار اول را باز می‌کنند؛ بقیه را با کلیک انتخاب کنید."),
+                         "نوار بالا دوازده ابزار دارد. کلیدهای ۱ تا ۰ ده ابزار اول را باز می‌کنند و − و = ابزار هنر و تحلیل را."),
                     step("سمت راست تنظیم کنید",
                          "پنل راست از ابزار فعال پیروی می‌کند. ستون چپ تحلیل هوشمند، پیش‌تنظیم‌ها و ویرایش هوش مصنوعی را در دسترس نگه می‌دارد."),
                     step("آزادانه واگرد کنید",

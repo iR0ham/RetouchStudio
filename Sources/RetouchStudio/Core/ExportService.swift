@@ -16,6 +16,9 @@ struct ExportSnapshot: Equatable {
     var analysis = AnalysisSettings()
     /// Crop in normalized photo coordinates with a top-left origin.
     var crop: CGRect?
+    /// Turn baked into the document's pixels. Batch uses it for this photo's
+    /// own file only; other files open in their own orientation.
+    var orientation = DocumentOrientation.identity
     /// Index into the photo's sorted faces, or nil for the automatic choice.
     /// Feature sizes and the callouts follow it, so an export matches what the
     /// editor showed.
@@ -35,6 +38,9 @@ struct ExportSnapshot: Equatable {
     /// Only meaningful when the requested size is larger than the photo; the
     /// UI hides the switch otherwise.
     var aiUpscale = false
+    /// Drawn last, over both the photo and its callouts, so a signature sits on
+    /// top of everything the file carries.
+    var watermark = WatermarkSettings.disabled
 }
 
 /// One image's pixels and measurements, as `ImageProcessor.load` reports them.
@@ -215,15 +221,28 @@ enum ExportService {
     static func renderFinal(_ snapshot: ExportSnapshot,
                             source: ExportSource,
                             progress: ((Int, Int) -> Void)? = nil) throws -> RenderedExport? {
-        guard snapshot.aiUpscale else { return render(snapshot, source: source) }
-        guard let base = render(snapshot, source: source, applyAnalysis: false) else {
-            return nil
+        let rendered: RenderedExport?
+        if snapshot.aiUpscale {
+            guard let base = render(snapshot, source: source, applyAnalysis: false) else {
+                return nil
+            }
+            let enlarged = try upscale(base.image, progress: progress)
+            if snapshot.includeAnalysis, snapshot.analysis.isEnabled, !source.faces.isEmpty {
+                rendered = analysisApplied(snapshot, image: enlarged, faces: source.faces,
+                                           focus: focusFace(snapshot, faces: source.faces))
+            } else {
+                rendered = RenderedExport(image: enlarged, carriesSourceMetadata: true)
+            }
+        } else {
+            rendered = render(snapshot, source: source)
         }
-        let enlarged = try upscale(base.image, progress: progress)
-        guard snapshot.includeAnalysis, snapshot.analysis.isEnabled, !source.faces.isEmpty
-        else { return RenderedExport(image: enlarged, carriesSourceMetadata: true) }
-        return analysisApplied(snapshot, image: enlarged, faces: source.faces,
-                               focus: focusFace(snapshot, faces: source.faces))
+        guard let rendered, snapshot.watermark.isActive,
+              rendered.carriesSourceMetadata else { return rendered }
+        // A lines-only export is art on transparency; a signature would land in
+        // the layout tool, not on a photo, so it is left off.
+        return RenderedExport(image: WatermarkRenderer.apply(snapshot.watermark,
+                                                             to: rendered.image),
+                              carriesSourceMetadata: true)
     }
 
     private static func focusFace(_ snapshot: ExportSnapshot,

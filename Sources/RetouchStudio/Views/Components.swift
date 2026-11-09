@@ -45,6 +45,7 @@ struct CardHeader: View {
 
             Spacer(minLength: 0)
         }
+        .help(subtitle.map { "\(title) — \($0)" } ?? title)
     }
 }
 
@@ -60,6 +61,7 @@ struct SectionHeader: View {
                 .font(Theme.Font.section)
                 .tracking(0.6)
                 .foregroundStyle(Theme.faint)
+                .help(title)
             Spacer(minLength: 4)
             if let reset {
                 Button(action: reset) {
@@ -85,6 +87,9 @@ struct BipolarSlider: View {
     var step: Double = 1
     /// Chartreuse for retouch amounts, sky for the generative controls.
     var tint: Color = Theme.accent
+    /// Runs once when the pointer is released. Controls that re-render the
+    /// source, such as straighten, commit there instead of on every tick.
+    var onEditingEnded: (() -> Void)? = nil
 
     @State private var isHovering = false
     @State private var isDragging = false
@@ -157,7 +162,10 @@ struct BipolarSlider: View {
                         let fraction = mirrored ? 1 - raw : raw
                         commit(range.lowerBound + Double(fraction) * span, span: span)
                     }
-                    .onEnded { _ in isDragging = false }
+                    .onEnded { _ in
+                        isDragging = false
+                        onEditingEnded?()
+                    }
             )
             .onHover { isHovering = $0 }
         }
@@ -194,6 +202,8 @@ struct BipolarSlider: View {
 /// One slider with its label, live value and a modified marker.
 struct ParameterRow: View {
     let title: String
+    /// A one-line explanation for the hover tooltip; empty shows just the title.
+    var hint: String = ""
     @Binding var value: Double
     var range: ClosedRange<Double> = -100...100
     var tint: Color = Theme.accent
@@ -239,6 +249,7 @@ struct ParameterRow: View {
             BipolarSlider(value: $value, range: range, tint: tint)
         }
         .contentShape(Rectangle())
+        .help(hint.isEmpty ? title : "\(title) — \(hint)")
         .onHover { isHovering = $0 }
         .animation(Motion.snappy, value: isHovering)
         .onTapGesture(count: 2) {
@@ -375,6 +386,7 @@ struct GroupLabel: View {
             .font(Theme.Font.section)
             .tracking(0.6)
             .foregroundStyle(Theme.muted)
+            .help(text)
     }
 }
 

@@ -161,37 +161,46 @@ struct InspectorView: View {
     private var skinContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             ParameterRow(title: model.s.skinSmoothing,
+                         hint: model.s.sliderHint(.skinSmoothing),
                          value: model.binding(for: \.smooth),
                          range: 0...100,
                          onReset: { model.resetEffect(\.smooth) })
             ParameterRow(title: model.s.texturePreserve,
+                         hint: model.s.sliderHint(.texturePreserve),
                          value: model.binding(for: \.texturePreserve),
                          range: 0...100,
                          onReset: { model.resetEffect(\.texturePreserve) })
             ParameterRow(title: model.s.blemishRemoval,
+                         hint: model.s.sliderHint(.blemishRemoval),
                          value: model.binding(for: \.blemish),
                          range: 0...100,
                          onReset: { model.resetEffect(\.blemish) })
             ParameterRow(title: model.s.wrinkleReduction,
+                         hint: model.s.sliderHint(.wrinkleReduction),
                          value: model.binding(for: \.wrinkle),
                          range: 0...100,
                          onReset: { model.resetEffect(\.wrinkle) })
             ParameterRow(title: model.s.skinTone,
+                         hint: model.s.sliderHint(.skinTone),
                          value: model.binding(for: \.skinToneEvens),
                          range: 0...100,
                          onReset: { model.resetEffect(\.skinToneEvens) })
             ParameterRow(title: model.s.darkCircles,
+                         hint: model.s.sliderHint(.darkCircles),
                          value: model.binding(for: \.darkCircles),
                          range: 0...100,
                          onReset: { model.resetEffect(\.darkCircles) })
             ParameterRow(title: model.s.skinBrightness,
+                         hint: model.s.sliderHint(.skinBrightness),
                          value: model.binding(for: \.skinBrighten),
                          range: 0...100,
                          onReset: { model.resetEffect(\.skinBrighten) })
             ParameterRow(title: model.s.skinFinish,
+                         hint: model.s.sliderHint(.skinFinish),
                          value: model.binding(for: \.skinFinish),
                          onReset: { model.resetEffect(\.skinFinish) })
             ParameterRow(title: model.s.shine,
+                         hint: model.s.sliderHint(.shine),
                          value: model.binding(for: \.shine),
                          range: 0...100,
                          onReset: { model.resetEffect(\.shine) })
@@ -201,30 +210,39 @@ struct InspectorView: View {
     private var shapeContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             ParameterRow(title: model.s.eyeSize,
+                         hint: model.s.sliderHint(.eyeSize),
                          value: model.binding(for: \.eyeSize),
                          onReset: { model.resetEffect(\.eyeSize) })
             ParameterRow(title: model.s.noseSize,
+                         hint: model.s.sliderHint(.noseSize),
                          value: model.binding(for: \.noseSize),
                          onReset: { model.resetEffect(\.noseSize) })
             ParameterRow(title: model.s.noseTip,
+                         hint: model.s.sliderHint(.noseTip),
                          value: model.binding(for: \.noseTip),
                          onReset: { model.resetEffect(\.noseTip) })
             ParameterRow(title: model.s.lipSize,
+                         hint: model.s.sliderHint(.lipSize),
                          value: model.binding(for: \.lipSize),
                          onReset: { model.resetEffect(\.lipSize) })
             ParameterRow(title: model.s.cheekSize,
+                         hint: model.s.sliderHint(.cheekSize),
                          value: model.binding(for: \.cheekSize),
                          onReset: { model.resetEffect(\.cheekSize) })
             ParameterRow(title: model.s.jawWidth,
+                         hint: model.s.sliderHint(.jawWidth),
                          value: model.binding(for: \.jawWidth),
                          onReset: { model.resetEffect(\.jawWidth) })
             ParameterRow(title: model.s.chinLength,
+                         hint: model.s.sliderHint(.chinLength),
                          value: model.binding(for: \.chinLength),
                          onReset: { model.resetEffect(\.chinLength) })
             ParameterRow(title: model.s.faceWidth,
+                         hint: model.s.sliderHint(.faceWidth),
                          value: model.binding(for: \.faceWidth),
                          onReset: { model.resetEffect(\.faceWidth) })
             ParameterRow(title: model.s.faceLength,
+                         hint: model.s.sliderHint(.faceLength),
                          value: model.binding(for: \.faceLength),
                          onReset: { model.resetEffect(\.faceLength) })
             SectionNote(text: model.s.reshapeScope)
@@ -234,26 +252,32 @@ struct InspectorView: View {
     private var eyesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             ParameterRow(title: model.s.teethWhitening,
+                         hint: model.s.sliderHint(.teethWhitening),
                          value: model.binding(for: \.teethWhiten),
                          range: 0...100,
                          onReset: { model.resetEffect(\.teethWhiten) })
             ParameterRow(title: model.s.eyeBrightness,
+                         hint: model.s.sliderHint(.eyeBrightness),
                          value: model.binding(for: \.eyeBrighten),
                          range: 0...100,
                          onReset: { model.resetEffect(\.eyeBrighten) })
             ParameterRow(title: model.s.eyeSharpen,
+                         hint: model.s.sliderHint(.eyeSharpen),
                          value: model.binding(for: \.eyeSharpen),
                          range: 0...100,
                          onReset: { model.resetEffect(\.eyeSharpen) })
             ParameterRow(title: model.s.irisEnhance,
+                         hint: model.s.sliderHint(.irisEnhance),
                          value: model.binding(for: \.irisEnhance),
                          range: 0...100,
                          onReset: { model.resetEffect(\.irisEnhance) })
             ParameterRow(title: model.s.lashDarken,
+                         hint: model.s.sliderHint(.lashDarken),
                          value: model.binding(for: \.lashDarken),
                          range: 0...100,
                          onReset: { model.resetEffect(\.lashDarken) })
             ParameterRow(title: model.s.teethAlign,
+                         hint: model.s.sliderHint(.teethAlign),
                          value: model.binding(for: \.teethAlign),
                          range: 0...100,
                          onReset: { model.resetEffect(\.teethAlign) })
@@ -269,6 +293,7 @@ struct InspectorView: View {
             }
 
             ParameterRow(title: model.s.lensTint,
+                         hint: model.s.sliderHint(.lensTint),
                          value: model.binding(for: \.lensTint),
                          range: 0...100,
                          onReset: { model.resetEffect(\.lensTint) })
@@ -326,28 +351,34 @@ struct InspectorView: View {
             }
 
             ParameterRow(title: model.s.hue,
+                         hint: model.s.sliderHint(.makeupHue),
                          value: model.makeupHueBinding(model.makeupRegion),
                          range: 0...360)
             ParameterRow(title: model.s.saturation,
+                         hint: model.s.sliderHint(.makeupSaturation),
                          value: model.makeupSaturationBinding(model.makeupRegion),
                          range: 0...100)
             ParameterRow(title: model.s.opacity,
+                         hint: model.s.sliderHint(.makeupOpacity),
                          value: model.binding(for: model.makeupRegion.amountPath),
                          range: 0...100,
                          onReset: { model.resetEffect(model.makeupRegion.amountPath) })
 
             if model.makeupRegion == .lips {
                 ParameterRow(title: model.s.lipGloss,
+                             hint: model.s.sliderHint(.lipGloss),
                              value: model.binding(for: \.lipGloss),
                              range: 0...100,
                              onReset: { model.resetEffect(\.lipGloss) })
             }
             if model.makeupRegion == .hair {
                 ParameterRow(title: model.s.hairShine,
+                             hint: model.s.sliderHint(.hairShine),
                              value: model.binding(for: \.hairShine),
                              range: 0...100,
                              onReset: { model.resetEffect(\.hairShine) })
                 ParameterRow(title: model.s.hairVolume,
+                             hint: model.s.sliderHint(.hairVolume),
                              value: model.binding(for: \.hairVolume),
                              range: 0...100,
                              onReset: { model.resetEffect(\.hairVolume) })
@@ -380,35 +411,47 @@ struct InspectorView: View {
 
     private var colorContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HistogramView(image: model.previewImage,
+                          accessibilityLabel: model.s.histogramLabel)
             ParameterRow(title: model.s.exposure,
+                         hint: model.s.sliderHint(.exposure),
                          value: model.binding(for: \.exposure),
                          onReset: { model.resetEffect(\.exposure) })
             ParameterRow(title: model.s.contrast,
+                         hint: model.s.sliderHint(.contrast),
                          value: model.binding(for: \.contrast),
                          onReset: { model.resetEffect(\.contrast) })
             ParameterRow(title: model.s.blacks,
+                         hint: model.s.sliderHint(.blacks),
                          value: model.binding(for: \.blacks),
                          onReset: { model.resetEffect(\.blacks) })
             ParameterRow(title: model.s.whites,
+                         hint: model.s.sliderHint(.whites),
                          value: model.binding(for: \.whites),
                          onReset: { model.resetEffect(\.whites) })
             ParameterRow(title: model.s.saturation,
+                         hint: model.s.sliderHint(.colorSaturation),
                          value: model.binding(for: \.saturation),
                          onReset: { model.resetEffect(\.saturation) })
             ParameterRow(title: model.s.vibrance,
+                         hint: model.s.sliderHint(.vibrance),
                          value: model.binding(for: \.vibrance),
                          onReset: { model.resetEffect(\.vibrance) })
             ParameterRow(title: model.s.warmth,
+                         hint: model.s.sliderHint(.warmth),
                          value: model.binding(for: \.warmth),
                          onReset: { model.resetEffect(\.warmth) })
             ParameterRow(title: model.s.clarity,
+                         hint: model.s.sliderHint(.clarity),
                          value: model.binding(for: \.clarity),
                          onReset: { model.resetEffect(\.clarity) })
             ParameterRow(title: model.s.splitTone,
+                         hint: model.s.sliderHint(.splitTone),
                          value: model.binding(for: \.splitTone),
                          range: 0...100,
                          onReset: { model.resetEffect(\.splitTone) })
             ParameterRow(title: model.s.vignette,
+                         hint: model.s.sliderHint(.vignette),
                          value: model.binding(for: \.vignette),
                          range: 0...100,
                          onReset: { model.resetEffect(\.vignette) })
@@ -426,12 +469,15 @@ struct InspectorView: View {
             }
 
             ParameterRow(title: model.s.hue,
+                         hint: model.s.sliderHint(.hslHue),
                          value: model.hslBinding(model.hslBand, \.hslHue),
                          onReset: { model.resetHSLBand(model.hslBand) })
             ParameterRow(title: model.s.saturation,
+                         hint: model.s.sliderHint(.hslSaturation),
                          value: model.hslBinding(model.hslBand, \.hslSaturation),
                          onReset: { model.resetHSLBand(model.hslBand) })
             ParameterRow(title: model.s.luminance,
+                         hint: model.s.sliderHint(.hslLuminance),
                          value: model.hslBinding(model.hslBand, \.hslLuminance),
                          onReset: { model.resetHSLBand(model.hslBand) })
 
@@ -452,10 +498,12 @@ struct InspectorView: View {
             }
 
             ParameterRow(title: model.s.lookStrength,
+                         hint: model.s.sliderHint(.lookStrength),
                          value: model.binding(for: \.lookStrength),
                          range: 0...100,
                          onReset: { model.resetEffect(\.lookStrength) })
             ParameterRow(title: model.s.grain,
+                         hint: model.s.sliderHint(.grain),
                          value: model.binding(for: \.grain),
                          range: 0...100,
                          onReset: { model.resetEffect(\.grain) })
@@ -467,22 +515,28 @@ struct InspectorView: View {
     private var bodyContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             ParameterRow(title: model.s.bodySmoothing,
+                         hint: model.s.sliderHint(.bodySmoothing),
                          value: model.binding(for: \.bodySmooth),
                          range: 0...100,
                          onReset: { model.resetEffect(\.bodySmooth) })
             ParameterRow(title: model.s.bodyBrightness,
+                         hint: model.s.sliderHint(.bodyBrightness),
                          value: model.binding(for: \.bodyTone),
                          onReset: { model.resetEffect(\.bodyTone) })
             ParameterRow(title: model.s.bodySlim,
+                         hint: model.s.sliderHint(.bodySlim),
                          value: model.binding(for: \.bodySlim),
                          onReset: { model.resetEffect(\.bodySlim) })
             ParameterRow(title: model.s.bodyWaist,
+                         hint: model.s.sliderHint(.bodyWaist),
                          value: model.binding(for: \.bodyWaist),
                          onReset: { model.resetEffect(\.bodyWaist) })
             ParameterRow(title: model.s.bodyArms,
+                         hint: model.s.sliderHint(.bodyArms),
                          value: model.binding(for: \.bodyArms),
                          onReset: { model.resetEffect(\.bodyArms) })
             ParameterRow(title: model.s.bodyLegs,
+                         hint: model.s.sliderHint(.bodyLegs),
                          value: model.binding(for: \.bodyLegs),
                          onReset: { model.resetEffect(\.bodyLegs) })
             subjectNote(scope: model.s.bodyScope)
@@ -519,13 +573,16 @@ struct InspectorView: View {
             // change what the photo shows. They dim together to say so.
             Group {
                 ParameterRow(title: model.s.backgroundBlur,
+                             hint: model.s.sliderHint(.backgroundBlur),
                              value: model.binding(for: \.backgroundBlur),
                              range: 0...100,
                              onReset: { model.resetEffect(\.backgroundBlur) })
                 ParameterRow(title: model.s.backgroundTone,
+                             hint: model.s.sliderHint(.backgroundTone),
                              value: model.binding(for: \.backgroundTone),
                              onReset: { model.resetEffect(\.backgroundTone) })
                 ParameterRow(title: model.s.backgroundSaturation,
+                             hint: model.s.sliderHint(.backgroundSaturation),
                              value: model.binding(for: \.backgroundSaturation),
                              onReset: { model.resetEffect(\.backgroundSaturation) })
 
@@ -540,9 +597,43 @@ struct InspectorView: View {
                 }
 
                 ParameterRow(title: model.s.backgroundFill,
+                             hint: model.s.sliderHint(.backgroundFill),
                              value: model.binding(for: \.backgroundFill),
                              range: 0...100,
                              onReset: { model.resetEffect(\.backgroundFill) })
+
+                GroupLabel(text: model.s.backdropImageTitle)
+                if model.adjustments.backgroundImage.isEmpty {
+                    SecondaryButton(title: model.s.chooseBackdrop, icon: "photo") {
+                        model.chooseBackdropImage()
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Icon(name: "photo", size: 12, emphasised: true)
+                            .foregroundStyle(Theme.accent)
+                        Text(model.adjustments.backgroundImageName.isEmpty
+                             ? model.s.backdropImageTitle
+                             : model.adjustments.backgroundImageName)
+                            .font(Theme.Font.face(size: 11))
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 6)
+                        Button { model.clearBackdropImage() } label: {
+                            Icon(name: "xmark", size: 10.5, emphasised: true)
+                                .foregroundStyle(Theme.faint)
+                        }
+                        .buttonStyle(PressableButtonStyle(dip: 0.9))
+                        .help(model.s.backdropClearHelp)
+                    }
+
+                    ParameterRow(title: model.s.backdropStrength,
+                                 hint: model.s.sliderHint(.backdropStrength),
+                                 value: model.binding(for: \.backgroundImageAmount),
+                                 range: 0...100,
+                                 onReset: { model.adjustments.backgroundImageAmount = 100 })
+                    SectionNote(text: model.s.backdropNote)
+                }
             }
             .disabled(model.adjustments.backgroundRemove)
             .opacity(model.adjustments.backgroundRemove ? 0.45 : 1)
@@ -604,12 +695,15 @@ struct InspectorView: View {
             }
 
             ParameterRow(title: model.s.artSize,
+                         hint: model.s.sliderHint(.artSize),
                          value: model.stickerSizeBinding(),
                          range: 2...60)
             ParameterRow(title: model.s.artRotation,
+                         hint: model.s.sliderHint(.artRotation),
                          value: model.stickerRotationBinding(),
                          range: -180...180)
             ParameterRow(title: model.s.opacity,
+                         hint: model.s.sliderHint(.artOpacity),
                          value: model.stickerOpacityBinding(),
                          range: 0...100)
 
@@ -722,6 +816,7 @@ struct InspectorView: View {
                 }
 
                 ParameterRow(title: model.s.analysisWeight,
+                             hint: model.s.sliderHint(.analysisWeight),
                              value: model.analysisWeightBinding,
                              range: 60...240)
 
@@ -737,6 +832,7 @@ struct InspectorView: View {
                 }
 
                 ParameterRow(title: model.s.analysisStrength,
+                             hint: model.s.sliderHint(.analysisStrength),
                              value: model.analysisOpacityBinding,
                              range: 5...100)
 
@@ -1040,6 +1136,7 @@ private struct PanelRow<Content: View>: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle(dip: 0.99))
+            .help("\(panel.title) — \(panel.hint)")
 
             if isOpen {
                 VStack(alignment: .leading, spacing: 12) {
@@ -1098,6 +1195,12 @@ enum Panel: String, CaseIterable, Identifiable {
 
     var title: String {
         L10n.current.panelTitle(self)
+    }
+
+    /// One line for the hover hint. Panels that drive a tool already carry a
+    /// subtitle; Presets is the only one that needs its own.
+    var hint: String {
+        tool?.subtitle ?? L10n.current.presetsHint
     }
 
     /// The tool whose canvas behaviour this row drives, if any.
