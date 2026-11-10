@@ -284,6 +284,17 @@ class L10n {
         "This project was written by a newer version of the app (v\(Digits.num(version)))."
     }
     var projectRelinked: String { "Project opened and the photo's new location was saved." }
+    var recoveryStorageFailed: String {
+        "Recovery could not be updated. The unsaved work is not protected for the next launch."
+    }
+    func recoveryQuarantined(_ count: Int) -> String {
+        count == 1
+            ? "A damaged recovery copy was set aside instead of deleted."
+            : "\(Digits.num(count)) damaged recovery copies were set aside instead of deleted."
+    }
+    var recoveryCandidateNotRemoved: String {
+        "The recovered photo is saved, but its old recovery copy could not be removed."
+    }
 
     // Batch
     var batchExportMenu: String { "Batch Export…" }
@@ -779,6 +790,9 @@ class L10n {
     func recoveryMessage(_ name: String) -> String {
         "Retouch Studio found edits to \(name) that were never saved, left behind when the app closed unexpectedly."
     }
+    func recoveryChangedMessage(_ name: String) -> String {
+        "\(name) changed on disk after these edits were saved. Restoring applies the edits to the photo as it is now."
+    }
     var recoveryRestore: String { "Restore Edits" }
     var recoveryDiscard: String { "Discard" }
 
@@ -837,6 +851,9 @@ class L10n {
         case .projectOpenFailed: return projectOpenFailed
         case .projectTooNew(let version): return projectTooNew(version)
         case .projectRelinked: return projectRelinked
+        case .recoveryStorageFailed: return recoveryStorageFailed
+        case .recoveryQuarantined(let count): return recoveryQuarantined(count)
+        case .recoveryCandidateNotRemoved: return recoveryCandidateNotRemoved
         case .batchStarting: return batchStarting
         case .batchProgress(let index, let total): return batchProgress(index, total)
         case .batchFinished(let saved, let total, let skipped):

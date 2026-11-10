@@ -288,6 +288,17 @@ final class PersianL10n: L10n {
         "این پروژه با نسخهٔ تازه‌تری از برنامه (نسخهٔ \(Digits.num(version))) نوشته شده است."
     }
     override var projectRelinked: String { "پروژه باز شد و جای تازهٔ عکس ذخیره شد." }
+    override var recoveryStorageFailed: String {
+        "نسخهٔ بازیابی به‌روز نشد؛ کار ذخیره‌نشده برای اجرای بعدی محافظت نشده است."
+    }
+    override func recoveryQuarantined(_ count: Int) -> String {
+        count == 1
+            ? "یک نسخهٔ بازیابی آسیب‌دیده کنار گذاشته شد و پاک نشد."
+            : "\(Digits.num(count)) نسخهٔ بازیابی آسیب‌دیده کنار گذاشته شدند و پاک نشدند."
+    }
+    override var recoveryCandidateNotRemoved: String {
+        "عکس بازیابی‌شده ذخیره شد، اما نسخهٔ بازیابی قدیمی‌اش حذف نشد."
+    }
 
     // MARK: - Batch
 
@@ -795,6 +806,9 @@ final class PersianL10n: L10n {
     override var recoveryTitle: String { "کار ذخیره‌نشده باز شود؟" }
     override func recoveryMessage(_ name: String) -> String {
         "Retouch Studio ویرایش‌های ذخیره‌نشدهٔ \(name) را پیدا کرد؛ وقتی اپ غیرمنتظره بسته شد از باقی مانده بود."
+    }
+    override func recoveryChangedMessage(_ name: String) -> String {
+        "\(name) پس از ذخیرهٔ این ویرایش‌ها روی دیسک تغییر کرده است. بازیابی، ویرایش‌ها را روی عکس کنونی اعمال می‌کند."
     }
     override var recoveryRestore: String { "بازیابی ویرایش‌ها" }
     override var recoveryDiscard: String { "دور ریختن" }

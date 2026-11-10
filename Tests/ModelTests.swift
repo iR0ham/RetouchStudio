@@ -1909,67 +1909,67 @@ func hasStagingDirectory(in support: URL) -> Bool {
     return entries.contains { $0.lastPathComponent.hasPrefix(prefix) }
 }
 
-/// The production recovery copies' identity, captured before the suite starts
-/// and compared at the end. Reading them is safe; nothing here writes to them.
+/// Every entry under the production recovery tree, captured before the suite
+/// starts and compared at the end. Reading them is safe; nothing here writes.
 struct RecoveryFingerprint: Equatable {
-    struct File: Equatable {
-        let exists: Bool
+    struct Entry: Equatable {
+        let path: String
+        let isDirectory: Bool
         let size: Int?
         let modified: Date?
         let hash: String?
     }
 
-    let active: File
-    let pending: File
+    let rootExists: Bool
+    let entries: [Entry]
 
     static func capture(_ directory: URL) -> RecoveryFingerprint {
-        RecoveryFingerprint(active: capture(directory.appendingPathComponent("session.retouch")),
-                            pending: capture(directory.appendingPathComponent("pending.retouch")))
-    }
-
-    private static func capture(_ url: URL) -> File {
         let manager = FileManager.default
-        guard manager.fileExists(atPath: url.path) else {
-            return File(exists: false, size: nil, modified: nil, hash: nil)
+        guard manager.fileExists(atPath: directory.path),
+              let enumerator = manager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey,
+                                             .contentModificationDateKey],
+                options: []) else {
+            return RecoveryFingerprint(rootExists: false, entries: [])
         }
-        let attributes = try? manager.attributesOfItem(atPath: url.path)
-        return File(exists: true,
-                    size: (attributes?[.size] as? NSNumber)?.intValue,
-                    modified: attributes?[.modificationDate] as? Date,
-                    hash: try? AIRuntime.sha256(of: url))
+        var entries: [Entry] = []
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey,
+                                                           .contentModificationDateKey])
+            let isDirectory = values?.isDirectory ?? false
+            let relative = url.pathComponents
+                .dropFirst(directory.pathComponents.count)
+                .joined(separator: "/")
+            entries.append(Entry(path: relative,
+                                 isDirectory: isDirectory,
+                                 size: isDirectory ? nil : values?.fileSize,
+                                 modified: values?.contentModificationDate,
+                                 hash: isDirectory ? nil : (try? AIRuntime.sha256(of: url))))
+        }
+        return RecoveryFingerprint(rootExists: true,
+                                   entries: entries.sorted { $0.path < $1.path })
     }
 }
 
-/// The model debounces a recovery write by 1.5 s. A task from the previous
-/// test can otherwise land in the middle of this one, so wait past the
-/// debounce, then clear both scratch slots before installing a fixture.
+/// Invalidates a debounced write left behind by the previous test and clears
+/// the scratch store. The epoch check makes this deterministic: no sleep is
+/// needed before the next scenario installs fixtures.
 @MainActor
 func settleRecoveryWrites() async {
-    try? await Task.sleep(nanoseconds: 1_800_000_000)
     RecoveryStore.clearAll()
 }
 
+// MARK: - Recovery candidates
+//
+// The store keeps one mutable working slot and any number of immutable
+// candidates. These tests drive the real launch and restore paths and compare
+// the bytes on disk, so a regression that deletes or overwrites a candidate
+// fails here instead of only flipping a state flag.
+
 @MainActor
-func testRecoveryCancelPreservesData() async {
-    print("\n[M1-R] recovery survives cancel, Escape, close and a cancelled Locate")
-
-    await settleRecoveryWrites()
-
-    let settings = AppSettings.shared
-    let previousRecoverySetting = settings.recoveryEnabled
-    settings.recoveryEnabled = true
-    defer { settings.recoveryEnabled = previousRecoverySetting }
-
-    let source = workDir.appendingPathComponent("recovery-photo.png")
-    check(makeImage(width: 320, height: 400).map { writePNG($0, to: source) } ?? false,
-          "recovery fixture written")
-
-    let project = RetouchProject(imagePath: source.path,
-                                 adjustments: Adjustments(),
-                                 exportFormat: "png",
-                                 exportQuality: 0.92,
-                                 autoRetouchStrength: 70)
-    check(RecoveryStore.writeActive(project), "recovery copy written")
+func testRecoveryChoiceMapping() {
+    print("\n[M1-R0] Escape and Cancel never delete a recovery copy")
 
     // Escape and a closed alert both arrive as .abort. Only the explicit
     // third button may be destructive.
@@ -1985,138 +1985,6 @@ func testRecoveryCancelPreservesData() async {
           "the explicit Discard response is recognized")
     check(EditorModel.restoreChoice(for: .alertThirdButtonReturn) == .discard,
           "the explicit Discard response is recognized")
-
-    var prompts = 0
-    let cancelModel = EditorModel()
-    cancelModel.recoveryChoiceHandler = { _, _ in
-        prompts += 1
-        return .cancel
-    }
-    cancelModel.offerRecoveryIfNeeded()
-    check(RecoveryStore.readPending() != nil, "Cancel keeps recovery data")
-    check(RecoveryStore.readActive() == nil,
-          "Cancel moves the candidate out of the autosave slot")
-    check(prompts == 1, "recovery prompt shown once", "\(prompts)")
-    cancelModel.offerRecoveryIfNeeded()
-    check(prompts == 1, "recovery prompt does not repeat in one session", "\(prompts)")
-
-    RecoveryStore.clearAll()
-    let missing = workDir.appendingPathComponent("recovery-missing.png")
-    let relocated = workDir.appendingPathComponent("recovery-relocated.png")
-    check(makeImage(width: 320, height: 400).map { writePNG($0, to: relocated) } ?? false,
-          "relocated fixture written")
-    let missingProject = RetouchProject(imagePath: missing.path,
-                                        adjustments: Adjustments(),
-                                        exportFormat: "png",
-                                        exportQuality: 0.92,
-                                        autoRetouchStrength: 70)
-    check(RecoveryStore.writeActive(missingProject), "missing-photo recovery written")
-    var locatePrompts = 0
-    var restorePrompts = 0
-    let locateModel = EditorModel()
-    locateModel.recoveryChoiceHandler = { missingSource, _ in
-        if missingSource { locatePrompts += 1 } else { restorePrompts += 1 }
-        return missingSource ? .locate : .cancel
-    }
-    locateModel.recoveryLocateHandler = { _ in relocated }
-    locateModel.offerRecoveryIfNeeded()
-    check(RecoveryStore.readPending() != nil, "cancelled Locate keeps recovery data")
-    check(RecoveryStore.readPending()?.imagePath == missing.path,
-          "Locate then Cancel keeps the original recovery path")
-    check(locatePrompts == 1, "Locate prompt shown once", "\(locatePrompts)")
-    check(restorePrompts == 1, "a successful Locate is followed by the Restore prompt",
-          "\(restorePrompts)")
-
-    RecoveryStore.clearAll()
-    check(RecoveryStore.writeActive(project), "recovery copy rewritten for discard")
-    let discardModel = EditorModel()
-    discardModel.recoveryChoiceHandler = { _, _ in .discard }
-    discardModel.offerRecoveryIfNeeded()
-    check(RecoveryStore.readActive() == nil && RecoveryStore.readPending() == nil,
-          "explicit Discard deletes recovery data")
-}
-
-@MainActor
-func testRecoveryRestoresAfterSimulatedRelaunch() async {
-    print("\n[M1-R2] recovery survives a simulated relaunch and restores the document")
-
-    await settleRecoveryWrites()
-
-    let settings = AppSettings.shared
-    let previousRecoverySetting = settings.recoveryEnabled
-    settings.recoveryEnabled = true
-    defer { settings.recoveryEnabled = previousRecoverySetting }
-
-    let source = workDir.appendingPathComponent("relaunch-photo.png")
-    check(makeImage(width: 320, height: 400).map { writePNG($0, to: source) } ?? false,
-          "relaunch fixture written")
-    let project = RetouchProject(imagePath: source.path,
-                                 adjustments: Adjustments(),
-                                 exportFormat: "png",
-                                 exportQuality: 0.92,
-                                 autoRetouchStrength: 70)
-    check(RecoveryStore.writeActive(project), "recovery copy written")
-
-    // Simulated relaunch: a new model and a new session flag. This proves the
-    // file survives a terminated process; it is not a real crash test.
-    check(RecoveryStore.readActive() != nil, "recovery data survives the simulated termination")
-    let restored = EditorModel()
-    restored.recoveryChoiceHandler = { missingSource, _ in
-        missingSource ? .cancel : .restore
-    }
-    restored.offerRecoveryIfNeeded()
-    check(await waitUntil(60) { restored.hasImage && !restored.isBusy },
-          "document restored on the next launch")
-    check(restored.imageName == source.lastPathComponent,
-          "restored document keeps the photo name", restored.imageName)
-    check(restored.imageURL?.standardizedFileURL == source.standardizedFileURL,
-          "restored document keeps the photo URL")
-    check(await waitUntil(10) { RecoveryStore.readActive()?.imagePath == source.path },
-          "the restored document is written back to the active slot")
-    check(RecoveryStore.readPending() == nil,
-          "restoring the active copy never creates a pending copy")
-}
-
-@MainActor
-func testRecoveryLocatePathWaitsForRestore() async {
-    print("\n[M1-R3] a located path is recorded only after Restore")
-
-    await settleRecoveryWrites()
-
-    let settings = AppSettings.shared
-    let previousRecoverySetting = settings.recoveryEnabled
-    settings.recoveryEnabled = true
-    defer { settings.recoveryEnabled = previousRecoverySetting }
-
-    let missing = workDir.appendingPathComponent("locate-missing.png")
-    let actual = workDir.appendingPathComponent("locate-actual.png")
-    check(makeImage(width: 320, height: 400).map { writePNG($0, to: actual) } ?? false,
-          "located fixture written")
-
-    var adjustments = Adjustments()
-    adjustments.exposure = 0.4
-    let project = RetouchProject(imagePath: missing.path,
-                                 adjustments: adjustments,
-                                 exportFormat: "png",
-                                 exportQuality: 0.92,
-                                 autoRetouchStrength: 70)
-    check(RecoveryStore.writeActive(project), "missing-path recovery written")
-
-    var prompts: [Bool] = []
-    let model = EditorModel()
-    model.recoveryChoiceHandler = { missingSource, _ in
-        prompts.append(missingSource)
-        return missingSource ? .locate : .restore
-    }
-    model.recoveryLocateHandler = { _ in actual }
-    model.offerRecoveryIfNeeded()
-    check(prompts == [true, false], "Locate is followed by the Restore prompt")
-    check(RecoveryStore.readActive()?.imagePath == missing.path,
-          "the recovery path is untouched before the Restore answer")
-    check(await waitUntil(60) { model.hasImage && !model.isBusy },
-          "the located photo restores")
-    check(await waitUntil(10) { RecoveryStore.readActive()?.imagePath == actual.path },
-          "the active recovery path is updated after Restore")
 }
 
 func recoveryFixture(_ name: String, width: Int, height: Int) -> URL? {
@@ -2144,8 +2012,24 @@ func recoveryBytes(_ url: URL) -> Data? {
 }
 
 @MainActor
-func testPendingRecoverySurvivesSameImageAutosave() async {
-    print("\n[M1-R6/A] pending recovery survives reopening the same image")
+func stageRecoveryCandidate(for url: URL, exposure: Double = 0, contrast: Double = 0,
+                            crop: CGRect? = nil,
+                            orientation: DocumentOrientation? = nil,
+                            healSpots: [HealSpot]? = nil,
+                            savedAt: Date) -> URL? {
+    let project = recoveryProject(for: url, exposure: exposure, contrast: contrast,
+                                  crop: crop, orientation: orientation, healSpots: healSpots)
+    return RecoveryStore.saveCandidate(RecoverySnapshot.capture(project, savedAt: savedAt))
+}
+
+@MainActor
+func recoveryCandidates() -> [RecoveryStore.Candidate] {
+    RecoveryStore.loadCandidates().candidates
+}
+
+@MainActor
+func testRestoreLeavesSameImageCandidateIntact() async {
+    print("\n[M1-R1] restoring one candidate leaves another copy of the same photo intact")
 
     await settleRecoveryWrites()
 
@@ -2154,12 +2038,75 @@ func testPendingRecoverySurvivesSameImageAutosave() async {
     settings.recoveryEnabled = true
     defer { settings.recoveryEnabled = previousRecoverySetting }
 
-    guard let source = recoveryFixture("pending-same.png", width: 320, height: 400) else {
-        check(false, "same-image fixture written")
+    guard let source = recoveryFixture("c1-same.png", width: 320, height: 400) else {
+        check(false, "same-photo fixture written")
         return
     }
-    let project = recoveryProject(for: source, exposure: 0.42, contrast: 9)
-    check(RecoveryStore.writeActive(project), "same-image recovery written")
+    let base = Date().addingTimeInterval(-60)
+    guard let older = stageRecoveryCandidate(for: source, exposure: 0.2, savedAt: base),
+          let newer = stageRecoveryCandidate(for: source, exposure: 0.7,
+                                             savedAt: base.addingTimeInterval(1)) else {
+        check(false, "both same-photo candidates written")
+        return
+    }
+    guard let newerBefore = recoveryBytes(newer) else {
+        check(false, "newer candidate readable")
+        return
+    }
+
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in
+        prompts += 1
+        return prompts == 1 ? .restore : .cancel
+    }
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the older candidate restores")
+    check(model.adjustments.exposure == 0.2,
+          "the restored document carries the older candidate's edits")
+    check(!FileManager.default.fileExists(atPath: older.path),
+          "the restored candidate is resolved")
+    check(FileManager.default.fileExists(atPath: newer.path),
+          "the other candidate for the same photo still exists")
+    check(recoveryBytes(newer) == newerBefore,
+          "the other candidate is byte-identical after the restore")
+    check(RecoveryStore.readWorking()?.project.imagePath == source.path,
+          "the restored document is durable in the working slot")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.2,
+          "the working copy carries the restored edits")
+    check(await waitUntil(20) { prompts == 2 },
+          "the postponed candidate gets its own prompt", "\(prompts)")
+    check(recoveryCandidates().count == 1,
+          "the postponed candidate is still recoverable")
+}
+
+@MainActor
+func testCancelKeepsEveryCandidateWhileThirdDocumentEdits() async {
+    print("\n[M1-R2] Cancel preserves both candidates while a third document autosaves")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let first = recoveryFixture("h1-first.png", width: 320, height: 400),
+          let second = recoveryFixture("h1-second.png", width: 400, height: 320),
+          let third = recoveryFixture("h1-third.png", width: 360, height: 360) else {
+        check(false, "H1 fixtures written")
+        return
+    }
+    let base = Date().addingTimeInterval(-60)
+    guard let candidateA = stageRecoveryCandidate(for: first, exposure: 0.31, savedAt: base),
+          let candidateB = stageRecoveryCandidate(for: second, exposure: 0.62,
+                                                  savedAt: base.addingTimeInterval(1)),
+          let bytesA = recoveryBytes(candidateA),
+          let bytesB = recoveryBytes(candidateB) else {
+        check(false, "H1 candidates written")
+        return
+    }
 
     var prompts = 0
     let model = EditorModel()
@@ -2168,34 +2115,29 @@ func testPendingRecoverySurvivesSameImageAutosave() async {
         return .cancel
     }
     model.offerRecoveryIfNeeded()
-    check(prompts == 1, "the active candidate is offered at launch", "\(prompts)")
-    guard let pendingBefore = recoveryBytes(RecoveryStore.pendingURL) else {
-        check(false, "pending copy exists after Cancel")
-        return
-    }
-    check(RecoveryStore.readActive() == nil,
-          "Cancel empties the autosave slot for the same photo")
+    check(prompts == 1, "Cancel answers the oldest candidate and postpones the rest")
 
-    model.requestLoad(url: source)
+    model.requestLoad(url: third)
     check(await waitUntil(60) { model.hasImage && !model.isBusy },
-          "the same photo reloads")
-    model.adjustments.exposure = 0.77
-    check(await waitUntil(10) { RecoveryStore.readActive() != nil },
-          "an autosave writes only the active slot")
-    check(recoveryBytes(RecoveryStore.pendingURL) == pendingBefore,
-          "the pending copy is byte-identical after an autosave")
-
-    model.undo()
-    check(await waitUntil(10) { !model.isBusy }, "undo finishes its re-read")
-    check(await waitUntil(5) { RecoveryStore.readActive() == nil },
-          "returning to clean clears only the active slot")
-    check(recoveryBytes(RecoveryStore.pendingURL) == pendingBefore,
-          "the pending copy survives the clean-state clear")
+          "the third photo loads while two candidates wait")
+    model.adjustments.exposure = 0.93
+    model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.imagePath == third.path,
+          "the third document autosaves into the working slot")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.93,
+          "the working slot holds the third document")
+    check(recoveryBytes(candidateA) == bytesA,
+          "the first candidate is byte-identical after the new autosave")
+    check(recoveryBytes(candidateB) == bytesB,
+          "the second candidate is byte-identical after the new autosave")
+    check(recoveryCandidates().count == 2,
+          "both postponed candidates are still recoverable")
+    check(prompts == 1, "the postponed pass did not run again in this session")
 }
 
 @MainActor
-func testPendingRecoverySurvivesOtherImageAutosave() async {
-    print("\n[M1-R6/B] pending recovery survives editing a different image")
+func testMissingSourceCancelKeepsCandidate() async {
+    print("\n[M1-R3] Cancel preserves a candidate whose photo is missing")
 
     await settleRecoveryWrites()
 
@@ -2204,40 +2146,86 @@ func testPendingRecoverySurvivesOtherImageAutosave() async {
     settings.recoveryEnabled = true
     defer { settings.recoveryEnabled = previousRecoverySetting }
 
-    guard let source = recoveryFixture("pending-original.png", width: 320, height: 400),
-          let other = recoveryFixture("pending-other.png", width: 400, height: 320) else {
-        check(false, "other-image fixtures written")
+    let missing = workDir.appendingPathComponent("h2-missing.png")
+    guard let candidate = stageRecoveryCandidate(for: missing, exposure: 0.44,
+                                                 savedAt: Date().addingTimeInterval(-30)),
+          let before = recoveryBytes(candidate) else {
+        check(false, "missing-source candidate written")
         return
     }
-    let project = recoveryProject(for: source, exposure: 0.31)
-    check(RecoveryStore.writeActive(project), "other-image recovery written")
 
+    var prompts: [Bool] = []
     let model = EditorModel()
-    model.recoveryChoiceHandler = { _, _ in .cancel }
+    model.recoveryChoiceHandler = { missingSource, _ in
+        prompts.append(missingSource)
+        return .cancel
+    }
     model.offerRecoveryIfNeeded()
-    guard let pendingBefore = recoveryBytes(RecoveryStore.pendingURL) else {
-        check(false, "pending copy exists after Cancel")
+    check(prompts == [true], "a missing source asks before anything is applied")
+    check(recoveryBytes(candidate) == before,
+          "Cancel keeps the candidate byte-identical")
+    check(!model.hasImage, "nothing was loaded")
+    check(RecoveryStore.readWorking() == nil,
+          "nothing was written to the working slot")
+}
+
+@MainActor
+func testMovedSourceLocateThenRestore() async {
+    print("\n[M1-R4] a located photo restores only after the Restore answer")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let missing = workDir.appendingPathComponent("h2-moved-away.png")
+    guard let actual = recoveryFixture("h2-moved-here.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(for: missing, exposure: 0.35,
+                                                 savedAt: Date().addingTimeInterval(-30)),
+          let before = recoveryBytes(candidate) else {
+        check(false, "moved-source fixtures written")
         return
     }
 
-    model.requestLoad(url: other)
+    var prompts: [Bool] = []
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { missingSource, _ in
+        prompts.append(missingSource)
+        return missingSource ? .locate : .restore
+    }
+    model.recoveryLocateHandler = { _ in actual }
+    model.offerRecoveryIfNeeded()
+    check(prompts == [true, false], "Locate is followed by the Restore prompt")
+    check(recoveryBytes(candidate) == before,
+          "the candidate is untouched before the Restore answer")
     check(await waitUntil(60) { model.hasImage && !model.isBusy },
-          "a different photo loads")
-    model.adjustments.contrast = 11
-    check(await waitUntil(10) {
-        RecoveryStore.readActive()?.imagePath == other.path
-    }, "the new document autosaves into the active slot")
-    check(RecoveryStore.readActive()?.adjustments.contrast == 11,
-          "the active slot holds the new document")
-    check(RecoveryStore.readPending()?.imagePath == source.path,
-          "the pending copy still names the original photo")
-    check(recoveryBytes(RecoveryStore.pendingURL) == pendingBefore,
-          "the pending copy is byte-identical after the new autosave")
+          "the located photo restores")
+    check(model.imageURL?.standardizedFileURL == actual.standardizedFileURL,
+          "the located path is on screen")
+    check(await waitUntil(10) { RecoveryStore.readWorking()?.project.imagePath == actual.path },
+          "the working copy records the located path")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.35,
+          "the edits survive the move")
+    check(!FileManager.default.fileExists(atPath: candidate.path),
+          "the candidate is resolved after the restore")
+
+    // The next launch must treat the located path as the photo's identity.
+    RecoveryStore.invalidatePendingAutosaves()
+    let relaunched = EditorModel()
+    var relaunchPrompts = 0
+    relaunched.recoveryChoiceHandler = { _, _ in relaunchPrompts += 1; return .cancel }
+    relaunched.offerRecoveryIfNeeded()
+    check(relaunchPrompts == 1,
+          "the restored document is offered again from its working copy", "\(relaunchPrompts)")
+    check(recoveryCandidates().first?.snapshot.project.imagePath == actual.path,
+          "the durable copy points at the located photo")
 }
 
 @MainActor
-func testDiscardingPendingLeavesActiveUntouched() async {
-    print("\n[M1-R6/C] Discard removes pending recovery and leaves the active copy")
+func testRestoreTwoDifferentDocuments() async {
+    print("\n[M1-R5] restoring a second document preserves the first one")
 
     await settleRecoveryWrites()
 
@@ -2246,111 +2234,74 @@ func testDiscardingPendingLeavesActiveUntouched() async {
     settings.recoveryEnabled = true
     defer { settings.recoveryEnabled = previousRecoverySetting }
 
-    guard let a = recoveryFixture("discard-a.png", width: 320, height: 400),
-          let b = recoveryFixture("discard-b.png", width: 400, height: 320) else {
-        check(false, "discard fixtures written")
+    guard let first = recoveryFixture("h3-first.png", width: 320, height: 400),
+          let second = recoveryFixture("h3-second.png", width: 400, height: 320) else {
+        check(false, "H3 fixtures written")
         return
     }
-
-    // Pending only: Discard resolves it and nothing else.
-    check(RecoveryStore.writeActive(recoveryProject(for: a, exposure: 0.11)),
-          "pending-only fixture written")
-    check(RecoveryStore.preserveActiveAsPending(), "pending-only fixture promoted")
-    let pendingOnly = EditorModel()
-    pendingOnly.recoveryChoiceHandler = { _, _ in .discard }
-    pendingOnly.offerRecoveryIfNeeded()
-    check(RecoveryStore.readPending() == nil && RecoveryStore.readActive() == nil,
-          "Discard removes the pending snapshot")
-
-    // Pending plus an older active copy: discarding pending must not delete
-    // the active content, which is then offered and postponed.
-    check(RecoveryStore.writeActive(recoveryProject(for: a, exposure: 0.22)),
-          "second pending fixture written")
-    check(RecoveryStore.preserveActiveAsPending(), "second pending fixture promoted")
-    check(RecoveryStore.writeActive(recoveryProject(for: b, exposure: 0.66)),
-          "active candidate written")
-    guard let activeBefore = recoveryBytes(RecoveryStore.activeURL) else {
-        check(false, "active candidate readable")
+    let base = Date().addingTimeInterval(-60)
+    guard let candidateA = stageRecoveryCandidate(for: first, exposure: 0.2, savedAt: base),
+          let candidateB = stageRecoveryCandidate(for: second, exposure: 0.8,
+                                                  savedAt: base.addingTimeInterval(1)) else {
+        check(false, "H3 candidates written")
         return
     }
-
-    var prompts: [String] = []
-    let both = EditorModel()
-    both.recoveryChoiceHandler = { _, name in
-        prompts.append(name ?? "")
-        return prompts.count == 1 ? .discard : .cancel
-    }
-    both.offerRecoveryIfNeeded()
-    check(prompts == [a.lastPathComponent, b.lastPathComponent],
-          "pending is discarded before the active copy is offered", "\(prompts)")
-    check(RecoveryStore.readPending()?.imagePath == b.path,
-          "the active candidate is preserved after its own Cancel")
-    check(recoveryBytes(RecoveryStore.pendingURL) == activeBefore,
-          "the preserved active candidate is byte-identical")
-}
-
-@MainActor
-func testPendingRestoreRebuildsDocumentState() async {
-    print("\n[M1-R6/D] Restore rebuilds the pending document's full state")
-
-    await settleRecoveryWrites()
-
-    let settings = AppSettings.shared
-    let previousRecoverySetting = settings.recoveryEnabled
-    settings.recoveryEnabled = true
-    defer { settings.recoveryEnabled = previousRecoverySetting }
-
-    guard let source = recoveryFixture("pending-restore.png", width: 320, height: 400) else {
-        check(false, "restore fixture written")
-        return
-    }
-    let crop = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
-    let orientation = DocumentOrientation(quarterTurns: 1, flipped: false, angle: 0)
-    let spot = HealSpot(center: CGPoint(x: 0.3, y: 0.6), radius: 0.05)
-    let project = recoveryProject(for: source, exposure: 0.37, contrast: 14,
-                                  crop: crop, orientation: orientation,
-                                  healSpots: [spot])
-    check(RecoveryStore.writeActive(project), "restore fixture written")
-
-    let cancelled = EditorModel()
-    cancelled.recoveryChoiceHandler = { _, _ in .cancel }
-    cancelled.offerRecoveryIfNeeded()
-    check(RecoveryStore.readPending() != nil, "Cancel leaves the snapshot pending")
 
     var prompts = 0
-    let restored = EditorModel()
-    restored.recoveryChoiceHandler = { _, _ in
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in
         prompts += 1
-        return .restore
+        if prompts == 1 { return .restore }
+        if prompts == 2 { return .restore }
+        return .cancel
     }
-    restored.offerRecoveryIfNeeded()
-    check(await waitUntil(60) { restored.hasImage && !restored.isBusy },
-          "pending document restores")
-    check(prompts == 1, "only the pending prompt was needed", "\(prompts)")
-    check(restored.imageURL?.standardizedFileURL == source.standardizedFileURL,
-          "the original source path is restored")
-    check(restored.adjustments == project.adjustments,
-          "the editing settings are restored")
-    check(restored.appliedCrop == crop, "the crop is restored")
-    check(restored.documentOrientation == orientation, "the orientation is restored")
-    check(restored.healSpots == [spot], "the healing stamps are restored")
-    check(restored.autoRetouchStrength == 63 && restored.exportQuality == 0.81
-            && restored.exportFormat == .png,
-          "export and auto settings are restored")
-    check(restored.workingPixelSize == CGSize(width: 200, height: 160),
-          "the restored pixels use the stored crop and turn",
-          "\(restored.workingPixelSize.width)×\(restored.workingPixelSize.height)")
-    check(RecoveryStore.readPending() == nil,
-          "a successful restore resolves the pending snapshot")
-    check(await waitUntil(10) { RecoveryStore.readActive()?.imagePath == source.path },
-          "the restored document is protected in the active slot")
-    check(RecoveryStore.readActive()?.adjustments == project.adjustments,
-          "the active copy carries the restored settings")
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) {
+        model.hasImage && model.imageURL?.standardizedFileURL == second.standardizedFileURL
+            && !model.isBusy
+    }, "the second document restores over the first")
+    check(await waitUntil(20) { prompts >= 2 }, "both documents were offered", "\(prompts)")
+    check(model.adjustments.exposure == 0.8, "the second document is on screen")
+    check(await waitUntil(10) { RecoveryStore.readWorking()?.project.imagePath == second.path },
+          "the second document is durable in the working slot")
+    check(!FileManager.default.fileExists(atPath: candidateB.path),
+          "the restored second candidate is resolved")
+
+    let preserved = recoveryCandidates().filter {
+        $0.snapshot.project.imagePath == first.path
+    }
+    check(preserved.count == 1,
+          "the first restored document was preserved before being replaced",
+          "\(preserved.count)")
+    check(preserved.first?.snapshot.project.adjustments.exposure == 0.2,
+          "the preserved copy carries the first document's edits")
+
+    // A relaunch still sees two complete documents: one in the working slot,
+    // one preserved as a candidate. Whichever is offered first, restoring it
+    // must leave the other recoverable.
+    RecoveryStore.invalidatePendingAutosaves()
+    let relaunched = EditorModel()
+    var relaunchPrompts = 0
+    relaunched.recoveryChoiceHandler = { _, _ in
+        relaunchPrompts += 1
+        return relaunchPrompts == 1 ? .restore : .cancel
+    }
+    relaunched.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { relaunched.hasImage && !relaunched.isBusy },
+          "one of the two documents restores on the next launch")
+    let restoredPath = relaunched.imageURL?.standardizedFileURL
+    check(restoredPath == first.standardizedFileURL || restoredPath == second.standardizedFileURL,
+          "the restored document is one of the two")
+    check(await waitUntil(20) { relaunchPrompts == 2 },
+          "the other document is offered separately", "\(relaunchPrompts)")
+    let otherPath = restoredPath == first.standardizedFileURL ? second.path : first.path
+    check(recoveryCandidates().contains { $0.snapshot.project.imagePath == otherPath },
+          "the other document is still recoverable after the restore")
 }
 
 @MainActor
-func testPendingIsOfferedBeforeActive() async {
-    print("\n[M1-R6/E] pending recovery is offered first and active survives")
+func testFailedPreservationKeepsLiveDocument() async {
+    print("\n[M1-R16] a restore that cannot preserve the live document leaves it in place")
 
     await settleRecoveryWrites()
 
@@ -2359,85 +2310,464 @@ func testPendingIsOfferedBeforeActive() async {
     settings.recoveryEnabled = true
     defer { settings.recoveryEnabled = previousRecoverySetting }
 
-    guard let a = recoveryFixture("order-pending.png", width: 320, height: 400),
-          let b = recoveryFixture("order-active.png", width: 400, height: 320) else {
-        check(false, "ordering fixtures written")
+    guard let first = recoveryFixture("preserve-live-first.png", width: 320, height: 400),
+          let second = recoveryFixture("preserve-live-second.png", width: 400, height: 320) else {
+        check(false, "preservation fixtures written")
         return
     }
-    check(RecoveryStore.writeActive(recoveryProject(for: a, exposure: 0.2)),
-          "pending candidate written")
-    check(RecoveryStore.preserveActiveAsPending(), "pending candidate preserved")
-    check(RecoveryStore.writeActive(recoveryProject(for: b, exposure: 0.6)),
-          "active candidate written")
-
-    var offered: [String] = []
-    let model = EditorModel()
-    model.recoveryChoiceHandler = { _, name in
-        offered.append(name ?? "")
-        return offered.count == 1 ? .restore : .cancel
+    let base = Date().addingTimeInterval(-60)
+    guard let candidateA = stageRecoveryCandidate(for: first, exposure: 0.21, savedAt: base),
+          let candidateB = stageRecoveryCandidate(for: second, exposure: 0.42,
+                                                  savedAt: base.addingTimeInterval(1)),
+          let bytesB = recoveryBytes(candidateB) else {
+        check(false, "preservation candidates written")
+        return
     }
+
+    // The live copy cannot be set aside, so replacing it would lose it.
+    RecoveryStore.injectedFailures = [.candidateWrite]
+    defer { RecoveryStore.injectedFailures = [] }
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .restore }
     model.offerRecoveryIfNeeded()
     check(await waitUntil(60) { model.hasImage && !model.isBusy },
-          "the pending document restores")
-    check(await waitUntil(20) { offered.count == 2 },
-          "the older active candidate is offered separately", "\(offered)")
-    check(offered.first == a.lastPathComponent,
-          "pending is offered before active", "\(offered)")
-    check(model.imageURL?.standardizedFileURL == a.standardizedFileURL,
-          "the pending document is the one on screen")
-    check(model.adjustments.exposure == 0.2, "the pending settings are on screen")
-    check(await waitUntil(10) { RecoveryStore.readPending()?.imagePath == b.path },
-          "the older active candidate survives the pending decision")
-    check(RecoveryStore.readPending()?.adjustments.exposure == 0.6,
-          "the surviving candidate is the older active document")
-    check(await waitUntil(10) { RecoveryStore.readActive()?.imagePath == a.path },
-          "the restored pending document is protected in the active slot")
+          "the first candidate restores")
+    check(await waitUntil(20) { prompts == 2 },
+          "the second candidate is offered", "\(prompts)")
+    check(model.imageURL?.standardizedFileURL == first.standardizedFileURL,
+          "the live document is still on screen")
+    check(model.adjustments.exposure == 0.21,
+          "the live document's edits are intact")
+    check(model.statusToken == .recoveryStorageFailed,
+          "the failed preservation is reported")
+    check(recoveryBytes(candidateB) == bytesB,
+          "the unresolvable candidate is byte-identical")
+    check(!FileManager.default.fileExists(atPath: candidateA.path),
+          "the candidate that was already restored is resolved")
+    check(RecoveryStore.readWorking()?.project.imagePath == first.path,
+          "the live document stays durable in the working slot")
+
+    // The next launch must offer both documents again.
+    RecoveryStore.injectedFailures = []
+    RecoveryStore.invalidatePendingAutosaves()
+    let relaunched = EditorModel()
+    var relaunchPrompts = 0
+    relaunched.recoveryChoiceHandler = { _, _ in relaunchPrompts += 1; return .cancel }
+    relaunched.offerRecoveryIfNeeded()
+    check(relaunchPrompts == 1, "the preserved live copy is offered again",
+          "\(relaunchPrompts)")
+    check(recoveryCandidates().count == 2,
+          "both documents are recoverable on the next launch")
 }
 
 @MainActor
-func testRecoveryPreferenceDoesNotDeletePending() async {
-    print("\n[M1-R6/F] disabling recovery preserves pending recovery")
+func testCrashBeforeRestoredSnapshotWrite() async {
+    print("\n[M1-R6] a failed durable write keeps the candidate for the next launch")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let source = recoveryFixture("crash-before-write.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(for: source, exposure: 0.5,
+                                                 savedAt: Date().addingTimeInterval(-30)),
+          let before = recoveryBytes(candidate) else {
+        check(false, "crash-before-write fixture written")
+        return
+    }
+
+    RecoveryStore.injectedFailures = [.workingWrite]
+    defer { RecoveryStore.injectedFailures = [] }
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .restore }
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the pixels still load")
+    check(model.statusToken == .recoveryStorageFailed,
+          "the failed durable write is reported")
+    check(FileManager.default.fileExists(atPath: candidate.path),
+          "the candidate survives a crash before persistence")
+    check(recoveryBytes(candidate) == before,
+          "the candidate is byte-identical")
+    check(RecoveryStore.readWorking() == nil,
+          "no working copy pretends the restored document is durable")
+    check(prompts == 1, "the failed restore does not repeat the prompt")
+
+    RecoveryStore.injectedFailures = []
+    RecoveryStore.invalidatePendingAutosaves()
+    let relaunched = EditorModel()
+    relaunched.recoveryChoiceHandler = { _, _ in .restore }
+    relaunched.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { relaunched.hasImage && !relaunched.isBusy },
+          "the preserved candidate restores on the next launch")
+    check(await waitUntil(10) {
+        RecoveryStore.readWorking()?.project.adjustments.exposure == 0.5
+    }, "the restore is durable this time")
+    check(recoveryCandidates().isEmpty, "the candidate is resolved after the verified write")
+}
+
+@MainActor
+func testCrashAfterWorkingWriteBeforeCandidateDelete() async {
+    print("\n[M1-R7] a failed candidate delete leaves two complete copies")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let source = recoveryFixture("crash-after-write.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(for: source, exposure: 0.52,
+                                                 savedAt: Date().addingTimeInterval(-30)) else {
+        check(false, "crash-after-write fixture written")
+        return
+    }
+
+    RecoveryStore.injectedFailures = [.candidateRemove]
+    defer { RecoveryStore.injectedFailures = [] }
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .restore }
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the restored pixels load")
+    check(await waitUntil(10) {
+        RecoveryStore.readWorking()?.project.adjustments.exposure == 0.52
+    }, "the restored document is durable before the delete")
+    check(model.statusToken == .recoveryCandidateNotRemoved,
+          "the failed delete is reported")
+    check(FileManager.default.fileExists(atPath: candidate.path),
+          "the old candidate remains after the failed delete")
+    check(prompts == 1, "the failed delete does not loop the prompt")
+
+    RecoveryStore.injectedFailures = []
+    RecoveryStore.invalidatePendingAutosaves()
+    let relaunched = EditorModel()
+    var relaunchPrompts = 0
+    relaunched.recoveryChoiceHandler = { _, _ in relaunchPrompts += 1; return .cancel }
+    relaunched.offerRecoveryIfNeeded()
+    let listing = recoveryCandidates()
+    check(listing.count == 2,
+          "the working copy and the candidate both survive the crash",
+          "\(listing.count)")
+    check(listing.allSatisfy { $0.snapshot.project.adjustments.exposure == 0.52 },
+          "both copies describe the same restored document")
+    check(RecoveryStore.readWorking() == nil,
+          "the working copy was lifted into the candidate list")
+    check(relaunchPrompts == 1, "the relaunch asks once and Cancel postpones the rest")
+}
+
+@MainActor
+func testFailedPromotionKeepsRecoveryCopy() async {
+    print("\n[M1-R8] a failed promotion leaves every copy where it was")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let first = recoveryFixture("promote-first.png", width: 320, height: 400),
+          let second = recoveryFixture("promote-second.png", width: 400, height: 320) else {
+        check(false, "promotion fixtures written")
+        return
+    }
+
+    // A legacy session file that cannot be renamed must stay exactly where it
+    // is, byte-identical, and be retried on the next launch.
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let legacy = recoveryProject(for: first, exposure: 0.61)
+    guard let legacyData = try? encoder.encode(legacy) else {
+        check(false, "legacy project encoded")
+        return
+    }
+    try? FileManager.default.createDirectory(at: RecoveryStore.directory,
+                                             withIntermediateDirectories: true)
+    check((try? legacyData.write(to: RecoveryStore.legacyActiveURL)) != nil,
+          "a legacy active copy is staged")
+
+    RecoveryStore.injectedFailures = [.migrate]
+    defer { RecoveryStore.injectedFailures = [] }
+    var prompts = 0
+    let blocked = EditorModel()
+    blocked.recoveryChoiceHandler = { _, _ in prompts += 1; return .cancel }
+    blocked.offerRecoveryIfNeeded()
+    check(prompts == 0, "nothing is offered while its file is still in the legacy slot")
+    check(blocked.statusToken == .recoveryStorageFailed,
+          "the failed promotion is reported")
+    check(recoveryBytes(RecoveryStore.legacyActiveURL) == legacyData,
+          "the legacy copy is byte-identical")
+    check(recoveryCandidates().isEmpty, "nothing was written as a candidate")
+
+    RecoveryStore.injectedFailures = []
+    RecoveryStore.invalidatePendingAutosaves()
+    let migrated = EditorModel()
+    var migratedPrompts = 0
+    migrated.recoveryChoiceHandler = { _, _ in migratedPrompts += 1; return .cancel }
+    migrated.offerRecoveryIfNeeded()
+    check(migratedPrompts == 1, "the next launch migrates and offers it", "\(migratedPrompts)")
+    check(!FileManager.default.fileExists(atPath: RecoveryStore.legacyActiveURL.path),
+          "the legacy file has moved")
+    check(recoveryCandidates().first?.snapshot.project.adjustments.exposure == 0.61,
+          "the migrated candidate carries the edits")
+
+    // A working copy that cannot be promoted must not be overwritten by the
+    // next document's autosave.
+    await settleRecoveryWrites()
+    let staged = RecoverySnapshot.capture(recoveryProject(for: first, exposure: 0.77),
+                                          savedAt: Date().addingTimeInterval(-30))
+    check(RecoveryStore.writeWorking(staged), "an unresolved working copy is staged")
+    RecoveryStore.injectedFailures = [.migrate]
+    var lockedPrompts = 0
+    let locked = EditorModel()
+    locked.recoveryChoiceHandler = { _, _ in lockedPrompts += 1; return .cancel }
+    locked.offerRecoveryIfNeeded()
+    check(lockedPrompts == 0, "the locked working copy is not offered")
+    check(locked.statusToken == .recoveryStorageFailed,
+          "the failed working promotion is reported")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.77,
+          "the unresolved working copy is still in its slot")
+    locked.load(url: first)
+    check(await waitUntil(60) { locked.hasImage && !locked.isBusy },
+          "another photo loads while the slot is locked")
+    locked.adjustments.exposure = 0.05
+    locked.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.77,
+          "autosave cannot overwrite a working copy that could not be promoted")
+    check(!RecoveryStore.removeWorking(),
+          "a confirmed open cannot delete a working copy that could not be promoted")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.77,
+          "the unresolved copy survives the refused removal")
+
+    RecoveryStore.injectedFailures = []
+    RecoveryStore.invalidatePendingAutosaves()
+    let recovered = EditorModel()
+    var recoveredPrompts = 0
+    recovered.recoveryChoiceHandler = { _, _ in recoveredPrompts += 1; return .cancel }
+    recovered.offerRecoveryIfNeeded()
+    check(recoveredPrompts == 1, "the next launch promotes and offers the copy",
+          "\(recoveredPrompts)")
+    check(RecoveryStore.readWorking() == nil, "the working slot is empty after promotion")
+
+    // Legacy pending is offered before legacy active, and a damaged legacy
+    // file is quarantined instead of blocking the valid one.
+    await settleRecoveryWrites()
+    try? FileManager.default.createDirectory(at: RecoveryStore.directory,
+                                             withIntermediateDirectories: true)
+    guard let pendingData = try? encoder.encode(recoveryProject(for: first, exposure: 0.11)),
+          let activeData = try? encoder.encode(recoveryProject(for: second, exposure: 0.22)) else {
+        check(false, "legacy order projects encoded")
+        return
+    }
+    check((try? pendingData.write(to: RecoveryStore.legacyPendingURL)) != nil,
+          "a legacy pending copy is staged")
+    check((try? activeData.write(to: RecoveryStore.legacyActiveURL)) != nil,
+          "a legacy active copy is staged")
+    var order: [String] = []
+    let ordered = EditorModel()
+    ordered.recoveryChoiceHandler = { _, name in
+        order.append(name ?? "")
+        return .cancel
+    }
+    ordered.offerRecoveryIfNeeded()
+    check(order == [first.lastPathComponent],
+          "the postponed legacy copy is offered first", "\(order)")
+    check(recoveryCandidates().count == 2, "both legacy copies were migrated")
+    check(!FileManager.default.fileExists(atPath: RecoveryStore.legacyPendingURL.path)
+            && !FileManager.default.fileExists(atPath: RecoveryStore.legacyActiveURL.path),
+          "the legacy slots are empty after migration")
+
+    await settleRecoveryWrites()
+    try? FileManager.default.createDirectory(at: RecoveryStore.directory,
+                                             withIntermediateDirectories: true)
+    check((try? Data("broken legacy".utf8).write(to: RecoveryStore.legacyPendingURL)) != nil,
+          "a damaged legacy copy is staged")
+    check((try? activeData.write(to: RecoveryStore.legacyActiveURL)) != nil,
+          "a valid legacy copy is staged next to it")
+    var legacyPrompts = 0
+    let damaged = EditorModel()
+    damaged.recoveryChoiceHandler = { _, _ in legacyPrompts += 1; return .cancel }
+    damaged.offerRecoveryIfNeeded()
+    check(legacyPrompts == 1, "the valid legacy copy is still offered")
+    check(damaged.statusToken == .recoveryQuarantined(1),
+          "the damaged legacy copy is reported as quarantined")
+    check(recoveryCandidates().count == 1, "the valid legacy copy migrated")
+}
+
+@MainActor
+func testFailedCandidateDeleteOnDiscard() async {
+    print("\n[M1-R9] a failed Discard leaves the candidate recoverable")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let source = recoveryFixture("discard-failure.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(for: source, exposure: 0.4,
+                                                 savedAt: Date().addingTimeInterval(-30)),
+          let before = recoveryBytes(candidate) else {
+        check(false, "discard-failure fixture written")
+        return
+    }
+
+    RecoveryStore.injectedFailures = [.candidateRemove]
+    defer { RecoveryStore.injectedFailures = [] }
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .discard }
+    model.offerRecoveryIfNeeded()
+    check(prompts == 1, "the prompt is not repeated after a failed delete")
+    check(FileManager.default.fileExists(atPath: candidate.path),
+          "the candidate survives a failed Discard")
+    check(recoveryBytes(candidate) == before, "the candidate is byte-identical")
+    check(model.statusToken == .recoveryCandidateNotRemoved,
+          "the failed delete is reported")
+
+    RecoveryStore.injectedFailures = []
+    RecoveryStore.invalidatePendingAutosaves()
+    var retryPrompts = 0
+    let retry = EditorModel()
+    retry.recoveryChoiceHandler = { _, _ in retryPrompts += 1; return .discard }
+    retry.offerRecoveryIfNeeded()
+    check(!FileManager.default.fileExists(atPath: candidate.path),
+          "the next launch can discard it")
+    check(retryPrompts == 1, "the retry asks once", "\(retryPrompts)")
+}
+
+@MainActor
+func testSeveralLaunchesKeepSeveralCandidates() async {
+    print("\n[M1-R10] several launches keep every unresolved candidate")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let first = recoveryFixture("launch-first.png", width: 320, height: 400),
+          let second = recoveryFixture("launch-second.png", width: 400, height: 320),
+          let third = recoveryFixture("launch-third.png", width: 360, height: 360) else {
+        check(false, "launch fixtures written")
+        return
+    }
+    let base = Date().addingTimeInterval(-60)
+    guard let candidateA = stageRecoveryCandidate(for: first, exposure: 0.1, savedAt: base),
+          let candidateB = stageRecoveryCandidate(for: second, exposure: 0.2,
+                                                  savedAt: base.addingTimeInterval(1)),
+          let candidateC = stageRecoveryCandidate(for: third, exposure: 0.3,
+                                                  savedAt: base.addingTimeInterval(2)),
+          let bytesA = recoveryBytes(candidateA),
+          let bytesB = recoveryBytes(candidateB),
+          let bytesC = recoveryBytes(candidateC) else {
+        check(false, "launch candidates written")
+        return
+    }
+
+    var prompts = 0
+    for _ in 0..<2 {
+        let model = EditorModel()
+        model.recoveryChoiceHandler = { _, _ in prompts += 1; return .cancel }
+        model.offerRecoveryIfNeeded()
+        check(recoveryCandidates().count == 3,
+              "a launch leaves all three candidates on disk")
+    }
+    check(prompts == 2, "each launch offers only the oldest copy", "\(prompts)")
+    check(recoveryBytes(candidateA) == bytesA
+            && recoveryBytes(candidateB) == bytesB
+            && recoveryBytes(candidateC) == bytesC,
+          "two Cancels leave all three candidates byte-identical")
+
+    let resolving = EditorModel()
+    var decisions: [String] = []
+    resolving.recoveryChoiceHandler = { _, name in
+        decisions.append(name ?? "")
+        return decisions.count == 1 ? .restore : .cancel
+    }
+    resolving.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { resolving.hasImage && !resolving.isBusy },
+          "the oldest document restores on a later launch")
+    check(decisions.first == first.lastPathComponent,
+          "the oldest candidate is the one restored", "\(decisions)")
+    check(resolving.adjustments.exposure == 0.1, "its own edits are on screen")
+    check(await waitUntil(20) { decisions.count == 2 },
+          "the next candidate gets its own prompt", "\(decisions.count)")
+    check(recoveryCandidates().count == 2,
+          "the two unresolved candidates remain")
+    check(recoveryBytes(candidateB) == bytesB && recoveryBytes(candidateC) == bytesC,
+          "the remaining candidates are byte-identical")
+}
+
+@MainActor
+func testRecoveryPreferenceKeepsCandidates() async {
+    print("\n[M1-R11] disabling recovery preserves every candidate and the working copy")
 
     await settleRecoveryWrites()
 
     let settings = AppSettings.shared
     let previousRecoverySetting = settings.recoveryEnabled
     defer { settings.recoveryEnabled = previousRecoverySetting }
+    settings.recoveryEnabled = true
 
-    guard let source = recoveryFixture("preference-pending.png", width: 320, height: 400) else {
-        check(false, "preference fixture written")
+    guard let first = recoveryFixture("pref-first.png", width: 320, height: 400),
+          let second = recoveryFixture("pref-second.png", width: 400, height: 320) else {
+        check(false, "preference fixtures written")
         return
     }
-    check(RecoveryStore.writeActive(recoveryProject(for: source, exposure: 0.28)),
-          "preference recovery written")
-    check(RecoveryStore.preserveActiveAsPending(), "preference recovery promoted")
-    guard let pendingBefore = recoveryBytes(RecoveryStore.pendingURL) else {
-        check(false, "pending fixture readable")
+    let base = Date().addingTimeInterval(-60)
+    guard let candidateA = stageRecoveryCandidate(for: first, exposure: 0.12, savedAt: base),
+          let candidateB = stageRecoveryCandidate(for: second, exposure: 0.24,
+                                                  savedAt: base.addingTimeInterval(1)),
+          let bytesA = recoveryBytes(candidateA),
+          let bytesB = recoveryBytes(candidateB) else {
+        check(false, "preference candidates written")
         return
     }
+    let working = RecoverySnapshot.capture(recoveryProject(for: first, exposure: 0.36),
+                                           savedAt: base.addingTimeInterval(2))
+    check(RecoveryStore.writeWorking(working), "an autosave copy is staged")
 
     settings.recoveryEnabled = false
-    var prompts = 0
+    var disabledPrompts = 0
     let disabled = EditorModel()
-    disabled.recoveryChoiceHandler = { _, _ in prompts += 1; return .cancel }
+    disabled.recoveryChoiceHandler = { _, _ in disabledPrompts += 1; return .cancel }
     disabled.offerRecoveryIfNeeded()
-    check(prompts == 0, "a disabled preference offers nothing", "\(prompts)")
-    check(recoveryBytes(RecoveryStore.pendingURL) == pendingBefore,
-          "a disabled preference leaves pending untouched")
+    check(disabledPrompts == 0, "a disabled preference offers nothing")
+    check(recoveryCandidates().count == 2,
+          "a disabled preference leaves the candidates alone")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.36,
+          "a disabled preference leaves the working copy alone")
+    check(recoveryBytes(candidateA) == bytesA && recoveryBytes(candidateB) == bytesB,
+          "the candidates are byte-identical while recovery is off")
 
     settings.recoveryEnabled = true
+    var enabledPrompts = 0
     let enabled = EditorModel()
-    enabled.recoveryChoiceHandler = { _, _ in prompts += 1; return .cancel }
+    enabled.recoveryChoiceHandler = { _, _ in enabledPrompts += 1; return .cancel }
     enabled.offerRecoveryIfNeeded()
-    check(prompts == 1, "re-enabling recovery offers the preserved pending copy",
-          "\(prompts)")
-    check(recoveryBytes(RecoveryStore.pendingURL) == pendingBefore,
-          "the pending copy is still byte-identical")
+    check(enabledPrompts == 1, "re-enabling recovery offers the copies", "\(enabledPrompts)")
+    check(RecoveryStore.readWorking() == nil,
+          "the working copy was promoted after re-enabling")
+    check(recoveryCandidates().count == 3,
+          "all three copies are recoverable after re-enabling")
+    check(recoveryBytes(candidateA) == bytesA && recoveryBytes(candidateB) == bytesB,
+          "the original candidates are still byte-identical")
 }
 
 @MainActor
-func testPendingRecoveryIsOfferedOnNextLaunch() async {
-    print("\n[M1-R6/G] a cancelled pending copy is offered on the next launch")
+func testCorruptCandidateIsQuarantined() async {
+    print("\n[M1-R12] a damaged candidate is quarantined, not deleted")
 
     await settleRecoveryWrites()
 
@@ -2446,33 +2776,152 @@ func testPendingRecoveryIsOfferedOnNextLaunch() async {
     settings.recoveryEnabled = true
     defer { settings.recoveryEnabled = previousRecoverySetting }
 
-    guard let source = recoveryFixture("next-launch-pending.png", width: 320, height: 400) else {
-        check(false, "next-launch fixture written")
+    guard let source = recoveryFixture("corrupt-valid.png", width: 320, height: 400),
+          let valid = stageRecoveryCandidate(for: source, exposure: 0.25,
+                                             savedAt: Date().addingTimeInterval(-30)) else {
+        check(false, "valid candidate written")
         return
     }
-    check(RecoveryStore.writeActive(recoveryProject(for: source, exposure: 0.33)),
-          "next-launch recovery written")
+    try? FileManager.default.createDirectory(at: RecoveryStore.candidatesDirectory,
+                                             withIntermediateDirectories: true)
+    let corrupt = RecoveryStore.candidatesDirectory
+        .appendingPathComponent("0000000000000-\(UUID().uuidString).retouch")
+    let junk = Data("{ this is not a recovery snapshot".utf8)
+    check((try? junk.write(to: corrupt)) != nil, "a damaged candidate is staged first")
 
-    var firstSession = 0
-    let first = EditorModel()
-    first.recoveryChoiceHandler = { _, _ in firstSession += 1; return .cancel }
-    first.offerRecoveryIfNeeded()
-    check(firstSession == 1, "the first launch offers the copy", "\(firstSession)")
-    guard let pendingBefore = recoveryBytes(RecoveryStore.pendingURL) else {
-        check(false, "pending copy readable after the first launch")
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .cancel }
+    model.offerRecoveryIfNeeded()
+    check(prompts == 1, "the valid candidate is still offered")
+    check(!FileManager.default.fileExists(atPath: corrupt.path),
+          "the damaged file left the candidate list")
+    check(FileManager.default.fileExists(atPath: valid.path),
+          "the valid candidate is untouched")
+    let quarantined = (try? FileManager.default.contentsOfDirectory(
+        at: RecoveryStore.quarantineDirectory, includingPropertiesForKeys: nil)) ?? []
+    check(quarantined.count == 1,
+          "exactly one damaged copy was quarantined", "\(quarantined.count)")
+    check(quarantined.first.flatMap(recoveryBytes) == junk,
+          "the damaged bytes are preserved, not deleted")
+    check(model.statusToken == .recoveryQuarantined(1),
+          "the quarantine is reported to the owner")
+
+    // A damaged file that cannot be moved aside must be reported, but it must
+    // not hide the candidates that can still be read.
+    await settleRecoveryWrites()
+    guard let second = recoveryFixture("corrupt-valid-2.png", width: 320, height: 400),
+          let readable = stageRecoveryCandidate(for: second, exposure: 0.26,
+                                                savedAt: Date().addingTimeInterval(-20)),
+          let readableBytes = recoveryBytes(readable) else {
+        check(false, "second valid candidate written")
         return
     }
-    first.offerRecoveryIfNeeded()
-    check(firstSession == 1, "the first session does not ask twice", "\(firstSession)")
+    let stuck = RecoveryStore.candidatesDirectory
+        .appendingPathComponent("0000000000001-\(UUID().uuidString).retouch")
+    check((try? junk.write(to: stuck)) != nil, "a second damaged candidate is staged")
+    RecoveryStore.injectedFailures = [.quarantine]
+    defer { RecoveryStore.injectedFailures = [] }
+    var secondPrompts = 0
+    let blocked = EditorModel()
+    blocked.recoveryChoiceHandler = { _, _ in secondPrompts += 1; return .cancel }
+    blocked.offerRecoveryIfNeeded()
+    check(secondPrompts == 1,
+          "a damaged file that cannot be quarantined does not hide a valid copy")
+    check(blocked.statusToken == .recoveryStorageFailed,
+          "the failed quarantine is reported")
+    check(FileManager.default.fileExists(atPath: stuck.path),
+          "the damaged file is left in place for the next launch")
+    check(recoveryBytes(readable) == readableBytes,
+          "the readable candidate is byte-identical")
+}
 
-    var secondSession = 0
-    let second = EditorModel()
-    second.recoveryChoiceHandler = { _, _ in secondSession += 1; return .cancel }
-    second.offerRecoveryIfNeeded()
-    check(secondSession == 1, "the next launch offers the postponed copy",
-          "\(secondSession)")
-    check(recoveryBytes(RecoveryStore.pendingURL) == pendingBefore,
-          "the second Cancel leaves the pending copy byte-identical")
+@MainActor
+func testChangedSourceAsksBeforeRestore() async {
+    print("\n[M1-R13] a changed photo still needs an explicit Restore")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let source = recoveryFixture("identity-source.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(for: source, exposure: 0.48,
+                                                 savedAt: Date().addingTimeInterval(-30)),
+          let before = recoveryBytes(candidate) else {
+        check(false, "identity fixture written")
+        return
+    }
+    guard let replacement = makeImage(width: 200, height: 260),
+          writePNG(replacement, to: source) else {
+        check(false, "replacement photo written")
+        return
+    }
+    try? FileManager.default.setAttributes(
+        [.modificationDate: Date().addingTimeInterval(120)], ofItemAtPath: source.path)
+
+    let listed = recoveryCandidates()
+    check(listed.count == 1, "the candidate is still listed")
+    if let snapshot = listed.first?.snapshot {
+        check(RecoveryStore.sourceState(for: snapshot) == .changed(source),
+              "a changed photo is detected before anything is applied")
+    }
+
+    var cancelPrompts = 0
+    let cancelled = EditorModel()
+    cancelled.recoveryChoiceHandler = { _, _ in cancelPrompts += 1; return .cancel }
+    cancelled.offerRecoveryIfNeeded()
+    check(cancelPrompts == 1, "the changed photo asks instead of applying silently")
+    check(!cancelled.hasImage, "nothing is applied without a decision")
+    check(recoveryBytes(candidate) == before,
+          "Cancel keeps the candidate byte-identical")
+
+    var restorePrompts = 0
+    let restored = EditorModel()
+    restored.recoveryChoiceHandler = { _, _ in restorePrompts += 1; return .restore }
+    restored.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { restored.hasImage && !restored.isBusy },
+          "the explicit Restore applies the edits")
+    check(restored.adjustments.exposure == 0.48, "the stored edits are on screen")
+    let identity = RecoverySourceIdentity.of(source)
+    check(await waitUntil(10) { RecoveryStore.readWorking()?.source == identity },
+          "the working copy records the new photo identity")
+    check(!FileManager.default.fileExists(atPath: candidate.path),
+          "the candidate is resolved after the explicit restore")
+}
+
+@MainActor
+func testWorkingSlotIsPromotedAtLaunch() async {
+    print("\n[M1-R14] an unsaved document in the working slot is offered at launch")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let source = recoveryFixture("working-launch.png", width: 320, height: 400) else {
+        check(false, "working-launch fixture written")
+        return
+    }
+    let staged = RecoverySnapshot.capture(recoveryProject(for: source, exposure: 0.58),
+                                          savedAt: Date().addingTimeInterval(-30))
+    check(RecoveryStore.writeWorking(staged), "a crash copy is staged in the working slot")
+
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .cancel }
+    model.offerRecoveryIfNeeded()
+    check(prompts == 1, "the working copy is offered at launch")
+    check(RecoveryStore.readWorking() == nil,
+          "the working slot was lifted before a new document can overwrite it")
+    let listing = recoveryCandidates()
+    check(listing.count == 1, "the crash copy became an independent candidate")
+    check(listing.first?.snapshot.project.adjustments.exposure == 0.58,
+          "the candidate carries the unsaved edits")
 }
 
 @MainActor
@@ -3417,7 +3866,7 @@ func testRealRuntimeValidation() {
 
 @MainActor
 func testRecoveryIsolation(productionBefore: RecoveryFingerprint) async {
-    print("\n[M1-R5] the suite never writes the production recovery copy")
+    print("\n[M1-R15] the suite never writes the production recovery tree")
 
     await settleRecoveryWrites()
 
@@ -3439,12 +3888,15 @@ func testRecoveryIsolation(productionBefore: RecoveryFingerprint) async {
     model.load(url: source)
     check(await waitUntil(60) { model.hasImage && !model.isBusy }, "isolation fixture loads")
     model.adjustments.exposure = 0.3
-    check(await waitUntil(10) { RecoveryStore.readActive()?.imagePath == source.path },
-          "the delayed autosave lands in the test directory")
+    model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.imagePath == source.path,
+          "the autosave lands in the working slot of the test directory")
+    check(recoveryCandidates().isEmpty,
+          "the autosave does not create a candidate")
 
     let productionAfter = RecoveryFingerprint.capture(RecoveryStore.productionDirectory)
     check(productionAfter == productionBefore,
-          "the production recovery copy is untouched by the whole suite")
+          "the production recovery tree is untouched by the whole suite")
 }
 
 // MARK: - runner
@@ -3474,16 +3926,22 @@ func runAll() async {
     await testFullFrameReimagine()
     await testExportUpscalePolicy()
     await testAnalysisExportNeedsFace()
-    await testRecoveryCancelPreservesData()
-    await testRecoveryRestoresAfterSimulatedRelaunch()
-    await testRecoveryLocatePathWaitsForRestore()
-    await testPendingRecoverySurvivesSameImageAutosave()
-    await testPendingRecoverySurvivesOtherImageAutosave()
-    await testDiscardingPendingLeavesActiveUntouched()
-    await testPendingRestoreRebuildsDocumentState()
-    await testPendingIsOfferedBeforeActive()
-    await testRecoveryPreferenceDoesNotDeletePending()
-    await testPendingRecoveryIsOfferedOnNextLaunch()
+    testRecoveryChoiceMapping()
+    await testRestoreLeavesSameImageCandidateIntact()
+    await testCancelKeepsEveryCandidateWhileThirdDocumentEdits()
+    await testMissingSourceCancelKeepsCandidate()
+    await testMovedSourceLocateThenRestore()
+    await testRestoreTwoDifferentDocuments()
+    await testFailedPreservationKeepsLiveDocument()
+    await testCrashBeforeRestoredSnapshotWrite()
+    await testCrashAfterWorkingWriteBeforeCandidateDelete()
+    await testFailedPromotionKeepsRecoveryCopy()
+    await testFailedCandidateDeleteOnDiscard()
+    await testSeveralLaunchesKeepSeveralCandidates()
+    await testRecoveryPreferenceKeepsCandidates()
+    await testCorruptCandidateIsQuarantined()
+    await testChangedSourceAsksBeforeRestore()
+    await testWorkingSlotIsPromotedAtLaunch()
     await testFailedLoadPreservesDocument()
     await testExportProtectsSource()
     await testBatchDoesNotOverwriteSource()
@@ -3494,8 +3952,9 @@ func runAll() async {
     testRealRuntimeValidation()
     await testRecoveryIsolation(productionBefore: productionRecoveryBefore)
 
-    // Give the last delayed autosave time to land before its directory goes.
-    try? await Task.sleep(nanoseconds: 1_800_000_000)
+    // Invalidate any debounced write left by the last scenario: the scratch
+    // directory is about to disappear, and no timer may outlive it.
+    RecoveryStore.invalidatePendingAutosaves()
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

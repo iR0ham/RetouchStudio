@@ -760,6 +760,23 @@ final class EditorModel: ObservableObject {
     private var recentsObserver: AnyCancellable?
     private var smartGeneration = 0
     private var offeredRecovery = false
+    /// A document restored from a recovery candidate stays here until the
+    /// owner saves it as a project. Its only durable copy is the working slot,
+    /// so autosave must not clear that slot just because no slider differs from
+    /// the baseline.
+    private var documentRecovered = false
+    /// Candidates already acted on in this launch, including copies preserved
+    /// while another candidate was restored. Keeps one pass from re-offering
+    /// work it deliberately set aside.
+    private var handledRecovery: Set<URL> = []
+
+    /// The candidate a load is restoring. Carried through the asynchronous load
+    /// so the candidate is deleted only after the restored document is proven
+    /// to be in the working slot.
+    struct RecoveryRestore {
+        let candidateURL: URL
+    }
+
     /// Headless tests replace the two recovery panels; production leaves these
     /// nil and the methods below use AppKit.
     var recoveryChoiceHandler: ((Bool, String?) -> RecoveryChoice)?
@@ -813,8 +830,17 @@ final class EditorModel: ObservableObject {
         panel.canChooseDirectories = false
         panel.message = s.choosePhotoToRetouch
         present(panel) { [weak self] url in
-            self?.load(url: url)
+            guard let self else { return }
+            self.prepareToReplaceDocument()
+            self.load(url: url)
         }
+    }
+
+    /// A user-confirmed open replaces the document, so the autosave copy of the
+    /// old one may be discarded. Candidate copies are never touched here.
+    private func prepareToReplaceDocument() {
+        _ = RecoveryStore.removeWorking()
+        documentRecovered = false
     }
 
     /// Attaches the picker to the editor window so it slides in as a sheet
@@ -842,6 +868,7 @@ final class EditorModel: ObservableObject {
         // one (and is never silently deleted).
         offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
+        prepareToReplaceDocument()
         load(url: url)
     }
 
@@ -898,12 +925,16 @@ final class EditorModel: ObservableObject {
     /// ask again during the termination that follows.
     func discardUnsavedChanges() {
         cleanState = currentState
+        // The owner explicitly ended this document. Its autosave copy goes with
+        // it; candidate copies waiting for their own decision stay.
+        documentRecovered = false
+        _ = RecoveryStore.removeWorking()
         updateCleanState()
     }
 
     func load(url: URL, restoring project: RetouchProject? = nil,
               projectURL: URL? = nil, relinkURL: URL? = nil,
-              resolvingPending: Bool = false) {
+              recoveryRestore: RecoveryRestore? = nil) {
         // A newer load wins over an older one, but no load may cut in front of
         // an export, a batch or a Smart analysis.
         guard let token = begin(.load) else {
@@ -945,7 +976,7 @@ final class EditorModel: ObservableObject {
                 return
             }
             self.apply(result, restoring: project, projectURL: projectURL,
-                       resolvingPending: resolvingPending)
+                       recoveryRestore: recoveryRestore)
             self.end(token)
             if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
         }
@@ -999,7 +1030,11 @@ final class EditorModel: ObservableObject {
     private func apply(_ result: LoadResult,
                        restoring project: RetouchProject? = nil,
                        projectURL: URL? = nil,
-                       resolvingPending: Bool = false) {
+                       recoveryRestore: RecoveryRestore? = nil) {
+        // Loading is not an edit. Every assignment below, including the ones
+        // whose observers would schedule an autosave, stays out of the
+        // recovery store until the restored document is complete.
+        isLoadingState = true
         install(result)
         self.projectURL = projectURL
 
@@ -1017,15 +1052,13 @@ final class EditorModel: ObservableObject {
             appliedCrop = nil
             documentOrientation = .identity
         }
-        // Loading is not an edit: the stamps arrive with the project, so they are
-        // installed without the change handling a user stamp needs.
-        isLoadingState = true
+        // The stamps arrive with the project, so they are installed without the
+        // change handling a user stamp needs.
         healSpots = project?.healSpots ?? []
         stickers = project?.stickers ?? []
         aiEdits = project?.aiEdits ?? []
         analysis = project?.analysis ?? AnalysisSettings()
         applyFaceSelection(project?.selectedFace)
-        isLoadingState = false
         selectedSticker = nil
         rebuildSpotMasks()
         refreshAnalysisOverlay()
@@ -1034,24 +1067,15 @@ final class EditorModel: ObservableObject {
         cleanState = currentState
         comparePosition = settings.comparePosition
         resetHistory()
-        // A crash copy lives nowhere else, so it must still count as unsaved:
-        // closing the window has to warn and the recovery file has to stay.
-        // This runs after resetHistory, which re-baselines the clean state.
-        if resolvingPending {
-            // The pending snapshot is resolved only now that its pixels loaded.
-            // Pending must never be written from here; an older Active copy is
-            // left alone until its own prompt is answered.
+        documentRecovered = recoveryRestore != nil
+        if recoveryRestore != nil {
+            // Until the working slot is written below, a crash copy lives
+            // nowhere else. It counts as unsaved so closing warns and the
+            // recovery data stays.
             cleanState = EditState()
-            hasUnsavedChanges = hasImage && currentState != cleanState
-            RecoveryStore.discardPending()
-        } else if project != nil, projectURL == nil {
-            cleanState = EditState()
-            updateCleanState()
-            // The photo may have been found at a new path. The active copy
-            // records it only now, after the pixels loaded, and only because
-            // the owner explicitly chose Restore.
-            if let updated = makeProject() { _ = RecoveryStore.writeActive(updated) }
+            hasUnsavedChanges = hasImage && currentState != EditState()
         }
+        isLoadingState = false
         resetView()
         // The report belongs to the photo that was just replaced.
         smartGeneration += 1
@@ -1082,12 +1106,8 @@ final class EditorModel: ObservableObject {
             rewriteProject(at: relinkURL)
             if project != nil { statusToken = .projectRelinked }
         }
-        if resolvingPending {
-            // Offer the older Active candidate after the restored document is
-            // fully installed, so its prompt cannot interrupt the load.
-            DispatchQueue.main.async { [weak self] in
-                self?.offerActiveRecoveryIfPresent()
-            }
+        if let recoveryRestore {
+            finishRestore(recoveryRestore)
         }
     }
 
@@ -2547,116 +2567,204 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Recovery
 
-    /// Writes a recovery copy while the photo has unsaved work. Debounced, so a
-    /// slider drag touches the disk once instead of on every tick.
+    /// Writes the working recovery copy while the photo has unsaved work.
+    /// Debounced, so a slider drag touches the disk once instead of on every
+    /// tick. Candidates are never written here: a postponed copy has its own
+    /// immutable file and nothing in this path can reach it.
     private func scheduleAutosave() {
         autosaveTask?.cancel()
         autosaveTask = nil
-        guard settings.recoveryEnabled else { return }
+        guard settings.recoveryEnabled, !isLoadingState else { return }
         guard hasImage, hasUnsavedChanges, let project = makeProject() else {
-            RecoveryStore.clearActive(ifSourcePath: imageURL?.path)
+            // A clean document no longer needs its autosave copy. A restored
+            // document is the exception: the working slot is its only durable
+            // copy until the owner saves a project.
+            if hasImage, !documentRecovered {
+                _ = RecoveryStore.removeWorking(ifSourcePath: imageURL?.path)
+            }
             return
         }
-        autosaveTask = Task {
+        let snapshot = RecoverySnapshot.capture(project)
+        let epoch = RecoveryStore.epoch
+        autosaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            guard !Task.isCancelled else { return }
-            _ = RecoveryStore.writeActive(project)
+            guard !Task.isCancelled, RecoveryStore.epoch == epoch else { return }
+            guard let self, !self.isLoadingState else { return }
+            self.persistAutosave(snapshot)
         }
     }
 
-    /// Asks once, at launch, whether to reopen a crash copy. Pending Recovery
-    /// is offered before Active Recovery, and Cancel on either postpones the
-    /// decision to the next launch without deleting anything.
+    private func persistAutosave(_ snapshot: RecoverySnapshot) {
+        guard settings.recoveryEnabled else { return }
+        if !RecoveryStore.writeWorking(snapshot) {
+            // This write is what protects the next launch; staying silent would
+            // let the owner close the window believing the copy is safe.
+            statusToken = .recoveryStorageFailed
+        }
+    }
+
+    /// Runs the debounced autosave now through the same path. Tests use this so
+    /// they never have to sleep past the delay.
+    func flushAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        guard settings.recoveryEnabled, !isLoadingState,
+              hasImage, hasUnsavedChanges, let project = makeProject() else { return }
+        persistAutosave(RecoverySnapshot.capture(project))
+    }
+
+    // MARK: - Recovery
+
+    /// Asks once, at launch, whether to reopen crash copies. Every unresolved
+    /// copy is offered in turn; Cancel postpones the whole pass and leaves all
+    /// of them on disk.
     func offerRecoveryIfNeeded() {
         guard !offeredRecovery, !hasImage, settings.recoveryEnabled else { return }
         offeredRecovery = true
-        if let pending = RecoveryStore.readPending() {
-            offerPendingRecovery(pending)
-        } else {
-            offerActiveRecoveryIfPresent()
+        handledRecovery.removeAll()
+        let launch = RecoveryStore.prepareForLaunch()
+        if launch.quarantined > 0 { statusToken = .recoveryQuarantined(launch.quarantined) }
+        if launch.failed { statusToken = .recoveryStorageFailed }
+        offerNextRecoveryCandidate()
+    }
+
+    private enum RecoveryPassStep {
+        case next
+        case stop
+    }
+
+    /// Offers the oldest unresolved candidate this pass has not handled yet.
+    /// A restore is asynchronous; its completion calls back into this loop.
+    private func offerNextRecoveryCandidate() {
+        guard settings.recoveryEnabled else { return }
+        while true {
+            let listing = RecoveryStore.loadCandidates()
+            if listing.quarantined > 0 { statusToken = .recoveryQuarantined(listing.quarantined) }
+            if listing.failed {
+                // The unreadable file is still on disk and is retried on the
+                // next launch, but it must not hide the copies that can be read.
+                statusToken = .recoveryStorageFailed
+            }
+            guard let candidate = listing.candidates.first(where: {
+                !handledRecovery.contains($0.url)
+            }) else { return }
+            switch offerRecoveryCandidate(candidate) {
+            case .next: continue
+            case .stop: return
+            }
         }
     }
 
-    /// A pending snapshot is only resolved by Restore or Discard. Cancel,
-    /// Escape, closing the alert and a cancelled Locate all leave it untouched.
-    private func offerPendingRecovery(_ project: RetouchProject) {
-        // The recovery copy points at a photo the same way a project does, so
-        // it uses the same resolver. A photo that moved is not a reason to
-        // throw the edits away.
-        var source = resolveProjectImage(project, projectURL: nil)
-        if source == nil {
+    private func offerRecoveryCandidate(_ candidate: RecoveryStore.Candidate) -> RecoveryPassStep {
+        var project = candidate.snapshot.project
+        var state = RecoveryStore.sourceState(for: candidate.snapshot)
+
+        if case .missing = state {
             switch recoveryChoice(missingSource: true, sourceName: nil) {
             case .locate:
                 // Closing the Locate panel is not permission to delete the
-                // edit; leave the pending copy exactly where it is.
-                guard let picked = locateRecoveryPhoto(for: project) else { return }
-                source = picked
+                // edit; leave the candidate exactly where it is.
+                guard let picked = locateRecoveryPhoto(for: project) else { return .stop }
+                project.imagePath = picked.path
+                // The panel grants access to the photo the owner picked, not to
+                // whatever the old path used to point at.
+                project.imageBookmark = bookmark(for: picked)
+                state = .available(picked)
             case .discard:
-                RecoveryStore.discardPending()
-                offerActiveRecoveryIfPresent()
-                return
+                return discardRecoveryCandidate(candidate)
             case .cancel, .restore:
-                return
+                return .stop
             }
         }
-        guard let source else { return }
 
-        switch recoveryChoice(missingSource: false, sourceName: source.lastPathComponent) {
-        case .restore:
-            load(url: source, restoring: project, resolvingPending: true)
-        case .discard:
-            RecoveryStore.discardPending()
-            offerActiveRecoveryIfPresent()
-        case .cancel, .locate:
-            return
-        }
-    }
-
-    /// The ordinary autosave candidate. Cancelling it moves the snapshot out
-    /// of the autosave slot, so the edits the owner chose to postpone cannot be
-    /// overwritten by the document they open next.
-    private func offerActiveRecoveryIfPresent() {
-        guard settings.recoveryEnabled else { return }
-        guard let project = RecoveryStore.readActive() else {
-            protectRestoredWorkInActive()
-            return
-        }
-        var source = resolveProjectImage(project, projectURL: nil)
-        if source == nil {
-            switch recoveryChoice(missingSource: true, sourceName: nil) {
-            case .locate:
-                guard let picked = locateRecoveryPhoto(for: project) else { return }
-                source = picked
+        switch state {
+        case .missing:
+            return .stop
+        case .changed(let source):
+            // Size or date says this is not the photo the edits were made for.
+            // Ask explicitly; never apply silently to a different image.
+            switch recoveryChoice(missingSource: false, changedSource: true,
+                                  sourceName: source.lastPathComponent) {
+            case .restore:
+                return beginRestore(candidate, project: project, source: source)
             case .discard:
-                RecoveryStore.clearActive()
-                protectRestoredWorkInActive()
-                return
-            case .cancel, .restore:
-                return
+                return discardRecoveryCandidate(candidate)
+            case .cancel, .locate:
+                return .stop
             }
-        }
-        guard let source else { return }
-
-        switch recoveryChoice(missingSource: false, sourceName: source.lastPathComponent) {
-        case .restore:
-            load(url: source, restoring: project)
-        case .discard:
-            RecoveryStore.clearActive()
-            protectRestoredWorkInActive()
-        case .cancel, .locate:
-            if RecoveryStore.preserveActiveAsPending() {
-                protectRestoredWorkInActive()
+        case .available(let source):
+            switch recoveryChoice(missingSource: false, sourceName: source.lastPathComponent) {
+            case .restore:
+                return beginRestore(candidate, project: project, source: source)
+            case .discard:
+                return discardRecoveryCandidate(candidate)
+            case .cancel, .locate:
+                return .stop
             }
         }
     }
 
-    /// Keeps a just-restored pending document safe in Active Recovery. Only
-    /// when that slot is empty: an older active candidate waiting for its own
-    /// answer must not be overwritten.
-    private func protectRestoredWorkInActive() {
-        guard hasImage, hasUnsavedChanges, RecoveryStore.readActive() == nil,
-              let project = makeProject() else { return }
-        _ = RecoveryStore.writeActive(project)
+    private func discardRecoveryCandidate(_ candidate: RecoveryStore.Candidate) -> RecoveryPassStep {
+        guard RecoveryStore.removeCandidate(at: candidate.url) else {
+            // The file is still the only copy of this candidate; stop rather
+            // than repeat the same prompt.
+            statusToken = .recoveryCandidateNotRemoved
+            return .stop
+        }
+        return .next
+    }
+
+    /// Snapshots the live document, then starts the load. The candidate is
+    /// deleted only in `finishRestore`, after the working copy is verified.
+    private func beginRestore(_ candidate: RecoveryStore.Candidate,
+                              project: RetouchProject, source: URL) -> RecoveryPassStep {
+        if hasImage {
+            if hasUnsavedChanges {
+                guard let live = makeProject(),
+                      let preserved = RecoveryStore.saveCandidate(RecoverySnapshot.capture(live))
+                else {
+                    statusToken = .recoveryStorageFailed
+                    return .stop
+                }
+                // Preserved for the next launch, not re-offered now.
+                handledRecovery.insert(preserved)
+            } else if let working = RecoveryStore.readWorking() {
+                // A document restored earlier has no unsaved slider, but the
+                // working slot is its only durable copy. Preserve it before the
+                // next candidate takes that slot.
+                guard let preserved = RecoveryStore.saveCandidate(working) else {
+                    statusToken = .recoveryStorageFailed
+                    return .stop
+                }
+                handledRecovery.insert(preserved)
+            }
+        }
+        handledRecovery.insert(candidate.url)
+        load(url: source, restoring: project,
+             recoveryRestore: RecoveryRestore(candidateURL: candidate.url))
+        return .stop
+    }
+
+    /// Deletes the candidate only after the restored document is durable in the
+    /// working slot. write -> verify -> delete leaves a complete copy after a
+    /// crash at every step.
+    private func finishRestore(_ restore: RecoveryRestore) {
+        guard let project = makeProject(),
+              RecoveryStore.writeWorking(RecoverySnapshot.capture(project)) else {
+            // The candidate is still the only durable copy; keep it and stop.
+            statusToken = .recoveryStorageFailed
+            return
+        }
+        guard RecoveryStore.removeCandidate(at: restore.candidateURL) else {
+            // The restored document is safe in the working slot; the old copy
+            // is left behind for the next launch, which reports it again.
+            statusToken = .recoveryCandidateNotRemoved
+            return
+        }
+        // Only the prompt order is deferred: durability above is synchronous.
+        DispatchQueue.main.async { [weak self] in
+            self?.offerNextRecoveryCandidate()
+        }
     }
 
     /// The first prompt's buttons are Locate, Cancel, Discard. Escape and a
@@ -2679,16 +2787,21 @@ final class EditorModel: ObservableObject {
         }
     }
 
-    private func recoveryChoice(missingSource: Bool, sourceName: String?) -> RecoveryChoice {
+    private func recoveryChoice(missingSource: Bool, changedSource: Bool = false,
+                                sourceName: String?) -> RecoveryChoice {
         if let recoveryChoiceHandler {
             return recoveryChoiceHandler(missingSource, sourceName)
         }
         let alert = NSAlert()
         alert.messageText = s.recoveryTitle
-        alert.informativeText = missingSource
-            ? s.projectPhotoMissing
-            : s.recoveryMessage(sourceName ?? "")
-        alert.alertStyle = missingSource ? .warning : .informational
+        if missingSource {
+            alert.informativeText = s.projectPhotoMissing
+        } else if changedSource {
+            alert.informativeText = s.recoveryChangedMessage(sourceName ?? "")
+        } else {
+            alert.informativeText = s.recoveryMessage(sourceName ?? "")
+        }
+        alert.alertStyle = missingSource || changedSource ? .warning : .informational
         alert.addButton(withTitle: missingSource ? s.projectLocateTitle : s.recoveryRestore)
         alert.addButton(withTitle: s.cancel)
         let discard = alert.addButton(withTitle: s.recoveryDiscard)
@@ -2979,8 +3092,9 @@ final class EditorModel: ObservableObject {
             projectURL = url
             recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
-            // protect until the next change.
+            // protect until the next change, and the autosave copy is redundant.
             cleanState = currentState
+            documentRecovered = false
             updateCleanState()
             statusToken = .projectSaved(url.lastPathComponent)
         } catch {
@@ -3019,6 +3133,7 @@ final class EditorModel: ObservableObject {
             }
             let recorded = URL(fileURLWithPath: project.imagePath).standardizedFileURL
             let relocated = source.standardizedFileURL != recorded
+            prepareToReplaceDocument()
             load(url: source, restoring: project, projectURL: url,
                  relinkURL: relocated ? url : nil)
         } catch {
