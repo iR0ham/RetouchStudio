@@ -195,8 +195,13 @@ func runChild(_ arguments: [String]) -> Int32 {
             }
             try? Data((replaced ? "replaced" : "stale").utf8).write(
                 to: marker.appendingPathExtension("replaced"))
-            // Keep U_EX past the CAS so the parent can observe the exclusion.
-            Thread.sleep(forTimeInterval: 0.6)
+            // Keep U_EX until the parent has observed the exclusion and the
+            // replaced record; a fixed sleep could release too early.
+            let release = support.appendingPathComponent("stale-window-release")
+            let deadline = Date().addingTimeInterval(10)
+            while !FileManager.default.fileExists(atPath: release.path), Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
             return replaced ? 0 : 75
         } catch {
             try? Data("error: \(error)".utf8).write(
@@ -569,10 +574,11 @@ func testLockFileHardening() {
     }
 
     let heldPath = support.appendingPathComponent("held.lock")
-    let contender = try? LockFile.open(heldPath)
-    let blocked = contender.map { !$0.tryAcquire(exclusive: true) } ?? false
+    // Keep this handle to the exact inode the child locked: the substitution
+    // below unlinks the path, so this is the only way back to that resource.
+    let held = try? LockFile.open(heldPath)
+    let blocked = held.map { !$0.tryAcquire(exclusive: true) } ?? false
     check(blocked, "K: a second process cannot take the lock")
-    contender?.close()
 
     // The lock protects the inode, not the path. Replacing the path is
     // detected at open time and never silently treated as the held lock.
@@ -592,15 +598,17 @@ func testLockFileHardening() {
     check(oldInode != nil && newInode != nil && oldInode != newInode,
           "K: a substituted lock path names a different inode than the holder")
     let replacementAcquired = replacement?.tryAcquire(exclusive: true) ?? false
-    check(replacementAcquired, "K: the substituted path starts unprotected (fail closed)")
+    check(replacementAcquired,
+          "K: the substituted path is a different, unlocked inode")
     replacement?.close()
 
     kill(child.processIdentifier, SIGKILL)
     check(waitUntilStopped(child, timeout: 5), "K: the lock holder is killed")
-    let after = try? LockFile.open(support.appendingPathComponent("child.lock"))
-    check(after?.tryAcquire(exclusive: true) == true,
-          "K: a crashed holder leaves no permanent lock")
-    after?.close()
+    // The child's flock lives in the kernel until its descriptor owner dies.
+    // Reacquire through the handle to the same inode, not the replaced path.
+    let released = held?.tryAcquire(exclusive: true) ?? false
+    check(released, "K: a crashed holder releases the exact lock resource")
+    held?.close()
 }
 
 // MARK: - L
@@ -680,6 +688,7 @@ func testStalePreparingReplacementHoldsExclusiveLease() {
         check(false, "L: the replaced record reads back")
     }
 
+    try? Data().write(to: support.appendingPathComponent("stale-window-release"))
     check(waitUntilStopped(child, timeout: 5), "L: the replacing process exits")
     let free = try? RuntimeUsageLease.acquireShared(support: support)
     check(free != nil, "L: the exclusive lease is released only after the CAS")

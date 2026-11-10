@@ -219,12 +219,19 @@ func runChild(_ arguments: [String]) -> Int32 {
     case "--child-startup":
         // A helper startup: the transaction lock is taken first, the shared
         // lease is acquired before the lock is released, then the helper runs.
+        // The lock is held until the parent releases it, so a slow machine
+        // cannot make the window expire before the parent observes it.
         do {
             var lease: RuntimeUsageLease?
             try RuntimeTransactionLock.shared.withLock(support: support, timeout: 30) {
                 try? Data("\(getpid())".utf8).write(
                     to: support.appendingPathComponent("child-startup-locked"))
-                Thread.sleep(forTimeInterval: 0.8)
+                let release = support.appendingPathComponent("child-startup-release")
+                let deadline = Date().addingTimeInterval(10)
+                while !FileManager.default.fileExists(atPath: release.path),
+                      Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
                 lease = try RuntimeUsageLease.acquireShared(support: support)
                 try? Data("\(getpid())".utf8).write(
                     to: support.appendingPathComponent("child-startup-started"))
@@ -584,6 +591,7 @@ func testStartupAndReplacementSerialize() {
           "E: no extraction starts while the startup holds the lock")
     check(!finishedEarly, "E: the install cannot finish during helper startup")
 
+    try? Data().write(to: support.appendingPathComponent("child-startup-release"))
     check(waitUntilStopped(child, timeout: 8), "E: the startup process finishes",
           "pid \(child.processIdentifier)")
     if let installThread {

@@ -104,7 +104,7 @@ RETOUCH_ARCH=arm64 ./build.sh release    # bundles Worker/ inside the app
 
 ## The local AI helper is optional
 
-The AI tools (remove object, heal area, reimagine, 4× upscale) run in a local Python worker. Release builds do not carry it. The protocol-v2 download path exists in the code but is disabled in this build (`AIRuntime.package` is nil) because no official runtime package has been approved: **Settings → Manage Models…** shows no runtime download, and the 1.0.0 arm64 archive is not treated as compatible. When an official package is configured, the app will show its name, size and SHA256, download it only after approval, verify the hash, and install it under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`. Model weights stay under `~/Library/Application Support/RetouchStudio/AI/models` and are downloaded separately, each after its own manifest is approved.
+The AI tools (remove object, heal area, reimagine, 4× upscale) run in a local Python worker. Release builds do not carry it. The protocol-v2 download path exists in the code but is disabled in this build (`AIRuntime.package` is nil) because no official runtime package has been approved: **Settings → Manage Models…** shows no runtime download, and the 1.0.0 arm64 archive is not treated as compatible. When an official package is configured, its consent sheet will show the archive name, its size and a 16-character SHA256 prefix; the app downloads it only after approval, verifies the full hash, and installs it under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`. Model weights stay under `~/Library/Application Support/RetouchStudio/AI/models` and are downloaded separately, each after a sheet shows the file count, total size and licence (the sheet does not list every file or its SHA256).
 
 A build can also carry the helper inside the app, which copies a relocatable interpreter plus the required wheels into `Contents/Resources/Worker` (about 1.3–1.6 GB). Model weights are never bundled either way.
 
@@ -125,17 +125,19 @@ At runtime the app prefers a helper packaged inside the app, then a downloaded p
 ./Tests/run.sh
 ```
 
-`Tests/run.sh` compiles the whole source tree with `swiftc` and runs two suites against real rendered pixels:
+`Tests/run.sh` compiles the source tree with `swiftc` — every Swift file under `Sources/RetouchStudio` except `App.swift` and `SelfCheck.swift` — and runs four suites against real rendered pixels or real child processes:
 
 - `EngineTests.swift` — the image pipeline, analysis, geometry, makeup, looks, export and mask behaviour.
 - `ModelTests.swift` — project round-trips, presets, settings, localisation completeness and recovery.
+- `RuntimeProcessTests.swift` — helper ownership, leases, runtime transactions and process lifecycle.
+- `RuntimeV2Tests.swift` — the protocol-v2 registry, lock identity and recovery ordering.
 
-The worker has its own Python suite (`unittest`); see `Docs/AI_RUNTIME.md`.
+`RETOUCH_ARCH=x86_64 ./Tests/run.sh` runs the same suites against an x86_64 build (through Rosetta on Apple silicon). The worker has its own Python suite (`unittest`); see `Docs/AI_RUNTIME.md`.
 
 ## Privacy
 
 - Image analysis, editing, upscaling and export are entirely local; nothing is uploaded.
-- When AI is used through a bundled helper or a future approved runtime package, the only network use is two explicit downloads: the optional AI runtime archive and the model weights. Both are requested by the owner after the exact file list, size and SHA256 are shown, and both are verified before installation.
+- When AI is used through a bundled helper or a future approved runtime package, the only network use is two explicit downloads: the optional AI runtime archive and the model weights. The owner approves the runtime after seeing its name, size and a 16-character SHA256 prefix, and approves each model after a sheet shows its file count, total size and licence. The runtime verifies its full SHA256 before installation; model checksums are verified where the catalog provides them (the SAM 2.1 tiny entry does not).
 - The current build offers no runtime download. When enabled, the runtime is fetched once from this repository's release page; the app has no other outbound address, no telemetry and no background requests.
 - GPS and camera identity are removed from exported copies.
 - No telemetry, no analytics, no crash reporting service.

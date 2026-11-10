@@ -28,6 +28,13 @@ func check(_ condition: Bool, _ label: String, _ detail: String = "") {
 
 let processor = ImageProcessor.shared
 let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+// Backdrop copies live in Application Support in production. Redirect the
+// store used by this suite to a scratch root; the one stored file is deleted
+// below and the root is removed before exit.
+let engineStoreRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("retouch-enginetests-\(UUID().uuidString)")
+try? FileManager.default.createDirectory(at: engineStoreRoot, withIntermediateDirectories: true)
+BackdropStore.rootOverride = engineStoreRoot.appendingPathComponent("backdrops", isDirectory: true)
 
 // MARK: - fixtures
 
@@ -1015,6 +1022,15 @@ privacyContext.setFillColor(CGColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 
 privacyContext.fill(CGRect(x: 0, y: 0, width: privacySide, height: privacySide))
 let privacyCG = privacyContext.makeImage()!
 let privacySource = CIImage(cgImage: privacyCG)
+// PNG and TIFF exports are written at 16 bits per component. A 16-bit fixture
+// proves the depth survives instead of merely being promoted by the writer.
+let deepPrivacyContext = CGContext(data: nil, width: privacySide, height: privacySide,
+                                   bitsPerComponent: 16, bytesPerRow: 0, space: sRGB,
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+deepPrivacyContext.setFillColor(CGColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1))
+deepPrivacyContext.fill(CGRect(x: 0, y: 0, width: privacySide, height: privacySide))
+let deepPrivacyCG = deepPrivacyContext.makeImage()!
+let deepPrivacySource = CIImage(cgImage: deepPrivacyCG)
 let privacyMetadata: [CFString: Any] = [
     kCGImagePropertyDPIWidth: 300,
     kCGImagePropertyDPIHeight: 300,
@@ -1097,6 +1113,8 @@ func privacyXMPPaths(at url: URL) -> [String] {
 }
 
 let privacyRendered = RenderedExport(image: privacySource, carriesSourceMetadata: true)
+let deepPrivacyRendered = RenderedExport(image: deepPrivacySource,
+                                         carriesSourceMetadata: true)
 var privacySnapshot = ExportSnapshot()
 privacySnapshot.format = .jpeg
 privacySnapshot.quality = 0.95
@@ -1108,8 +1126,10 @@ for (name, format) in [("stripped.jpg", ExportFormat.jpeg),
     var snap = privacySnapshot
     snap.format = format
     snap.quality = 0.95
+    let deep = format == .png || format == .tiff
+    let rendered = deep ? deepPrivacyRendered : privacyRendered
     let url = privacyDirectory.appendingPathComponent(name)
-    let wrote = ExportService.write(privacyRendered, snapshot: snap, to: url,
+    let wrote = ExportService.write(rendered, snapshot: snap, to: url,
                                     colorSpace: sRGB, metadata: privacyMetadata)
     if !wrote && format == .heic {
         print("  … HEIC encoder unavailable in this environment (NOT VERIFIED)")
@@ -1153,10 +1173,16 @@ for (name, format) in [("stripped.jpg", ExportFormat.jpeg),
           "orientation \(orientation), \(Int(dpi)) dpi, \(privacySide) px")
     if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
        let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-        let deepBits = format == .png || format == .tiff ? decoded.bitsPerComponent >= 16 : true
-        check(decoded.colorSpace != nil && deepBits,
-              "\(name) keeps its profile and bit depth",
-              "\(decoded.bitsPerComponent)-bit")
+        if format == .png || format == .tiff {
+            check(decoded.colorSpace != nil
+                    && decoded.bitsPerComponent == deepPrivacyCG.bitsPerComponent,
+                  "\(name) keeps its profile and the 16-bit fixture depth",
+                  "\(decoded.bitsPerComponent)-bit")
+        } else {
+            check(decoded.colorSpace != nil && decoded.bitsPerComponent == 8,
+                  "\(name) writes its 8-bit codec depth",
+                  "\(decoded.bitsPerComponent)-bit")
+        }
     } else {
         check(false, "\(name) decodes")
     }
@@ -1171,6 +1197,15 @@ if let xmp = privacyXMP() {
             sourceURL as CFURL, ExportFormat.jpeg.utType.identifier as CFString, 1, nil) {
         CGImageDestinationAddImageAndMetadata(destination, privacyCG, xmp, nil)
         let wroteSource = CGImageDestinationFinalize(destination)
+        // Positive control: prove the source really carries the identity we
+        // expect to be stripped, otherwise the removal check proves nothing.
+        let sourceXMPPaths = privacyXMPPaths(at: sourceURL).map { $0.lowercased() }
+        let sourceHasIdentity = sourceXMPPaths.contains {
+            $0.contains("dc:creator") || $0.contains("photoshop:city") || $0.contains("dc:rights")
+        }
+        check(wroteSource && sourceHasIdentity,
+              "the XMP source really contains creator, city and rights",
+              sourceXMPPaths.joined(separator: ", "))
         let sourceProperties = exportedProperties("xmp-source.jpg")
         let outputURL = privacyDirectory.appendingPathComponent("xmp-out.jpg")
         let wrote = ExportService.write(privacyRendered, snapshot: privacySnapshot,
@@ -1558,6 +1593,7 @@ if let png = NSBitmapImageRep(cgImage: twoToneFixture(width: 40, height: 30,
 }
 
 print("\n" + String(repeating: "-", count: 60))
+try? FileManager.default.removeItem(at: engineStoreRoot)
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")
     exit(0)

@@ -4,7 +4,7 @@
 **Target:** macOS 14.0 or later. The app is universal (arm64 + x86_64); the helper is an Apple-silicon (arm64) runtime, so AI tools are unavailable on Intel. Measured on a MacBook Air M3 with 16 GB.
 **Related:** [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md), [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md)
 
-The helper is self-contained. A full build carries it inside the app. Release builds do not, and the protocol-v2 download path exists in the code but is disabled in the current build: no official runtime package has been approved, so `AIRuntime.package` stays nil and Settings offers no runtime download. The `RetouchStudio-1.0.0-ai-runtime-arm64.zip` asset on the 1.0.0 release page is a legacy archive; it is not treated as a compatible protocol-v2 package, and compatibility has not been verified. When an official package is configured, the runtime archive and the model weights will be the only downloads, each after the owner approves the exact file, size and SHA256. Everything that runs — the retouching engine, the Python helper, PyTorch, Transformers, ONNX Runtime and MLX — is local.
+The helper is self-contained. A full build carries it inside the app. Release builds do not, and the protocol-v2 download path exists in the code but is disabled in the current build: no official runtime package has been approved, so `AIRuntime.package` stays nil and Settings offers no runtime download. The `RetouchStudio-1.0.0-ai-runtime-arm64.zip` asset on the 1.0.0 release page is a legacy archive; it is not treated as a compatible protocol-v2 package, and compatibility has not been verified. When an official package is configured, the runtime archive and the model weights will be the only downloads. The runtime gets its own consent sheet showing the archive name, its size and a 16-character SHA256 prefix before anything is fetched. Each model gets a sheet showing its file count, total size and licence; that sheet does not list every file or its SHA256. Everything that runs — the retouching engine, the Python helper, PyTorch, Transformers, ONNX Runtime and MLX — is local.
 
 ---
 
@@ -36,7 +36,7 @@ The worker is the framework interpreter copied from Homebrew Python 3.13.15, wit
    xattr -dr com.apple.quarantine "/Applications/Retouch Studio.app"
    ```
 
-3. Open **Settings (⌘,) → Manage Models…**. In the current build there is no runtime download card: the protocol-v2 installer is disabled until an official package is configured. A build that carries the helper inside the app can download models, each after its own sheet shows the file count, total size and license. Once an approved runtime package exists, its sheet will show the archive name, size and SHA256 before anything is fetched.
+3. Open **Settings (⌘,) → Manage Models…**. In the current build there is no runtime download card: the protocol-v2 installer is disabled until an official package is configured. A build that carries the helper inside the app can download models, each after its own sheet shows the file count, total size and license. Once an approved runtime package exists, its sheet will show the archive name, its size and a 16-character SHA256 prefix before anything is fetched; the full hash is verified after download.
 4. When the downloads finish, the app is fully usable offline.
 
 There are no launch agents, no background daemons and no login items. The helper starts with the app and stops when the app quits normally; a bundled helper lives inside the app bundle, while an enabled protocol-v2 runtime would run from its installed tree. After a crash it is left running (or replaced) by the next launch, as described in [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md) §3.
@@ -56,30 +56,45 @@ The app is signed **ad-hoc** (`codesign --verify --deep --strict` passes; `spctl
 After the models are installed:
 
 - opening a photo, all twelve retouch tools, Auto Retouch, masking, AI edits, 4× upscaling and export are local;
-- the helper communicates with the app over a Unix socket in `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.sock`;
+- the helper communicates with the app over a Unix socket: `~/Library/Application Support/RetouchStudio/AI/worker.sock` for a bundled or source-checkout helper, and `.../AI/runtimes/worker.sock` once a protocol-v2 runtime is adopted;
 - the app's network API is the runtime downloader (`AIRuntimeInstaller`), which is disabled in the current build and will fetch one approved archive after consent and check its SHA256 when enabled; the helper's only networking is the model downloader (`Downloads` is a separate command that requires consent).
 
 This was measured, not assumed: see [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md) §3 — zero TCP/UDP endpoints while idle and during a real upscale job, and exactly two HTTPS connections during an approved download.
 
-If a model file is damaged, `Manage Models… → Verify` reports the mismatched file and the model can be downloaded again. Launch never re-downloads anything on its own.
+If a model file with a catalog SHA256 is damaged, `Manage Models… → Verify` reports the mismatched file and the model can be downloaded again. The SAM 2.1 tiny entry has no SHA256, so Verify has nothing to compare for that file. Launch never re-downloads anything on its own.
 
 ---
 
 ## 4. Where data lives
 
+Paths depend on which helper is running.
+
+**Bundled or source-checkout helper:**
+
 | Path | Contents |
 |---|---|
-| `~/Library/Application Support/RetouchStudio/AI/models/` | Installed model weights (never inside the runtime tree) |
-| `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2/` | The installed protocol-v2 runtime (when a package is configured) |
+| `~/Library/Application Support/RetouchStudio/AI/models/` | Installed model weights |
+| `~/Library/Application Support/RetouchStudio/AI/jobs/` | Helper working copies and job outputs (cleaned up over time) |
+| `~/Library/Application Support/RetouchStudio/AI/worker.log` | Helper stdout/stderr |
+| `~/Library/Application Support/RetouchStudio/AI/worker.sock` | Local JSON-RPC socket |
+| `~/Library/Application Support/RetouchStudio/AI/helper-owner.json` | Which app instance owns the running helper |
+| `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
+
+**Protocol-v2 runtime (when a package is configured):**
+
+| Path | Contents |
+|---|---|
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2/` | The installed protocol-v2 runtime |
 | `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2-backup/` | Previous runtime kept during installation or recovery |
 | `~/Library/Application Support/RetouchStudio/AI/runtimes/` | Runtime registry, transaction record, lock files (`runtime.lock`, `runtime-usage.lock`) |
-| `~/Library/Application Support/RetouchStudio/AI/runtimes/jobs/` | Helper working copies and job outputs (cleaned up over time) |
-| `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.log` | Helper stdout/stderr |
-| `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.sock` | Local JSON-RPC socket |
-| `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/jobs/` | v2 helper working copies and job outputs (cleaned up over time) |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.log` | v2 helper stdout/stderr |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.sock` | v2 local JSON-RPC socket |
+| `~/Library/Application Support/RetouchStudio/AI/models/` | Installed model weights (never inside the runtime tree) |
 | `~/Library/Application Support/RetouchStudio/AI/helper-owner.json` | Which app instance owns the running helper |
+| `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
 
-The legacy `AI/runtime/` and `AI/jobs/` trees are never read, moved or deleted by the current build. A 1.0.0 runtime archive is not installed there.
+The legacy `AI/runtime/` (singular) tree is never read, moved or deleted by the current build; a 1.0.0 runtime archive is not installed there. `AI/jobs/` is not legacy: it is the working directory of a bundled or source-checkout helper and is used whenever that helper runs.
 
 Projects and originals are never modified in place; exports are written where the owner chooses. Private test photos are never read by the helper unless the owner sends that photo to it as part of an edit.
 
@@ -148,7 +163,7 @@ The complete pinned list is `worker/requirements.lock`.
 | Swin2SR x4 | Upscaling | Apache-2.0 | Yes |
 | MI-GAN (512, Places2) | Small-hole inpainting | MIT (weights) | Yes |
 
-Weights are downloaded, never redistributed inside the app. Each download is verified against the SHA256 in the catalog when the manifest provides one.
+Weights are downloaded, never redistributed inside the app. Each download is verified against the SHA256 in the catalog when the manifest provides one. Inspected on 2026-11-10, the worker catalog (`retouch_ai_worker/catalog.py` in the separate checkout) gives SAM 2.1 tiny neither a size nor a SHA256: that download cannot be checksum-verified and its progress is indeterminate. That checkout is not under version control here, so this describes it as inspected, not a property of the app bundle.
 
 ---
 
@@ -160,9 +175,11 @@ Prerequisites: macOS 14 or later with Xcode Command Line Tools. The local AI hel
 ./build.sh release            # compiles, bundles the helper when it is reachable, runs the engine self-test, signs ad-hoc
 RETOUCH_SKIP_WORKER=1 ./build.sh release   # app only; the AI tools report the helper as missing
 RETOUCH_REBUNDLE=1 ./build.sh release      # force a fresh copy of the Python runtime
-./Tests/run.sh                # engine + model tests
+./Tests/run.sh                # Engine, Model, RuntimeProcess and RuntimeV2 suites
 cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # 60 worker tests
 ```
+
+`Tests/run.sh` compiles every Swift file under `Sources/RetouchStudio` except `App.swift` and `SelfCheck.swift`, then runs four suites: Engine, Model, RuntimeProcess and RuntimeV2. `RETOUCH_ARCH=x86_64 ./Tests/run.sh` runs the same suites against an x86_64 build (Rosetta on Apple silicon).
 
 The worker checkout is not under version control here. Regression tests that
 must survive a fresh clone are copied into `Docs/worker-regressions/` with their
