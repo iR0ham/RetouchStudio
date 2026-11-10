@@ -27,8 +27,9 @@ struct ExportSnapshot: Equatable {
     var format: ExportFormat = .jpeg
     var quality: Double = 0.92
     var longEdge: CGFloat?
-    /// Drop GPS and camera identity from the copied EXIF. The setting is on by
-    /// default, and every file in a batch shares this one answer.
+    /// Keep only non-identifying technical metadata (orientation and
+    /// resolution). The setting is on by default, and every file in a batch
+    /// shares this one answer.
     var stripsPrivacyMetadata = true
     /// Manual repairs and placed art. Off for batch work unless asked for:
     /// stamps describe one face's blemishes, not another photo's.

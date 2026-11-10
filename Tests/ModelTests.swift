@@ -78,6 +78,19 @@ func removeRecentEntries(under directory: URL) {
     }
 }
 
+/// A counter the batch's file task and the main-actor test can share.
+final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
+    }
+}
+
 // MARK: - P0-1 / C-1
 
 @MainActor
@@ -373,6 +386,107 @@ func changedPixels(_ aURL: URL, _ bURL: URL, threshold: Int = 8) -> Int? {
         }
     }
     return count
+}
+
+// MARK: - P0-4
+
+@MainActor
+func testBatchExportPolicy() {
+    print("\n[P0-4] a batch file keeps only the shared export settings")
+
+    let documentURL = workDir.appendingPathComponent("policy-doc.png")
+    let otherURL = workDir.appendingPathComponent("policy-other.png")
+    let differentURL = workDir.appendingPathComponent("policy-wide.png")
+
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    analysis.regions = [.forehead, .texture]
+    analysis.exportMode = .poster
+    analysis.setEndpoint(CGPoint(x: 0.21, y: 0.32), for: .forehead)
+    analysis.setAnchor(CGPoint(x: 0.42, y: 0.55), for: .forehead)
+
+    var base = ExportSnapshot()
+    base.adjustments.contrast = 30
+    base.healSpots = [HealSpot(center: CGPoint(x: 0.5, y: 0.5), radius: 0.02)]
+    base.stickers = [Sticker(center: CGPoint(x: 0.2, y: 0.2), size: 0.1)]
+    base.aiEdits = [AIEdit(preset: "test", prompt: "p", seed: 1,
+                           patchFile: "patch.png", alphaFile: "alpha.png",
+                           box: CGRect(x: 0, y: 0, width: 1, height: 1),
+                           imagePixels: CGSize(width: 10, height: 10))]
+    base.analysis = analysis
+    base.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    base.orientation = DocumentOrientation(quarterTurns: 1)
+    base.selectedFaceIndex = 1
+    base.format = .png
+    base.quality = 0.8
+    base.longEdge = 2048
+    base.stripsPrivacyMetadata = true
+    base.includeStamps = true
+    base.includeAnalysis = true
+    base.aiUpscale = true
+    base.watermark = WatermarkSettings(enabled: true, text: "Studio")
+
+    let document = BatchExportPolicy.snapshot(
+        base, fileURL: documentURL, documentURL: documentURL,
+        documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
+    check(document.selectedFaceIndex == 1
+            && document.analysis.endpoint(for: .forehead) != nil
+            && document.analysis.anchor(for: .forehead) != nil
+            && document.crop != nil && document.orientation.quarterTurns == 1
+            && !document.aiEdits.isEmpty,
+          "the open document keeps its own selection, pins and crop")
+
+    let sameAspect = BatchExportPolicy.snapshot(
+        base, fileURL: otherURL, documentURL: documentURL,
+        documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
+    check(sameAspect.selectedFaceIndex == nil && sameAspect.analysis.endpoints.isEmpty
+            && sameAspect.analysis.anchors.isEmpty && sameAspect.aiEdits.isEmpty
+            && sameAspect.orientation.isIdentity,
+          "another same-shape file gets automatic focus and callouts")
+    check(sameAspect.crop == base.crop, "the crop travels to a same-shape file")
+    check(sameAspect.adjustments == base.adjustments && sameAspect.format == base.format
+            && sameAspect.quality == base.quality && sameAspect.longEdge == base.longEdge
+            && sameAspect.stripsPrivacyMetadata == base.stripsPrivacyMetadata
+            && sameAspect.watermark == base.watermark && sameAspect.aiUpscale == base.aiUpscale
+            && sameAspect.includeStamps == base.includeStamps
+            && sameAspect.includeAnalysis == base.includeAnalysis,
+          "shared look, format and privacy settings are unchanged")
+    check(sameAspect.analysis.isEnabled && sameAspect.analysis.exportMode == .poster
+            && sameAspect.analysis.regions == base.analysis.regions,
+          "the analysis style stays shared, only the pins are cleared")
+
+    let differentAspect = BatchExportPolicy.snapshot(
+        base, fileURL: differentURL, documentURL: documentURL,
+        documentAspect: 4.0 / 3.0, fileAspect: 1.0)
+    check(differentAspect.crop == nil, "a different-shape file exports whole")
+
+    // Zero, one and three faces all get automatic focus; the policy never
+    // depends on how many faces the other file actually has.
+    for count in [3, 1, 0] {
+        let faces = (0..<count).map { index in
+            FaceGeometry.synthetic(boundingBox: CGRect(x: 0.05 + Double(index) * 0.25,
+                                                       y: 0.2, width: 0.2, height: 0.3))
+        }
+        let snapshot = BatchExportPolicy.snapshot(
+            base, fileURL: otherURL, documentURL: documentURL,
+            documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
+        check(snapshot.selectedFaceIndex == nil && snapshot.analysis.endpoints.isEmpty
+                && snapshot.analysis.anchors.isEmpty,
+              "a file with \(count) faces still uses automatic focus",
+              "faces \(faces.count)")
+    }
+
+    // The renderer guards an out-of-range index; the policy must not leak it.
+    var invalid = base
+    invalid.selectedFaceIndex = 99
+    let invalidDocument = BatchExportPolicy.snapshot(
+        invalid, fileURL: documentURL, documentURL: documentURL,
+        documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
+    let invalidOther = BatchExportPolicy.snapshot(
+        invalid, fileURL: otherURL, documentURL: documentURL,
+        documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
+    check(invalidDocument.selectedFaceIndex == 99 && invalidOther.selectedFaceIndex == nil,
+          "an out-of-range selection stays with the document and never leaks")
 }
 
 @MainActor
@@ -779,6 +893,144 @@ func testOperationCoordination() async {
         .filter { $0.hasSuffix(".tmp") } ?? []
     check(leftovers.isEmpty, "a cancelled batch leaves no partial files",
           leftovers.joined(separator: ", "))
+}
+
+// MARK: - P1-8
+
+@MainActor
+func testBatchCancellationStopsInFlightFile() async {
+    print("\n[P1-8] cancelling a batch stops the file in flight before it writes")
+
+    let prefix = "cancel-\(UUID().uuidString.prefix(8))"
+    let documentURL = workDir.appendingPathComponent("\(prefix)-doc.png")
+    let firstURL = workDir.appendingPathComponent("\(prefix)-first.png")
+    let secondURL = workDir.appendingPathComponent("\(prefix)-second.png")
+    guard let image = makeImage(width: 480, height: 600),
+          writePNG(image, to: documentURL),
+          writePNG(image, to: firstURL),
+          writePNG(image, to: secondURL) else {
+        check(false, "cancellation fixtures")
+        return
+    }
+
+    let model = EditorModel()
+    model.load(url: documentURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "document loads")
+    model.exportFormat = .png
+
+    let folder = workDir.appendingPathComponent("batch-cancel-\(prefix)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+    // The hook pauses the second file immediately before its write, which is
+    // the only moment where a cancellation can land after the render and still
+    // leave nothing behind.
+    let reached = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let writes = LockedCounter()
+    model.batchFileWillWriteHook = { _ in
+        guard writes.next() == 2 else { return }
+        reached.signal()
+        _ = release.wait(timeout: .now() + 30)
+    }
+
+    model.runBatch([firstURL, secondURL], to: folder)
+    let stopped = await waitUntil(120) { reached.wait(timeout: .now()) == .success }
+    check(stopped, "the batch reaches the second file just before writing")
+    model.cancelBatchExport()
+    release.signal()
+    check(await waitUntil(120) { !model.isBatchRunning && model.batchHasReport },
+          "the cancelled batch finishes promptly")
+
+    check(model.statusToken == .batchCancelled, "the status reports the cancellation",
+          "\(model.statusToken)")
+    check(model.batchSavedCount == 1, "the finished first file still counts",
+          "\(model.batchSavedCount)")
+    let firstOut = folder.appendingPathComponent("\(prefix)-first-retouched.png")
+    let secondOut = folder.appendingPathComponent("\(prefix)-second-retouched.png")
+    check(readImage(firstOut) != nil, "the first output is complete and readable")
+    check(!FileManager.default.fileExists(atPath: secondOut.path),
+          "the cancelled second file wrote nothing")
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?
+        .filter { $0.hasSuffix(".tmp") || $0.hasSuffix(".part") } ?? []
+    check(leftovers.isEmpty, "no temporary files remain", leftovers.joined(separator: ", "))
+
+    // The model must run normally again once the cancellation has been cleared.
+    model.batchFileWillWriteHook = nil
+    let again = workDir.appendingPathComponent("batch-after-cancel-\(prefix)")
+    try? FileManager.default.createDirectory(at: again, withIntermediateDirectories: true)
+    model.runBatch([firstURL], to: again)
+    check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
+          "a batch runs normally after a cancellation")
+    check(model.batchSavedCount == 1
+            && model.statusToken == .batchFinished(saved: 1, total: 1, cropsSkipped: 0),
+          "the later batch saved its file", "\(model.statusToken)")
+}
+
+// MARK: - P1-8 write failure
+
+@MainActor
+func testBatchWriteFailureIsNotCounted() async {
+    print("\n[P1-8] a failed write is not counted as a saved photo")
+
+    let prefix = "writefail-\(UUID().uuidString.prefix(8))"
+    let documentURL = workDir.appendingPathComponent("\(prefix)-doc.png")
+    let firstURL = workDir.appendingPathComponent("\(prefix)-first.png")
+    let secondURL = workDir.appendingPathComponent("\(prefix)-second.png")
+    guard let image = makeImage(width: 480, height: 600),
+          writePNG(image, to: documentURL),
+          writePNG(image, to: firstURL),
+          writePNG(image, to: secondURL) else {
+        check(false, "write-failure fixtures")
+        return
+    }
+
+    let model = EditorModel()
+    model.load(url: documentURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "document loads")
+    model.exportFormat = .png
+
+    let folder = workDir.appendingPathComponent("batch-writefail-\(prefix)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+    // The first file uses the real writer; the second reaches the same write
+    // stage and reports failure. A load or render failure would not prove that
+    // a failed write is kept out of the saved count.
+    let writes = LockedCounter()
+    model.batchFileWriteResultOverride = { _ in
+        writes.next() == 1 ? nil : false
+    }
+
+    model.runBatch([firstURL, secondURL], to: folder)
+    check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
+          "batch finishes")
+    check(writes.next() == 3, "both files reached the write stage")
+
+    check(model.batchSavedCount == 1, "the failed write is not counted",
+          "\(model.batchSavedCount)")
+    check(model.batchCompleted == 2,
+          "the failed file still finishes its turn", "\(model.batchCompleted)")
+    check(model.statusToken == .batchFinished(saved: 1, total: 2, cropsSkipped: 0),
+          "the report says one of two was saved", "\(model.statusToken)")
+
+    let firstOut = folder.appendingPathComponent("\(prefix)-first-retouched.png")
+    let secondOut = folder.appendingPathComponent("\(prefix)-second-retouched.png")
+    check(readImage(firstOut) != nil, "the real write produced a readable file")
+    check(!FileManager.default.fileExists(atPath: secondOut.path),
+          "the failed write produced no file")
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?
+        .filter { $0.hasSuffix(".tmp") || $0.hasSuffix(".part") } ?? []
+    check(leftovers.isEmpty, "no temporary files remain", leftovers.joined(separator: ", "))
+
+    // A later batch is unaffected once the test override is gone.
+    model.batchFileWriteResultOverride = nil
+    let again = workDir.appendingPathComponent("batch-after-writefail-\(prefix)")
+    try? FileManager.default.createDirectory(at: again, withIntermediateDirectories: true)
+    model.runBatch([firstURL], to: again)
+    check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
+          "a batch runs normally after a failed write")
+    check(model.batchSavedCount == 1
+            && model.statusToken == .batchFinished(saved: 1, total: 1, cropsSkipped: 0),
+          "the later batch saved its file", "\(model.statusToken)")
 }
 
 // MARK: - P1-6 / H-6 / M-3
@@ -2752,10 +3004,13 @@ func runAll() async {
     await testResetAllClearsEverything()
     await testCropIsUndoable()
     await testOrientationKeepsEditsAttached()
+    testBatchExportPolicy()
     await testBatchMatchesSingleExport()
     await testProjectRelink()
     await testProjectVersionGuard()
     await testOperationCoordination()
+    await testBatchCancellationStopsInFlightFile()
+    await testBatchWriteFailureIsNotCounted()
     await testPreviewStaysAtPreviewResolution()
     await testPrivacySettingDefaults()
     await testAIEditBoundaries()

@@ -55,6 +55,11 @@ final class ModelManager: ObservableObject {
 
     var isDownloading: Bool { activeID != nil }
 
+    /// A plan can contain a file whose catalog entry has no verified size
+    /// (SAM2 today). A determinate bar would sit at a misleading 0%, so the
+    /// sheet shows an activity indicator instead.
+    var progressIsIndeterminate: Bool { totalBytes <= 0 }
+
     var percent: Int {
         guard totalBytes > 0 else { return 0 }
         return max(0, min(100, Int((Double(receivedBytes) / Double(totalBytes) * 100).rounded())))

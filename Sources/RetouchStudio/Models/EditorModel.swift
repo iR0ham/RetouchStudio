@@ -750,6 +750,10 @@ final class EditorModel: ObservableObject {
     private var exportJob: Task<ExportService.Outcome, Never>?
     private var thumbTask: Task<Void, Never>?
     private var batchTask: Task<Void, Never>?
+    /// The file the batch is writing right now. A detached task does not
+    /// inherit the outer task's cancellation, so this reference is what lets
+    /// `cancelBatchExport` reach the photo in flight.
+    private var batchFileTask: Task<BatchOutcome, Never>?
     private var batchSources: [URL] = []
     private var batchFolder: URL?
     private var autosaveTask: Task<Void, Never>?
@@ -760,6 +764,12 @@ final class EditorModel: ObservableObject {
     /// nil and the methods below use AppKit.
     var recoveryChoiceHandler: ((Bool, String?) -> RecoveryChoice)?
     var recoveryLocateHandler: ((RetouchProject) -> URL?)?
+    /// Headless tests pause the file here to deliver a cancellation exactly
+    /// before the write. Production leaves this nil.
+    var batchFileWillWriteHook: (@Sendable (URL) -> Void)?
+    /// Headless tests force the write stage's result. `nil` uses the real
+    /// atomic writer; production leaves the property itself nil.
+    var batchFileWriteResultOverride: (@Sendable (URL) -> Bool?)?
     /// Project file to rewrite once a relocated photo finishes loading.
     private var pendingRelink: URL?
     private var batchGeneration = 0
@@ -903,6 +913,8 @@ final class EditorModel: ObservableObject {
         pendingRelink = relinkURL
         batchGeneration += 1
         batchTask?.cancel()
+        batchFileTask?.cancel()
+        batchFileTask = nil
         batchTask = nil
         isBatchRunning = false
         showBatchSheet = false
@@ -3035,6 +3047,9 @@ final class EditorModel: ObservableObject {
 
     func cancelBatchExport() {
         batchTask?.cancel()
+        // The file runs in its own detached task, which does not inherit the
+        // batch's cancellation, so it must be cancelled by name.
+        batchFileTask?.cancel()
     }
 
     func dismissBatchSheet() {
@@ -3056,11 +3071,15 @@ final class EditorModel: ObservableObject {
         batchGeneration += 1
         let batch = batchGeneration
         batchTask?.cancel()
+        batchFileTask?.cancel()
+        batchFileTask = nil
 
         let documentAspect = sourceAspect
         let documentURL = imageURL?.resolvingSymlinksInPath()
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
+        let willWrite = batchFileWillWriteHook
+        let writeResult = batchFileWriteResultOverride
 
         isBatchRunning = true
         batchTotal = urls.count
@@ -3074,34 +3093,56 @@ final class EditorModel: ObservableObject {
             var saved = 0
             var skipped = 0
             var completed = 0
+            var cancelled = false
             for (index, url) in urls.enumerated() {
-                if Task.isCancelled { break }
+                if Task.isCancelled {
+                    cancelled = true
+                    break
+                }
                 self?.statusToken = .batchProgress(index + 1, urls.count)
 
-                let outcome = await Task.detached(priority: .userInitiated) { () -> BatchOutcome in
+                let fileTask = Task.detached(priority: .userInitiated) { () -> BatchOutcome in
                     Self.exportOne(url, to: folder, snapshot: snapshot,
                                    documentAspect: documentAspect,
                                    documentURL: documentURL,
                                    processor: processor,
-                                   previewMaxDimension: previewMaxDimension)
-                }.value
+                                   previewMaxDimension: previewMaxDimension,
+                                   willWrite: willWrite,
+                                   writeResult: writeResult)
+                }
+                if let self, self.batchGeneration == batch {
+                    self.batchFileTask = fileTask
+                }
+                let outcome = await fileTask.value
+                if let self, self.batchGeneration == batch, self.batchFileTask == fileTask {
+                    self.batchFileTask = nil
+                }
 
-                if outcome.saved { saved += 1 }
-                if outcome.skippedCrop { skipped += 1 }
+                switch outcome {
+                case .cancelled:
+                    cancelled = true
+                case .failed:
+                    break
+                case .exported(let skippedCrop):
+                    saved += 1
+                    if skippedCrop { skipped += 1 }
+                }
+                if cancelled || Task.isCancelled { break }
+
                 completed = index + 1
                 if let self, self.batchGeneration == batch {
                     self.batchCompleted = completed
                     self.batchSavedCount = saved
                     self.batchSkippedCrops = skipped
                 }
-                if Task.isCancelled { break }
             }
 
             guard let self, self.batchGeneration == batch else { return }
+            self.batchFileTask = nil
             self.batchTask = nil
             self.isBatchRunning = false
             self.batchHasReport = true
-            let wasCancelled = Task.isCancelled
+            let wasCancelled = cancelled || Task.isCancelled
             self.end(token)
             if wasCancelled {
                 self.statusToken = .batchCancelled
@@ -3121,28 +3162,25 @@ final class EditorModel: ObservableObject {
                                               documentAspect: CGFloat,
                                               documentURL: URL?,
                                               processor: ImageProcessor,
-                                              previewMaxDimension: CGFloat) -> BatchOutcome {
+                                              previewMaxDimension: CGFloat,
+                                              willWrite: (@Sendable (URL) -> Void)?,
+                                              writeResult: (@Sendable (URL) -> Bool?)?) -> BatchOutcome {
+        // A cancelled batch must stop before loading or rendering the next
+        // photo, not after it has already paid for both.
+        if Task.isCancelled { return .cancelled }
         let fileAspect = ExportService.pixelAspect(of: url) ?? 0
-        let useCrop = ExportService.cropApplies(snapshot.crop,
-                                                documentAspect: documentAspect,
-                                                fileAspect: fileAspect)
-        var fileSnapshot = snapshot
-        fileSnapshot.crop = useCrop ? snapshot.crop : nil
-        // A patch describes exactly the pixels it was generated from. It may
-        // travel to another file only if that file is this very photo.
-        if url.resolvingSymlinksInPath() != documentURL {
-            fileSnapshot.aiEdits = []
-            // The turn belongs to this photo's frame, not to another file.
-            fileSnapshot.orientation = .identity
-        }
-        let skippedCrop = snapshot.crop != nil && !useCrop
+        var fileSnapshot = BatchExportPolicy.snapshot(
+            snapshot, fileURL: url, documentURL: documentURL,
+            documentAspect: documentAspect, fileAspect: fileAspect)
+        let skippedCrop = snapshot.crop != nil && fileSnapshot.crop == nil
 
         guard let result = processor.load(from: url,
                                           previewMaxDimension: previewMaxDimension,
                                           crop: fileSnapshot.crop,
                                           orientation: fileSnapshot.orientation) else {
-            return BatchOutcome(saved: false, skippedCrop: false)
+            return .failed
         }
+        if Task.isCancelled { return .cancelled }
         // Each file builds its own set inside the renderer, one file at a time.
         let source = ExportSource(image: result.sourceFull,
                                   masks: nil,
@@ -3161,17 +3199,24 @@ final class EditorModel: ObservableObject {
             }
         }
         guard let rendered = try? ExportService.renderFinal(fileSnapshot, source: source) else {
-            return BatchOutcome(saved: false, skippedCrop: false)
+            return .failed
         }
+        if Task.isCancelled { return .cancelled }
         let out = uniqueOutputURL(for: url, in: folder, format: fileSnapshot.format)
-        let saved = ExportService.write(rendered, snapshot: fileSnapshot, to: out,
-                                        colorSpace: fileSnapshot.aiUpscale
-                                            ? ExportUpscale.workingColorSpace
-                                            : result.colorSpace,
-                                        metadata: result.metadata,
-                                        protecting: url)
+        willWrite?(out)
+        // The hook and the write are the last two steps, so a cancellation that
+        // lands here leaves no file at all rather than a truncated one.
+        if Task.isCancelled { return .cancelled }
+        let saved = writeResult?(out) ?? ExportService.write(
+            rendered, snapshot: fileSnapshot, to: out,
+            colorSpace: fileSnapshot.aiUpscale
+                ? ExportUpscale.workingColorSpace
+                : result.colorSpace,
+            metadata: result.metadata,
+            protecting: url)
         // A file that produced no export is a failure, not a skipped crop.
-        return BatchOutcome(saved: saved, skippedCrop: skippedCrop && saved)
+        guard saved else { return .failed }
+        return .exported(skippedCrop: skippedCrop)
     }
 
     private nonisolated static func uniqueOutputURL(for url: URL,
@@ -3188,9 +3233,12 @@ final class EditorModel: ObservableObject {
     }
 }
 
-private struct BatchOutcome {
-    var saved = false
-    var skippedCrop = false
+private enum BatchOutcome {
+    case exported(skippedCrop: Bool)
+    case failed
+    /// The file stopped before writing anything, so it is not a failure and not
+    /// a saved photo.
+    case cancelled
 }
 
 /// State of the subject silhouette Body and Background rely on.

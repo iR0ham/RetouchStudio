@@ -383,20 +383,28 @@ struct ModelManagerView: View {
     private var downloadBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text(editor.s.modelsDownloading(manager.percent))
+                Text(manager.progressIsIndeterminate
+                     ? editor.s.modelsDownloadingUnknown
+                     : editor.s.modelsDownloading(manager.percent))
                     .font(Theme.Font.label)
                     .foregroundStyle(Theme.text)
                 Spacer(minLength: 8)
-                Text("\(sizeText(manager.receivedBytes)) / \(sizeText(manager.totalBytes))")
-                    .font(Theme.Font.value)
-                    .foregroundStyle(Theme.muted)
+                if manager.progressIsIndeterminate {
+                    Text(sizeText(manager.receivedBytes))
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.muted)
+                } else {
+                    Text("\(sizeText(manager.receivedBytes)) / \(sizeText(manager.totalBytes))")
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.muted)
+                }
                 chipButton(editor.s.modelsCancel) { manager.cancelDownload() }
             }
-            if manager.totalBytes > 0 {
-                ProgressView(value: Double(manager.percent), total: 100)
+            if manager.progressIsIndeterminate {
+                ProgressView()
                     .tint(Theme.accent)
             } else {
-                ProgressView()
+                ProgressView(value: Double(manager.percent), total: 100)
                     .tint(Theme.accent)
             }
         }

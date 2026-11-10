@@ -156,8 +156,12 @@ Prerequisites: macOS 14 or later with Xcode Command Line Tools. The local AI hel
 RETOUCH_SKIP_WORKER=1 ./build.sh release   # app only; the AI tools report the helper as missing
 RETOUCH_REBUNDLE=1 ./build.sh release      # force a fresh copy of the Python runtime
 ./Tests/run.sh                # engine + model tests
-cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # 57 worker tests
+cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # 60 worker tests
 ```
+
+The worker checkout is not under version control here. Regression tests that
+must survive a fresh clone are copied into `Docs/worker-regressions/` with their
+own run instructions; they are not part of the Swift suite.
 
 Overrides used by the bundler:
 

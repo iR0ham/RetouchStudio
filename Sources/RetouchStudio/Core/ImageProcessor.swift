@@ -1132,9 +1132,9 @@ final class ImageProcessor {
     }
 
     /// Writes the image; PNG and TIFF keep 16 bits per channel, JPEG stays at 8
-    /// because the format defines no deeper container. Source metadata is
-    /// carried over, with orientation normalized to 1 since the pixels have
-    /// already been rotated upright.
+    /// because the format defines no deeper container. With privacy removal on
+    /// only the approved technical keys travel (orientation and resolution);
+    /// with it off the source metadata round-trips.
     ///
     /// `maxDimension` downscales the longest edge with a Lanczos pass; it never
     /// enlarges, so a target larger than the photo writes the photo as-is.
@@ -1193,28 +1193,34 @@ final class ImageProcessor {
         return CGImageDestinationFinalize(destination)
     }
 
-    /// Removes the keys that say where a photo was taken or who owns the gear.
-    /// Only these keys: the rest of EXIF still describes how the picture was
-    /// taken, which an edit has no reason to discard. The artist lives in TIFF;
-    /// the serials and comments live in EXIF; the location is its own
-    /// dictionary.
+    /// The non-identifying technical metadata an export may keep.
+    ///
+    /// This is an allowlist, not a denylist: the output dictionary starts empty
+    /// and only orientation and resolution are copied from the source. GPS,
+    /// IPTC, XMP, TIFF identity (Artist/Make/Model/Copyright/Software), EXIF
+    /// identity and capture time, PNG text, MakerNote, ExifAux and vendor
+    /// blocks (8BIM and friends) are therefore dropped together, including any
+    /// namespace ImageIO learns about later.
     static func strippedPrivacyMetadata(_ metadata: [CFString: Any]) -> [CFString: Any] {
-        var properties = metadata
-        properties.removeValue(forKey: kCGImagePropertyGPSDictionary)
-        if var exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] {
-            for key in [kCGImagePropertyExifUserComment,
-                        kCGImagePropertyExifCameraOwnerName,
-                        kCGImagePropertyExifBodySerialNumber,
-                        kCGImagePropertyExifLensSerialNumber,
-                        kCGImagePropertyExifImageUniqueID] {
-                exif.removeValue(forKey: key)
+        var properties: [CFString: Any] = [:]
+        for key in [kCGImagePropertyDPIWidth, kCGImagePropertyDPIHeight] {
+            if let value = metadata[key] { properties[key] = value }
+        }
+        // Keep resolution from TIFF when it is the only place it lives, but
+        // never copy the identity keys that share the dictionary.
+        if let tiff = metadata[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
+            var resolution: [CFString: Any] = [:]
+            for key in [kCGImagePropertyTIFFXResolution,
+                        kCGImagePropertyTIFFYResolution,
+                        kCGImagePropertyTIFFResolutionUnit] {
+                if let value = tiff[key] { resolution[key] = value }
             }
-            properties[kCGImagePropertyExifDictionary] = exif
+            if !resolution.isEmpty {
+                properties[kCGImagePropertyTIFFDictionary] = resolution
+            }
         }
-        if var tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
-            tiff.removeValue(forKey: kCGImagePropertyTIFFArtist)
-            properties[kCGImagePropertyTIFFDictionary] = tiff
-        }
+        // The pixels were rotated upright before this call.
+        properties[kCGImagePropertyOrientation] = 1
         return properties
     }
 

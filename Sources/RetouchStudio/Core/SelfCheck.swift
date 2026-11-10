@@ -1875,9 +1875,9 @@ enum SelfCheck {
 
     // MARK: - ۱۲.۵) حفظ حریم خصوصی در متادیتا
 
-    /// A portrait can say where it was taken and which body and lens shot it.
-    /// The export pipeline drops those keys by default and leaves the rest of
-    /// EXIF, the orientation, the DPI and the profile alone.
+    /// A portrait can say where it was taken, which body and lens shot it and
+    /// when. The export pipeline drops every identifying key by default and
+    /// leaves only orientation, DPI and the profile.
     private static func checkPrivacyMetadata(outDirectory: String) -> Bool {
         let size = 64
         guard let context = CGContext(data: nil, width: size, height: size,
@@ -1943,9 +1943,8 @@ enum SelfCheck {
             && strippedExif[kCGImagePropertyExifUserComment] == nil
             && strippedExif[kCGImagePropertyExifImageUniqueID] == nil
             && strippedTIFF[kCGImagePropertyTIFFArtist] == nil
-        let keptExposure = (strippedExif[kCGImagePropertyExifDateTimeOriginal] as? String)
-            == "2026:01:02 03:04:05"
-            && (strippedTIFF[kCGImagePropertyTIFFMake] as? String) == "CameraCo"
+        let removedCapture = strippedExif[kCGImagePropertyExifDateTimeOriginal] == nil
+            && strippedTIFF[kCGImagePropertyTIFFMake] == nil
         let orientation = (stripped[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 0
         let dpi = (stripped[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 0
         let geometryOK = orientation == 1 && abs(dpi - 300) < 1
@@ -1967,11 +1966,11 @@ enum SelfCheck {
 
         print("  \(noLocation ? "✓" : "✗") GPS is not written to the export")
         print("  \(noIdentity ? "✓" : "✗") owner, serials and comments are gone")
-        print("  \(keptExposure ? "✓" : "✗") exposure date and camera make survive")
+        print("  \(removedCapture ? "✓" : "✗") capture time and camera make are gone")
         print("  \(geometryOK ? "✓" : "✗") orientation=\(orientation) dpi=\(Int(dpi)) size preserved (expect 1 / 300 / \(size))")
         print("  \(keptIdentity ? "✓" : "✗") turning the setting off keeps the identity keys")
         return wroteStripped && wroteKept && noLocation && noIdentity
-            && keptExposure && geometryOK && keptIdentity
+            && removedCapture && geometryOK && keptIdentity
     }
 
     /// A batch job carries one snapshot but many shapes. The crop describes the

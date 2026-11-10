@@ -600,9 +600,9 @@ final class PersianL10n: L10n {
     override var settingsExportHelp: String {
         "قالب، کیفیت و مشخصات فایل برای نسخه‌های ذخیره‌شده."
     }
-    override var settingsStripMetadata: String { "حذف موقعیت مکانی و مشخصات دوربین" }
+    override var settingsStripMetadata: String { "حذف مشخصات هویتی تصویر" }
     override var settingsStripMetadataNote: String {
-        "GPS، نام مالک دوربین، شمارهٔ سریال و یادداشت‌ها از خروجی حذف می‌شوند. جهت، پروفایل رنگ و ابعاد حفظ می‌شوند."
+        "GPS، سازنده و مدل دوربین، شمارهٔ سریال، نام پدیدآورنده، زمان ثبت و دیگر مشخصات هویتی از خروجی حذف می‌شوند. جهت، وضوح و پروفایل رنگ حفظ می‌شوند."
     }
     override var settingsTools: String { "ابزارها" }
     override var settingsToolsHelp: String { "اندازهٔ قلم ترمیم و نمایش کادر چهره." }
@@ -650,6 +650,7 @@ final class PersianL10n: L10n {
     override func modelsDownloading(_ percent: Int) -> String {
         "در حال دانلود… \(Digits.num(percent))٪"
     }
+    override var modelsDownloadingUnknown: String { "در حال دانلود…" }
     override func modelsDownloaded(_ name: String) -> String { "\(name) نصب شد." }
     override var modelsDownloadCancelled: String { "دانلود لغو شد. چیزی نصب نشد." }
     override var modelsDownloadFailed: String { "دانلود کامل نشد. چیزی نصب نشد." }

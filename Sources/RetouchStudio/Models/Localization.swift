@@ -587,9 +587,9 @@ class L10n {
     var settingsExportHelp: String {
         "File format, quality and metadata for saved copies."
     }
-    var settingsStripMetadata: String { "Remove location and camera info" }
+    var settingsStripMetadata: String { "Remove identifying image metadata" }
     var settingsStripMetadataNote: String {
-        "Leaves GPS, camera owner, serial numbers and comments out of exports. Orientation, colour profile and size are kept."
+        "Leaves GPS, camera make and model, serial numbers, creator, capture time and other identifying details out of exports. Orientation, resolution and colour profile are kept."
     }
     var settingsTools: String { "TOOLS" }
     var settingsToolsHelp: String { "Healing brush size and the face overlay." }
@@ -634,6 +634,7 @@ class L10n {
     var modelsDownloadAction: String { "Download" }
     var modelsCancel: String { "Cancel" }
     func modelsDownloading(_ percent: Int) -> String { "Downloading… \(percent)%" }
+    var modelsDownloadingUnknown: String { "Downloading…" }
     func modelsDownloaded(_ name: String) -> String { "\(name) is installed." }
     var modelsDownloadCancelled: String { "Download cancelled. Nothing was installed." }
     var modelsDownloadFailed: String { "The download did not finish. Nothing was installed." }
