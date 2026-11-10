@@ -17,7 +17,7 @@ final class AIRuntimeInstaller: ObservableObject {
 
     static let shared = AIRuntimeInstaller()
 
-    @Published private(set) var phase: Phase = AIRuntime.isInstalled ? .installed : .missing
+    @Published private(set) var phase: Phase
     @Published private(set) var received: Int64 = 0
     @Published private(set) var total: Int64 = 0
 
@@ -39,7 +39,32 @@ final class AIRuntimeInstaller: ObservableObject {
     private var task: URLSessionDownloadTask?
     private var downloader: DownloadDelegate?
 
-    private init() {}
+    private init() {
+        // A previous installation may have been interrupted after the old
+        // runtime was moved aside. Recovery can run the functional contract, so
+        // it stays off the main actor; the card shows the structural state
+        // until the result arrives.
+        phase = AIRuntime.isStructurallyInstalled ? .installed : .missing
+        Task.detached(priority: .utility) {
+            let result = AIWorker.recoverRuntimeIfNeeded(force: true)
+            let installed = AIRuntime.isStructurallyInstalled
+            await MainActor.run {
+                switch self.phase {
+                case .downloading, .verifying, .installing: return
+                default: break
+                }
+                if !result.isSuccess {
+                    self.phase = .failed(result.failure?.code == .busy
+                        ? L10n.current.aiRuntimeBusy
+                        : L10n.current.aiRuntimeRecoveryFailed)
+                } else if installed {
+                    self.phase = .installed
+                } else if case .failed = self.phase {
+                    self.phase = .missing
+                }
+            }
+        }
+    }
 
     func install(_ package: AIRuntime.Package) {
         guard !isBusy else { return }
@@ -136,9 +161,25 @@ final class AIRuntimeInstaller: ObservableObject {
         Task.detached(priority: .userInitiated) {
             let outcome: Result<Void, Error>
             do {
-                try AIRuntime.install(archive: archive)
+                var hooks = AIRuntime.InstallHooks()
+                hooks.beforeInstall = {
+                    try AIWorker.prepareForRuntimeReplacement(
+                        support: AIWorker.runtimeSupportDirectory)
+                }
+                // The transaction verifies the archive again, under its own
+                // lock, so a file swapped between download and install is
+                // rejected rather than extracted.
+                try AIRuntime.install(archive: archive,
+                                      support: AIWorker.runtimeSupportDirectory,
+                                      package: AIRuntime.package, hooks: hooks)
+                AIWorker.runtimeDidChange()
+                AIWorker.noteRuntimeValidated()
                 outcome = .success(())
             } catch {
+                // A failed attempt may have left a different live directory, so
+                // the cached "validated" answer for this process is no longer
+                // trustworthy.
+                AIWorker.runtimeDidChange()
                 outcome = .failure(error)
             }
             try? FileManager.default.removeItem(at: archive)

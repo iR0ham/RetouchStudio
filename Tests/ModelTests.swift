@@ -26,6 +26,16 @@ let workDir = FileManager.default.temporaryDirectory
     .appendingPathComponent("retouch-modeltests-\(UUID().uuidString)")
 try? FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
 
+// Every recovery write in this process goes to one scratch directory, including
+// the delayed autosave tasks a model leaves behind. The override is set before
+// the first model exists and is never changed again, so a task cannot follow a
+// later test into a different directory. The production copy is only read for
+// a fingerprint; the isolation test at the end proves it stayed byte-identical.
+let recoveryRoot = workDir.appendingPathComponent("recovery", isDirectory: true)
+try? FileManager.default.createDirectory(at: recoveryRoot, withIntermediateDirectories: true)
+let productionRecoveryBefore = RecoveryFingerprint.capture(RecoveryStore.productionDirectory)
+RecoveryStore.directoryOverride = recoveryRoot
+
 /// Suspends the MainActor task so the model's own load/export tasks can run.
 @MainActor
 func waitUntil(_ timeout: TimeInterval = 60, _ condition: @MainActor () -> Bool) async -> Bool {
@@ -1428,6 +1438,1313 @@ func testAnalysisExportNeedsFace() async {
           "the ordinary format is kept without a face", name)
 }
 
+// MARK: - Milestone 1: data integrity
+
+struct RuntimeTestFailure: Error {}
+
+/// Counts how many times a test hook may still reject a path. A rollback
+/// validates the restored copy through the same hook, so a rejection must be
+/// one-shot to model a bad new runtime rather than a broken hook.
+final class RuntimeVerifyPlan {
+    let root: URL
+    var armed = false
+    var remainingRejections: Int
+
+    init(root: URL, rejections: Int = 1) {
+        self.root = root
+        self.remainingRejections = rejections
+    }
+
+    func shouldReject(_ candidate: URL) -> Bool {
+        guard armed, remainingRejections > 0,
+              candidate.standardizedFileURL == root.standardizedFileURL else { return false }
+        remainingRejections -= 1
+        if remainingRejections == 0 { armed = false }
+        return true
+    }
+}
+
+func fileBytes(_ url: URL) -> Data? {
+    try? Data(contentsOf: url)
+}
+
+/// A fixture that passes the structural contract. It is not a real Python, so
+/// tests replace the functional hook; this keeps the transaction tests offline
+/// and bounded while still exercising the layout the real runtime must have.
+func makeFakeRuntime(at root: URL, marker: String) throws {
+    let manager = FileManager.default
+    try manager.createDirectory(at: root.appendingPathComponent("bin"),
+                                withIntermediateDirectories: true)
+    let python = root.appendingPathComponent("bin/python3")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: python)
+    try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: python.path)
+    let worker = root.appendingPathComponent("retouch_ai_worker", isDirectory: true)
+    try manager.createDirectory(at: worker, withIntermediateDirectories: true)
+    for name in ["__main__.py", "server.py", "engine.py"] {
+        try Data("# fake\n".utf8).write(to: worker.appendingPathComponent(name))
+    }
+    try manager.createDirectory(at: root.appendingPathComponent("site-packages",
+                                                                isDirectory: true),
+                                withIntermediateDirectories: true)
+    try manager.createDirectory(
+        at: root.appendingPathComponent("Python.framework/Versions/3.13",
+                                        isDirectory: true),
+        withIntermediateDirectories: true)
+    try Data(marker.utf8).write(to: root.appendingPathComponent("marker.txt"))
+}
+
+/// Install hooks for fixture runtimes: extraction comes from the test, the
+/// structural contract is the real one, and the functional stage is stubbed
+/// unless the test supplies its own decision.
+func fakeRuntimeHooks(
+    extract: @escaping (URL, URL) throws -> Void,
+    functional: ((URL) -> RuntimeValidationReport)? = nil
+) -> AIRuntime.InstallHooks {
+    var hooks = AIRuntime.InstallHooks()
+    hooks.extract = extract
+    hooks.validateRuntime = { root in
+        if let functional { return functional(root) }
+        let layout = AIRuntimeValidation.structural(root: root)
+        guard layout.ok else { return layout }
+        return RuntimeValidationReport.success(.functional)
+    }
+    return hooks
+}
+
+func recoveryHooks(
+    functional: ((URL) -> RuntimeValidationReport)? = nil
+) -> AIRuntime.InstallHooks {
+    fakeRuntimeHooks(extract: { _, _ in throw RuntimeTestFailure() },
+                     functional: functional)
+}
+
+/// Writes a durable marker exactly as the transaction would, for recovery tests
+/// that start from a state a crash left behind.
+func writeTransactionMarker(in support: URL, id: String, state: String,
+                            hadPrevious: Bool, extra: [String: Any] = [:]) throws {
+    var object: [String: Any] = [
+        "id": id,
+        "state": state,
+        "had_previous": hadPrevious,
+        "created": "2026-11-10T00:00:00Z",
+    ]
+    for (key, value) in extra { object[key] = value }
+    let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    try data.write(to: support.appendingPathComponent("runtime-transaction.json"),
+                   options: .atomic)
+}
+
+func transactionMarker(in support: URL) -> [String: Any]? {
+    let url = support.appendingPathComponent("runtime-transaction.json")
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+func transactionState(in support: URL) -> String? {
+    transactionMarker(in: support)?["state"] as? String
+}
+
+func hasBackupDirectory(in support: URL) -> Bool {
+    FileManager.default.fileExists(atPath: AIRuntime.backupDirectory(in: support).path)
+}
+
+func hasRejectedDirectory(in support: URL) -> Bool {
+    let prefix = AIRuntime.installDirectory(in: support).lastPathComponent + "-rejected-"
+    let entries = (try? FileManager.default.contentsOfDirectory(
+        at: support, includingPropertiesForKeys: nil)) ?? []
+    return entries.contains { $0.lastPathComponent.hasPrefix(prefix) }
+}
+
+func copyContents(of source: URL, into destination: URL) throws {
+    let manager = FileManager.default
+    for item in try manager.contentsOfDirectory(at: source,
+                                                 includingPropertiesForKeys: nil) {
+        try manager.copyItem(at: item,
+                             to: destination.appendingPathComponent(item.lastPathComponent))
+    }
+}
+
+func marker(at root: URL) -> String? {
+    guard let data = try? Data(contentsOf: root.appendingPathComponent("marker.txt"))
+    else { return nil }
+    return String(data: data, encoding: .utf8)
+}
+
+func hasStagingDirectory(in support: URL) -> Bool {
+    let manager = FileManager.default
+    let prefix = AIRuntime.installDirectory(in: support).lastPathComponent + "-installing-"
+    let entries = (try? manager.contentsOfDirectory(at: support,
+                                                     includingPropertiesForKeys: nil)) ?? []
+    return entries.contains { $0.lastPathComponent.hasPrefix(prefix) }
+}
+
+/// The production recovery copy's identity, captured before the suite starts
+/// and compared at the end. Reading it is safe; nothing here writes to it.
+struct RecoveryFingerprint: Equatable {
+    let exists: Bool
+    let size: Int?
+    let modified: Date?
+    let hash: String?
+
+    static func capture(_ directory: URL) -> RecoveryFingerprint {
+        let url = directory.appendingPathComponent("session.retouch")
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: url.path) else {
+            return RecoveryFingerprint(exists: false, size: nil, modified: nil, hash: nil)
+        }
+        let attributes = try? manager.attributesOfItem(atPath: url.path)
+        return RecoveryFingerprint(
+            exists: true,
+            size: (attributes?[.size] as? NSNumber)?.intValue,
+            modified: attributes?[.modificationDate] as? Date,
+            hash: try? AIRuntime.sha256(of: url))
+    }
+}
+
+/// The model debounces a recovery write by 1.5 s. A task from the previous
+/// test can otherwise land in the middle of this one, so wait past the
+/// debounce, then clear the scratch copy before installing a fixture.
+@MainActor
+func settleRecoveryWrites() async {
+    try? await Task.sleep(nanoseconds: 1_800_000_000)
+    RecoveryStore.clear()
+}
+
+@MainActor
+func testRecoveryCancelPreservesData() async {
+    print("\n[M1-R] recovery survives cancel, Escape, close and a cancelled Locate")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let source = workDir.appendingPathComponent("recovery-photo.png")
+    check(makeImage(width: 320, height: 400).map { writePNG($0, to: source) } ?? false,
+          "recovery fixture written")
+
+    let project = RetouchProject(imagePath: source.path,
+                                 adjustments: Adjustments(),
+                                 exportFormat: "png",
+                                 exportQuality: 0.92,
+                                 autoRetouchStrength: 70)
+    check(RecoveryStore.write(project), "recovery copy written")
+
+    // Escape and a closed alert both arrive as .abort. Only the explicit
+    // third button may be destructive.
+    check(EditorModel.missingSourceChoice(for: .abort) == .cancel,
+          "Escape/close on the Locate prompt cancels")
+    check(EditorModel.restoreChoice(for: .abort) == .cancel,
+          "Escape/close on the Restore prompt cancels")
+    check(EditorModel.missingSourceChoice(for: .alertSecondButtonReturn) == .cancel,
+          "the Cancel button on the Locate prompt cancels")
+    check(EditorModel.restoreChoice(for: .alertSecondButtonReturn) == .cancel,
+          "the Cancel button on the Restore prompt cancels")
+    check(EditorModel.missingSourceChoice(for: .alertThirdButtonReturn) == .discard,
+          "the explicit Discard response is recognized")
+    check(EditorModel.restoreChoice(for: .alertThirdButtonReturn) == .discard,
+          "the explicit Discard response is recognized")
+
+    var prompts = 0
+    let cancelModel = EditorModel()
+    cancelModel.recoveryChoiceHandler = { _, _ in
+        prompts += 1
+        return .cancel
+    }
+    cancelModel.offerRecoveryIfNeeded()
+    check(RecoveryStore.read() != nil, "Cancel keeps recovery data")
+    check(prompts == 1, "recovery prompt shown once", "\(prompts)")
+    cancelModel.offerRecoveryIfNeeded()
+    check(prompts == 1, "recovery prompt does not repeat in one session", "\(prompts)")
+
+    let missing = workDir.appendingPathComponent("recovery-missing.png")
+    let relocated = workDir.appendingPathComponent("recovery-relocated.png")
+    check(makeImage(width: 320, height: 400).map { writePNG($0, to: relocated) } ?? false,
+          "relocated fixture written")
+    let missingProject = RetouchProject(imagePath: missing.path,
+                                        adjustments: Adjustments(),
+                                        exportFormat: "png",
+                                        exportQuality: 0.92,
+                                        autoRetouchStrength: 70)
+    check(RecoveryStore.write(missingProject), "missing-photo recovery written")
+    var locatePrompts = 0
+    var restorePrompts = 0
+    let locateModel = EditorModel()
+    locateModel.recoveryChoiceHandler = { missingSource, _ in
+        if missingSource { locatePrompts += 1 } else { restorePrompts += 1 }
+        return missingSource ? .locate : .cancel
+    }
+    locateModel.recoveryLocateHandler = { _ in relocated }
+    locateModel.offerRecoveryIfNeeded()
+    check(RecoveryStore.read() != nil, "cancelled Locate keeps recovery data")
+    check(RecoveryStore.read()?.imagePath == missing.path,
+          "Locate then Cancel keeps the original recovery path")
+    check(locatePrompts == 1, "Locate prompt shown once", "\(locatePrompts)")
+    check(restorePrompts == 1, "a successful Locate is followed by the Restore prompt",
+          "\(restorePrompts)")
+
+    check(RecoveryStore.write(project), "recovery copy rewritten for discard")
+    let discardModel = EditorModel()
+    discardModel.recoveryChoiceHandler = { _, _ in .discard }
+    discardModel.offerRecoveryIfNeeded()
+    check(RecoveryStore.read() == nil, "explicit Discard deletes recovery data")
+}
+
+@MainActor
+func testRecoveryRestoresAfterSimulatedRelaunch() async {
+    print("\n[M1-R2] recovery survives a simulated relaunch and restores the document")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let source = workDir.appendingPathComponent("relaunch-photo.png")
+    check(makeImage(width: 320, height: 400).map { writePNG($0, to: source) } ?? false,
+          "relaunch fixture written")
+    let project = RetouchProject(imagePath: source.path,
+                                 adjustments: Adjustments(),
+                                 exportFormat: "png",
+                                 exportQuality: 0.92,
+                                 autoRetouchStrength: 70)
+    check(RecoveryStore.write(project), "recovery copy written")
+
+    // Simulated relaunch: a new model and a new session flag. This proves the
+    // file survives a terminated process; it is not a real crash test.
+    check(RecoveryStore.read() != nil, "recovery data survives the simulated termination")
+    let restored = EditorModel()
+    restored.recoveryChoiceHandler = { missingSource, _ in
+        missingSource ? .cancel : .restore
+    }
+    restored.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { restored.hasImage && !restored.isBusy },
+          "document restored on the next launch")
+    check(restored.imageName == source.lastPathComponent,
+          "restored document keeps the photo name", restored.imageName)
+    check(restored.imageURL?.standardizedFileURL == source.standardizedFileURL,
+          "restored document keeps the photo URL")
+}
+
+@MainActor
+func testRecoveryLocatePathWaitsForRestore() async {
+    print("\n[M1-R3] a located path is recorded only after Restore")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let missing = workDir.appendingPathComponent("locate-missing.png")
+    let actual = workDir.appendingPathComponent("locate-actual.png")
+    check(makeImage(width: 320, height: 400).map { writePNG($0, to: actual) } ?? false,
+          "located fixture written")
+
+    var adjustments = Adjustments()
+    adjustments.exposure = 0.4
+    let project = RetouchProject(imagePath: missing.path,
+                                 adjustments: adjustments,
+                                 exportFormat: "png",
+                                 exportQuality: 0.92,
+                                 autoRetouchStrength: 70)
+    check(RecoveryStore.write(project), "missing-path recovery written")
+
+    var prompts: [Bool] = []
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { missingSource, _ in
+        prompts.append(missingSource)
+        return missingSource ? .locate : .restore
+    }
+    model.recoveryLocateHandler = { _ in actual }
+    model.offerRecoveryIfNeeded()
+    check(prompts == [true, false], "Locate is followed by the Restore prompt")
+    check(RecoveryStore.read()?.imagePath == missing.path,
+          "the recovery path is untouched before the Restore answer")
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the located photo restores")
+    check(await waitUntil(10) { RecoveryStore.read()?.imagePath == actual.path },
+          "the recovery path is updated after Restore")
+}
+
+@MainActor
+func testFailedLoadPreservesDocument() async {
+    print("\n[M1-L] a failed open leaves the current document intact")
+
+    let good = workDir.appendingPathComponent("failedload-good.png")
+    check(makeImage(width: 400, height: 500).map { writePNG($0, to: good) } ?? false,
+          "good fixture written")
+    let bad = workDir.appendingPathComponent("failedload-bad.png")
+    check((try? Data("not an image".utf8).write(to: bad)) != nil, "corrupt fixture written")
+
+    let model = EditorModel()
+    model.load(url: good)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "good fixture loads")
+    model.adjustments.smooth = 30
+    check(model.adjustments.smooth == 30, "an edit is made before the failed open")
+    check(model.canUndo, "the edit is in the undo history")
+    let name = model.imageName
+    let url = model.imageURL
+    let suggested = model.suggestedFileName()
+    let title = model.windowTitle
+
+    model.load(url: bad)
+    check(await waitUntil { model.status == L10n.current.couldNotRead },
+          "the failure is reported")
+    check(model.hasImage, "the previous image remains open")
+    check(model.imageName == name, "the previous name remains", model.imageName)
+    check(model.imageURL == url, "the previous URL remains")
+    check(model.adjustments.smooth == 30, "the previous adjustments remain")
+    check(model.canUndo, "the previous undo history remains")
+    check(model.suggestedFileName() == suggested,
+          "the export name still describes the previous photo")
+    check(model.windowTitle == title, "the title still describes the previous photo")
+    model.undo()
+    check(model.adjustments.smooth == 0, "undo still reaches the edit made before the failure")
+
+    let empty = EditorModel()
+    empty.load(url: bad)
+    check(await waitUntil { empty.status == L10n.current.couldNotRead },
+          "the failure is reported with no document")
+    check(!empty.hasImage, "the failed image does not become the document")
+    check(empty.imageName.isEmpty, "the failed image does not become the title")
+    check(empty.imageURL == nil, "the failed image does not become the URL")
+    check(empty.windowTitle == L10n.current.appName, "the window keeps the app title")
+    check(!empty.suggestedFileName().contains("failedload-bad"),
+          "the suggested export name does not use the failed file")
+}
+
+@MainActor
+func testExportProtectsSource() async {
+    print("\n[M1-X] export refuses the source path and every alias")
+
+    let source = workDir.appendingPathComponent("export-source.png")
+    check(makeImage(width: 480, height: 600).map { writePNG($0, to: source) } ?? false,
+          "source fixture written")
+    guard let before = fileBytes(source) else {
+        check(false, "source bytes are readable")
+        return
+    }
+
+    let model = EditorModel()
+    model.load(url: source)
+    model.exportFormat = .png
+    check(await waitUntil { model.hasImage && !model.isBusy }, "source fixture loads")
+
+    model.export(to: source)
+    check(!model.isBusy, "same-path export is refused before rendering")
+    check(model.status == L10n.current.exportRefusedOriginal,
+          "the same-path refusal is reported", model.status)
+    check(fileBytes(source) == before, "the source is unchanged after the same-path refusal")
+
+    let symlink = workDir.appendingPathComponent("export-symlink.png")
+    try? FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: source)
+    model.export(to: symlink)
+    check(!model.isBusy, "the symlink alias is refused before rendering")
+    check(fileBytes(source) == before, "the source is unchanged after the symlink refusal")
+
+    let hardlink = workDir.appendingPathComponent("export-hardlink.png")
+    let linked = (try? FileManager.default.linkItem(at: source, to: hardlink)) != nil
+    if linked {
+        model.export(to: hardlink)
+        check(!model.isBusy, "the hard-link alias is refused before rendering")
+        check(fileBytes(source) == before, "the source is unchanged after the hard-link refusal")
+    } else {
+        print("  · hard links are not available here; NOT RUN")
+    }
+
+    // The writer itself refuses too: this is the check immediately before the
+    // replace, independent of the UI's early check.
+    if let image = makeImage(width: 32, height: 32) {
+        let rendered = RenderedExport(image: CIImage(cgImage: image),
+                                      carriesSourceMetadata: false)
+        var snapshot = ExportSnapshot()
+        snapshot.format = .png
+        let direct = ExportService.writeResult(rendered, snapshot: snapshot, to: source,
+                                               colorSpace: sRGB, metadata: [:],
+                                               protecting: source)
+        check(direct == .refusedOriginal, "the writer refuses the source at commit time")
+        let directAlias = ExportService.writeResult(rendered, snapshot: snapshot, to: symlink,
+                                                    colorSpace: sRGB, metadata: [:],
+                                                    protecting: source)
+        check(directAlias == .refusedOriginal, "the writer refuses a symlink at commit time")
+        if linked {
+            let directHardlink = ExportService.writeResult(rendered, snapshot: snapshot,
+                                                           to: hardlink, colorSpace: sRGB,
+                                                           metadata: [:], protecting: source)
+            check(directHardlink == .refusedOriginal,
+                  "the writer refuses a hard link at commit time")
+        }
+    }
+
+    let valid = workDir.appendingPathComponent("export-valid.png")
+    model.export(to: valid)
+    check(await waitUntil(120) {
+        FileManager.default.fileExists(atPath: valid.path) && !model.isBusy
+    }, "a valid destination still exports")
+    check(fileBytes(source) == before, "the source is unchanged after a valid export")
+}
+
+@MainActor
+func testBatchDoesNotOverwriteSource() async {
+    print("\n[M1-B] batch output cannot replace a source image")
+
+    let source = workDir.appendingPathComponent("batch-source.png")
+    check(makeImage(width: 480, height: 600).map { writePNG($0, to: source) } ?? false,
+          "batch source written")
+    guard let before = fileBytes(source) else {
+        check(false, "batch source bytes are readable")
+        return
+    }
+
+    let model = EditorModel()
+    model.load(url: source)
+    model.exportFormat = .png
+    check(await waitUntil { model.hasImage && !model.isBusy }, "batch source loads")
+
+    model.runBatch([source], to: workDir)
+    check(await waitUntil(120) {
+        !model.isBatchRunning && model.batchCompleted == 1
+    }, "batch finishes")
+    check(fileBytes(source) == before,
+          "the batch leaves the source byte-for-byte unchanged")
+    check(model.batchSavedCount == 1, "the batch saves a distinct output",
+          "\(model.batchSavedCount)")
+
+    let entries = (try? FileManager.default.contentsOfDirectory(
+        at: workDir, includingPropertiesForKeys: nil)) ?? []
+    check(entries.contains { $0.lastPathComponent.hasPrefix("batch-source-retouched") },
+          "the batch output exists under a different name")
+}
+
+@MainActor
+func testRuntimeTransactionalInstall() {
+    print("\n[M1-AI] runtime installation is transactional")
+
+    let manager = FileManager.default
+    let oldFixture = workDir.appendingPathComponent("runtime-old-\(UUID().uuidString)")
+    let newFixture = workDir.appendingPathComponent("runtime-new-\(UUID().uuidString)")
+    do {
+        try makeFakeRuntime(at: oldFixture, marker: "old")
+        try makeFakeRuntime(at: newFixture, marker: "new")
+    } catch {
+        check(false, "runtime fixtures written", "\(error)")
+        return
+    }
+
+    func makeSupport(_ label: String) -> URL {
+        let url = workDir.appendingPathComponent("runtime-\(label)-\(UUID().uuidString)",
+                                                isDirectory: true)
+        try? manager.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    func seedLive(_ support: URL, _ fixture: URL) {
+        let install = AIRuntime.installDirectory(in: support)
+        try? manager.createDirectory(at: install, withIntermediateDirectories: true)
+        try? copyContents(of: fixture, into: install)
+    }
+    func extractNew(_ archive: URL, _ staging: URL) throws {
+        try copyContents(of: newFixture, into: staging)
+    }
+
+    // A. A first install has no previous runtime to protect.
+    let firstSupport = makeSupport("first")
+    do {
+        try AIRuntime.install(archive: newFixture, support: firstSupport,
+                              hooks: fakeRuntimeHooks(extract: extractNew))
+        let install = AIRuntime.installDirectory(in: firstSupport)
+        check(AIRuntime.isStructurallyValid(root: install), "A: a first install lands")
+        check(marker(at: install) == "new", "A: the first install is the new runtime")
+        check(transactionState(in: firstSupport) == "committed",
+              "A: the marker records a committed install")
+        check(!hasBackupDirectory(in: firstSupport), "A: no backup after a first install")
+        check(!hasStagingDirectory(in: firstSupport), "A: no staging after a first install")
+    } catch {
+        check(false, "A: first install", "\(error)")
+    }
+
+    // B. Replacing a runtime: the old copy is a backup until the new one has
+    // passed the full contract.
+    let replaceSupport = makeSupport("replace")
+    seedLive(replaceSupport, oldFixture)
+    do {
+        try AIRuntime.install(archive: newFixture, support: replaceSupport,
+                              hooks: fakeRuntimeHooks(extract: extractNew))
+        let install = AIRuntime.installDirectory(in: replaceSupport)
+        check(marker(at: install) == "new", "B: a replacement installs the new runtime")
+        check(transactionState(in: replaceSupport) == "committed",
+              "B: the replacement is committed")
+        check(!hasBackupDirectory(in: replaceSupport),
+              "B: the old runtime is deleted only after the new one is committed")
+        check(!hasStagingDirectory(in: replaceSupport),
+              "B: no staging remains after a replacement")
+    } catch {
+        check(false, "B: replacement install", "\(error)")
+    }
+
+    // C. A corrupt archive is rejected by extraction and changes nothing.
+    let corruptSupport = makeSupport("corrupt")
+    seedLive(corruptSupport, oldFixture)
+    let corruptArchive = workDir.appendingPathComponent(
+        "runtime-corrupt-\(UUID().uuidString).zip")
+    try? Data("not a zip".utf8).write(to: corruptArchive)
+    var corruptHooks = AIRuntime.InstallHooks()
+    corruptHooks.validateRuntime = { _ in RuntimeValidationReport.success(.functional) }
+    var corruptThrew = false
+    do {
+        try AIRuntime.install(archive: corruptArchive, support: corruptSupport,
+                              hooks: corruptHooks)
+    } catch {
+        corruptThrew = true
+    }
+    check(corruptThrew, "C: a corrupt archive is rejected")
+    check(marker(at: AIRuntime.installDirectory(in: corruptSupport)) == "old",
+          "C: the old runtime survives a corrupt archive")
+    check(!hasBackupDirectory(in: corruptSupport), "C: no backup is created for a corrupt archive")
+    check(!hasStagingDirectory(in: corruptSupport),
+          "C: the failed extraction leaves no staging")
+
+    // D. A staged tree with no worker package fails the structural contract.
+    let layoutSupport = makeSupport("layout")
+    seedLive(layoutSupport, oldFixture)
+    let incomplete = workDir.appendingPathComponent("runtime-incomplete-\(UUID().uuidString)")
+    try? manager.createDirectory(at: incomplete.appendingPathComponent("bin"),
+                                 withIntermediateDirectories: true)
+    let incompletePython = incomplete.appendingPathComponent("bin/python3")
+    try? Data("#!/bin/sh\nexit 0\n".utf8).write(to: incompletePython)
+    try? manager.setAttributes([.posixPermissions: 0o755],
+                               ofItemAtPath: incompletePython.path)
+    var layoutThrew = false
+    do {
+        try AIRuntime.install(archive: incomplete, support: layoutSupport,
+                              hooks: fakeRuntimeHooks(extract: { _, staging in
+                                  try copyContents(of: incomplete, into: staging)
+                              }))
+    } catch {
+        layoutThrew = true
+    }
+    check(layoutThrew, "D: a runtime without the worker package is rejected")
+    check(marker(at: AIRuntime.installDirectory(in: layoutSupport)) == "old",
+          "D: the old runtime survives a structural failure")
+    check(!hasStagingDirectory(in: layoutSupport),
+          "D: a structural failure leaves no staging")
+
+    // E. A tree that is structurally complete but fails the core contract is
+    // rejected before the swap.
+    let functionalSupport = makeSupport("functional")
+    seedLive(functionalSupport, oldFixture)
+    let functionalHooks = fakeRuntimeHooks(extract: extractNew, functional: { root in
+        if marker(at: root) == "new" {
+            return RuntimeValidationReport.failure(.functional, "core-dependency",
+                                                   "numpy: ImportError")
+        }
+        return RuntimeValidationReport.success(.functional)
+    })
+    var functionalThrew = false
+    do {
+        try AIRuntime.install(archive: newFixture, support: functionalSupport,
+                              hooks: functionalHooks)
+    } catch {
+        functionalThrew = true
+    }
+    check(functionalThrew, "E: a runtime that fails its core imports is rejected")
+    check(marker(at: AIRuntime.installDirectory(in: functionalSupport)) == "old",
+          "E: the old runtime survives a functional failure")
+    check(transactionState(in: functionalSupport) == "committed",
+          "E: a pre-swap failure restores the previous marker state")
+    check(!hasStagingDirectory(in: functionalSupport),
+          "E: a pre-swap failure leaves no staging")
+
+    // F. Crash before the old runtime is moved aside: the old copy is still
+    // live, the marker says swapping, and recovery keeps the old copy.
+    let crashBeforeSupport = makeSupport("crash-before")
+    seedLive(crashBeforeSupport, oldFixture)
+    var crashBeforeHooks = fakeRuntimeHooks(extract: extractNew)
+    crashBeforeHooks.checkpoint = { point in
+        if point == .beforeBackupMove { throw SimulatedRuntimeCrash() }
+    }
+    var crashBeforeInjected = false
+    do {
+        try AIRuntime.install(archive: newFixture, support: crashBeforeSupport,
+                              hooks: crashBeforeHooks)
+    } catch is SimulatedRuntimeCrash {
+        crashBeforeInjected = true
+    } catch {
+        crashBeforeInjected = false
+    }
+    check(crashBeforeInjected, "F: the crash before the backup move is injected")
+    check(transactionState(in: crashBeforeSupport) == "swapping",
+          "F: the crash leaves a durable swapping marker")
+    check(hasStagingDirectory(in: crashBeforeSupport), "F: the staging tree survives the crash")
+    let crashBeforeRecovery = AIRuntime.recoverInterruptedInstall(
+        in: crashBeforeSupport, hooks: recoveryHooks())
+    check(crashBeforeRecovery.isSuccess, "F: recovery after the crash succeeds",
+          crashBeforeRecovery.logLine)
+    check(marker(at: AIRuntime.installDirectory(in: crashBeforeSupport)) == "old",
+          "F: the old runtime stays live")
+    check(transactionState(in: crashBeforeSupport) == "committed",
+          "F: recovery commits the runtime it kept")
+    check(!hasStagingDirectory(in: crashBeforeSupport), "F: recovery removes the staging tree")
+
+    // G. Crash after the old runtime moved to the backup and before the new one
+    // moved in: the live directory is missing, so recovery restores the backup.
+    let crashBackupSupport = makeSupport("crash-backup")
+    seedLive(crashBackupSupport, oldFixture)
+    var crashBackupHooks = fakeRuntimeHooks(extract: extractNew)
+    crashBackupHooks.checkpoint = { point in
+        if point == .afterBackupMove { throw SimulatedRuntimeCrash() }
+    }
+    var crashBackupInjected = false
+    do {
+        try AIRuntime.install(archive: newFixture, support: crashBackupSupport,
+                              hooks: crashBackupHooks)
+    } catch is SimulatedRuntimeCrash {
+        crashBackupInjected = true
+    } catch {
+        crashBackupInjected = false
+    }
+    check(crashBackupInjected, "G: the crash after the backup move is injected")
+    check(!manager.fileExists(atPath: AIRuntime.installDirectory(in: crashBackupSupport).path),
+          "G: the crash leaves no live runtime")
+    check(marker(at: AIRuntime.backupDirectory(in: crashBackupSupport)) == "old",
+          "G: the old runtime is in the backup")
+    let crashBackupRecovery = AIRuntime.recoverInterruptedInstall(
+        in: crashBackupSupport, hooks: recoveryHooks())
+    check(crashBackupRecovery.isSuccess, "G: recovery restores the backup",
+          crashBackupRecovery.logLine)
+    check(marker(at: AIRuntime.installDirectory(in: crashBackupSupport)) == "old",
+          "G: the old runtime is live again")
+    check(!hasBackupDirectory(in: crashBackupSupport), "G: the consumed backup is gone")
+
+    // H. Crash after the new runtime moved in but before commit: the old copy
+    // is still the last known-good runtime, so recovery prefers it.
+    let crashLiveSupport = makeSupport("crash-live")
+    seedLive(crashLiveSupport, oldFixture)
+    var crashLiveHooks = fakeRuntimeHooks(extract: extractNew)
+    crashLiveHooks.checkpoint = { point in
+        if point == .afterLiveMove { throw SimulatedRuntimeCrash() }
+    }
+    var crashLiveInjected = false
+    do {
+        try AIRuntime.install(archive: newFixture, support: crashLiveSupport,
+                              hooks: crashLiveHooks)
+    } catch is SimulatedRuntimeCrash {
+        crashLiveInjected = true
+    } catch {
+        crashLiveInjected = false
+    }
+    check(crashLiveInjected, "H: the crash after the live move is injected")
+    check(marker(at: AIRuntime.installDirectory(in: crashLiveSupport)) == "new",
+          "H: the new runtime is momentarily live")
+    let crashLiveRecovery = AIRuntime.recoverInterruptedInstall(
+        in: crashLiveSupport, hooks: recoveryHooks())
+    check(crashLiveRecovery.isSuccess, "H: recovery after the live move succeeds",
+          crashLiveRecovery.logLine)
+    check(marker(at: AIRuntime.installDirectory(in: crashLiveSupport)) == "old",
+          "H: the last known-good runtime is restored")
+    check(!hasBackupDirectory(in: crashLiveSupport), "H: the old backup becomes live")
+    check(!hasRejectedDirectory(in: crashLiveSupport),
+          "H: the uncommitted new copy is removed")
+
+    // I. Crash after commit: the new runtime is proven, so recovery keeps it and
+    // only then deletes the backup.
+    let crashCommitSupport = makeSupport("crash-commit")
+    seedLive(crashCommitSupport, oldFixture)
+    var crashCommitHooks = fakeRuntimeHooks(extract: extractNew)
+    crashCommitHooks.checkpoint = { point in
+        if point == .afterCommit { throw SimulatedRuntimeCrash() }
+    }
+    var crashCommitInjected = false
+    do {
+        try AIRuntime.install(archive: newFixture, support: crashCommitSupport,
+                              hooks: crashCommitHooks)
+    } catch is SimulatedRuntimeCrash {
+        crashCommitInjected = true
+    } catch {
+        crashCommitInjected = false
+    }
+    check(crashCommitInjected, "I: the crash after commit is injected")
+    check(transactionState(in: crashCommitSupport) == "committed",
+          "I: the committed marker survived the crash")
+    let crashCommitRecovery = AIRuntime.recoverInterruptedInstall(
+        in: crashCommitSupport, hooks: recoveryHooks())
+    check(crashCommitRecovery.isSuccess, "I: recovery accepts the committed runtime",
+          crashCommitRecovery.logLine)
+    check(marker(at: AIRuntime.installDirectory(in: crashCommitSupport)) == "new",
+          "I: the committed runtime stays live")
+    check(hasBackupDirectory(in: crashCommitSupport),
+          "I: a verified live copy keeps the old backup until the next install")
+    check(crashCommitRecovery.warnings.contains {
+              $0.contains("kept until the next install")
+          }, "I: recovery reports the deferred backup cleanup",
+          crashCommitRecovery.warnings.joined(separator: "; "))
+
+    // J. A new runtime that moves in and then fails its post-swap check is
+    // rolled back to the old copy.
+    let postSupport = makeSupport("post")
+    seedLive(postSupport, oldFixture)
+    let postInstall = AIRuntime.installDirectory(in: postSupport)
+    let postPlan = RuntimeVerifyPlan(root: postInstall)
+    var postHooks = fakeRuntimeHooks(extract: extractNew)
+    postHooks.move = { source, destination in
+        try manager.moveItem(at: source, to: destination)
+        if destination.standardizedFileURL == postInstall.standardizedFileURL {
+            postPlan.armed = true
+        }
+    }
+    postHooks.validateRuntime = { root in
+        if postPlan.shouldReject(root) {
+            return RuntimeValidationReport.failure(.functional, "startup",
+                                                   "the helper did not answer")
+        }
+        return RuntimeValidationReport.success(.functional)
+    }
+    var postFailure: AIRuntimeFailure?
+    do {
+        try AIRuntime.install(archive: newFixture, support: postSupport,
+                              hooks: postHooks)
+    } catch let error as AIRuntimeFailure {
+        postFailure = error
+    } catch {
+        postFailure = nil
+    }
+    check(postFailure?.code == .validation, "J: a post-swap failure is a validation failure")
+    check(postFailure?.previous == .kept, "J: the error knows the old runtime was kept")
+    check(marker(at: postInstall) == "old", "J: the old runtime is restored after a failed swap")
+    check(transactionState(in: postSupport) == "committed",
+          "J: the restored runtime is committed")
+    check(!hasBackupDirectory(in: postSupport), "J: the backup is consumed by the rollback")
+    check(!hasStagingDirectory(in: postSupport), "J: the failed post-swap leaves no staging")
+
+    // K. If moving the old runtime to the backup fails, it never left its place
+    // and the message must not claim it was lost.
+    let keptSupport = makeSupport("kept")
+    seedLive(keptSupport, oldFixture)
+    let keptBackup = AIRuntime.backupDirectory(in: keptSupport)
+    var keptHooks = fakeRuntimeHooks(extract: extractNew)
+    keptHooks.move = { source, destination in
+        if destination.standardizedFileURL == keptBackup.standardizedFileURL {
+            throw RuntimeTestFailure()
+        }
+        try manager.moveItem(at: source, to: destination)
+    }
+    var keptFailure: AIRuntimeFailure?
+    do {
+        try AIRuntime.install(archive: newFixture, support: keptSupport, hooks: keptHooks)
+    } catch let error as AIRuntimeFailure {
+        keptFailure = error
+    } catch {
+        keptFailure = nil
+    }
+    check(keptFailure?.code == .install, "K: a failed backup move is an install failure")
+    check(keptFailure?.previous == .kept, "K: the error knows the old runtime never moved")
+    check(keptFailure?.localizedDescription == L10n.current.aiRuntimeInstallFailed,
+          "K: the message says the previous runtime was kept",
+          keptFailure?.localizedDescription ?? "")
+    check(marker(at: AIRuntime.installDirectory(in: keptSupport)) == "old",
+          "K: the old runtime remains live")
+    check(transactionState(in: keptSupport) == "committed",
+          "K: the marker records the still-live runtime")
+
+    // L. A first install that fails after the swap leaves nothing live and must
+    // not claim a previous runtime was kept.
+    let firstFailSupport = makeSupport("first-fail")
+    let firstFailInstall = AIRuntime.installDirectory(in: firstFailSupport)
+    let firstFailPlan = RuntimeVerifyPlan(root: firstFailInstall)
+    var firstFailHooks = fakeRuntimeHooks(extract: extractNew)
+    firstFailHooks.move = { source, destination in
+        try manager.moveItem(at: source, to: destination)
+        if destination.standardizedFileURL == firstFailInstall.standardizedFileURL {
+            firstFailPlan.armed = true
+        }
+    }
+    firstFailHooks.validateRuntime = { root in
+        if firstFailPlan.shouldReject(root) {
+            return RuntimeValidationReport.failure(.functional, "startup",
+                                                   "the helper did not answer")
+        }
+        return RuntimeValidationReport.success(.functional)
+    }
+    var firstFailFailure: AIRuntimeFailure?
+    do {
+        try AIRuntime.install(archive: newFixture, support: firstFailSupport,
+                              hooks: firstFailHooks)
+    } catch let error as AIRuntimeFailure {
+        firstFailFailure = error
+    } catch {
+        firstFailFailure = nil
+    }
+    check(firstFailFailure?.code == .validation, "L: a first install failure is reported")
+    check(firstFailFailure?.previous == AIRuntimeFailure.PreviousRuntime.none,
+          "L: the error knows there was no previous runtime")
+    check(firstFailFailure?.localizedDescription == L10n.current.aiRuntimeInstallFailedNothing,
+          "L: the message does not claim a previous runtime was kept",
+          firstFailFailure?.localizedDescription ?? "")
+    check(!manager.fileExists(atPath: firstFailInstall.path),
+          "L: a failed first install leaves nothing live")
+    check(transactionMarker(in: firstFailSupport) == nil,
+          "L: a failed first install leaves no marker")
+    check(!hasStagingDirectory(in: firstFailSupport),
+          "L: a failed first install leaves no staging")
+
+    // M. If the rollback itself cannot restore the backup, it must say so and
+    // keep the old runtime in the backup for a later recovery.
+    let rollbackSupport = makeSupport("rollback")
+    seedLive(rollbackSupport, oldFixture)
+    let rollbackInstall = AIRuntime.installDirectory(in: rollbackSupport)
+    let rollbackBackup = AIRuntime.backupDirectory(in: rollbackSupport)
+    let rollbackPlan = RuntimeVerifyPlan(root: rollbackInstall)
+    var rollbackHooks = fakeRuntimeHooks(extract: extractNew)
+    rollbackHooks.move = { source, destination in
+        if destination.standardizedFileURL == rollbackInstall.standardizedFileURL {
+            rollbackPlan.armed = true
+        }
+        if source.standardizedFileURL == rollbackBackup.standardizedFileURL {
+            throw RuntimeTestFailure()
+        }
+        try manager.moveItem(at: source, to: destination)
+    }
+    rollbackHooks.validateRuntime = { root in
+        if rollbackPlan.shouldReject(root) {
+            return RuntimeValidationReport.failure(.functional, "startup",
+                                                   "the helper did not answer")
+        }
+        return RuntimeValidationReport.success(.functional)
+    }
+    var rollbackFailure: AIRuntimeFailure?
+    do {
+        try AIRuntime.install(archive: newFixture, support: rollbackSupport,
+                              hooks: rollbackHooks)
+    } catch let error as AIRuntimeFailure {
+        rollbackFailure = error
+    } catch {
+        rollbackFailure = nil
+    }
+    check(rollbackFailure?.code == .validation, "M: a failed rollback is reported")
+    check(rollbackFailure?.previous == .preserved,
+          "M: the error knows the old runtime is preserved, not live")
+    check(rollbackFailure?.localizedDescription == L10n.current.aiRuntimeInstallFailedPreserved,
+          "M: the message says the previous runtime was preserved for recovery",
+          rollbackFailure?.localizedDescription ?? "")
+    check(marker(at: rollbackBackup) == "old",
+          "M: the old runtime is preserved in the backup")
+    check(!manager.fileExists(atPath: rollbackInstall.path),
+          "M: no unverified runtime is left live")
+    check(hasRejectedDirectory(in: rollbackSupport),
+          "M: the rejected new copy is kept for inspection")
+    check(transactionState(in: rollbackSupport) == "rollingBack",
+          "M: the marker stays honest after a failed rollback")
+}
+
+@MainActor
+func testRuntimeMarkerAndRecoverySafety() {
+    print("\n[M1-AI2] a damaged marker or a symlink cannot reach outside the runtime folder")
+
+    let manager = FileManager.default
+    let oldFixture = workDir.appendingPathComponent("runtime-old-\(UUID().uuidString)")
+    do {
+        try makeFakeRuntime(at: oldFixture, marker: "old")
+    } catch {
+        check(false, "runtime fixture written", "\(error)")
+        return
+    }
+
+    func makeSupport(_ label: String) -> URL {
+        let url = workDir.appendingPathComponent("runtime-\(label)-\(UUID().uuidString)",
+                                                isDirectory: true)
+        try? manager.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    func seedLive(_ support: URL) {
+        let install = AIRuntime.installDirectory(in: support)
+        try? manager.createDirectory(at: install, withIntermediateDirectories: true)
+        try? copyContents(of: oldFixture, into: install)
+    }
+
+    // The marker is treated as untrusted input: unreadable JSON, a JSON object
+    // with unexpected fields, a non-UUID id and a directory in its place are all
+    // rejected without touching any runtime file.
+    let brokenJSON = makeSupport("broken-json")
+    seedLive(brokenJSON)
+    try? Data("{not json".utf8).write(to: brokenJSON.appendingPathComponent(
+        "runtime-transaction.json"))
+    let brokenResult = AIRuntime.recoverInterruptedInstall(in: brokenJSON,
+                                                           hooks: recoveryHooks())
+    check(brokenResult.failure?.code == .invalidMarker,
+          "N: unreadable marker JSON is rejected")
+    check(marker(at: AIRuntime.installDirectory(in: brokenJSON)) == "old",
+          "N: the live runtime is untouched when the marker is unreadable")
+    check(!hasRejectedDirectory(in: brokenJSON),
+          "N: no directory is moved for an unreadable marker")
+
+    let canary = workDir.appendingPathComponent("canary-\(UUID().uuidString)")
+    try? Data("keep".utf8).write(to: canary)
+
+    let absoluteID = makeSupport("absolute-id")
+    try? writeTransactionMarker(in: absoluteID, id: canary.path,
+                                state: "swapping", hadPrevious: true)
+    let absoluteResult = AIRuntime.recoverInterruptedInstall(in: absoluteID,
+                                                             hooks: recoveryHooks())
+    check(absoluteResult.failure?.code == .invalidMarker,
+          "N: a path in the id field is rejected")
+    check(fileBytes(canary) != nil,
+          "N: a path in the id cannot delete a file outside the runtime folder")
+
+    let extraField = makeSupport("extra-field")
+    try? writeTransactionMarker(in: extraField,
+                                id: UUID().uuidString,
+                                state: "swapping", hadPrevious: true,
+                                extra: ["path": canary.path])
+    let extraResult = AIRuntime.recoverInterruptedInstall(in: extraField,
+                                                          hooks: recoveryHooks())
+    check(extraResult.failure?.code == .invalidMarker,
+          "N: unexpected fields in the marker are rejected")
+    check(fileBytes(canary) != nil,
+          "N: an unexpected path field cannot reach outside the runtime folder")
+
+    let malformedID = makeSupport("malformed-id")
+    try? writeTransactionMarker(in: malformedID, id: "../outside",
+                                state: "swapping", hadPrevious: true)
+    let malformedResult = AIRuntime.recoverInterruptedInstall(in: malformedID,
+                                                              hooks: recoveryHooks())
+    check(malformedResult.failure?.code == .invalidMarker,
+          "N: a traversal id is rejected")
+
+    let directoryMarker = makeSupport("directory-marker")
+    try? manager.createDirectory(
+        at: directoryMarker.appendingPathComponent("runtime-transaction.json"),
+        withIntermediateDirectories: true)
+    let directoryResult = AIRuntime.recoverInterruptedInstall(in: directoryMarker,
+                                                              hooks: recoveryHooks())
+    check(directoryResult.failure?.code == .invalidMarker,
+          "N: a directory in place of the marker is rejected")
+
+    // A symlinked live or backup directory is never followed, even when the
+    // marker is otherwise valid.
+    let outside = workDir.appendingPathComponent("outside-\(UUID().uuidString)")
+    try? manager.createDirectory(at: outside, withIntermediateDirectories: true)
+    try? copyContents(of: oldFixture, into: outside)
+
+    let symlinkBackup = makeSupport("symlink-backup")
+    try? manager.createSymbolicLink(at: AIRuntime.backupDirectory(in: symlinkBackup),
+                                    withDestinationURL: outside)
+    try? writeTransactionMarker(in: symlinkBackup, id: UUID().uuidString,
+                                state: "swapping", hadPrevious: true)
+    let symlinkBackupResult = AIRuntime.recoverInterruptedInstall(
+        in: symlinkBackup, hooks: recoveryHooks())
+    check(symlinkBackupResult.failure?.code == .unsafePath,
+          "N: a symlinked backup is rejected")
+    check(marker(at: outside) == "old",
+          "N: the symlink target is never moved or modified")
+
+    let symlinkLive = makeSupport("symlink-live")
+    try? manager.createSymbolicLink(at: AIRuntime.installDirectory(in: symlinkLive),
+                                    withDestinationURL: outside)
+    let symlinkLiveResult = AIRuntime.recoverInterruptedInstall(
+        in: symlinkLive, hooks: recoveryHooks())
+    check(symlinkLiveResult.failure?.code == .unsafePath,
+          "N: a symlinked live runtime is rejected")
+    check(marker(at: outside) == "old",
+          "N: the live symlink target is never modified")
+
+    // A committed runtime whose files are gone is a failure, not a silent
+    // "installed" answer.
+    let missing = makeSupport("missing")
+    try? writeTransactionMarker(in: missing, id: UUID().uuidString,
+                                state: "committed", hadPrevious: false)
+    let missingResult = AIRuntime.recoverInterruptedInstall(in: missing,
+                                                            hooks: recoveryHooks())
+    check(missingResult.failure?.code == .liveInvalid,
+          "N: a committed marker with no live runtime is a failure")
+
+    // A committed live copy that no longer passes the contract is replaced by
+    // the validated backup instead of deleting the backup first.
+    let committedBroken = makeSupport("committed-broken")
+    let brokenInstall = AIRuntime.installDirectory(in: committedBroken)
+    try? manager.createDirectory(at: brokenInstall, withIntermediateDirectories: true)
+    try? Data("half".utf8).write(to: brokenInstall.appendingPathComponent("half"))
+    let brokenBackup = AIRuntime.backupDirectory(in: committedBroken)
+    try? manager.createDirectory(at: brokenBackup, withIntermediateDirectories: true)
+    try? copyContents(of: oldFixture, into: brokenBackup)
+    try? writeTransactionMarker(in: committedBroken, id: UUID().uuidString,
+                                state: "committed", hadPrevious: true)
+    let committedBrokenResult = AIRuntime.recoverInterruptedInstall(
+        in: committedBroken, hooks: recoveryHooks())
+    check(committedBrokenResult.isSuccess, "N: a broken committed runtime is repaired",
+          committedBrokenResult.logLine)
+    check(marker(at: brokenInstall) == "old",
+          "N: the validated backup replaces the broken live copy")
+    check(!hasBackupDirectory(in: committedBroken),
+          "N: the backup is consumed only after the restored copy validates")
+
+    // A fresh staging folder with no marker could belong to an older install,
+    // so it is left alone; an old one is swept.
+    let freshStaging = makeSupport("fresh-staging")
+    let stagingPrefix = AIRuntime.installDirectory(in: freshStaging)
+        .lastPathComponent + "-installing-"
+    let fresh = freshStaging.appendingPathComponent(stagingPrefix + "fresh")
+    try? manager.createDirectory(at: fresh, withIntermediateDirectories: true)
+    let freshResult = AIRuntime.recoverInterruptedInstall(in: freshStaging,
+                                                          hooks: recoveryHooks())
+    check(freshResult.isSuccess, "N: a marker-less support folder recovers cleanly")
+    check(manager.fileExists(atPath: fresh.path),
+          "N: a fresh marker-less staging folder is not deleted")
+
+    let staleStaging = makeSupport("stale-staging")
+    let stale = staleStaging.appendingPathComponent(
+        AIRuntime.installDirectory(in: staleStaging).lastPathComponent + "-installing-stale")
+    try? manager.createDirectory(at: stale, withIntermediateDirectories: true)
+    try? manager.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)],
+                               ofItemAtPath: stale.path)
+    _ = AIRuntime.recoverInterruptedInstall(in: staleStaging, hooks: recoveryHooks())
+    check(!manager.fileExists(atPath: stale.path),
+          "N: stale marker-less staging data is swept")
+}
+
+@MainActor
+func testRuntimeRecoveryBeforeUse() {
+    print("\n[M1-AI3] a failed recovery is retried, a good one is cached, and AI use waits for it")
+
+    let manager = FileManager.default
+    let oldFixture = workDir.appendingPathComponent("runtime-old-\(UUID().uuidString)")
+    do {
+        try makeFakeRuntime(at: oldFixture, marker: "old")
+    } catch {
+        check(false, "runtime fixture written", "\(error)")
+        return
+    }
+
+    // The worker recovers an update interrupted while the app was closed before
+    // it reports a runtime.
+    let useSupport = workDir.appendingPathComponent("runtime-use-\(UUID().uuidString)",
+                                                   isDirectory: true)
+    try? manager.createDirectory(at: useSupport, withIntermediateDirectories: true)
+    let useBackup = AIRuntime.backupDirectory(in: useSupport)
+    try? manager.createDirectory(at: useBackup, withIntermediateDirectories: true)
+    try? copyContents(of: oldFixture, into: useBackup)
+    let useResult = AIWorker.recoverRuntimeIfNeeded(force: true, support: useSupport,
+                                                    hooks: recoveryHooks())
+    check(useResult.isSuccess, "R: the worker recovers before looking up a helper",
+          useResult.logLine)
+    check(marker(at: AIRuntime.installDirectory(in: useSupport)) == "old",
+          "R: the old runtime is restored before use")
+    check(AIRuntime.isStructurallyValid(root: AIRuntime.installDirectory(in: useSupport)),
+          "R: the recovered runtime passes the layout contract")
+    check(!hasBackupDirectory(in: useSupport), "R: the backup is consumed after a good restore")
+
+    // A failed recovery is not cached as done: the next use retries.
+    let retrySupport = workDir.appendingPathComponent("runtime-retry-\(UUID().uuidString)",
+                                                     isDirectory: true)
+    try? manager.createDirectory(at: retrySupport, withIntermediateDirectories: true)
+    try? Data("{bad".utf8).write(to: retrySupport.appendingPathComponent(
+        "runtime-transaction.json"))
+    let firstAttempt = AIWorker.recoverRuntimeIfNeeded(force: true, support: retrySupport,
+                                                       hooks: recoveryHooks())
+    check(!firstAttempt.isSuccess, "R: a failed recovery is reported")
+    try? manager.removeItem(at: retrySupport.appendingPathComponent("runtime-transaction.json"))
+    let retryInstall = AIRuntime.installDirectory(in: retrySupport)
+    try? manager.createDirectory(at: retryInstall, withIntermediateDirectories: true)
+    try? copyContents(of: oldFixture, into: retryInstall)
+    let secondAttempt = AIWorker.recoverRuntimeIfNeeded(support: retrySupport,
+                                                        hooks: recoveryHooks())
+    check(secondAttempt.isSuccess, "R: the next use retries a failed recovery",
+          secondAttempt.logLine)
+    check(marker(at: retryInstall) == "old", "R: the retry adopts the live runtime")
+
+    // AIWorker's gate: a runtime that passes the functional contract is usable;
+    // the answer is cached until the runtime changes.
+    let gateSupport = workDir.appendingPathComponent("runtime-gate-\(UUID().uuidString)",
+                                                    isDirectory: true)
+    try? manager.createDirectory(at: gateSupport, withIntermediateDirectories: true)
+    let gateInstall = AIRuntime.installDirectory(in: gateSupport)
+    try? manager.createDirectory(at: gateInstall, withIntermediateDirectories: true)
+    try? copyContents(of: oldFixture, into: gateInstall)
+    AIWorker.runtimeDidChange(support: gateSupport)
+    check(AIWorker.downloadedRuntimeUsable(support: gateSupport, hooks: recoveryHooks()),
+          "P: a runtime that passes the functional contract is usable")
+    let refusing = recoveryHooks(functional: { _ in
+        RuntimeValidationReport.failure(.functional, "startup", "refused by the test")
+    })
+    check(AIWorker.downloadedRuntimeUsable(support: gateSupport, hooks: refusing),
+          "P: the validated answer is cached for this process")
+    AIWorker.runtimeDidChange(support: gateSupport)
+    check(!AIWorker.downloadedRuntimeUsable(support: gateSupport, hooks: refusing),
+          "P: an invalid runtime is refused after the cache is cleared")
+    check(AIWorker.runtimeProblem(support: gateSupport) != nil,
+          "P: the refusal is available to the error message")
+
+    let capsSupport = workDir.appendingPathComponent("runtime-caps-\(UUID().uuidString)",
+                                                    isDirectory: true)
+    try? manager.createDirectory(at: capsSupport, withIntermediateDirectories: true)
+    let capsInstall = AIRuntime.installDirectory(in: capsSupport)
+    try? manager.createDirectory(at: capsInstall, withIntermediateDirectories: true)
+    try? copyContents(of: oldFixture, into: capsInstall)
+    AIWorker.runtimeDidChange(support: capsSupport)
+    let capsHooks = recoveryHooks(functional: { _ in
+        RuntimeValidationReport.success(.functional,
+                                        capabilities: ["segmentation": false,
+                                                       "image-generation": true])
+    })
+    check(AIWorker.downloadedRuntimeUsable(support: capsSupport, hooks: capsHooks),
+          "P: a missing optional backend does not invalidate the runtime")
+
+    let blockedSupport = workDir.appendingPathComponent("runtime-blocked-\(UUID().uuidString)",
+                                                       isDirectory: true)
+    try? manager.createDirectory(at: blockedSupport, withIntermediateDirectories: true)
+    let blockedInstall = AIRuntime.installDirectory(in: blockedSupport)
+    try? manager.createDirectory(at: blockedInstall, withIntermediateDirectories: true)
+    try? copyContents(of: oldFixture, into: blockedInstall)
+    try? Data("{bad".utf8).write(to: blockedSupport.appendingPathComponent(
+        "runtime-transaction.json"))
+    AIWorker.runtimeDidChange(support: blockedSupport)
+    check(!AIWorker.downloadedRuntimeUsable(support: blockedSupport, hooks: recoveryHooks()),
+          "P: an unresolved transaction blocks runtime selection")
+}
+
+@MainActor
+func testRuntimeConcurrentInstall() {
+    print("\n[M1-AI4] concurrent installs serialize on one shared transaction lock")
+
+    let manager = FileManager.default
+    let support = workDir.appendingPathComponent("runtime-concurrent-\(UUID().uuidString)",
+                                                isDirectory: true)
+    try? manager.createDirectory(at: support, withIntermediateDirectories: true)
+
+    var fixtures: [URL] = []
+    for index in 0..<4 {
+        let fixture = workDir.appendingPathComponent(
+            "runtime-concurrent-\(index)-\(UUID().uuidString)")
+        do {
+            try makeFakeRuntime(at: fixture, marker: "v\(index)")
+            fixtures.append(fixture)
+        } catch {
+            check(false, "O: concurrent fixtures written", "\(error)")
+            return
+        }
+    }
+
+    let errors = NSLock()
+    var collected: [String] = []
+    let group = DispatchGroup()
+    for fixture in fixtures {
+        DispatchQueue.global().async(group: group) {
+            var hooks = fakeRuntimeHooks(extract: { _, staging in
+                try copyContents(of: fixture, into: staging)
+            })
+            hooks.validateRuntime = { root in
+                let layout = AIRuntimeValidation.structural(root: root)
+                guard layout.ok else { return layout }
+                return RuntimeValidationReport.success(.functional)
+            }
+            do {
+                try AIRuntime.install(archive: fixture, support: support, hooks: hooks)
+            } catch {
+                errors.lock()
+                collected.append("\(error)")
+                errors.unlock()
+            }
+        }
+    }
+    group.wait()
+
+    check(collected.isEmpty, "O: every concurrent install finishes", collected.joined(separator: "; "))
+    let install = AIRuntime.installDirectory(in: support)
+    check(AIRuntime.isStructurallyValid(root: install),
+          "O: the surviving runtime passes the layout contract")
+    check(transactionState(in: support) == "committed",
+          "O: the final marker is committed")
+    check(!hasStagingDirectory(in: support), "O: no staging is left behind")
+    check(!hasBackupDirectory(in: support), "O: no backup is left behind")
+    check(!hasRejectedDirectory(in: support), "O: no rejected copy is left behind")
+    let lockPath = support.appendingPathComponent("runtime.lock")
+    var isDirectory: ObjCBool = false
+    let lockIsFile = manager.fileExists(atPath: lockPath.path, isDirectory: &isDirectory)
+        && !isDirectory.boolValue
+    var info = stat()
+    let notSymlink = lockPath.path.withCString { lstat($0, &info) } == 0
+        && (info.st_mode & S_IFMT) == S_IFREG
+    check(lockIsFile && notSymlink, "O: the lock file is a persistent regular file")
+}
+
+@MainActor
+func testRealRuntimeValidation() {
+    print("\n[M1-AI-R] the real runtime passes the functional contract")
+
+    guard ProcessInfo.processInfo.environment["RETOUCH_REAL_RUNTIME"] == "1" else {
+        print("  · skipped (set RETOUCH_REAL_RUNTIME=1 to probe an installed runtime)")
+        return
+    }
+
+    var candidates: [URL] = []
+    if let bundled = AIWorker.bundledRoot { candidates.append(bundled) }
+    let installed = AIRuntime.installDirectory
+    if FileManager.default.fileExists(atPath: installed.path) {
+        candidates.append(installed)
+    }
+    guard let root = candidates.first(where: { AIRuntime.isStructurallyValid(root: $0) }) else {
+        check(false, "a structurally valid real runtime is available")
+        return
+    }
+
+    func fingerprint(_ root: URL) -> String {
+        ["bin/python3", "retouch_ai_worker", "site-packages"].map { name in
+            let url = root.appendingPathComponent(name)
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey,
+                                                            .fileSizeKey])
+            return "\(name):\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0):\(values?.fileSize ?? 0)"
+        }.joined(separator: "|")
+    }
+
+    let before = fingerprint(root)
+    let report = AIRuntimeValidation.functional(root: root)
+    check(report.ok, "the real runtime starts, imports its core and answers health",
+          report.logLine)
+    check(report.capabilities["segmentation"] != nil,
+          "optional capability availability is reported separately")
+    check(AIRuntime.isStructurallyValid(root: root),
+          "the functional probe leaves the real runtime valid")
+    check(fingerprint(root) == before,
+          "the functional probe does not modify the runtime")
+}
+
+@MainActor
+func testRecoveryIsolation(productionBefore: RecoveryFingerprint) async {
+    print("\n[M1-R5] the suite never writes the production recovery copy")
+
+    await settleRecoveryWrites()
+
+    check(RecoveryStore.directory.standardizedFileURL
+            != RecoveryStore.productionDirectory.standardizedFileURL,
+          "recovery writes are redirected away from Application Support")
+    check(RecoveryStore.directory.path.hasPrefix(workDir.path),
+          "the test recovery root is inside the scratch directory")
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let source = workDir.appendingPathComponent("isolation-photo.png")
+    check(makeImage(width: 320, height: 400).map { writePNG($0, to: source) } ?? false,
+          "isolation fixture written")
+    let model = EditorModel()
+    model.load(url: source)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy }, "isolation fixture loads")
+    model.adjustments.exposure = 0.3
+    check(await waitUntil(10) { RecoveryStore.read()?.imagePath == source.path },
+          "the delayed autosave lands in the test directory")
+
+    let productionAfter = RecoveryFingerprint.capture(RecoveryStore.productionDirectory)
+    check(productionAfter == productionBefore,
+          "the production recovery copy is untouched by the whole suite")
+}
+
+// MARK: - runner
+
 @MainActor
 func runAll() async {
     await testExportDoesNotSave()
@@ -1449,6 +2766,21 @@ func runAll() async {
     await testFullFrameReimagine()
     await testExportUpscalePolicy()
     await testAnalysisExportNeedsFace()
+    await testRecoveryCancelPreservesData()
+    await testRecoveryRestoresAfterSimulatedRelaunch()
+    await testRecoveryLocatePathWaitsForRestore()
+    await testFailedLoadPreservesDocument()
+    await testExportProtectsSource()
+    await testBatchDoesNotOverwriteSource()
+    testRuntimeTransactionalInstall()
+    testRuntimeMarkerAndRecoverySafety()
+    testRuntimeRecoveryBeforeUse()
+    testRuntimeConcurrentInstall()
+    testRealRuntimeValidation()
+    await testRecoveryIsolation(productionBefore: productionRecoveryBefore)
+
+    // Give the last delayed autosave time to land before its directory goes.
+    try? await Task.sleep(nanoseconds: 1_800_000_000)
 
     print("\n" + String(repeating: "-", count: 60))
     removeRecentEntries(under: workDir)

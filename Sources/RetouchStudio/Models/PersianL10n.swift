@@ -248,6 +248,9 @@ final class PersianL10n: L10n {
     }
     override func saved(_ name: String) -> String { "\(name) ذخیره شد" }
     override var exportFailed: String { "خروجی ذخیره نشد." }
+    override var exportRefusedOriginal: String {
+        "این همان عکسی است که ویرایش می‌کنی. نام یا پوشهٔ دیگری انتخاب کن."
+    }
     override var exportCancelled: String { "خروجی لغو شد." }
     override var cancelExport: String { "لغو خروجی" }
     override var operationBusy: String {
@@ -676,12 +679,39 @@ final class PersianL10n: L10n {
         "فایل دانلودشده با SHA256 مطابقت ندارد. چیزی نصب نشد."
     }
     override var aiRuntimeExtractFailed: String { "دستیار باز نشد. چیزی نصب نشد." }
+    override var aiRuntimeInstallFailed: String {
+        "دستیار نصب نشد. نسخهٔ قبلی حفظ شد."
+    }
+    override var aiRuntimeInstallFailedNothing: String {
+        "دستیار نصب نشد. نسخهٔ قبلی‌ای وجود نداشت که جایگزین شود."
+    }
+    override var aiRuntimeInstallFailedRollback: String {
+        "دستیار نصب نشد و نسخهٔ قبلی هم بازگردانده نشد. از تنظیمات دوباره دانلودش کن."
+    }
+    override var aiRuntimeInstallFailedPreserved: String {
+        "دستیار نصب نشد. نسخهٔ قبلی برای بازیابی حفظ شد و دوباره تلاش می‌شود."
+    }
+    override var aiRuntimeRecoveryFailed: String {
+        "دستیار هوش مصنوعی به‌طور ایمن بازیابی نشد. فایل‌های موجود حفظ شدند؛ اپ را دوباره باز کن یا از تنظیمات دستیار را دوباره دانلود کن."
+    }
+    override var aiRuntimeValidationFailed: String {
+        "دستیار نصب‌شده آزمون راه‌اندازی را نگذراند. اپ را دوباره باز کن یا از تنظیمات دستیار را دوباره دانلود کن."
+    }
+    override var aiRuntimeBusy: String {
+        "دستیار هوش مصنوعی همین حالا در پنجرهٔ دیگری از برنامه در حال استفاده است. آن پنجره را ببند و دوباره تلاش کن."
+    }
     override var aiRuntimeInstalledNote: String { "نصب شد — حالا می‌توانی مدل‌ها را دانلود کنی." }
     override var aiRuntimeNotInstalled: String {
         "دستیار هوش مصنوعی نصب نیست. از تنظیمات → مدل‌های AI دانلودش کن و دوباره تلاش کن."
     }
     override var aiRuntimeIntelUnavailable: String {
         "دستیار هوش مصنوعی فقط روی Apple silicon اجرا می‌شود. این مک اینتل ویرایشگر کامل را بدون AI دارد."
+    }
+    override var aiRuntimeUnavailable: String {
+        "دستیار هوش مصنوعی هنوز در این نسخه در دسترس نیست. بقیهٔ ویرایشگر بدون آن کار می‌کند."
+    }
+    override var aiHelperStarting: String {
+        "دستیار هوش مصنوعی هنوز در حال راه‌اندازی است. لحظه‌ای بعد دوباره تلاش کن."
     }
     override var modelsHelperMissing: String {
         "دستیار هوش مصنوعی روی این مک در دسترس نیست."

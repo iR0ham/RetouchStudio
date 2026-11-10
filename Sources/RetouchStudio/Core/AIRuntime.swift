@@ -2,8 +2,13 @@ import CryptoKit
 import Foundation
 
 /// The optional local-AI runtime. A light release ships the editor alone and
-/// fetches this archive only when the owner asks for AI; a full build carries
-/// the same runtime inside the app bundle instead.
+/// fetches a protocol-v2 archive only when the owner asks for AI.
+///
+/// The official protocol-v2 package is not published yet. No URL, size or
+/// checksum is invented here, and nothing falls back to the older `AI/runtime`
+/// directory: until a real package is released and validated, the download path
+/// stays disabled (`package == nil`) and a previously installed legacy runtime
+/// is never read.
 enum AIRuntime {
 
     struct Package: Equatable {
@@ -12,60 +17,73 @@ enum AIRuntime {
         let url: URL
         let bytes: Int64
         let sha256: String
+        let protocolVersion: Int
+
+        init(version: String, fileName: String, url: URL, bytes: Int64,
+             sha256: String, protocolVersion: Int = HelperRegistry.protocolVersion) {
+            self.version = version
+            self.fileName = fileName
+            self.url = url
+            self.bytes = bytes
+            self.sha256 = sha256
+            self.protocolVersion = protocolVersion
+        }
 
         var hashPrefix: String {
             String(sha256.prefix(16)) + "…"
         }
     }
 
-    private static let RUNTIME_BYTES: Int64 = 388_277_063
-    private static let RUNTIME_SHA256 =
-        "cb1485beecad1bb947f5e3e2e056b0a2783816522c6e6ba90ed25cf069dddcfd"
-
-    /// The helper is an Apple-silicon runtime, so Intel builds have no package.
-    static var package: Package? {
-        #if arch(x86_64)
-        return nil
-        #else
-        if let override = overridePackage { return override }
-        return Package(
-            version: "1.0.0",
-            fileName: "RetouchStudio-1.0.0-ai-runtime-arm64.zip",
-            url: URL(string: "https://github.com/iR0ham/RetouchStudio/releases/download/v1.0.0/RetouchStudio-1.0.0-ai-runtime-arm64.zip")!,
-            bytes: RUNTIME_BYTES,
-            sha256: RUNTIME_SHA256)
-        #endif
-    }
-
-    /// QA hook: a local server can stand in for the release asset, so the
-    /// download, checksum and extraction path is testable without the network.
-    private static var overridePackage: Package? {
-        let environment = ProcessInfo.processInfo.environment
-        guard let raw = environment["RETOUCH_AI_RUNTIME_URL"],
-              let url = URL(string: raw) else { return nil }
-        guard let sha = environment["RETOUCH_AI_RUNTIME_SHA256"], !sha.isEmpty else { return nil }
-        return Package(
-            version: environment["RETOUCH_AI_RUNTIME_VERSION"] ?? "test",
-            fileName: url.lastPathComponent,
-            url: url,
-            bytes: Int64(environment["RETOUCH_AI_RUNTIME_BYTES"] ?? "") ?? 0,
-            sha256: sha.lowercased())
-    }
+    /// No official protocol-v2 runtime has been published. Fabricating its
+    /// metadata would enable a download the app cannot verify, so this stays
+    /// nil and the UI reports the runtime as unavailable.
+    static var package: Package? { nil }
 
     static var installDirectory: URL {
-        AIWorker.supportDirectory.appendingPathComponent("runtime", isDirectory: true)
+        installDirectory(in: AIWorker.runtimeSupportDirectory)
     }
 
-    static var isInstalled: Bool {
-        package != nil && isValid(root: installDirectory)
+    static func installDirectory(in support: URL) -> URL {
+        support.appendingPathComponent("protocol-v2", isDirectory: true)
     }
 
-    static func isValid(root: URL) -> Bool {
-        let manager = FileManager.default
-        let python = root.appendingPathComponent("bin/python3")
-        let worker = root.appendingPathComponent("retouch_ai_worker", isDirectory: true)
-        return manager.isExecutableFile(atPath: python.path)
-            && manager.fileExists(atPath: worker.path)
+    static func backupDirectory(in support: URL) -> URL {
+        support.appendingPathComponent("protocol-v2-backup", isDirectory: true)
+    }
+
+    /// A cheap layout check for display and for deciding whether any runtime
+    /// exists. It never grants trust to the downloaded runtime; selection and
+    /// transaction recovery use the functional contract.
+    static var isStructurallyInstalled: Bool {
+        package != nil && isStructurallyValid(root: installDirectory)
+    }
+
+    static func isStructurallyValid(root: URL) -> Bool {
+        AIRuntimeValidation.structural(root: root).ok
+    }
+
+    /// The filesystem steps installation uses. Tests replace one of these to
+    /// fail at a specific point; production uses the real file system.
+    struct InstallHooks {
+        var extract: (URL, URL) throws -> Void = { archive, staging in
+            try AIRuntime.extract(archive, into: staging)
+        }
+        var move: (URL, URL) throws -> Void = { source, destination in
+            try FileManager.default.moveItem(at: source, to: destination)
+        }
+        var remove: (URL) throws -> Void = { url in
+            try FileManager.default.removeItem(at: url)
+        }
+        var validateStructure: (URL) -> RuntimeValidationReport = { root in
+            AIRuntimeValidation.structural(root: root)
+        }
+        var validateRuntime: (URL) throws -> RuntimeValidationReport = { root in
+            AIRuntimeValidation.functional(root: root)
+        }
+        var checkpoint: (RuntimeInstallCheckpoint) throws -> Void = { _ in }
+        /// Runs under the transaction lock before any file is touched. The app
+        /// uses it to stop a running helper that still reads the old runtime.
+        var beforeInstall: () throws -> Void = {}
     }
 
     static func sha256(of file: URL) throws -> String {
@@ -78,47 +96,106 @@ enum AIRuntime {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Extracts into Application Support, validates the layout, and only then
-    /// replaces the installed copy, so a failed unzip never leaves a broken
-    /// runtime behind.
+    /// Installs through the durable transaction: staging is validated first,
+    /// the previous runtime stays reachable as a backup until the new one has
+    /// passed the full functional contract, and only a committed record allows
+    /// the backup to be deleted.
     static func install(archive: URL) throws {
-        let manager = FileManager.default
-        let support = AIWorker.supportDirectory
-        try manager.createDirectory(at: support, withIntermediateDirectories: true)
+        try install(archive: archive, support: AIWorker.runtimeSupportDirectory,
+                    package: package)
+    }
 
-        let staging = support.appendingPathComponent(
-            "runtime-installing-\(UUID().uuidString)", isDirectory: true)
-        try manager.createDirectory(at: staging, withIntermediateDirectories: true)
-        defer { try? manager.removeItem(at: staging) }
+    static func install(archive: URL, support: URL, package: Package? = nil,
+                        hooks: InstallHooks = InstallHooks(),
+                        lockTimeout: TimeInterval = RuntimeTransactionLock.defaultTimeout,
+                        usageTimeout: TimeInterval = 10) throws {
+        try AIRuntimeTransaction.install(archive: archive, support: support,
+                                         package: package, hooks: hooks,
+                                         lockTimeout: lockTimeout,
+                                         usageTimeout: usageTimeout)
+    }
 
+    /// Finishes or undoes an interrupted installation. The result is explicit:
+    /// a failure is never reported as a completed recovery.
+    @discardableResult
+    static func recoverInterruptedInstall(in support: URL = AIWorker.runtimeSupportDirectory,
+                                          hooks: InstallHooks = InstallHooks(),
+                                          lockTimeout: TimeInterval = RuntimeTransactionLock.defaultTimeout,
+                                          usageTimeout: TimeInterval = 10)
+        -> AIRuntimeRecoveryResult {
+        AIRuntimeTransaction.recover(in: support, hooks: hooks,
+                                     lockTimeout: lockTimeout,
+                                     usageTimeout: usageTimeout)
+    }
+
+    private static func extract(_ archive: URL, into staging: URL) throws {
         let unzip = Process()
         unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         unzip.arguments = ["-x", "-k", archive.path, staging.path]
         try unzip.run()
         unzip.waitUntilExit()
-        guard unzip.terminationStatus == 0, isValid(root: staging) else {
+        guard unzip.terminationStatus == 0 else {
             throw AIRuntimeFailure(code: .extract)
         }
-
-        if manager.fileExists(atPath: installDirectory.path) {
-            try manager.removeItem(at: installDirectory)
-        }
-        try manager.moveItem(at: staging, to: installDirectory)
     }
 }
 
+enum RuntimeInstallCheckpoint: String {
+    case beforeBackupMove
+    case afterBackupMove
+    case afterLiveMove
+    case beforeCommit
+    case afterCommit
+    case duringRollback
+}
+
+/// Tests throw this from a checkpoint to model a process that died before it
+/// could run rollback. Production code never throws it.
+struct SimulatedRuntimeCrash: Error {}
+
 struct AIRuntimeFailure: LocalizedError {
-    enum Kind {
+    enum Kind: Equatable {
         case extract
         case checksum
+        case install
+        case validation
+        case recovery
+        case busy
+    }
+
+    /// What happened to the runtime that was installed before this attempt.
+    /// The installation message must not promise a previous copy when there
+    /// was none, or when rolling back failed.
+    enum PreviousRuntime: Equatable {
+        case kept
+        case none
+        case lost
+        case preserved
     }
 
     let code: Kind
+    var previous: PreviousRuntime
+    var detail: String?
+
+    init(code: Kind, previous: PreviousRuntime = .none, detail: String? = nil) {
+        self.code = code
+        self.previous = previous
+        self.detail = detail
+    }
 
     var errorDescription: String? {
         switch code {
         case .checksum: return L10n.current.aiRuntimeChecksumFailed
         case .extract: return L10n.current.aiRuntimeExtractFailed
+        case .recovery: return L10n.current.aiRuntimeRecoveryFailed
+        case .busy: return L10n.current.aiRuntimeBusy
+        case .install, .validation:
+            switch previous {
+            case .kept: return L10n.current.aiRuntimeInstallFailed
+            case .none: return L10n.current.aiRuntimeInstallFailedNothing
+            case .lost: return L10n.current.aiRuntimeInstallFailedRollback
+            case .preserved: return L10n.current.aiRuntimeInstallFailedPreserved
+            }
         }
     }
 }

@@ -244,6 +244,9 @@ class L10n {
     }
     func saved(_ name: String) -> String { "Saved \(name)" }
     var exportFailed: String { "Could not save the export." }
+    var exportRefusedOriginal: String {
+        "That is the photo you are editing. Choose a different name or folder."
+    }
     var exportCancelled: String { "Export cancelled." }
     var cancelExport: String { "Cancel Export" }
     var operationBusy: String {
@@ -662,12 +665,39 @@ class L10n {
         "The downloaded file did not match its SHA256. Nothing was installed."
     }
     var aiRuntimeExtractFailed: String { "The runtime could not be unpacked. Nothing was installed." }
+    var aiRuntimeInstallFailed: String {
+        "The runtime could not be installed. The previous runtime was kept."
+    }
+    var aiRuntimeInstallFailedNothing: String {
+        "The runtime could not be installed. No previous runtime was replaced."
+    }
+    var aiRuntimeInstallFailedRollback: String {
+        "The runtime could not be installed, and the previous runtime could not be restored. Download it again in Settings."
+    }
+    var aiRuntimeInstallFailedPreserved: String {
+        "The runtime could not be installed. The previous runtime was preserved for recovery and will be retried."
+    }
+    var aiRuntimeRecoveryFailed: String {
+        "The AI runtime could not be recovered safely. Existing runtime files were preserved; restart the app to retry, or download the runtime again in Settings."
+    }
+    var aiRuntimeValidationFailed: String {
+        "The installed AI runtime did not pass its startup check. Restart the app to retry, or download the runtime again in Settings."
+    }
+    var aiRuntimeBusy: String {
+        "The AI runtime is in use by another Retouch Studio window. Close it, then try again."
+    }
     var aiRuntimeInstalledNote: String { "Installed — models can be downloaded now." }
     var aiRuntimeNotInstalled: String {
         "The AI runtime is not installed. Download it in Settings → AI models, then try again."
     }
     var aiRuntimeIntelUnavailable: String {
         "The AI helper runs only on Apple silicon. This Intel Mac uses the full editor without AI."
+    }
+    var aiRuntimeUnavailable: String {
+        "The AI helper is not available in this build yet. The rest of the editor works without it."
+    }
+    var aiHelperStarting: String {
+        "The AI helper is still starting. Try again in a moment."
     }
     func modelsTaskName(_ task: String) -> String {
         switch task {
@@ -797,6 +827,7 @@ class L10n {
         case .upscaling(let done, let total): return upscaling(done, total)
         case .saved(let name): return saved(name)
         case .exportFailed: return exportFailed
+        case .exportRefusedOriginal: return exportRefusedOriginal
         case .exportCancelled: return exportCancelled
         case .operationBusy: return operationBusy
         case .projectSaved(let name): return projectSaved(name)

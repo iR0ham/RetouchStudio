@@ -756,6 +756,10 @@ final class EditorModel: ObservableObject {
     private var recentsObserver: AnyCancellable?
     private var smartGeneration = 0
     private var offeredRecovery = false
+    /// Headless tests replace the two recovery panels; production leaves these
+    /// nil and the methods below use AppKit.
+    var recoveryChoiceHandler: ((Bool, String?) -> RecoveryChoice)?
+    var recoveryLocateHandler: ((RetouchProject) -> URL?)?
     /// Project file to rewrite once a relocated photo finishes loading.
     private var pendingRelink: URL?
     private var batchGeneration = 0
@@ -906,7 +910,6 @@ final class EditorModel: ObservableObject {
         let generation = self.generation
 
         statusToken = .readingImage
-        imageName = url.lastPathComponent
 
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
@@ -921,6 +924,9 @@ final class EditorModel: ObservableObject {
 
             guard let self, self.generation == generation else { return }
             guard let result else {
+                // The previous document is still on screen: do not let a failed
+                // open rename it or leave a project rewrite queued for it.
+                self.pendingRelink = nil
                 self.end(token)
                 self.statusToken = .couldNotRead
                 return
@@ -1019,6 +1025,10 @@ final class EditorModel: ObservableObject {
         if project != nil, projectURL == nil {
             cleanState = EditState()
             updateCleanState()
+            // The photo may have been found at a new path. The recovery copy
+            // records it only now, after the pixels loaded, and only because
+            // the owner explicitly chose Restore.
+            if let updated = makeProject() { _ = RecoveryStore.write(updated) }
         }
         resetView()
         // The report belongs to the photo that was just replaced.
@@ -2526,6 +2536,8 @@ final class EditorModel: ObservableObject {
     }
 
     /// Asks once, at launch, whether to reopen the edit a crash left behind.
+    /// Cancel, Escape, closing the alert and a cancelled Locate all postpone
+    /// the decision; only the explicit destructive button deletes the copy.
     func offerRecoveryIfNeeded() {
         guard !offeredRecovery, !hasImage, settings.recoveryEnabled else { return }
         offeredRecovery = true
@@ -2536,42 +2548,85 @@ final class EditorModel: ObservableObject {
         // throw the edits away.
         var source = resolveProjectImage(project, projectURL: nil)
         if source == nil {
-            let alert = NSAlert()
-            alert.messageText = s.recoveryTitle
-            alert.informativeText = s.projectPhotoMissing
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: s.projectLocateTitle)
-            let discard = alert.addButton(withTitle: s.recoveryDiscard)
-            discard.hasDestructiveAction = true
-            discard.keyEquivalent = ""
-            guard alert.runModal() == .alertFirstButtonReturn,
-                  let picked = locatePhoto(for: project) else {
+            switch recoveryChoice(missingSource: true, sourceName: nil) {
+            case .locate:
+                // Closing the Locate panel is not permission to delete the
+                // edit; leave the recovery copy exactly where it is.
+                guard let picked = locateRecoveryPhoto(for: project) else { return }
+                source = picked
+            case .discard:
                 RecoveryStore.clear()
                 return
+            case .cancel, .restore:
+                return
             }
-            source = picked
         }
         guard let source else { return }
-        if source.standardizedFileURL != URL(fileURLWithPath: project.imagePath).standardizedFileURL {
-            var updated = project
-            updated.imagePath = source.path
-            updated.imageBookmark = bookmark(for: source)
-            _ = RecoveryStore.write(updated)
-        }
 
+        switch recoveryChoice(missingSource: false, sourceName: source.lastPathComponent) {
+        case .restore:
+            load(url: source, restoring: project)
+        case .discard:
+            RecoveryStore.clear()
+        case .cancel, .locate:
+            return
+        }
+    }
+
+    /// The first prompt's buttons are Locate, Cancel, Discard. Escape and a
+    /// closed alert arrive as `.abort` and are treated as Cancel.
+    static func missingSourceChoice(for response: NSApplication.ModalResponse) -> RecoveryChoice {
+        switch response {
+        case .alertFirstButtonReturn: return .locate
+        case .alertThirdButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    /// The second prompt's buttons are Restore, Cancel, Discard. Same rule:
+    /// only the third button is destructive.
+    static func restoreChoice(for response: NSApplication.ModalResponse) -> RecoveryChoice {
+        switch response {
+        case .alertFirstButtonReturn: return .restore
+        case .alertThirdButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+
+    private func recoveryChoice(missingSource: Bool, sourceName: String?) -> RecoveryChoice {
+        if let recoveryChoiceHandler {
+            return recoveryChoiceHandler(missingSource, sourceName)
+        }
         let alert = NSAlert()
         alert.messageText = s.recoveryTitle
-        alert.informativeText = s.recoveryMessage(source.lastPathComponent)
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: s.recoveryRestore)
+        alert.informativeText = missingSource
+            ? s.projectPhotoMissing
+            : s.recoveryMessage(sourceName ?? "")
+        alert.alertStyle = missingSource ? .warning : .informational
+        alert.addButton(withTitle: missingSource ? s.projectLocateTitle : s.recoveryRestore)
+        alert.addButton(withTitle: s.cancel)
         let discard = alert.addButton(withTitle: s.recoveryDiscard)
         discard.hasDestructiveAction = true
         discard.keyEquivalent = ""
-        if alert.runModal() == .alertFirstButtonReturn {
-            load(url: source, restoring: project)
-        } else {
-            RecoveryStore.clear()
+        // AppKit does not wire Esc to the cancel button for programmatic
+        // alerts. Escape and a closed window both mean Cancel: only the
+        // explicit destructive button may delete the recovery copy.
+        let escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }
+            NSApp.stopModal(withCode: .abort)
+            return nil
         }
+        let response = alert.runModal()
+        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        if response == .abort { alert.window.orderOut(nil) }
+        return missingSource
+            ? Self.missingSourceChoice(for: response)
+            : Self.restoreChoice(for: response)
+    }
+
+    private func locateRecoveryPhoto(for project: RetouchProject) -> URL? {
+        if let recoveryLocateHandler { return recoveryLocateHandler(project) }
+        return locatePhoto(for: project)
     }
 
     // MARK: - Status text
@@ -2717,6 +2772,14 @@ final class EditorModel: ObservableObject {
 
     func export(to url: URL) {
         guard let image = sourceFull, let snapshot = makeExportSnapshot() else { return }
+        // Refuse before rendering: the source is immutable even when the chosen
+        // destination is a symlink, a hard link, or a case-only alias of it.
+        // The same check runs again at the commit point inside ExportService.
+        if let imageURL, ExportService.referencesSameFile(url, imageURL) {
+            statusToken = .exportRefusedOriginal
+            return
+        }
+        let protectedURL = imageURL
         guard let token = begin(.export) else {
             statusToken = .operationBusy
             return
@@ -2741,7 +2804,9 @@ final class EditorModel: ObservableObject {
             Task { @MainActor in self?.statusToken = .upscaling(done, total) }
         }
         let job = Task.detached(priority: .userInitiated) {
-            ExportService.run(snapshot, source: source, to: url, progress: progressSink)
+            ExportService.run(snapshot, source: source, to: url,
+                              protecting: protectedURL,
+                              progress: progressSink)
         }
         exportJob = job
         exportTask = Task { [weak self] in
@@ -2763,6 +2828,8 @@ final class EditorModel: ObservableObject {
                 self.statusToken = .exportCancelled
             case .failed:
                 self.statusToken = .exportFailed
+            case .refusedSource:
+                self.statusToken = .exportRefusedOriginal
             }
         }
     }
@@ -3101,7 +3168,8 @@ final class EditorModel: ObservableObject {
                                         colorSpace: fileSnapshot.aiUpscale
                                             ? ExportUpscale.workingColorSpace
                                             : result.colorSpace,
-                                        metadata: result.metadata)
+                                        metadata: result.metadata,
+                                        protecting: url)
         // A file that produced no export is a failure, not a skipped crop.
         return BatchOutcome(saved: saved, skippedCrop: skippedCrop && saved)
     }

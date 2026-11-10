@@ -50,3 +50,5 @@ run_suite() {
 
 run_suite Tests/EngineTests.swift enginetests
 run_suite Tests/ModelTests.swift modeltests
+run_suite Tests/RuntimeProcessTests.swift runtimeprocesstests
+run_suite Tests/RuntimeV2Tests.swift runtimev2tests

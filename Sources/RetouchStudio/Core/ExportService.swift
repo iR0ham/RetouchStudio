@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreImage
+import Darwin
 import Foundation
 import ImageIO
 
@@ -109,9 +110,18 @@ enum ExportUpscale {
 enum ExportService {
 
     /// How a one-photo export ended. `cancelled` is distinct from `failed`
-    /// because nothing was written and the owner asked for it.
+    /// because nothing was written and the owner asked for it. `refusedSource`
+    /// means the chosen destination is the opened photo itself, or an alias of
+    /// it, so nothing was rendered or written.
     enum Outcome {
-        case saved, cancelled, failed
+        case saved, cancelled, failed, refusedSource
+    }
+
+    /// The result of the final write, before the UI turns it into a sentence.
+    enum WriteResult: Equatable {
+        case written
+        case failed
+        case refusedOriginal
     }
 
     /// Renders and writes in one cancellable step. Cancellation is checked
@@ -119,6 +129,7 @@ enum ExportService {
     /// a cancelled export leaves no photo behind even though Core Image itself
     /// does not stop early.
     static func run(_ snapshot: ExportSnapshot, source: ExportSource, to url: URL,
+                    protecting protectedURL: URL? = nil,
                     progress: ((Int, Int) -> Void)? = nil) -> Outcome {
         if Task.isCancelled { return .cancelled }
         let rendered: RenderedExport?
@@ -134,9 +145,14 @@ enum ExportService {
         // The upscaler hands back sRGB pixels, so an upscaled file is written
         // with the profile those pixels were produced in.
         let colorSpace = snapshot.aiUpscale ? ExportUpscale.workingColorSpace : source.colorSpace
-        let wrote = write(rendered, snapshot: snapshot, to: url,
-                          colorSpace: colorSpace, metadata: source.metadata)
-        return wrote ? .saved : .failed
+        let wrote = writeResult(rendered, snapshot: snapshot, to: url,
+                                colorSpace: colorSpace, metadata: source.metadata,
+                                protecting: protectedURL)
+        switch wrote {
+        case .written: return .saved
+        case .failed: return .failed
+        case .refusedOriginal: return .refusedSource
+        }
     }
 
     /// Aspect ratio of the file as the pipeline will decode it, orientation
@@ -324,12 +340,28 @@ enum ExportService {
 
     /// Writes through a temporary file in the destination folder and moves it
     /// into place, so a cancelled or failed export never leaves a half-written
-    /// photo behind.
+    /// photo behind. `protecting` is the opened photo: writing anywhere that
+    /// resolves to that file is refused, even through a symbolic or hard link.
     static func write(_ rendered: RenderedExport,
                       snapshot: ExportSnapshot,
                       to url: URL,
                       colorSpace: CGColorSpace?,
-                      metadata: [CFString: Any]) -> Bool {
+                      metadata: [CFString: Any],
+                      protecting protectedURL: URL? = nil) -> Bool {
+        writeResult(rendered, snapshot: snapshot, to: url,
+                    colorSpace: colorSpace, metadata: metadata,
+                    protecting: protectedURL) == .written
+    }
+
+    static func writeResult(_ rendered: RenderedExport,
+                            snapshot: ExportSnapshot,
+                            to url: URL,
+                            colorSpace: CGColorSpace?,
+                            metadata: [CFString: Any],
+                            protecting protectedURL: URL?) -> WriteResult {
+        if let protectedURL, referencesSameFile(url, protectedURL) {
+            return .refusedOriginal
+        }
         let processor = ImageProcessor.shared
         let temporary = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
@@ -342,7 +374,13 @@ enum ExportService {
                                     maxDimension: snapshot.longEdge)
         guard wrote else {
             try? FileManager.default.removeItem(at: temporary)
-            return false
+            return .failed
+        }
+        // Check again at the commit point: the destination could have been
+        // replaced or linked to the source while the render was being written.
+        if let protectedURL, referencesSameFile(url, protectedURL) {
+            try? FileManager.default.removeItem(at: temporary)
+            return .refusedOriginal
         }
         do {
             if FileManager.default.fileExists(atPath: url.path) {
@@ -350,10 +388,41 @@ enum ExportService {
             } else {
                 try FileManager.default.moveItem(at: temporary, to: url)
             }
-            return true
+            return .written
         } catch {
             try? FileManager.default.removeItem(at: temporary)
-            return false
+            return .failed
         }
+    }
+
+    /// True when writing to `destination` would replace `source`, including a
+    /// symbolic link, a hard link, or a differently-cased spelling on a
+    /// case-insensitive volume. `stat` follows links, so the device/inode pair
+    /// is the reliable identity check; resolved paths cover a destination that
+    /// does not exist yet but names the source.
+    static func referencesSameFile(_ destination: URL, _ source: URL) -> Bool {
+        let destinationURL = destination.resolvingSymlinksInPath().standardizedFileURL
+        let sourceURL = source.resolvingSymlinksInPath().standardizedFileURL
+        if destinationURL.path == sourceURL.path { return true }
+        if let destinationID = fileIdentity(destinationURL),
+           let sourceID = fileIdentity(sourceURL),
+           destinationID == sourceID {
+            return true
+        }
+        // A missing destination has no inode. APFS is case-insensitive by
+        // default, so compare the remaining spellings conservatively rather
+        // than risk replacing the source through a case-only alias.
+        if !FileManager.default.fileExists(atPath: destinationURL.path) {
+            return destinationURL.path.compare(sourceURL.path,
+                                               options: [.caseInsensitive]) == .orderedSame
+        }
+        return false
+    }
+
+    private static func fileIdentity(_ url: URL) -> String? {
+        var info = stat()
+        let result = url.path.withCString { stat($0, &info) }
+        guard result == 0 else { return nil }
+        return "\(info.st_dev):\(info.st_ino)"
     }
 }
