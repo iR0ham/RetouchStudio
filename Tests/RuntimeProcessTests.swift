@@ -12,7 +12,8 @@ import Foundation
 // E. helper startup and replacement serialize on the transaction lock and lease;
 // F. a bounded lock wait fails with a retryable busy error and succeeds later;
 // G. the model CLI's lease is owned by the CLI process, so it survives the
-//    death of the app that launched it and keeps a replacement out.
+//    death of the app that launched it and keeps a replacement out;
+// H. a cancel request does not free the lease while the CLI is still running.
 //
 // Every child below is a genuine separate process (this same test binary started
 // with a `--child-` argument), and every runtime is a temporary fixture.
@@ -731,6 +732,69 @@ func testModelCLILeaseIsChildOwned() {
     }
 }
 
+// MARK: - H
+
+func testCancellationKeepsLeaseUntilExit() {
+    print("\n[H] a cancel request cannot free the lease while the CLI still runs")
+    let support = freshSupport("model-cli-cancel")
+    let started = support.appendingPathComponent("cli-started")
+    // The wrapper ignores SIGTERM, so it is still mid-operation after the
+    // cancel request. The lease is the kernel's through the CLI's descriptor;
+    // nothing in the parent can release it early.
+    let script = "#!/bin/sh\ntrap '' TERM\nprintf started > '\(started.path)'\nsleep 1.5\n"
+    do {
+        try seedRuntime(in: support, version: "v1", python: script)
+    } catch {
+        check(false, "H: fixture runtime written", "\(error)")
+        return
+    }
+
+    setenv("RETOUCH_AI_PYTHON",
+           AIRuntime.installDirectory(in: support).appendingPathComponent("bin/python3").path, 1)
+    setenv("RETOUCH_AI_WORKER_ROOT", support.path, 1)
+    let tool: RuntimeModelTool
+    do {
+        tool = try AIWorker.startModelTool(["models", "download"], support: support)
+    } catch {
+        unsetenv("RETOUCH_AI_PYTHON")
+        unsetenv("RETOUCH_AI_WORKER_ROOT")
+        check(false, "H: the CLI starts", "\(error)")
+        return
+    }
+    unsetenv("RETOUCH_AI_PYTHON")
+    unsetenv("RETOUCH_AI_WORKER_ROOT")
+    check(waitForFile(started, timeout: 3), "H: the CLI is running")
+
+    tool.terminate()
+    check(tool.isRunning, "H: the CLI survives the cancel request")
+
+    let next = try? fixture(version: "v2")
+    var busy: AIRuntimeFailure?
+    if let next {
+        do {
+            try installFixture(next, into: support, lockTimeout: 2, usageTimeout: 0.3)
+        } catch let failure as AIRuntimeFailure {
+            busy = failure
+        } catch {
+            check(false, "H: the blocked install reports a typed error", "\(error)")
+        }
+    }
+    check(busy?.code == .busy, "H: a cancel request does not free the lease",
+          busy.map { "\($0.code)" } ?? "no error")
+    check(tool.isRunning, "H: the CLI was still active during the refused install")
+
+    check(tool.wait(timeout: 6), "H: the CLI exits on its own")
+    if let next {
+        do {
+            try installFixture(next, into: support, lockTimeout: 5, usageTimeout: 3)
+            check(installedVersion(in: support) == "v2",
+                  "H: the lease is released only after the real exit")
+        } catch {
+            check(false, "H: replacement after the real exit", "\(error)")
+        }
+    }
+}
+
 // MARK: - Run
 
 testCLILaunchCannotRaceSwap()
@@ -740,6 +804,7 @@ testUnrelatedProcessIsNeverTerminated()
 testStartupAndReplacementSerialize()
 testBoundedLockWaitIsRetryable()
 testModelCLILeaseIsChildOwned()
+testCancellationKeepsLeaseUntilExit()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 
