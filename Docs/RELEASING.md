@@ -1,6 +1,6 @@
 # Releasing Retouch Studio
 
-This is the checklist for turning the working tree into a public build. It is written for the current state of the project: universal (Apple silicon and Intel), ad-hoc signed, with an optional local AI helper. Release builds ship without the helper: the app downloads its runtime (about 390 MB) only when the owner asks, then downloads model weights separately. A build with the worker bundled is still supported for offline use. The helper itself is Apple-silicon-only.
+This is the checklist for turning the working tree into a public build. It is written for the current state of the project: universal (Apple silicon and Intel), ad-hoc signed, with an optional local AI helper. Release builds ship without the helper. In the current stabilization build the protocol-v2 runtime installer is disabled (`AIRuntime.package` is nil), so the AI tools report the runtime as unavailable and the app downloads no runtime. When an official protocol-v2 package is configured, the app will fetch it only after the owner approves its name, size and SHA256; model weights stay a separate download. A build with the worker bundled is still supported for offline use. The helper itself is Apple-silicon-only.
 
 ## 1. Public identity
 
@@ -31,7 +31,7 @@ Without the overrides the values in `Resources/Info.plist` are used. Bump `CFBun
 
 ```bash
 git status                                  # expect a clean tree
-./Tests/run.sh                              # engine + model suites
+./Tests/run.sh                              # Engine, Model, Runtime Process and Runtime V2 suites
 cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # worker suite, if shipping the helper
 ```
 
@@ -72,11 +72,11 @@ xcrun notarytool submit RetouchStudio.zip --keychain-profile <profile> --wait
 xcrun stapler staple "Retouch Studio.app"
 ```
 
-Until then, release notes must state that the build is ad-hoc signed, light (the AI runtime is a separate download on Apple silicon), and opened with **right-click → Open** on first launch.
+Until then, release notes must state that the build is ad-hoc signed, light (the current build offers no runtime download; a future approved runtime package would be a separate Apple-silicon download), and opened with **right-click → Open** on first launch.
 
 ## 6. Package and publish
 
-The two disk images are light builds, because the AI helper is downloaded on demand. The runtime archive is cut from a helper build first:
+The two disk images are light builds. The current build offers no runtime download (`AIRuntime.package` is nil); packaging a future runtime is a separate step, enabled only when an official protocol-v2 package is approved. That archive is cut from a helper build first:
 
 ```bash
 RETOUCH_ARCH=arm64 ./build.sh release                 # helper build, source available
@@ -84,7 +84,7 @@ RETOUCH_ARCH=arm64 ./build.sh release                 # helper build, source ava
                                          # RetouchStudio-1.0.0-ai-runtime-arm64.zip + checksum
 ```
 
-Copy the printed byte count and SHA256 into `Sources/RetouchStudio/Core/AIRuntime.swift` (`RUNTIME_BYTES`, `RUNTIME_SHA256`) and rebuild before cutting the images; the app refuses an archive whose size or hash differs.
+Do not publish that archive as installable until an official protocol-v2 package exists. Enabling the installer requires an `AIRuntime.Package` entry (URL, byte count and SHA256) in `Sources/RetouchStudio/Core/AIRuntime.swift`; the current build keeps `package` nil, so no runtime is offered, verified or installed. When an approved package is configured, the app verifies both size and SHA256 before installing under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`.
 
 ```bash
 RETOUCH_ARCH=arm64 RETOUCH_SKIP_WORKER=1 ./build.sh release
@@ -103,18 +103,17 @@ gh release create v1.0.0 \
   "RetouchStudio-1.0.0-arm64.dmg" "RetouchStudio-1.0.0-arm64.dmg.sha256" \
   "RetouchStudio-1.0.0-x86_64.dmg" "RetouchStudio-1.0.0-x86_64.dmg.sha256" \
   "RetouchStudio-1.0.0-universal.zip" "RetouchStudio-1.0.0-universal.zip.sha256" \
-  "RetouchStudio-1.0.0-ai-runtime-arm64.zip" "RetouchStudio-1.0.0-ai-runtime-arm64.zip.sha256" \
   --title "Retouch Studio 1.0.0" --notes-file Docs/RELEASE_NOTES_1.0.0.md
 ```
 
-Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 and x86_64 images are the same light editor; the runtime archive is an Apple-silicon-only extra fetched by the app after consent, and the universal zip is a single-file alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
+Attach a runtime archive only when an approved `AIRuntime.Package` points at that exact file; an archive without that entry cannot be installed by the app. Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 and x86_64 images are the same light editor, and the universal zip is a single-file alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
 
 Release notes should include:
 
 - what changed, and the minimum macOS version (14.0);
 - that the build is ad-hoc signed, with first-launch instructions;
-- that the editor runs on Intel while the AI tools require Apple silicon and a downloaded runtime;
-- that the runtime is about 390 MB, downloaded from the release page after its size and SHA256 are shown, and that models are downloaded separately;
+- that the editor runs on Intel while the AI tools require Apple silicon and a runtime that the current build does not offer;
+- that the current build offers no runtime download; a future approved protocol-v2 runtime would be about 390 MB and fetched only after its size and SHA256 are shown, and models are always downloaded separately;
 - the SHA256 of every archive;
 - a link to `PRIVACY_AUDIT.md` for the network claim.
 
@@ -122,14 +121,14 @@ Release notes should include:
 
 - Download the DMG from the release page, verify its checksum, mount it, drag the app to Applications and launch it from a different account or folder. Repeat once with the zip.
 - Open a photo, run one Auto Retouch, export, and reopen the saved `.retouch` project.
-- Approve the runtime download from **Settings → Manage Models…**, watch it verify the SHA256 and install, then confirm the helper answers and a model downloads and runs one AI job. Repeat the idle socket check described in `PRIVACY_AUDIT.md` §5.
+- In the current build, confirm **Settings → Manage Models…** offers no runtime download and the AI tools report the runtime as unavailable. When an approved protocol-v2 package is configured, approve its download, watch the SHA256 check and install, then confirm the helper answers and a model downloads and runs one AI job. Repeat the idle socket check described in `PRIVACY_AUDIT.md` §5.
 - Confirm the About window and Settings show the stamped version.
 
 ## 8. Known limitations to repeat in the release notes
 
 1. Ad-hoc signature, no notarization — Gatekeeper asks once on other Macs.
 2. No clean-machine install has been tested on a second physical Mac.
-3. The AI runtime is an optional ~390 MB download on Apple silicon (about 1.3 GB unpacked); models add tens of megabytes to several gigabytes on top. Intel has no AI.
+3. The current build offers no AI runtime download. A future approved protocol-v2 runtime would be an optional ~390 MB Apple-silicon download (about 1.3 GB unpacked); models add tens of megabytes to several gigabytes on top. Intel has no AI.
 4. Windows and Linux are not supported by this codebase.
-5. The worker source lives outside this repository; a build from a fresh clone without it produces a light app whose AI tools offer the runtime download.
+5. The worker source lives outside this repository; a build from a fresh clone without it produces a light app whose AI tools report that the runtime is unavailable.
 6. Downloaded models range from tens of megabytes to several gigabytes under Application Support; removing the app and that folder is the documented uninstall.

@@ -443,7 +443,16 @@ func testBatchExportPolicy() {
             && sameAspect.analysis.anchors.isEmpty && sameAspect.aiEdits.isEmpty
             && sameAspect.orientation.isIdentity,
           "another same-shape file gets automatic focus and callouts")
-    check(sameAspect.crop == base.crop, "the crop travels to a same-shape file")
+    check(sameAspect.crop == nil,
+          "a turned document's crop does not leak into another photo")
+
+    var unrotatedBase = base
+    unrotatedBase.orientation = .identity
+    let unrotatedSameAspect = BatchExportPolicy.snapshot(
+        unrotatedBase, fileURL: otherURL, documentURL: documentURL,
+        documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
+    check(unrotatedSameAspect.crop == unrotatedBase.crop,
+          "an unturned document's crop travels to a same-shape file")
     check(sameAspect.adjustments == base.adjustments && sameAspect.format == base.format
             && sameAspect.quality == base.quality && sameAspect.longEdge == base.longEdge
             && sameAspect.stripsPrivacyMetadata == base.stripsPrivacyMetadata
@@ -586,6 +595,88 @@ func testBatchMatchesSingleExport() async {
               String(format: "mean delta %.2f/255, %d pixels changed", stampDelta, changed))
     } else {
         check(false, "batch without stamps written")
+    }
+}
+
+@MainActor
+func testBatchKeepsCropAfterQuarterTurn() async {
+    print("\n[P1-1b] a turned document keeps its own crop in a batch")
+
+    let docURL = workDir.appendingPathComponent("turn-doc.png")
+    let squareURL = workDir.appendingPathComponent("turn-square.png")
+    guard let docImage = makeImage(width: 800, height: 600),
+          let squareImage = makeImage(width: 600, height: 600),
+          writePNG(docImage, to: docURL), writePNG(squareImage, to: squareURL) else {
+        check(false, "turn fixtures")
+        return
+    }
+
+    // 800×600 cropped by half is a 400×300 frame; a quarter turn swaps it to
+    // roughly 300×400 (the crop edges are integral pixels, so the height can
+    // differ by one).
+    for (label, clockwise, expectedTurns) in [("90°", true, 1), ("270°", false, 3)] {
+        let model = EditorModel()
+        model.load(url: docURL)
+        check(await waitUntil { model.hasImage && !model.isBusy },
+              "\(label): document loads")
+
+        model.cropDraft = CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.5)
+        model.applyCrop()
+        check(await waitUntil { !model.isBusy && model.appliedCrop != nil },
+              "\(label): crop applies")
+
+        if clockwise {
+            model.rotateClockwise()
+        } else {
+            model.rotateCounterClockwise()
+        }
+        check(await waitUntil(30) {
+            !model.isBusy && model.documentOrientation.quarterTurns == expectedTurns
+                && model.workingPixelSize.width == 300
+        }, "\(label): the document turns and re-crops",
+        "\(model.workingPixelSize.width)×\(model.workingPixelSize.height)")
+
+        model.exportFormat = .png
+        let singleURL = workDir.appendingPathComponent("turn-\(expectedTurns)-single.png")
+        model.export(to: singleURL)
+        check(await waitUntil(120) {
+            FileManager.default.fileExists(atPath: singleURL.path) && !model.isBusy
+        }, "\(label): single export finishes")
+
+        let folder = workDir.appendingPathComponent("turn-\(expectedTurns)-batch")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        model.runBatch([docURL, squareURL], to: folder)
+        check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
+              "\(label): batch finishes")
+        check(model.batchSavedCount == 2 && model.batchSkippedCrops == 1,
+              "\(label): the document is saved and only the square skips the crop",
+              "saved \(model.batchSavedCount), skipped \(model.batchSkippedCrops)")
+
+        let docOut = folder.appendingPathComponent("turn-doc-retouched.png")
+        if let dims = readImage(docOut), let singleDims = readImage(singleURL) {
+            check(dims.width == singleDims.width && dims.height == singleDims.height
+                    && dims.width == 300,
+                  "\(label): the batch keeps the turned crop",
+                  "\(dims.width)×\(dims.height) vs single \(singleDims.width)×\(singleDims.height)")
+        } else {
+            check(false, "\(label): batch output reads back")
+        }
+
+        if let delta = meanDelta(singleURL, docOut) {
+            check(delta < 1.0, "\(label): batch pixels match the single export",
+                  String(format: "mean delta %.3f/255", delta))
+        } else {
+            check(false, "\(label): batch pixels comparable")
+        }
+
+        let squareOut = folder.appendingPathComponent("turn-square-retouched.png")
+        if let squareDims = readImage(squareOut) {
+            check(squareDims.width == 600 && squareDims.height == 600,
+                  "\(label): a different-shape file still exports whole",
+                  "\(squareDims.width)×\(squareDims.height)")
+        } else {
+            check(false, "\(label): square output reads back")
+        }
     }
 }
 
@@ -3006,6 +3097,7 @@ func runAll() async {
     await testOrientationKeepsEditsAttached()
     testBatchExportPolicy()
     await testBatchMatchesSingleExport()
+    await testBatchKeepsCropAfterQuarterTurn()
     await testProjectRelink()
     await testProjectVersionGuard()
     await testOperationCoordination()

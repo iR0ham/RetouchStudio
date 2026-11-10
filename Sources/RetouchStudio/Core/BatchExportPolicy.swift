@@ -14,12 +14,23 @@ enum BatchExportPolicy {
                          documentURL: URL?,
                          documentAspect: CGFloat,
                          fileAspect: CGFloat) -> ExportSnapshot {
+        // The document's own file always keeps the crop it was edited with.
+        // After a quarter turn the crop is expressed in the turned frame while
+        // `fileAspect` still describes the unturned file, so the aspect gate
+        // below cannot judge that crop. Single-file export already uses these
+        // exact crop and orientation values together.
+        guard fileURL.resolvingSymlinksInPath() != documentURL else { return base }
+
         var snapshot = base
-        let applies = ExportService.cropApplies(base.crop,
-                                                documentAspect: documentAspect,
-                                                fileAspect: fileAspect)
+        // A quarter turn or mirror re-expresses the crop in a different frame.
+        // Another photo opens in its own frame, so that crop must not travel.
+        let sharesDocumentFrame = base.orientation.quarterTurns == 0
+            && !base.orientation.flipped
+        let applies = sharesDocumentFrame
+            && ExportService.cropApplies(base.crop,
+                                         documentAspect: documentAspect,
+                                         fileAspect: fileAspect)
         snapshot.crop = applies ? base.crop : nil
-        guard fileURL.resolvingSymlinksInPath() != documentURL else { return snapshot }
 
         // A patch describes exactly the pixels it was generated from, and the
         // turn belongs to this photo's frame.

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Packages the relocatable AI helper as the optional runtime archive that a
-# light build downloads on demand. The archive is the Worker folder itself:
+# Packages the relocatable AI helper as the runtime archive for a future
+# approved light build. The archive is the Worker folder itself:
 # bin/python3, Python.framework, lib, site-packages and retouch_ai_worker at the
 # zip root, so extraction lands exactly on the layout AIRuntime validates.
 #
@@ -25,5 +25,5 @@ printf '%s  %s\n' "$SHA" "$OUT" > "$OUT.sha256"
 
 echo "✓ ساخته شد: $OUT  ($BYTES بایت)"
 echo "  checksum: $OUT.sha256"
-echo "  AIRuntime.swift: RUNTIME_BYTES = $BYTES"
-echo "                   RUNTIME_SHA256 = \"$SHA\""
+echo "  AIRuntime.Package: bytes = $BYTES"
+echo "                     sha256 = \"$SHA\""
