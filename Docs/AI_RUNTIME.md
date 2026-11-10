@@ -1,10 +1,10 @@
 # Retouch Studio — Local AI Runtime
 
-**Applies to:** the local AI helper, whether it is bundled inside `Retouch Studio.app` or installed from the on-demand runtime archive. Measurements below were taken with the 2.1 (build 3) development build, before the first public release (`app.retouchstudio.mac`, 1.0.0).
+**Applies to:** the local AI helper, whether it is bundled inside `Retouch Studio.app` or installed from a future approved protocol-v2 runtime archive. The on-demand installer is disabled in the current stabilization build (`AIRuntime.package` is nil). Measurements below were taken with the 2.1 (build 3) development build, before the first public release (`app.retouchstudio.mac`, 1.0.0).
 **Target:** macOS 14.0 or later. The app is universal (arm64 + x86_64); the helper is an Apple-silicon (arm64) runtime, so AI tools are unavailable on Intel. Measured on a MacBook Air M3 with 16 GB.
 **Related:** [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md), [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md)
 
-The helper is self-contained. A full build carries it inside the app; the 1.0.0 release ships a light app and downloads the same runtime once, with consent, into Application Support. Everything that runs — the retouching engine, the Python helper, PyTorch, Transformers, ONNX Runtime and MLX — is local. The runtime archive and the model weights are the only downloads, each after the owner approves the exact file, size and SHA256.
+The helper is self-contained. A full build carries it inside the app. Release builds do not, and the protocol-v2 download path exists in the code but is disabled in the current build: no official runtime package has been approved, so `AIRuntime.package` stays nil and Settings offers no runtime download. The `RetouchStudio-1.0.0-ai-runtime-arm64.zip` asset on the 1.0.0 release page is a legacy archive; it is not treated as a compatible protocol-v2 package, and compatibility has not been verified. When an official package is configured, the runtime archive and the model weights will be the only downloads, each after the owner approves the exact file, size and SHA256. Everything that runs — the retouching engine, the Python helper, PyTorch, Transformers, ONNX Runtime and MLX — is local.
 
 ---
 
@@ -15,7 +15,8 @@ The helper is self-contained. A full build carries it inside the app; the 1.0.0 
 | App, engine and UI | `Contents/MacOS/RetouchStudio` | 5.9 MB |
 | Light release app (per architecture / universal) | `Retouch Studio.app` | ~3.5–4 MB / ~16 MB |
 | Python 3.13.15 + wheels + helper (full build) | `Contents/Resources/Worker/` | ~1.29 GiB |
-| Runtime archive (light build, downloaded on demand) | `~/Library/Application Support/RetouchStudio/AI/runtime/` | 388,277,063 bytes zipped, ~1.29 GiB installed |
+| Protocol-v2 runtime (future approved package, installed on demand) | `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2/` | archive size fixed by its package metadata |
+| Legacy 1.0.0 runtime archive (not read by this build) | Release asset only; never installed under `AI/runtime` | 388,277,063 bytes zipped |
 | Typeface (Vazirmatn, SIL OFL) | `Contents/Resources/Fonts/` | ~496 KB |
 | **Whole full app bundle** | | **~1.31 GiB** |
 | Model weights | Not shipped; downloaded by consent | 28 MB – 4.6 GB |
@@ -35,10 +36,10 @@ The worker is the framework interpreter copied from Homebrew Python 3.13.15, wit
    xattr -dr com.apple.quarantine "/Applications/Retouch Studio.app"
    ```
 
-3. Open **Settings (⌘,) → Manage Models…**. On Apple silicon the first card offers the AI runtime: its sheet shows the archive name, its size and its SHA256, and nothing is fetched before it is approved. After the download verifies and installs, pick the models you need and approve their download sheet. The sheet lists file count, total size and license. These approved downloads are the only steps that use the internet.
+3. Open **Settings (⌘,) → Manage Models…**. In the current build there is no runtime download card: the protocol-v2 installer is disabled until an official package is configured. A build that carries the helper inside the app can download models, each after its own sheet shows the file count, total size and license. Once an approved runtime package exists, its sheet will show the archive name, size and SHA256 before anything is fetched.
 4. When the downloads finish, the app is fully usable offline.
 
-There are no launch agents, no background daemons and no login items. The helper starts with the app, lives inside the app bundle, and stops when the app quits normally. After a crash it is left running (or replaced) by the next launch, as described in [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md) §3.
+There are no launch agents, no background daemons and no login items. The helper starts with the app and stops when the app quits normally; a bundled helper lives inside the app bundle, while an enabled protocol-v2 runtime would run from its installed tree. After a crash it is left running (or replaced) by the next launch, as described in [`PHASE5_ACCEPTANCE.md`](PHASE5_ACCEPTANCE.md) §3.
 
 ### Signature status
 
@@ -55,8 +56,8 @@ The app is signed **ad-hoc** (`codesign --verify --deep --strict` passes; `spctl
 After the models are installed:
 
 - opening a photo, all twelve retouch tools, Auto Retouch, masking, AI edits, 4× upscaling and export are local;
-- the helper communicates with the app over a Unix socket in `~/Library/Application Support/RetouchStudio/AI/worker.sock`;
-- the app's only network API is the runtime downloader (`AIRuntimeInstaller`), which fetches that one archive after consent and checks its SHA256; the helper's only networking is the model downloader (`Downloads` is a separate command that requires consent).
+- the helper communicates with the app over a Unix socket in `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.sock`;
+- the app's network API is the runtime downloader (`AIRuntimeInstaller`), which is disabled in the current build and will fetch one approved archive after consent and check its SHA256 when enabled; the helper's only networking is the model downloader (`Downloads` is a separate command that requires consent).
 
 This was measured, not assumed: see [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md) §3 — zero TCP/UDP endpoints while idle and during a real upscale job, and exactly two HTTPS connections during an approved download.
 
@@ -68,13 +69,17 @@ If a model file is damaged, `Manage Models… → Verify` reports the mismatched
 
 | Path | Contents |
 |---|---|
-| `~/Library/Application Support/RetouchStudio/AI/models/` | Installed model weights |
-| `~/Library/Application Support/RetouchStudio/AI/runtime/` | The on-demand helper runtime (light builds) |
-| `~/Library/Application Support/RetouchStudio/AI/jobs/` | Helper working copies and job outputs (cleaned up over time) |
+| `~/Library/Application Support/RetouchStudio/AI/models/` | Installed model weights (never inside the runtime tree) |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2/` | The installed protocol-v2 runtime (when a package is configured) |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2-backup/` | Previous runtime kept during installation or recovery |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/` | Runtime registry, transaction record, lock files (`runtime.lock`, `runtime-usage.lock`) |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/jobs/` | Helper working copies and job outputs (cleaned up over time) |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.log` | Helper stdout/stderr |
+| `~/Library/Application Support/RetouchStudio/AI/runtimes/worker.sock` | Local JSON-RPC socket |
 | `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
 | `~/Library/Application Support/RetouchStudio/AI/helper-owner.json` | Which app instance owns the running helper |
-| `~/Library/Application Support/RetouchStudio/AI/worker.log` | Helper stdout/stderr |
-| `~/Library/Application Support/RetouchStudio/AI/worker.sock` | Local JSON-RPC socket |
+
+The legacy `AI/runtime/` and `AI/jobs/` trees are never read, moved or deleted by the current build. A 1.0.0 runtime archive is not installed there.
 
 Projects and originals are never modified in place; exports are written where the owner chooses. Private test photos are never read by the helper unless the owner sends that photo to it as part of an edit.
 

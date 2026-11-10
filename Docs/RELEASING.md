@@ -56,7 +56,7 @@ ls "Retouch Studio.app/Contents/Resources/Worker"          # only if the helper 
 find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only
 ```
 
-Model weights must not appear inside the bundle. They belong in `~/Library/Application Support/RetouchStudio/AI/models` after the owner approves a download. The on-demand runtime, when installed, lives beside them in `~/Library/Application Support/RetouchStudio/AI/runtime`.
+Model weights must not appear inside the bundle. They belong in `~/Library/Application Support/RetouchStudio/AI/models` after the owner approves a download. The on-demand protocol-v2 runtime installs under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`; the installer is currently disabled because `AIRuntime.package` is nil, so this build does not install a runtime.
 
 ## 5. Signing and notarization
 

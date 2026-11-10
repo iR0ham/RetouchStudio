@@ -14,7 +14,12 @@ import UniformTypeIdentifiers
 /// hands it a temporary copy of the photo, and turns the reply into an `AIEdit`.
 enum AIWorker {
 
+    /// Tests point the production-default paths at a scratch tree so they can
+    /// exercise the real defaults without reading or writing the owner's data.
+    static var supportDirectoryOverride: URL?
+
     static var supportDirectory: URL {
+        if let supportDirectoryOverride { return supportDirectoryOverride.standardizedFileURL }
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                            in: .userDomainMask)[0]
         return base.appendingPathComponent("RetouchStudio/AI", isDirectory: true)
@@ -57,6 +62,15 @@ enum AIWorker {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return support.appendingPathComponent("models", isDirectory: true)
+    }
+
+    /// Model weights stay beside the app state in `AI/models`; the installer
+    /// replaces `AI/runtimes`, which must never contain downloaded weights.
+    /// A test that passes its own support keeps its isolated model folder.
+    private static func modelDirectory(for support: URL) -> URL {
+        support.standardizedFileURL == runtimeSupportDirectory.standardizedFileURL
+            ? modelsDirectory
+            : modelsDirectory(for: support)
     }
 
     private static var launched: Process?
@@ -1318,7 +1332,7 @@ enum AIWorker {
     /// this app crashes. Stdout is discarded and stderr is the caller's pipe,
     /// exactly as the progress reader expects.
     static func startModelTool(_ arguments: [String],
-                               support: URL = AIWorker.supportDirectory,
+                               support: URL = AIWorker.runtimeSupportDirectory,
                                hooks: AIRuntime.InstallHooks = AIRuntime.InstallHooks(),
                                standardError: Pipe? = nil,
                                onExit: @escaping (Int32) -> Void = { _ in })
@@ -1335,7 +1349,7 @@ enum AIWorker {
                                       message: L10n.current.modelsHelperMissing)
             }
             try FileManager.default.createDirectory(
-                at: modelsDirectory(for: support), withIntermediateDirectories: true)
+                at: modelDirectory(for: support), withIntermediateDirectories: true)
 
             let lease: RuntimeUsageLease
             do {

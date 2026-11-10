@@ -13,7 +13,9 @@ import Foundation
 // F. a bounded lock wait fails with a retryable busy error and succeeds later;
 // G. the model CLI's lease is owned by the CLI process, so it survives the
 //    death of the app that launched it and keeps a replacement out;
-// H. a cancel request does not free the lease while the CLI is still running.
+// H. a cancel request does not free the lease while the CLI is still running;
+// I. the production-default model CLI locks and leases the same support tree
+//    the runtime installer replaces, while models stay in AI/models.
 //
 // Every child below is a genuine separate process (this same test binary started
 // with a `--child-` argument), and every runtime is a temporary fixture.
@@ -795,6 +797,90 @@ func testCancellationKeepsLeaseUntilExit() {
     }
 }
 
+// MARK: - I
+
+func testProductionDefaultUsesInstallerSupport() {
+    print("\n[I] the production-default CLI uses the installer's runtime tree")
+    let scratch = freshSupport("default-support")
+    let runtimeSupport = scratch.appendingPathComponent("runtimes", isDirectory: true)
+    let models = scratch.appendingPathComponent("models", isDirectory: true)
+    AIWorker.supportDirectoryOverride = scratch
+    defer { AIWorker.supportDirectoryOverride = nil }
+
+    let started = scratch.appendingPathComponent("cli-started")
+    let source: URL
+    do {
+        source = try fixture(version: "default-support")
+        let interpreter = source.appendingPathComponent("bin/python3")
+        let script = "#!/bin/sh\nprintf started > '\(started.path)'\nsleep 4\n"
+        try Data(script.utf8).write(to: interpreter)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: interpreter.path)
+    } catch {
+        check(false, "I: fixture runtime written", "\(error)")
+        return
+    }
+
+    // No `support:` argument: this is the call ModelManager makes in production.
+    setenv("RETOUCH_AI_PYTHON",
+           source.appendingPathComponent("bin/python3").path, 1)
+    setenv("RETOUCH_AI_WORKER_ROOT", source.path, 1)
+    let tool: RuntimeModelTool
+    do {
+        tool = try AIWorker.startModelTool(["models", "download"])
+    } catch {
+        unsetenv("RETOUCH_AI_PYTHON")
+        unsetenv("RETOUCH_AI_WORKER_ROOT")
+        check(false, "I: the default CLI starts", "\(error)")
+        return
+    }
+    unsetenv("RETOUCH_AI_PYTHON")
+    unsetenv("RETOUCH_AI_WORKER_ROOT")
+    check(tool.isRunning, "I: the CLI is running", "pid \(tool.pid)")
+    check(waitForFile(started, timeout: 3), "I: the fake CLI actually ran")
+
+    let leasePath = runtimeSupport.appendingPathComponent(RuntimeUsageLease.fileName)
+    let lockPath = runtimeSupport.appendingPathComponent("runtime.lock")
+    let oldLeasePath = scratch.appendingPathComponent(RuntimeUsageLease.fileName)
+    let oldLockPath = scratch.appendingPathComponent("runtime.lock")
+    check(FileManager.default.fileExists(atPath: leasePath.path),
+          "I: the shared lease lives under AI/runtimes")
+    check(FileManager.default.fileExists(atPath: lockPath.path),
+          "I: the transaction lock lives under AI/runtimes")
+    check(!FileManager.default.fileExists(atPath: oldLeasePath.path),
+          "I: the old support root has no usage lease")
+    check(!FileManager.default.fileExists(atPath: oldLockPath.path),
+          "I: the old support root has no transaction lock")
+    check(FileManager.default.fileExists(atPath: models.path),
+          "I: model storage stays in AI/models")
+    check(!FileManager.default.fileExists(
+        atPath: runtimeSupport.appendingPathComponent("models").path),
+        "I: no model folder appears inside the runtime tree")
+
+    // The installer takes this exact lease before swapping the runtime.
+    var installBlocked = false
+    do {
+        let lease = try RuntimeUsageLease.acquireExclusive(support: runtimeSupport,
+                                                           timeout: 0.3)
+        lease.release()
+    } catch {
+        installBlocked = true
+    }
+    check(installBlocked, "I: the installer's exclusive lease is refused while the CLI runs")
+
+    var oldRootFree = false
+    do {
+        let lease = try RuntimeUsageLease.acquireExclusive(support: scratch, timeout: 0)
+        lease.release()
+        oldRootFree = true
+    } catch {
+        // A lease in the old tree would mean the default was still wrong.
+    }
+    check(oldRootFree, "I: no shared lease is held in the old support root")
+
+    check(tool.wait(timeout: 8), "I: the CLI exits on its own")
+}
+
 // MARK: - Run
 
 testCLILaunchCannotRaceSwap()
@@ -805,6 +891,7 @@ testStartupAndReplacementSerialize()
 testBoundedLockWaitIsRetryable()
 testModelCLILeaseIsChildOwned()
 testCancellationKeepsLeaseUntilExit()
+testProductionDefaultUsesInstallerSupport()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 

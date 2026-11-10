@@ -2,6 +2,17 @@
 
 First public release. A native, local-first portrait retouching studio for Apple silicon and Intel Macs, with a complete English/Persian interface.
 
+> **Current status (stabilization branch, after 1.0.0).** The protocol-v2
+> runtime installer is disabled in this build because no official protocol-v2
+> package has been approved (`AIRuntime.package` is nil). The app therefore
+> offers no runtime download. The `RetouchStudio-1.0.0-ai-runtime-arm64.zip`
+> asset is a legacy archive; it is not treated as a compatible protocol-v2
+> package, and its compatibility with the current installer has not been
+> verified. When an official package is configured, the v2 installer places the
+> runtime under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`
+> and model weights stay in `.../AI/models`. The 1.0.0 text below is kept as the
+> historical release record.
+
 ## Highlights
 
 - Twelve tools in one inspector: Skin, Healing, Reshape, Eyes & Teeth, Makeup, Color & Light, Looks, Crop, Body, Background, Stickers and Analysis.
