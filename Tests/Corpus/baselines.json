@@ -1,0 +1,2373 @@
+{
+  "captureNote" : "Digests are exact on the machine that captured them; cross-platform tolerances are documented separately as provisional.",
+  "cases" : [
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "1b7eb1b33faf3062dcd18a566a6194c2e2b0d235ca13c8ce2687e664878634a7",
+      "fixture" : "F05_GRADIENT_SKY",
+      "height" : 384,
+      "id" : "G01_EXPOSURE_UP",
+      "note" : "Exposure raises the whole ramp without clipping the sun.",
+      "params" : "exposure +40",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 132.64413500000001,
+        "lumaStdDev" : 57.614933000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 1,
+        "deltaE76Max" : 3.3489640000000001,
+        "deltaE76Mean" : 2.054948,
+        "mae" : 5.0315339999999997,
+        "maxError" : 9,
+        "psnr" : 33.482942999999999,
+        "rmse" : 5.399991,
+        "ssim" : 0.99896399999999996
+      },
+      "width" : 768
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "bbaa66133d10bc58ebd34bdadb84df39919bb2a3a07861437aee4ec5a9d9192e",
+      "fixture" : "F06_HIGHLIGHTS_SHADOWS",
+      "height" : 480,
+      "id" : "G02_EXPOSURE_DOWN",
+      "note" : "Negative exposure recovers the clipped white patch.",
+      "params" : "exposure -40",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 115.299178,
+        "lumaStdDev" : 95.813017000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.98647799999999997,
+        "deltaE76Max" : 3.2387269999999999,
+        "deltaE76Mean" : 1.783366,
+        "mae" : 4.5184639999999998,
+        "maxError" : 9,
+        "psnr" : 33.030071,
+        "rmse" : 5.6890090000000004,
+        "ssim" : 0.99840200000000001
+      },
+      "width" : 640
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "afe16d4946302754412b9160d2e59f8776a8eefe1a5d5c6bc2406d99be34d622",
+      "fixture" : "F04_DETAIL_CHART",
+      "height" : 512,
+      "id" : "G03_CONTRAST",
+      "note" : "Contrast steepens the mid-tones and leaves the patches in gamut.",
+      "params" : "contrast +45",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 113.926463,
+        "lumaStdDev" : 81.497350999999995
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.99974099999999999,
+        "deltaE76Max" : 38.884185000000002,
+        "deltaE76Mean" : 5.8406640000000003,
+        "mae" : 14.967266,
+        "maxError" : 81,
+        "psnr" : 23.218160999999998,
+        "rmse" : 17.604842000000001,
+        "ssim" : 0.92043699999999995
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "28228ed69c3734858b6a48a96c2756745991ee2e04e236194c5751622ed99d93",
+      "fixture" : "F06_HIGHLIGHTS_SHADOWS",
+      "height" : 480,
+      "id" : "G04_BLACKS",
+      "note" : "Blacks digs the near-black half out of the floor.",
+      "params" : "blacks +60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 111.900238,
+        "lumaStdDev" : 106.677148
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.49589800000000001,
+        "deltaE76Max" : 19.601690999999999,
+        "deltaE76Mean" : 2.8320889999999999,
+        "mae" : 8.202413,
+        "maxError" : 45,
+        "psnr" : 25.837523999999998,
+        "rmse" : 13.021589000000001,
+        "ssim" : 0.61000399999999999
+      },
+      "width" : 640
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "57adcf70cf3ad4cdf60bc24056b95da819b1e6acc3108105644fca1dd5db561a",
+      "fixture" : "F06_HIGHLIGHTS_SHADOWS",
+      "height" : 480,
+      "id" : "G05_WHITES",
+      "note" : "Whites lifts the highlight band toward white.",
+      "params" : "whites +50",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 128.62351699999999,
+        "lumaStdDev" : 107.73092
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.40714800000000001,
+        "deltaE76Max" : 12.960255,
+        "deltaE76Mean" : 3.398825,
+        "mae" : 9.0989079999999998,
+        "maxError" : 41,
+        "psnr" : 24.245052000000001,
+        "rmse" : 15.641831,
+        "ssim" : 0.98131699999999999
+      },
+      "width" : 640
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "b2e493cd4d81c7d60bdb6f626ee687bc0c1f971c7f48ae91838c6273189d686a",
+      "fixture" : "F04_DETAIL_CHART",
+      "height" : 512,
+      "id" : "G06_SATURATION",
+      "note" : "Saturation scales every colour patch.",
+      "params" : "saturation +50",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 124.982507,
+        "lumaStdDev" : 73.729445999999996
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.044949000000000003,
+        "deltaE76Max" : 25.050899999999999,
+        "deltaE76Mean" : 0.56694500000000003,
+        "mae" : 0.90668000000000004,
+        "maxError" : 77,
+        "psnr" : 33.510351,
+        "rmse" : 5.3829779999999996,
+        "ssim" : 0.99764699999999995
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "ef609dbe866e9097d3d67b5d7e2e386774df16bae93bd51bc0f5c628f7768505",
+      "fixture" : "F04_DETAIL_CHART",
+      "height" : 512,
+      "id" : "G07_VIBRANCE",
+      "note" : "Vibrance protects already-saturated patches.",
+      "params" : "vibrance +60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 124.82486,
+        "lumaStdDev" : 74.109583000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.22506000000000001,
+        "deltaE76Max" : 21.178440999999999,
+        "deltaE76Mean" : 0.57246600000000003,
+        "mae" : 0.74255499999999997,
+        "maxError" : 38,
+        "psnr" : 39.033780999999998,
+        "rmse" : 2.850041,
+        "ssim" : 0.99832399999999999
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "52b8d5e1316d220e83e80abee13e880bbbac8ad3d3f5c29314a3179e73af6e37",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "G08_WARMTH",
+      "note" : "Warmth moves the neutral target on skin and fabric.",
+      "params" : "warmth +45",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.459607000000005,
+        "lumaStdDev" : 57.651651000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 1,
+        "deltaE76Max" : 7.138083,
+        "deltaE76Mean" : 3.5504829999999998,
+        "mae" : 2.7359200000000001,
+        "maxError" : 14,
+        "psnr" : 36.236981999999998,
+        "rmse" : 3.9327019999999999,
+        "ssim" : 0.99997400000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "0127cb4642d7efa57c121fd8382315aff68d41f0b244261edd7455cc1a2d6cbc",
+      "fixture" : "F04_DETAIL_CHART",
+      "height" : 512,
+      "id" : "G09_CLARITY_UP",
+      "note" : "Positive clarity sharpens luminance without colour fringes.",
+      "params" : "clarity +55",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 121.120051,
+        "lumaStdDev" : 81.499674999999996
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.89245600000000003,
+        "deltaE76Max" : 37.405892000000001,
+        "deltaE76Mean" : 4.4736570000000002,
+        "mae" : 12.088717000000001,
+        "maxError" : 88,
+        "psnr" : 23.962655999999999,
+        "rmse" : 16.158735,
+        "ssim" : 0.91696699999999998
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "24449fb9ae8d44416b38bbc934c6447746feb67c346d5ce3d0aa122088bcec75",
+      "fixture" : "F04_DETAIL_CHART",
+      "height" : 512,
+      "id" : "G10_CLARITY_DOWN",
+      "note" : "Negative clarity blurs luminance only.",
+      "params" : "clarity -60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 131.256811,
+        "lumaStdDev" : 63.402146000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0.31246200000000002,
+        "changedFraction" : 0.64017100000000005,
+        "deltaE76Max" : 41.321846000000001,
+        "deltaE76Mean" : 5.0249889999999997,
+        "mae" : 11.861758,
+        "maxError" : 93,
+        "psnr" : 21.950621000000002,
+        "rmse" : 20.370849,
+        "ssim" : 0.86045400000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "219edd265cc5df52db9ddd980d4d134b7186dcc14219af262e0044557d0defbb",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "G11_VIGNETTE",
+      "note" : "Vignette darkens the corners around a centred subject.",
+      "params" : "vignette +55",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 86.473359000000002,
+        "lumaStdDev" : 59.081170999999998
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.98843800000000004,
+        "deltaE76Max" : 14.990121,
+        "deltaE76Mean" : 4.4308579999999997,
+        "mae" : 9.941891,
+        "maxError" : 38,
+        "psnr" : 26.865991999999999,
+        "rmse" : 11.567529,
+        "ssim" : 0.98018700000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "12d473d0458681034bb88ee67377d7639a8afa68550e38d4b5fedd9f3d30a03b",
+      "fixture" : "F06_HIGHLIGHTS_SHADOWS",
+      "height" : 480,
+      "id" : "G12_CURVE",
+      "note" : "All three curve anchors move independently.",
+      "params" : "curve shadows +30, midtones -25, highlights +20",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 131.313785,
+        "lumaStdDev" : 93.525270000000006
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.92558300000000004,
+        "deltaE76Max" : 12.380431,
+        "deltaE76Mean" : 5.8811390000000001,
+        "mae" : 13.008921000000001,
+        "maxError" : 34,
+        "psnr" : 24.430914999999999,
+        "rmse" : 15.310677999999999,
+        "ssim" : 0.86016800000000004
+      },
+      "width" : 640
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "27fce5e51761fbe36cd3d7fd53fe1f3055ea9517aaa164eed5543d4e986fbcc6",
+      "fixture" : "F06_HIGHLIGHTS_SHADOWS",
+      "height" : 480,
+      "id" : "G13_SPLIT_TONE",
+      "note" : "Split tone cools shadows and warms highlights.",
+      "params" : "splitTone 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 121.373699,
+        "lumaStdDev" : 99.924620000000004
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.97746100000000002,
+        "deltaE76Max" : 7.1182059999999998,
+        "deltaE76Mean" : 4.486923,
+        "mae" : 3.718054,
+        "maxError" : 10,
+        "psnr" : 34.410943000000003,
+        "rmse" : 4.8528070000000003,
+        "ssim" : 0.99788100000000002
+      },
+      "width" : 640
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "dd198dc4ce6cb4dc58f5e88495b8cffbba6bf6056dedc1ceff1adab751b6b0fd",
+      "fixture" : "F04_DETAIL_CHART",
+      "height" : 512,
+      "id" : "G14_HSL",
+      "note" : "HSL bands address green saturation, red hue and blue luminance.",
+      "params" : "hue red +20, saturation green -60, luminance blue -30",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 123.517,
+        "lumaStdDev" : 76.381924999999995
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.21063999999999999,
+        "deltaE76Max" : 33.213118000000001,
+        "deltaE76Mean" : 0.93232400000000004,
+        "mae" : 2.3894440000000001,
+        "maxError" : 36,
+        "psnr" : 32.982812000000003,
+        "rmse" : 5.720046,
+        "ssim" : 0.95552000000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "af89e5d4f54d9f88860bee88263876f15e76382678f84d3d0a0d6851f774085d",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "G15_LOOK_WARM_GOLD",
+      "note" : "The warm gold look runs the 32-cube grade.",
+      "params" : "look warmGold, strength 70",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 93.937123999999997,
+        "lumaStdDev" : 61.907105000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 1,
+        "deltaE76Max" : 10.525565,
+        "deltaE76Mean" : 4.651548,
+        "mae" : 6.3355379999999997,
+        "maxError" : 28,
+        "psnr" : 31.460605000000001,
+        "rmse" : 6.8156920000000003,
+        "ssim" : 0.99438599999999999
+      },
+      "width" : 512
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "4adcc1b54e599f6f514589ea3870b42ff1c5e4fcf0fd6888b7bd2de0d2dd03f4",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "G16_LOOK_CROSS",
+      "note" : "A second look proves the cube is not a no-op.",
+      "params" : "look crossProcess, strength 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 89.236625000000004,
+        "lumaStdDev" : 49.974924000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 1,
+        "deltaE76Max" : 14.084887,
+        "deltaE76Mean" : 4.1197270000000001,
+        "mae" : 6.4435099999999998,
+        "maxError" : 22,
+        "psnr" : 30.502880000000001,
+        "rmse" : 7.6102020000000001,
+        "ssim" : 0.994892
+      },
+      "width" : 768
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "45ed841c65f35a21d2414495ab4ac531a40c5aa9cc461030641e16de85e6a615",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "G18_TONE_COMBO",
+      "note" : "Exposure, contrast, saturation and warmth compose in pipeline order.",
+      "params" : "exposure +20, contrast +20, saturation +10, warmth +15",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 72.502032999999997,
+        "lumaStdDev" : 56.271189999999997
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.99994899999999998,
+        "deltaE76Max" : 28.505454,
+        "deltaE76Mean" : 10.007486999999999,
+        "mae" : 19.961973,
+        "maxError" : 57,
+        "psnr" : 20.727461000000002,
+        "rmse" : 23.451312000000001,
+        "ssim" : 0.83845700000000001
+      },
+      "width" : 768
+    },
+    {
+      "category" : "color-light",
+      "deterministic" : true,
+      "digest" : "84d293818f6c1ca495e9ce32d9bfe4f3e1ff5fcd3c9120a5d700333fce6ef68e",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "G17_GRAIN",
+      "note" : "Grain uses CIRandomGenerator; observed repeatable on this host.",
+      "params" : "grain 60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 92.394351,
+        "lumaStdDev" : 55.958002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.94436600000000004,
+        "deltaE76Max" : 12.295043,
+        "deltaE76Mean" : 2.4539800000000001,
+        "mae" : 5.7832970000000001,
+        "maxError" : 35,
+        "psnr" : 30.017833,
+        "rmse" : 8.047269,
+        "ssim" : 0.73569399999999996
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "de61c04d430804b1f78c67a2e63ef7af5d2ec0f1d3b39a0c160aac0d9b44c5a9",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S01_BLEMISH",
+      "note" : "The blemish pass finds the three painted spots.",
+      "params" : "blemish 70",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.699743999999995,
+        "lumaStdDev" : 57.217221000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.046349000000000001,
+        "deltaE76Max" : 56.482346999999997,
+        "deltaE76Mean" : 0.30185499999999998,
+        "mae" : 0.66020800000000002,
+        "maxError" : 150,
+        "psnr" : 33.397095999999998,
+        "rmse" : 5.4536259999999999,
+        "ssim" : 0.98800399999999999
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "122ef840470bd7ba6ba36b948ccec9c6a60eed43380f677f5b5b774d66b7ab46",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S02_WRINKLE",
+      "note" : "Fine-lines reduction works on the painted lines.",
+      "params" : "wrinkle 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.604699999999994,
+        "lumaStdDev" : 57.341897000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.220749,
+        "deltaE76Max" : 28.323810000000002,
+        "deltaE76Mean" : 0.319519,
+        "mae" : 0.69883700000000004,
+        "maxError" : 70,
+        "psnr" : 37.819842999999999,
+        "rmse" : 3.2775400000000001,
+        "ssim" : 0.98568500000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "f128e13841ee0cbd0d2a12b2bbc7b5c777ce3e800cce7c0533afa823b8e0811c",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S03_TONE_EVEN",
+      "note" : "Tone evening replaces chroma at low frequency.",
+      "params" : "skinToneEvens 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.378448000000006,
+        "lumaStdDev" : 57.688087000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.31911800000000001,
+        "deltaE76Max" : 6.5932649999999997,
+        "deltaE76Mean" : 0.71423499999999995,
+        "mae" : 0.77111600000000002,
+        "maxError" : 15,
+        "psnr" : 43.769742000000001,
+        "rmse" : 1.652164,
+        "ssim" : 0.99993299999999996
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "92c15444a046442152a37d58b1ca00c7a9c7f45983a76fda6d88d06fdcfa43ea",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S04_SMOOTH",
+      "note" : "Smoothing keeps a share of pore-scale texture.",
+      "params" : "smooth 60, texturePreserve 40",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.467455999999999,
+        "lumaStdDev" : 57.457818000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.181034,
+        "deltaE76Max" : 23.579599999999999,
+        "deltaE76Mean" : 0.19798499999999999,
+        "mae" : 0.43184,
+        "maxError" : 57,
+        "psnr" : 41.062061,
+        "rmse" : 2.2565089999999999,
+        "ssim" : 0.99205299999999996
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "c98fd5900213fc0476e332b7c3aeb35e4f918d8cfa9928c2f5a2f2a3e24da46a",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S05_SMOOTH_PRESERVE",
+      "note" : "Maximum texture preservation changes how much smoothing survives.",
+      "params" : "smooth 70, texturePreserve 100",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.414795999999996,
+        "lumaStdDev" : 57.539434999999997
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.090095999999999996,
+        "deltaE76Max" : 14.720174,
+        "deltaE76Mean" : 0.091800999999999994,
+        "mae" : 0.19128200000000001,
+        "maxError" : 34,
+        "psnr" : 46.206778,
+        "rmse" : 1.247962,
+        "ssim" : 0.99786900000000001
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "c6d397f72e61df2b395da8c7164164d268e40ceedc96f11a2cf3ce4d5241558d",
+      "fixture" : "F02_PORTRAIT_DEEP_LOWKEY",
+      "height" : 512,
+      "id" : "S06_SKIN_BRIGHTEN",
+      "note" : "Brightening lifts deep skin without turning it grey.",
+      "params" : "skinBrighten 40",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 41.804043999999998,
+        "lumaStdDev" : 39.416415000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.32896399999999998,
+        "deltaE76Max" : 11.296922,
+        "deltaE76Mean" : 1.4486589999999999,
+        "mae" : 2.9554999999999998,
+        "maxError" : 27,
+        "psnr" : 32.259382000000002,
+        "rmse" : 6.2168599999999996,
+        "ssim" : 0.97598600000000002
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "a10260bf2c5ec3003d2e29474f0011ec41d3153d82b0212d74d7cf3f7f775da1",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S07_SKIN_FINISH",
+      "note" : "Skin finish changes the highlight roll-off.",
+      "params" : "skinFinish 50",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 99.909475999999998,
+        "lumaStdDev" : 60.667324999999998
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.32678200000000002,
+        "deltaE76Max" : 23.062819999999999,
+        "deltaE76Mean" : 1.472229,
+        "mae" : 3.5298600000000002,
+        "maxError" : 55,
+        "psnr" : 31.366147999999999,
+        "rmse" : 6.8902150000000004,
+        "ssim" : 0.98669399999999996
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "b0cd7fa65db68e8432893b3b5a4896a6b8376f3c8558dace6e63ea258f6500ad",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S08_SHINE",
+      "note" : "Shine control calms the painted speculars.",
+      "params" : "shine 50",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 95.462334999999996,
+        "lumaStdDev" : 56.335712999999998
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.243839,
+        "deltaE76Max" : 2.4199459999999999,
+        "deltaE76Mean" : 0.354931,
+        "mae" : 0.855321,
+        "maxError" : 6,
+        "psnr" : 42.745950000000001,
+        "rmse" : 1.858843,
+        "ssim" : 0.99942600000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "skin",
+      "deterministic" : true,
+      "digest" : "6516fe5661ef5c9fd21fb84c6a75fa045f8b2e11cb0de7febcb254b655adfba6",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S09_DARK_CIRCLES",
+      "note" : "Under-eye correction works inside the tear-trough mask.",
+      "params" : "darkCircles 60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.344854999999995,
+        "lumaStdDev" : 57.647770999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0096360000000000005,
+        "deltaE76Max" : 0.82760500000000004,
+        "deltaE76Mean" : 0.0045209999999999998,
+        "mae" : 0.0056189999999999999,
+        "maxError" : 2,
+        "psnr" : 69.465883000000005,
+        "rmse" : 0.085751999999999995,
+        "ssim" : 0.99999199999999999
+      },
+      "width" : 512
+    },
+    {
+      "category" : "eyes-teeth",
+      "deterministic" : true,
+      "digest" : "dc55d65112d489bb90a9bea65013e7a9d1c2c9c605e63cae8af42ac14ae09af5",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S10_TEETH_WHITEN",
+      "note" : "Whitening lands on enamel, not lips.",
+      "params" : "teethWhiten 70",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.342338999999996,
+        "lumaStdDev" : 57.647331999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0047419999999999997,
+        "deltaE76Max" : 2.5752060000000001,
+        "deltaE76Mean" : 0.011024000000000001,
+        "mae" : 0.0074700000000000001,
+        "maxError" : 5,
+        "psnr" : 62.638384000000002,
+        "rmse" : 0.18820100000000001,
+        "ssim" : 1
+      },
+      "width" : 512
+    },
+    {
+      "category" : "eyes-teeth",
+      "deterministic" : true,
+      "digest" : "0a0039898b8aa619a5aaa3798be12c3e4e403c2c5557104038705b8deb4c26e6",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S11_TEETH_ALIGN",
+      "note" : "Alignment fills the painted gap from neighbouring enamel.",
+      "params" : "teethAlign 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.503174999999999,
+        "lumaStdDev" : 57.552058000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0054400000000000004,
+        "deltaE76Max" : 31.636424999999999,
+        "deltaE76Mean" : 0.075985999999999998,
+        "mae" : 0.14841299999999999,
+        "maxError" : 72,
+        "psnr" : 39.943117999999998,
+        "rmse" : 2.566754,
+        "ssim" : 0.99851299999999998
+      },
+      "width" : 512
+    },
+    {
+      "category" : "eyes-teeth",
+      "deterministic" : true,
+      "digest" : "47f723ed6757413cbb8b53c205d5f83513b1a267715bd5bccef44edb9ddae1d3",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S12_EYE_BRIGHTEN",
+      "note" : "Sclera brightening is gated to the white of the eye.",
+      "params" : "eyeBrighten 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.372460000000004,
+        "lumaStdDev" : 57.716799000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.007927,
+        "deltaE76Max" : 3.166531,
+        "deltaE76Mean" : 0.01159,
+        "mae" : 0.032129999999999999,
+        "maxError" : 11,
+        "psnr" : 56.233438999999997,
+        "rmse" : 0.39343099999999998,
+        "ssim" : 0.99997100000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "eyes-teeth",
+      "deterministic" : true,
+      "digest" : "e32a75a05884f889f1b0f9abf745dd703f5fea6addc4a2439ece71dcb24d147f",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S13_EYE_SHARPEN",
+      "note" : "Eye detail sharpens iris and lashes, not skin.",
+      "params" : "eyeSharpen 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.298248999999998,
+        "lumaStdDev" : 57.684910000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0070720000000000002,
+        "deltaE76Max" : 13.404362000000001,
+        "deltaE76Mean" : 0.022675000000000001,
+        "mae" : 0.045760000000000002,
+        "maxError" : 34,
+        "psnr" : 50.617353000000001,
+        "rmse" : 0.75105599999999995,
+        "ssim" : 0.99988699999999997
+      },
+      "width" : 512
+    },
+    {
+      "category" : "eyes-teeth",
+      "deterministic" : true,
+      "digest" : "f6d2d0df290eafa1862bc660654d579d1410ad7bc256da9332098bf13e0b4e3e",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S14_IRIS",
+      "note" : "Iris enhancement adds local contrast inside the iris.",
+      "params" : "irisEnhance 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.283582999999993,
+        "lumaStdDev" : 57.694865
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0071370000000000001,
+        "deltaE76Max" : 16.009305000000001,
+        "deltaE76Mean" : 0.025933000000000001,
+        "mae" : 0.059479999999999998,
+        "maxError" : 39,
+        "psnr" : 48.269855,
+        "rmse" : 0.98411899999999997,
+        "ssim" : 0.99977000000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "eyes-teeth",
+      "deterministic" : true,
+      "digest" : "49e828fb43304997745089ebc071a320667c3387cdf340f9bd07aa8531427d6b",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S15_LASH",
+      "note" : "Lash darkening stays on the lash line.",
+      "params" : "lashDarken 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.150279999999995,
+        "lumaStdDev" : 57.878419000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0086400000000000001,
+        "deltaE76Max" : 24.394756999999998,
+        "deltaE76Mean" : 0.087914999999999993,
+        "mae" : 0.19228999999999999,
+        "maxError" : 64,
+        "psnr" : 40.396272000000003,
+        "rmse" : 2.436277,
+        "ssim" : 0.99846500000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "eyes-teeth",
+      "deterministic" : true,
+      "digest" : "7150bef1b86f63cb8ca5e5cf721297f5391cfb74bfb22a8520b80c44222befee",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "S16_LENS",
+      "note" : "A contact-lens tint rides the iris and keeps its striations.",
+      "params" : "lensTint 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.243747999999997,
+        "lumaStdDev" : 57.688039000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0067980000000000002,
+        "deltaE76Max" : 10.947436,
+        "deltaE76Mean" : 0.044727999999999997,
+        "mae" : 0.090588000000000002,
+        "maxError" : 26,
+        "psnr" : 45.718291999999998,
+        "rmse" : 1.320157,
+        "ssim" : 0.99973500000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "makeup",
+      "deterministic" : true,
+      "digest" : "0a0c399fa05a04799eb92a062408ba1dedde600845b302feedcd041b1ffae551",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M01_LIPS",
+      "note" : "Lip tint is luminance-preserving within the lip polygon.",
+      "params" : "lipTint 60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 95.991403000000005,
+        "lumaStdDev" : 57.226092000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.017417999999999999,
+        "deltaE76Max" : 29.614345,
+        "deltaE76Mean" : 0.21845500000000001,
+        "mae" : 0.31111,
+        "maxError" : 55,
+        "psnr" : 37.953493999999999,
+        "rmse" : 3.2274940000000001,
+        "ssim" : 0.99801799999999996
+      },
+      "width" : 512
+    },
+    {
+      "category" : "makeup",
+      "deterministic" : true,
+      "digest" : "e57873bb8bfe0aaf68febee19b48747a40782f52b0ab641b1a2d3d5eed4ddf1b",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M02_BLUSH",
+      "note" : "Blush sits on the cheekbone mask.",
+      "params" : "blush 60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.161696000000006,
+        "lumaStdDev" : 57.409664999999997
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.047974000000000003,
+        "deltaE76Max" : 11.058317000000001,
+        "deltaE76Mean" : 0.22065399999999999,
+        "mae" : 0.27514,
+        "maxError" : 18,
+        "psnr" : 43.631084999999999,
+        "rmse" : 1.67875,
+        "ssim" : 0.99981299999999995
+      },
+      "width" : 512
+    },
+    {
+      "category" : "makeup",
+      "deterministic" : true,
+      "digest" : "9d131b90bb9b69cdc0c2877ef4c74ef15a688ea7fc6672b3f80ccfdd0ac6cdc6",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M03_BROWS",
+      "note" : "Brow definition follows the widened brow band.",
+      "params" : "browDefine 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.232117000000002,
+        "lumaStdDev" : 57.629820000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.022460999999999998,
+        "deltaE76Max" : 5.6126610000000001,
+        "deltaE76Mean" : 0.055527,
+        "mae" : 0.107084,
+        "maxError" : 15,
+        "psnr" : 49.599707000000002,
+        "rmse" : 0.84441299999999997,
+        "ssim" : 0.99942299999999995
+      },
+      "width" : 512
+    },
+    {
+      "category" : "makeup",
+      "deterministic" : true,
+      "digest" : "2920d712c9862335415578b04205364147913fcdcd15dbcd4d16188676e49835",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M04_EYESHADOW",
+      "note" : "Shadow lands on the lids with the brow subtracted.",
+      "params" : "eyeshadow 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.326710000000006,
+        "lumaStdDev" : 57.633223000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0069470000000000001,
+        "deltaE76Max" : 2.4230749999999999,
+        "deltaE76Mean" : 0.0064079999999999996,
+        "mae" : 0.01357,
+        "maxError" : 6,
+        "psnr" : 62.134748000000002,
+        "rmse" : 0.199436,
+        "ssim" : 0.99998299999999996
+      },
+      "width" : 512
+    },
+    {
+      "category" : "makeup",
+      "deterministic" : true,
+      "digest" : "26d72634ec01380889fbab9081a1afff8eead4bcda054bbd26bfd8202c28d704",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M05_EYELINER",
+      "note" : "Liner follows the traced upper lash line.",
+      "params" : "eyeliner 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.301991999999998,
+        "lumaStdDev" : 57.663254999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0065989999999999998,
+        "deltaE76Max" : 7.6104399999999996,
+        "deltaE76Mean" : 0.019625,
+        "mae" : 0.038475000000000002,
+        "maxError" : 23,
+        "psnr" : 52.875095999999999,
+        "rmse" : 0.57914200000000005,
+        "ssim" : 0.99983500000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "makeup",
+      "deterministic" : true,
+      "digest" : "590138e6681a0639983bae59b6ae8acc904956f1ac0d11599a3ecba2c4acb125",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M06_CONTOUR",
+      "note" : "Contour shading follows the cheek-to-jaw hollows.",
+      "params" : "contour 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 94.800196,
+        "lumaStdDev" : 55.677317000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.092201000000000005,
+        "deltaE76Max" : 12.662615000000001,
+        "deltaE76Mean" : 0.58976300000000004,
+        "mae" : 1.5324960000000001,
+        "maxError" : 39,
+        "psnr" : 32.304110999999999,
+        "rmse" : 6.1849280000000002,
+        "ssim" : 0.99497199999999997
+      },
+      "width" : 512
+    },
+    {
+      "category" : "hair",
+      "deterministic" : true,
+      "digest" : "1ea5821dfec543c6a97a01167899a3882599f97a7e6191f655b14a088cf92900",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M07_HAIR_DYE",
+      "note" : "Hair dye is intersected with the person mask.",
+      "params" : "hairColor 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 94.019183999999996,
+        "lumaStdDev" : 55.515675999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.12792600000000001,
+        "deltaE76Max" : 15.489466999999999,
+        "deltaE76Mean" : 0.94750900000000005,
+        "mae" : 2.3131970000000002,
+        "maxError" : 47,
+        "psnr" : 29.520966999999999,
+        "rmse" : 8.5210249999999998,
+        "ssim" : 0.99148800000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "hair",
+      "deterministic" : true,
+      "digest" : "14109b0430dcc0597580c584a52ec8568f53509b2212d9cc29186a8bf118d56d",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M08_HAIR_SHINE",
+      "note" : "Hair shine preserves the hair's own shading.",
+      "params" : "hairShine 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 97.206693000000001,
+        "lumaStdDev" : 58.723714999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.119099,
+        "deltaE76Max" : 5.8419030000000003,
+        "deltaE76Mean" : 0.35725899999999999,
+        "mae" : 0.83434799999999998,
+        "maxError" : 17,
+        "psnr" : 38.261384999999997,
+        "rmse" : 3.1150929999999999,
+        "ssim" : 0.99863999999999997
+      },
+      "width" : 512
+    },
+    {
+      "category" : "hair",
+      "deterministic" : true,
+      "digest" : "85f7526a1b186e94721d259455aff03d2b4a6a3f804e3942c62f631f18c447ec",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M09_HAIR_VOLUME",
+      "note" : "Hair volume uses a radial bulge confined to the band.",
+      "params" : "hairVolume 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 97.184126000000006,
+        "lumaStdDev" : 57.039957000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.16148399999999999,
+        "deltaE76Max" : 51.784810999999998,
+        "deltaE76Mean" : 0.71927099999999999,
+        "mae" : 1.6197239999999999,
+        "maxError" : 133,
+        "psnr" : 27.910793000000002,
+        "rmse" : 10.256531000000001,
+        "ssim" : 0.97655800000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "makeup",
+      "deterministic" : true,
+      "digest" : "364b78caadc8d416fefbf20b4dc8275f659e88ae6411ae86e776398a9509f2fa",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "M10_LIP_GLOSS",
+      "note" : "Gloss adds a highlight inside the lip mask.",
+      "params" : "lipGloss 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.544258999999997,
+        "lumaStdDev" : 57.673025000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.016369000000000002,
+        "deltaE76Max" : 32.123165999999998,
+        "deltaE76Mean" : 0.091115000000000002,
+        "mae" : 0.19638800000000001,
+        "maxError" : 73,
+        "psnr" : 41.174807999999999,
+        "rmse" : 2.2274080000000001,
+        "ssim" : 0.99871200000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "b17bc8dcb9d9e46a160fa6e4a2301f6331a6804dca4e585b92ba306be87fa6b8",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R01_EYE_SIZE",
+      "note" : "Eye size warps around each eye centre.",
+      "params" : "eyeSize 60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.300400999999994,
+        "lumaStdDev" : 57.498201999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.10294300000000001,
+        "deltaE76Max" : 86.543026999999995,
+        "deltaE76Mean" : 0.41449900000000001,
+        "mae" : 1.0061329999999999,
+        "maxError" : 221,
+        "psnr" : 29.909116000000001,
+        "rmse" : 8.1486260000000001,
+        "ssim" : 0.96714900000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "cfeba65ba894300996c0b74c30b09bae9cbbe0edd3219e3f48d82d29e63e6657",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R02_NOSE_SIZE",
+      "note" : "Nose size warps around the nose.",
+      "params" : "noseSize 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.344577000000001,
+        "lumaStdDev" : 57.647404999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.015938000000000001,
+        "deltaE76Max" : 22.482824999999998,
+        "deltaE76Mean" : 0.016730999999999999,
+        "mae" : 0.043116000000000002,
+        "maxError" : 64,
+        "psnr" : 51.661724999999997,
+        "rmse" : 0.66596900000000003,
+        "ssim" : 0.99808200000000002
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "85eac73d911b4843c92c3b77977486812f5c2edcc5cd652631d328e9563b5c37",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R03_NOSE_TIP",
+      "note" : "Nose tip is a separate control from whole-nose size.",
+      "params" : "noseTip 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.339977000000005,
+        "lumaStdDev" : 57.640901999999997
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0081209999999999997,
+        "deltaE76Max" : 8.286365,
+        "deltaE76Mean" : 0.0063449999999999999,
+        "mae" : 0.015824999999999999,
+        "maxError" : 28,
+        "psnr" : 58.465803000000001,
+        "rmse" : 0.30426399999999998,
+        "ssim" : 0.99968500000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "7fd131821abc6a973a3376dbb8a5ef6c7184447e2333b70967af00540779fac4",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R04_LIP_SIZE",
+      "note" : "Lip size warps around the mouth.",
+      "params" : "lipSize 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.335279,
+        "lumaStdDev" : 57.636037000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.031071000000000001,
+        "deltaE76Max" : 72.361569000000003,
+        "deltaE76Mean" : 0.12807499999999999,
+        "mae" : 0.28151999999999999,
+        "maxError" : 182,
+        "psnr" : 35.311897999999999,
+        "rmse" : 4.3746700000000001,
+        "ssim" : 0.99360800000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "9f5693d2020c60b9eb7fb5ca329fae02cc85bd8ae31cd4cf28a5ae1ad997ec8e",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R05_CHEEK",
+      "note" : "Cheek shaping moves the lower face beside the mouth.",
+      "params" : "cheekSize 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.369667000000007,
+        "lumaStdDev" : 57.628079999999997
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.072227,
+        "deltaE76Max" : 41.651380000000003,
+        "deltaE76Mean" : 0.099392999999999995,
+        "mae" : 0.24940899999999999,
+        "maxError" : 107,
+        "psnr" : 42.888146999999996,
+        "rmse" : 1.828659,
+        "ssim" : 0.98610200000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "1f046e35c2125c4edef4c91d2aeb4fc16a349f3941bd2d148be983186d8e77b4",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R06_JAW",
+      "note" : "Jaw width narrows the lower silhouette.",
+      "params" : "jawWidth 60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.437494999999998,
+        "lumaStdDev" : 57.647927000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.067692000000000002,
+        "deltaE76Max" : 50.259982000000001,
+        "deltaE76Mean" : 0.10549500000000001,
+        "mae" : 0.230652,
+        "maxError" : 148,
+        "psnr" : 40.19623,
+        "rmse" : 2.4930370000000002,
+        "ssim" : 0.99013700000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "c5592f5e41bcff3ffdb7f837848d6ddf9f90556fa7c5260b186992937b7dc883",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R07_CHIN",
+      "note" : "Chin length moves the chin without the jaw.",
+      "params" : "chinLength 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.379110999999995,
+        "lumaStdDev" : 57.642566000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.048023000000000003,
+        "deltaE76Max" : 51.759988,
+        "deltaE76Mean" : 0.069137000000000004,
+        "mae" : 0.15504699999999999,
+        "maxError" : 170,
+        "psnr" : 42.383237000000001,
+        "rmse" : 1.93811,
+        "ssim" : 0.99491600000000002
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "ef9c78effefc03630bab2c90b30746957eb65671d7642bc4eb9d796c9ef5c97f",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R08_FACE_WIDTH",
+      "note" : "Face width narrows the whole silhouette.",
+      "params" : "faceWidth 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 97.110785000000007,
+        "lumaStdDev" : 57.863945000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.42503000000000002,
+        "deltaE76Max" : 69.270503000000005,
+        "deltaE76Mean" : 0.93813100000000005,
+        "mae" : 2.1121989999999999,
+        "maxError" : 187,
+        "psnr" : 27.578408,
+        "rmse" : 10.656628,
+        "ssim" : 0.90935200000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "867d2e51d94d28290038d5bc19f9141ff0fbbcd0e752d7d29af96ad86cd6be67",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R09_FACE_LENGTH",
+      "note" : "Face length stretches the whole silhouette.",
+      "params" : "faceLength 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.920415000000006,
+        "lumaStdDev" : 57.431035000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.428116,
+        "deltaE76Max" : 71.512141,
+        "deltaE76Mean" : 1.049849,
+        "mae" : 2.3955989999999998,
+        "maxError" : 193,
+        "psnr" : 27.037504999999999,
+        "rmse" : 11.341355,
+        "ssim" : 0.90562699999999996
+      },
+      "width" : 512
+    },
+    {
+      "category" : "reshape",
+      "deterministic" : true,
+      "digest" : "6abba560bd7a5e982054f92bb659c218ce1bf93dd495222717da26a4f111377a",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "R10_COMBO",
+      "note" : "Feature and silhouette passes compose in one render.",
+      "params" : "eyeSize 40, jawWidth 40, faceWidth 30",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.794855999999996,
+        "lumaStdDev" : 57.637808999999997
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.37219600000000003,
+        "deltaE76Max" : 80.279358000000002,
+        "deltaE76Mean" : 0.83000799999999997,
+        "mae" : 1.911343,
+        "maxError" : 203,
+        "psnr" : 28.345237999999998,
+        "rmse" : 9.7561459999999993,
+        "ssim" : 0.93197600000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "body",
+      "deterministic" : true,
+      "digest" : "82bf9076610bb3c9254d598e5358c79df81b7f7daaafa57ab9bc9f395bac6784",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "S17_BODY_SMOOTH",
+      "note" : "Body smoothing runs on person ∩ skin pixels.",
+      "params" : "bodySmooth 50",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 91.63467,
+        "lumaStdDev" : 44.201259
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.090874999999999997,
+        "deltaE76Max" : 23.929421999999999,
+        "deltaE76Mean" : 0.16397900000000001,
+        "mae" : 0.34001599999999998,
+        "maxError" : 54,
+        "psnr" : 41.197755999999998,
+        "rmse" : 2.2215310000000001,
+        "ssim" : 0.99709899999999996
+      },
+      "width" : 768
+    },
+    {
+      "category" : "body",
+      "deterministic" : true,
+      "digest" : "83f4ecc94670ee7e853e1137fd3c43b96b450e694af343b8c709a3306ab9b6dd",
+      "fixture" : "F02_PORTRAIT_DEEP_LOWKEY",
+      "height" : 512,
+      "id" : "S18_BODY_TONE",
+      "note" : "Body tone brightening uses the same person mask.",
+      "params" : "bodyTone 40",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 42.477297,
+        "lumaStdDev" : 39.665823000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.61804199999999998,
+        "deltaE76Max" : 10.249281,
+        "deltaE76Mean" : 1.831888,
+        "mae" : 3.5566409999999999,
+        "maxError" : 22,
+        "psnr" : 34.093820000000001,
+        "rmse" : 5.033258,
+        "ssim" : 0.98830499999999999
+      },
+      "width" : 512
+    },
+    {
+      "category" : "body",
+      "deterministic" : true,
+      "digest" : "dddbe9358e3c244e4dd574b402efcc0d4196e0abe00cffc6d93e0aa2752086e4",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "B01_BODY_SLIM",
+      "note" : "Body slim scales the subject horizontally.",
+      "params" : "bodySlim 60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 90.478004999999996,
+        "lumaStdDev" : 43.230707000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.36702499999999999,
+        "deltaE76Max" : 92.749497000000005,
+        "deltaE76Mean" : 1.977538,
+        "mae" : 4.4148240000000003,
+        "maxError" : 240,
+        "psnr" : 22.379615000000001,
+        "rmse" : 19.389178999999999,
+        "ssim" : 0.87342299999999995
+      },
+      "width" : 768
+    },
+    {
+      "category" : "background",
+      "deterministic" : true,
+      "digest" : "72f8eaed831387e0093313f4d92b5d1bdd9bff06b5a7c353822e4764ddde861b",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "BG01_BLUR",
+      "note" : "Background blur falls off outside the person mask.",
+      "params" : "backgroundBlur 60",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 91.463684000000001,
+        "lumaStdDev" : 44.436948000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.50745099999999999,
+        "deltaE76Max" : 18.028570999999999,
+        "deltaE76Mean" : 0.42638199999999998,
+        "mae" : 0.64291500000000001,
+        "maxError" : 47,
+        "psnr" : 43.876783000000003,
+        "rmse" : 1.631928,
+        "ssim" : 0.98184400000000005
+      },
+      "width" : 768
+    },
+    {
+      "category" : "background",
+      "deterministic" : true,
+      "digest" : "97171a4271ee581b675a2cf8b6dee309b2223027540022c2f6e9120771405e8f",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "BG02_TONE",
+      "note" : "Background tone darkens only the surroundings.",
+      "params" : "backgroundTone -50",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 50.471308000000001,
+        "lumaStdDev" : 65.965281000000004
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.60845300000000002,
+        "deltaE76Max" : 47.057471,
+        "deltaE76Mean" : 18.663487,
+        "mae" : 40.237394999999999,
+        "maxError" : 93,
+        "psnr" : 13.449951,
+        "rmse" : 54.205409000000003,
+        "ssim" : 0.45727800000000002
+      },
+      "width" : 768
+    },
+    {
+      "category" : "background",
+      "deterministic" : true,
+      "digest" : "2ec105ddc5b30d7a560431bc18ea5a5904b9a7772ac00c9f7399f7d29c98946e",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "BG03_SATURATION",
+      "note" : "Background saturation desaturates only the surroundings.",
+      "params" : "backgroundSaturation -60",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 91.657454000000001,
+        "lumaStdDev" : 44.434075
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.59248100000000004,
+        "deltaE76Max" : 11.288565,
+        "deltaE76Mean" : 2.713794,
+        "mae" : 2.2839999999999998,
+        "maxError" : 17,
+        "psnr" : 36.625194999999998,
+        "rmse" : 3.760802,
+        "ssim" : 0.99962499999999999
+      },
+      "width" : 768
+    },
+    {
+      "category" : "background",
+      "deterministic" : true,
+      "digest" : "8c3dd2d19e747fd09d50dad5c64ac3785a3f64c38d358d7648413c52f69fee56",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "BG04_FILL",
+      "note" : "A solid backdrop is composited behind the subject.",
+      "params" : "backgroundFill 70",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 163.75109499999999,
+        "lumaStdDev" : 57.478411000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.61207,
+        "deltaE76Max" : 69.498698000000005,
+        "deltaE76Mean" : 28.545742000000001,
+        "mae" : 71.300571000000005,
+        "maxError" : 177,
+        "psnr" : 8.6539160000000006,
+        "rmse" : 94.15522,
+        "ssim" : 0.75011300000000003
+      },
+      "width" : 768
+    },
+    {
+      "category" : "background",
+      "deterministic" : true,
+      "digest" : "bf80d5b29f7f80b808059991d9b7fe115343b44d4093b0c335b5d1798ae4b2e2",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "BG05_REMOVE",
+      "note" : "Removal makes the background transparent.",
+      "params" : "backgroundRemove",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 47.833320000000001,
+        "lumaStdDev" : 67.211770000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 145.43221,
+        "changedFraction" : 0.59723999999999999,
+        "deltaE76Max" : 47.065848000000003,
+        "deltaE76Mean" : 19.160209999999999,
+        "mae" : 44.737394999999999,
+        "maxError" : 122,
+        "psnr" : 12.457183000000001,
+        "rmse" : 60.768849000000003,
+        "ssim" : 0.417381
+      },
+      "width" : 768
+    },
+    {
+      "category" : "background",
+      "deterministic" : true,
+      "digest" : "693f59ba1f8a94109adbb915e8e68c23f11dc74fcb5f3b2fd91c6c5bc3bd68df",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "BG06_COMBO",
+      "note" : "Blur, tone and saturation compose in one background pass.",
+      "params" : "backgroundBlur 40, tone -20, saturation -30",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 74.341284000000002,
+        "lumaStdDev" : 53.916339000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.60316899999999996,
+        "deltaE76Max" : 29.767305,
+        "deltaE76Mean" : 7.6750829999999999,
+        "mae" : 16.930655999999999,
+        "maxError" : 77,
+        "psnr" : 20.726762000000001,
+        "rmse" : 23.453196999999999,
+        "ssim" : 0.84277599999999997
+      },
+      "width" : 768
+    },
+    {
+      "category" : "extras",
+      "deterministic" : true,
+      "digest" : "70001c1da7f74388c4ce9f9220d5cff6e023964c8be2427fc30968395c714428",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "X01_HEAL",
+      "note" : "Three manual stamps repair the painted blemishes.",
+      "params" : "3 stamps r=0.018",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.472493,
+        "lumaStdDev" : 57.592331000000001
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0092010000000000008,
+        "deltaE76Max" : 56.008222000000004,
+        "deltaE76Mean" : 0.075621999999999995,
+        "mae" : 0.16370499999999999,
+        "maxError" : 154,
+        "psnr" : 38.299706,
+        "rmse" : 3.1013790000000001,
+        "ssim" : 0.99763299999999999
+      },
+      "width" : 512
+    },
+    {
+      "category" : "extras",
+      "deterministic" : true,
+      "digest" : "1d418244cdbfc4314bbca73201790e716ff30ccdb4163d4374f7289635157bf1",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "X02_STICKER",
+      "note" : "A procedural star sticker is placed on the finished picture.",
+      "params" : "star at (0.72, 0.28), size 0.16, rotation 12",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 97.102378000000002,
+        "lumaStdDev" : 58.112093999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0085030000000000001,
+        "deltaE76Max" : 99.194948999999994,
+        "deltaE76Mean" : 0.63062200000000002,
+        "mae" : 0.74745799999999996,
+        "maxError" : 210,
+        "psnr" : 27.953586999999999,
+        "rmse" : 10.206123,
+        "ssim" : 0.99122299999999997
+      },
+      "width" : 512
+    },
+    {
+      "category" : "extras",
+      "deterministic" : true,
+      "digest" : "762bb4a818aaf195e44ab44f0c50c1b7614a7ed600db1c311fc8690ff5cead0d",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "X03_ANALYSIS_PHOTO",
+      "note" : "Callouts are drawn over the photo at its own size.",
+      "params" : "analysis onPhoto",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 97.547725999999997,
+        "lumaStdDev" : 57.646873999999997
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.11647,
+        "deltaE76Max" : 78.165073000000007,
+        "deltaE76Mean" : 0.66090300000000002,
+        "mae" : 1.418814,
+        "maxError" : 203,
+        "psnr" : 28.728375,
+        "rmse" : 9.335153,
+        "ssim" : 0.92901500000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "extras",
+      "deterministic" : true,
+      "digest" : "d4cfb1e72ecca321b989cc75fcb81fa9d8f45d4ef90a02ceafee35868f2dd992",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 635,
+      "id" : "X04_ANALYSIS_POSTER",
+      "note" : "Poster mode adds a blurred bleed around the photo.",
+      "params" : "analysis poster",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 71.882071999999994,
+        "lumaStdDev" : 59.502876000000001
+      },
+      "width" : 635
+    },
+    {
+      "category" : "extras",
+      "deterministic" : true,
+      "digest" : "b3c5235dd32ff3626b42f5122f044705c4090ec44e3a424dd6c9b3877b2144ea",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "X05_ANALYSIS_OVERLAY",
+      "note" : "Overlay mode writes only the lines on transparency.",
+      "params" : "analysis overlayOnly",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 2.0998610000000002,
+        "lumaStdDev" : 14.513748
+      },
+      "width" : 512
+    },
+    {
+      "category" : "extras",
+      "deterministic" : true,
+      "digest" : "d598aa4111d6759bfadf8e0afb718b69eeb82b07159e06e4803aa108a750a2ed",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "X06_WATERMARK",
+      "note" : "A watermark is burned into the final render.",
+      "params" : "text 'Retouch Studio', bottom-right",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 96.704390000000004,
+        "lumaStdDev" : 57.831161999999999
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.0053559999999999997,
+        "deltaE76Max" : 55.984484000000002,
+        "deltaE76Mean" : 0.15140100000000001,
+        "mae" : 0.37117800000000001,
+        "maxError" : 164,
+        "psnr" : 31.694051000000002,
+        "rmse" : 6.6349499999999999,
+        "ssim" : 0.99306700000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "auto",
+      "deterministic" : true,
+      "digest" : "ef6fe508923d7d2dc3d97f6d1bc83d4456c0ba66c7c3fdac16e03a42bb15d9da",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "A01_AUTO_COLOR_PORTRAIT",
+      "note" : "Auto Color & Light measures the portrait and applies its patch.",
+      "params" : "auto: exposure 1.98, blacks 36.60, whites 13.07, vibrance 2.65",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 86.182079999999999,
+        "lumaStdDev" : 67.839252000000002
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.99876399999999999,
+        "deltaE76Max" : 14.527810000000001,
+        "deltaE76Mean" : 5.4516619999999998,
+        "mae" : 12.362809,
+        "maxError" : 31,
+        "psnr" : 24.858422000000001,
+        "rmse" : 14.575353,
+        "ssim" : 0.87541800000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "auto",
+      "deterministic" : true,
+      "digest" : "556c506083c2db72b242a0216e9202f0839151ed6e0ffaefde56595ee970634c",
+      "fixture" : "F06_HIGHLIGHTS_SHADOWS",
+      "height" : 480,
+      "id" : "A02_AUTO_COLOR_CLIPPED",
+      "note" : "Auto Color & Light sees a frame with clipped white and deep shadow.",
+      "params" : "auto: vibrance 8.85, warmth -7.37, clarity 4.65",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 119.48094399999999,
+        "lumaStdDev" : 99.487312000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.71076499999999998,
+        "deltaE76Max" : 8.6453299999999995,
+        "deltaE76Mean" : 0.59588799999999997,
+        "mae" : 0.64240299999999995,
+        "maxError" : 28,
+        "psnr" : 44.124346000000003,
+        "rmse" : 1.5860719999999999,
+        "ssim" : 0.99482899999999996
+      },
+      "width" : 640
+    },
+    {
+      "category" : "auto",
+      "deterministic" : true,
+      "digest" : "89a6bb7b3b561ce28580dd18c6d30eabddaa7b6494745969e01461b453fefc60",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "A03_AUTO_RETOUCH",
+      "note" : "Auto Retouch reads texture, spots, lines and under-eye tone.",
+      "params" : "auto: smooth 6.00, texturePreserve 90.10, blemish 12.52, wrinkle 16.00, skinToneEvens 6.00, eyeBrighten 16.00, eyeSharpen 6.00",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.501966999999993,
+        "lumaStdDev" : 57.388637000000003
+      },
+      "vsNoop" : {
+        "alphaMAE" : 0,
+        "changedFraction" : 0.11837399999999999,
+        "deltaE76Max" : 24.004131000000001,
+        "deltaE76Mean" : 0.171768,
+        "mae" : 0.33325700000000003,
+        "maxError" : 61,
+        "psnr" : 41.137208999999999,
+        "rmse" : 2.2370709999999998,
+        "ssim" : 0.99595100000000003
+      },
+      "width" : 512
+    },
+    {
+      "category" : "load",
+      "deterministic" : true,
+      "digest" : "2e296528edb18f93730c4f55d842df917fa4f62ba3bca3b2ec7b78428a2bfdf7",
+      "fixture" : "F10_EXIF_ORIENT6",
+      "height" : 720,
+      "id" : "L01_F10_UPRIGHT",
+      "note" : "EXIF orientation 6 is baked upright: 720x480 becomes 480x720.",
+      "params" : "load orientation 6",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 115.745688,
+        "lumaStdDev" : 61.529862000000001
+      },
+      "width" : 480
+    },
+    {
+      "category" : "load",
+      "deterministic" : true,
+      "digest" : "cd56c6989bd433ef0d36106a4ae7a9f0ab72b959d6681884a0a69e54b3b094b0",
+      "fixture" : "F11_P3_16BIT",
+      "height" : 512,
+      "id" : "L02_F11_P3",
+      "note" : "A 16-bit Display P3 source loads without being converted to sRGB.",
+      "params" : "load 16-bit P3",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 120.113983,
+        "lumaStdDev" : 50.717061000000001
+      },
+      "width" : 512
+    },
+    {
+      "category" : "load",
+      "deterministic" : true,
+      "digest" : "5decb9feffa86eab1e77756bbd6d4109e8a9572a2892ff7d20e3f1936723fe2a",
+      "fixture" : "F09_ALPHA_CUTOUT",
+      "height" : 512,
+      "id" : "L04_F09_ALPHA",
+      "note" : "Transparent source pixels survive the load.",
+      "params" : "load RGBA",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 31.946763000000001,
+        "lumaStdDev" : 45.984256999999999
+      },
+      "width" : 512
+    },
+    {
+      "category" : "load",
+      "deterministic" : true,
+      "digest" : "30bcac352aed171e9c845e976d2d9b0a688906d367d827c4ea6d23718018e170",
+      "fixture" : "F08_HIGHRES_PORTRAIT",
+      "height" : 1067,
+      "id" : "L05_F08_NOOP",
+      "note" : "The 1600 px source renders unchanged with zero adjustments.",
+      "params" : "zero adjustments",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 97.195465999999996,
+        "lumaStdDev" : 55.574269999999999
+      },
+      "width" : 1600
+    },
+    {
+      "category" : "load",
+      "deterministic" : true,
+      "digest" : "d5662c964021f6bbee96eb70276553ab3012f287c354e61f2e3752d1cebac7ed",
+      "fixture" : "F03_PORTRAIT_LANDSCAPE",
+      "height" : 432,
+      "id" : "L06_F03_CROP",
+      "note" : "A normalized top-left crop is applied before analysis.",
+      "params" : "crop x0 y0 w0.5 h1",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 102.38493699999999,
+        "lumaStdDev" : 59.502932000000001
+      },
+      "width" : 384
+    },
+    {
+      "category" : "load",
+      "deterministic" : true,
+      "digest" : "2ccb55691e839b48e0a49ac00a0b1ce54a0d5cb4795cbfc25b33e0edbf56333a",
+      "fixture" : "F01_PORTRAIT_SRGB_8",
+      "height" : 512,
+      "id" : "L07_F01_ROTATE",
+      "note" : "A clockwise quarter turn is baked into the pixels.",
+      "params" : "load quarterTurns 1",
+      "reference" : false,
+      "stats" : {
+        "lumaMean" : 96.340436999999994,
+        "lumaStdDev" : 57.643317000000003
+      },
+      "width" : 512
+    }
+  ],
+  "createdBy" : "Tests\/CorpusTests.swift",
+  "exports" : [
+    {
+      "heic" : {
+        "written" : true
+      },
+      "jpeg" : {
+        "bits" : 8,
+        "height" : 256,
+        "path" : "F01_export_256.jpg",
+        "width" : 256
+      },
+      "p3" : {
+        "bits" : 16,
+        "path" : "F11_export_256.png",
+        "profile" : "Display P3"
+      },
+      "png" : {
+        "bits" : 16,
+        "height" : 256,
+        "path" : "F01_export_256.png",
+        "width" : 256
+      },
+      "sourceProtection" : {
+        "caseAliasRefused" : true,
+        "hardlinkRefused" : true,
+        "originalUnchanged" : true,
+        "symlinkRefused" : true
+      }
+    }
+  ],
+  "fixtures" : [
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "512x512, 8-bit sRGB, one synthetic face with landmarks, pores, blemishes, teeth, hair, fabric.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "512x512|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|d6f80fa5c8119f9a071555b009db1c03c33937b7f6bba19a9bcee4bf1624c7d3",
+      "file" : "F01_portrait_srgb_8.png",
+      "height" : 512,
+      "id" : "F01_PORTRAIT_SRGB_8",
+      "necessity" : "Every face-masked operation needs one shared, reproducible subject.",
+      "operations" : "skin, eyes, teeth, makeup, reshape, healing, global colour, stickers, analysis overlay.",
+      "purpose" : "Baseline portrait for local retouch and global colour.",
+      "sha256" : "8e0bdc284c5c62ca6728416b99fd17cc832158335f0108c444c6b1224de39867",
+      "width" : 512
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "512x512, 8-bit sRGB, deep tone, dark background, visible shadow noise.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "512x512|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|1ff0bd8e009215b5bd87c4861fd08224eabd7e51552a772617b32cc680da0ff7",
+      "file" : "F02_portrait_deep_lowkey.png",
+      "height" : 512,
+      "id" : "F02_PORTRAIT_DEEP_LOWKEY",
+      "necessity" : "Colour and tone controls must not be calibrated on light skin only.",
+      "operations" : "skin brightening, tone evening, under-eye, exposure, highlight\/shadow, clarity.",
+      "purpose" : "Deep skin tone under low-key light.",
+      "sha256" : "d63b2621dd51dd3dc3c4384af30791be2d5b1fd0152588a4d8bc650f8f63b869",
+      "width" : 512
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "768x432, 8-bit sRGB, 16:9 landscape, subject on the left, sky gradient and bokeh.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "768x432|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|0d52767eac999a263f0129cfc42cd1a6b48d6e8e13beec18861fd8091923d1e9",
+      "file" : "F03_portrait_landscape.png",
+      "height" : 432,
+      "id" : "F03_PORTRAIT_LANDSCAPE",
+      "necessity" : "Background and batch behaviour depends on an off-centre subject in a non-square frame.",
+      "operations" : "background blur\/fill\/remove, watermark, person tools, crop\/aspect mapping.",
+      "purpose" : "Off-centre subject in a wide frame.",
+      "sha256" : "c7d37b517731b74c4cf3ff97c0c7fc3fd712556cfaa15cf2568e11e157788a18",
+      "width" : 768
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "512x512, 8-bit sRGB, line pairs, checkerboards, weave, colour patches, smooth ramp.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "512x512|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|cdb41d9c8d9845df94f9383cdd3cb7cc129336c6ec0dd46728a1e83abca75ca5",
+      "file" : "F04_detail_chart.png",
+      "height" : 512,
+      "id" : "F04_DETAIL_CHART",
+      "necessity" : "Texture-preserving operations need measurable fine detail, not only skin.",
+      "operations" : "clarity, sharpening, blur, saturation, HSL, grain comparison.",
+      "purpose" : "High-frequency structure and colour patches.",
+      "sha256" : "36c270ccbb1284a5d32896092abf4fc5f018ecc3149e8e8b15feb31fd456e6de",
+      "width" : 512
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "768x384, 8-bit sRGB, vertical sky gradient, sun disc, no noise.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "768x384|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|8c0c583dac5107109dc765eeb4e2b60a1b76378c506f1693090276e7fc8b3982",
+      "file" : "F05_gradient_sky.png",
+      "height" : 384,
+      "id" : "F05_GRADIENT_SKY",
+      "necessity" : "Tonal operations are judged on smooth ramps where banding is visible.",
+      "operations" : "exposure, levels, contrast, curves, split tone, banding checks.",
+      "purpose" : "Smooth gradients and a highlight.",
+      "sha256" : "0b4292da20fef5c0541d00cf28f3ab70252b34cff9a328da54972098728c90ca",
+      "width" : 768
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "640x480, 8-bit sRGB, split exposure, clipped white patch, 256-step ramp, colour checker.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "640x480|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|613def25bbd7287ed09c37de1e18ba1304850b456800bfa5566e41048e4d52d1",
+      "file" : "F06_highlights_shadows.png",
+      "height" : 480,
+      "id" : "F06_HIGHLIGHTS_SHADOWS",
+      "necessity" : "Endpoint recovery and clipping behaviour need known clipped and near-black regions.",
+      "operations" : "highlight recovery, shadow lift, whites\/blacks, vignette, auto colour and light.",
+      "purpose" : "Clipped highlights, deep shadows and a grey ramp.",
+      "sha256" : "a08238512f3cfcbf81ef11457ab660fa3f5bfeb1ae9c58b340d1b67ef48d47eb",
+      "width" : 640
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "512x384, 8-bit sRGB, dark scene, seeded +\/-18 level noise, dim highlight.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "512x384|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|cbb3ca26f8bb8846f7bb2ebd2c02bac5afd680a41f79124fbb9ad7bae95c2ce7",
+      "file" : "F07_lowlight_noise.png",
+      "height" : 384,
+      "id" : "F07_LOWLIGHT_NOISE",
+      "necessity" : "Noise handling must be visible in a controlled, repeatable frame.",
+      "operations" : "clarity, noise reduction side effects, grain, exposure lift.",
+      "purpose" : "Low light with deterministic luminance noise.",
+      "sha256" : "ca2c236e1d43497dac7f1d116e6c62f20e5aea8b766287fad0fb8fcd51adb8b1",
+      "width" : 512
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "1600x1067, 8-bit sRGB, synthetic portrait plus detail patch.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "1600x1067|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|702a47826531fa5b330ce4f00e34ce9760c318ce8ea2c357f8b145654c266238",
+      "file" : "F08_highres_portrait.png",
+      "height" : 1067,
+      "id" : "F08_HIGHRES_PORTRAIT",
+      "necessity" : "Radius scaling and preview\/export parity require an image well above 1400 px.",
+      "operations" : "load dimensions, preview\/export scale, hash-only no-op; masked cases are not captured at this size.",
+      "purpose" : "Full-resolution behaviour.",
+      "sha256" : "d6de05d6cdd48dbabab0d7c26b2e951b32e4a763d23de1162ed629e5e9dc67c9",
+      "width" : 1600
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "512x512, 8-bit sRGB with alpha, soft radial alpha, opaque star, semi-transparent ring.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "512x512|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|8bca14018dd28ff6f3fb9d2450b6cfeae7faf0921c6eaf32b85ab37746bb7c93",
+      "file" : "F09_alpha_cutout.png",
+      "height" : 512,
+      "id" : "F09_ALPHA_CUTOUT",
+      "necessity" : "Alpha handling and JPEG flattening cannot be verified on opaque photos.",
+      "operations" : "load alpha, PNG alpha export, JPEG flatten, background removal comparison.",
+      "purpose" : "Transparency and alpha export.",
+      "sha256" : "677efcd0b5a496d3ffa076101d3148ff492b520aab395b114690c9098b1a8617",
+      "width" : 512
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "Stored 720x480 JPEG tagged orientation 6; four coloured quadrants plus a diagonal marker.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "720x480|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|3cc9cebfd638ac678c149088efa9c222ba6dba6a57df6e32d7db1f7549233e18",
+      "file" : "F10_exif_orient6.jpg",
+      "height" : 480,
+      "id" : "F10_EXIF_ORIENT6",
+      "necessity" : "Camera files are commonly stored rotated; the corpus must prove the mapping.",
+      "operations" : "decode, upright baking, dimension swap, quadrant mapping, export orientation tag.",
+      "purpose" : "EXIF orientation handling.",
+      "sha256" : "4d3425f496edf636705a9016d7339ccadf311664f70ec387559a8a5381be0c63",
+      "width" : 720
+    },
+    {
+      "bitsPerComponent" : 16,
+      "bitsPerPixel" : 64,
+      "characteristics" : "512x512, 16-bit PNG tagged Display P3, saturated patches and smooth ramps.",
+      "colorSpace" : "kCGColorSpaceDisplayP3",
+      "decodedKey" : "512x512|bpc=16|bpp=64|cs=kCGColorSpaceDisplayP3|cf22c1f89f88d73720b1973ae67b207466de403ab7235bc8c707a73b315dbd11",
+      "file" : "F11_p3_16bit.png",
+      "height" : 512,
+      "id" : "F11_P3_16BIT",
+      "necessity" : "Colour management and bit-depth behaviour need a non-sRGB, non-8-bit source.",
+      "operations" : "16-bit decode, P3 colour space preservation, 16-bit PNG export.",
+      "purpose" : "Wide gamut and deep storage.",
+      "sha256" : "9aafb99ff2dcbe14b6c0d2a5e49ea2da6331cb01e057b31661c9343f1cb7b952",
+      "width" : 512
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 8,
+      "characteristics" : "640x480, 8-bit grayscale PNG, gradient, bars and discs.",
+      "colorSpace" : "kCGColorSpaceGenericGrayGamma2_2",
+      "decodedKey" : "640x480|bpc=8|bpp=8|cs=kCGColorSpaceGenericGrayGamma2_2|70bce62f24011b2891e4c22a93616ac62bcb78b07514d73ecdfefa5387321a8b",
+      "file" : "F12_gray_8.png",
+      "height" : 480,
+      "id" : "F12_GRAY_8",
+      "necessity" : "A grayscale source exercises a colour model the RGB fixtures cannot.",
+      "operations" : "decode, grayscale colour model, export to colour formats.",
+      "purpose" : "Grayscale source.",
+      "sha256" : "47c1c64adc8027a289bd4256985ecb808a20efb6dd868dccd0b391b5b06a9b77",
+      "width" : 640
+    }
+  ],
+  "grayscale" : {
+    "codePath" : "ImageProcessor.load line 193 -> renderCGImage(colorSpace: GenericGrayGamma2_2)",
+    "decoded" : {
+      "centerSample" : {
+        "b" : 146,
+        "g" : 146,
+        "r" : 146
+      },
+      "colorSpace" : "kCGColorSpaceGenericGrayGamma2_2",
+      "height" : 480,
+      "width" : 640
+    },
+    "explicitSRGBDigest" : "ba4efc28c7711985c97c684f9e2f72201643699f8e96b7aa7999a36babd21229",
+    "load" : "nil",
+    "observedReason" : "preview render uses .RGBA8 with the source gray colour space",
+    "source" : "F12_GRAY_8"
+  },
+  "host" : {
+    "arch" : "arm64",
+    "languageMode" : "swift5",
+    "os" : "Version 27.2 (Build 26B123)"
+  },
+  "masks" : {
+    "F01_PORTRAIT_SRGB_8" : {
+      "brows" : true,
+      "cheeks" : true,
+      "contours" : true,
+      "eyeDetail" : true,
+      "eyes" : true,
+      "face" : true,
+      "forehead" : true,
+      "hair" : true,
+      "iris" : true,
+      "lashes" : true,
+      "lids" : true,
+      "liners" : true,
+      "lips" : true,
+      "nose" : true,
+      "person" : true,
+      "sclera" : true,
+      "skin" : true,
+      "skinTexture" : true,
+      "teeth" : true,
+      "underEyes" : true
+    },
+    "F02_PORTRAIT_DEEP_LOWKEY" : {
+      "brows" : true,
+      "cheeks" : true,
+      "contours" : true,
+      "eyeDetail" : true,
+      "eyes" : true,
+      "face" : true,
+      "forehead" : true,
+      "hair" : true,
+      "iris" : true,
+      "lashes" : true,
+      "lids" : true,
+      "liners" : true,
+      "lips" : true,
+      "nose" : true,
+      "person" : true,
+      "sclera" : true,
+      "skin" : true,
+      "skinTexture" : true,
+      "teeth" : true,
+      "underEyes" : true
+    },
+    "F03_PORTRAIT_LANDSCAPE" : {
+      "brows" : true,
+      "cheeks" : true,
+      "contours" : true,
+      "eyeDetail" : true,
+      "eyes" : true,
+      "face" : true,
+      "forehead" : true,
+      "hair" : true,
+      "iris" : true,
+      "lashes" : false,
+      "lids" : true,
+      "liners" : true,
+      "lips" : true,
+      "nose" : true,
+      "person" : true,
+      "sclera" : false,
+      "skin" : true,
+      "skinTexture" : true,
+      "teeth" : true,
+      "underEyes" : true
+    }
+  },
+  "noop" : {
+    "F01_PORTRAIT_SRGB_8" : {
+      "digest" : "dfa84b5211658c0e7abc6512c206cbf1faba6fd20d9eff0b97fc0e0bc07e848c",
+      "sourceDigest" : "dfa84b5211658c0e7abc6512c206cbf1faba6fd20d9eff0b97fc0e0bc07e848c"
+    },
+    "F02_PORTRAIT_DEEP_LOWKEY" : {
+      "digest" : "c7b23ebd5cfb2d74d2a1ef27cb457da87fe504364fec2244e68e1d3adb9e5815",
+      "sourceDigest" : "c7b23ebd5cfb2d74d2a1ef27cb457da87fe504364fec2244e68e1d3adb9e5815"
+    },
+    "F03_PORTRAIT_LANDSCAPE" : {
+      "digest" : "16b11a3a11dd296c9ae4a97ea913424508b7e059ca0290cbe73114e8537cf8f0",
+      "sourceDigest" : "16b11a3a11dd296c9ae4a97ea913424508b7e059ca0290cbe73114e8537cf8f0"
+    },
+    "F04_DETAIL_CHART" : {
+      "digest" : "69d062d6d6836068d7a4f108df5c35e2ee145e924064617f2fc246dfb5c31d25",
+      "sourceDigest" : "69d062d6d6836068d7a4f108df5c35e2ee145e924064617f2fc246dfb5c31d25"
+    },
+    "F05_GRADIENT_SKY" : {
+      "digest" : "ed8b50ddf8c8f6f3c9150847a02c0fadb2803097e109d2559ae3f84988cb8e3d",
+      "sourceDigest" : "ed8b50ddf8c8f6f3c9150847a02c0fadb2803097e109d2559ae3f84988cb8e3d"
+    },
+    "F06_HIGHLIGHTS_SHADOWS" : {
+      "digest" : "c495d8f1d85e48a672e52926e8f517facd8fb21de8995bb8a444b200928ccca1",
+      "sourceDigest" : "c495d8f1d85e48a672e52926e8f517facd8fb21de8995bb8a444b200928ccca1"
+    },
+    "F07_LOWLIGHT_NOISE" : {
+      "digest" : "c962188b656fec2dc19072994db96e45b571985e57de7f417b2f1812b0a2ffc5",
+      "sourceDigest" : "c962188b656fec2dc19072994db96e45b571985e57de7f417b2f1812b0a2ffc5"
+    },
+    "F08_HIGHRES_PORTRAIT" : {
+      "digest" : "30bcac352aed171e9c845e976d2d9b0a688906d367d827c4ea6d23718018e170",
+      "sourceDigest" : "30bcac352aed171e9c845e976d2d9b0a688906d367d827c4ea6d23718018e170"
+    },
+    "F09_ALPHA_CUTOUT" : {
+      "digest" : "5decb9feffa86eab1e77756bbd6d4109e8a9572a2892ff7d20e3f1936723fe2a",
+      "sourceDigest" : "5decb9feffa86eab1e77756bbd6d4109e8a9572a2892ff7d20e3f1936723fe2a"
+    },
+    "F10_EXIF_ORIENT6" : {
+      "digest" : "2e296528edb18f93730c4f55d842df917fa4f62ba3bca3b2ec7b78428a2bfdf7",
+      "sourceDigest" : "2e296528edb18f93730c4f55d842df917fa4f62ba3bca3b2ec7b78428a2bfdf7"
+    },
+    "F11_P3_16BIT" : {
+      "digest" : "cd56c6989bd433ef0d36106a4ae7a9f0ab72b959d6681884a0a69e54b3b094b0",
+      "sourceDigest" : "cd56c6989bd433ef0d36106a4ae7a9f0ab72b959d6681884a0a69e54b3b094b0"
+    }
+  },
+  "schemaVersion" : 1
+}
