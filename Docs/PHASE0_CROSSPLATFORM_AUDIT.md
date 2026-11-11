@@ -1,712 +1,530 @@
-# Phase Zero — Cross-Platform Architecture Audit
+# Phase Zero — Cross-Platform Architecture Audit (Refresh)
 
 **Project:** Retouch Studio
 **Repository:** `iR0ham/RetouchStudio`
-**Branch / commit:** `stabilization` at `5d8642f` (working tree clean at time of audit)
-**Date:** 2026-11-09
-**Mode:** read-only. No source file was modified, no dependency was installed, no file was deleted, no architecture or feature work was started.
-**Evidence rule:** every statement below is labelled **VERIFIED** (read in the current tree or reproduced by a command), **PARTIAL**, **NOT REPRODUCED**, or **ASSUMPTION**. Line numbers refer to this commit, not to older audit documents.
+**Branch / commit:** `main` at `01da9005663127a513dae704785243f5b5ec8fab` — the merge commit of PR #1, *Stabilization: runtime lifecycle, privacy, batch and recovery reliability*. Merge parents: `2d0affc4b23943f110cb0a2b626462f3ed282763` and `405ae2eea90cde785961254fe0a156555c96a02d`.
+**Audit date:** 2026-11-11
+**Supersedes:** the Phase 0 audit dated 2026-11-09, taken at `stabilization` / `5d8642f`.
+**Mode:** strictly read-only. No source file, test, build script or project file was changed. No dependency was installed, no runtime or model was downloaded, no branch or commit was created, nothing was pushed, and no PR metadata was modified. The only file changed by this refresh is this document.
+**Evidence rule:** every important statement is labelled **VERIFIED** (read in this tree or reproduced by a command at this commit), **PARTIAL**, **NOT REPRODUCED**, **UNVERIFIED**, or **ASSUMPTION**. Line numbers refer to `01da900`, not to older documents.
 
 ---
 
-## 0. Verdict in one page
+## 0. Required item 2 — Executive summary
 
-1. **Retouch Studio is a mature, single-target macOS application**, not a prototype: 69 Swift files, 31,788 lines in `Sources/`, a working non-destructive editor, a tested image engine, a bundle, two DMGs, and a shipped 1.0.0 release.
-2. **The quality engine is deeply Apple-bound.** Core Image appears in 19 files, Vision in 2, and the UI uses SwiftUI in 24 files and AppKit in 14. There is no direct Metal code; Core Image supplies the GPU path internally.
-3. **The AI subsystem is a separate Python process**, not part of the Swift binary. Its runtime is a 388,277,063-byte arm64 archive, and the built `.app` measured 1.3 GB on disk (`du -sh`). The Python worker source is **not in this repository**; `build.sh` falls back to `$HOME/RetouchStudio-Phase0/worker`.
-4. **A cross-platform product is feasible, but not by compiling this code for Windows or Linux.** It requires extracting a portable core, characterizing today's output, and building separate platform shells. The macOS app should remain the quality reference during that work.
-5. **Four of the eight reported P0/P1 items are verified, three are partial, and one is not reproducible** (P0-06). The defects are real but localized; none requires an architecture rewrite.
-6. **The first approved change should be a data-integrity milestone, not a migration.** Fix recovery deletion, original-file overwrite, runtime install rollback, and failed-load document identity, each with a regression test.
-7. **Estimated full cross-platform parity:** 132–202 person-weeks (±40%), i.e. roughly 10–16 months with three engineers, or 31–47 months with one senior engineer. This excludes model licensing and certification delays.
+1. **The repository is in the expected post-merge state.** Local `main`, `origin/main` and the merge commit are all `01da9005663127a513dae704785243f5b5ec8fab`; the working tree was clean before this document was written. **VERIFIED.**
+2. **Every reported P0/P1 defect now has a tested disposition:** six are **FIXED**, one is **PARTIALLY FIXED**, one is **NOT REPRODUCED**, and none is **OPEN**. The 2026-11-09 statuses are superseded. **VERIFIED** against implementation and tests, not commit messages.
+3. **The stabilization work is real and load-bearing.** Recovery is now an immutable candidate store with an explicit readiness barrier; the runtime installer is a staged, validated, rollback-capable transaction; metadata privacy uses an allowlist; batch export derives per-file snapshots and cancels the file in flight; a failed open preserves the current document; exports refuse the source and every alias.
+4. **The product is still a macOS application, and the architecture has not become portable.** It is 78 Swift files / 36,653 lines; the editable document object is 3,518 lines with 92 `@Published` properties; the image layer is 17,433 lines bound to Core Image and Vision; the project file still stores an absolute path plus an Apple bookmark.
+5. **Cross-platform delivery still requires extraction and new shells, not recompilation.** The macOS app must remain the quality reference. A Windows or Linux claim cannot be made from this audit: no such hardware was used.
+6. **Seven genuine blockers remain:** the EditorModel/UI god object, the missing Core/Models boundary, Apple geometry and bookmarks in the project format, the Core Image/Vision image engine, the external Python AI runtime, the macOS-only build/test path, and the absence of off-macOS testability.
+7. **The next architecture milestone must be a design deliverable, not a rewrite.** Recommended milestone: a 4–8 person-week portability design package (interfaces, frozen corpus, one kernel prototype, one UI/color prototype), with no shipping code replaced.
+8. **The remaining cross-platform effort is estimated at 122–188 person-weeks (±40%)**, including near-term macOS hardening, corpus work, core extraction, one engine prototype, project v4, Windows, Linux, AI unification and Pro UI. This is a planning range, not a commitment.
+9. **The runtime installer is implemented but disabled in this build.** `AIRuntime.package` is `nil`, so no download is offered; the transaction code is exercised only by tests and a real-runtime test that is skipped unless explicitly enabled. **VERIFIED.**
+10. **No Windows/Linux compatibility, no native Intel validation, and no published-runtime validation is claimed.** Intel evidence in this document is from Rosetta on Apple silicon.
 
-**Nothing in this document authorizes implementation. Phase Zero ends with an approval request.**
+**Nothing here authorizes implementation. Phase 0 ends with an approval request.**
 
 ---
 
-## 1. Current architecture
+## 1. Required item 1 — Audit date, exact HEAD, and repository state
 
-### 1.1 Process and layer diagram
-
-```text
-┌──────────────────────────── Retouch Studio.app ────────────────────────────┐
-│                                                                            │
-│  App.swift (300 LOC)                                                       │
-│   @main RetouchStudioApp · AppDelegate · EditorWindowDelegate · WindowBridge│
-│   menus · Finder open · quit/close prompts · recovery prompt · --selftest  │
-│                              │                                             │
-│                              ▼                                             │
-│  Views (18 files, 7,455 LOC)                                               │
-│   EditorView · TopBar · ToolPanel · InspectorView · CompareCanvas           │
-│   Analysis/Crop/Heal/Art/AI overlays · SettingsView · ModelManagerView      │
-│   SmartAnalyzeSheet · Theme · Components · Histogram · Tutorial             │
-│                              │  @EnvironmentObject / @Published             │
-│                              ▼                                             │
-│  EditorModel (3,135 LOC, 92 @Published properties)                         │
-│   document state · undo/redo · operation tokens · panels · batch · export   │
-│   recovery · presets · project open/save · AI orchestration                 │
-│                              │                                             │
-│        ┌─────────────────────┼──────────────────────┬───────────────────┐   │
-│        ▼                     ▼                      ▼                   ▼   │
-│  ImageProcessor        AnalysisRenderer        ExportService         AIWorker│
-│  Core Image graph      CoreText overlay        render + ImageIO      Process │
-│  Vision requests       face geometry           atomic write          launcher│
-│  Skin/Look/Scene/      leader lines            16-bit PNG/TIFF       socket  │
-│  Makeup/Mask/Heal/     labels                  JPEG/HEIC             client  │
-│  Reshape/Backdrop                                                     │       │
-│        │                                                            │       │
-│        ▼                                                            ▼       │
-│  CIContext ──► Core Image (GPU via Metal, CPU fallback)      AF_UNIX socket │
-│  ImageIO · CoreGraphics · CoreText · Vision · CryptoKit                     │
-└─────────────────────────────────────────────┬──────────────────────────────┘
-                                              │ JSON-RPC
-                                              ▼
-┌──────────────────── Python helper process (optional) ──────────────────────┐
-│ retouch_ai_worker serve                                                    │
-│ PyTorch · Transformers · ONNX Runtime · MLX                                │
-│ models under Application Support, downloaded by explicit consent           │
-│ separate CLI process for model download / verify                          │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 1.2 Runtime topology
-
-| Concern | Current mechanism | Evidence |
+| Check | Result | Evidence |
 |---|---|---|
-| UI process | One SwiftUI/AppKit process | `Sources/RetouchStudio/App.swift` |
-| Editor state | `@MainActor` `EditorModel` `ObservableObject` | `Sources/RetouchStudio/Models/EditorModel.swift:9` |
-| Image work | `Task.detached`, Core Image lazy graph | `EditorModel.load` 916–920; `ImageProcessor.process` 731 |
-| AI transport | Unix-domain socket, JSON-RPC | `Core/WorkerClient.swift`, `Core/AIWorker.swift` |
-| AI runtime | Bundled or downloaded Python venv + worker package | `Core/AIRuntime.swift:21–37`, `Core/AIRuntimeInstaller.swift` |
-| Model files | Application Support, SHA-256 verified | `ModelManager`, bundled `downloads.py` |
-| Persistence | JSON project sidecar v3; JSON recovery; `presets.json`; AI edits in Application Support | `Models/Project.swift`, `Models/Recovery.swift`, `Models/UserPreset.swift`, `Models/AIEdit.swift` |
-| Build | Direct `swiftc`, universal, ad-hoc signing, self-test gate | `build.sh:52–66`, `159–188` |
+| Audit date | 2026-11-11 | this document |
+| Branch | `main` | `git branch --show-current` |
+| Local HEAD | `01da9005663127a513dae704785243f5b5ec8fab` | `git rev-parse HEAD` |
+| Remote `origin/main` | same SHA | `git rev-parse origin/main` |
+| Merge commit | `01da900` with parents `2d0affc` and `405ae2e` | `git rev-list --parents -n 1 HEAD` |
+| Commit subject | `Merge pull request #1 from iR0ham/stabilization` | `git log -1` |
+| Working tree before this audit | clean | `git status --short` (empty) |
+| PR #1 | merged; merge SHA is HEAD | `gh pr view` in the prior session; merge commit present locally |
+| Source changes in this audit | none | only this document written |
 
-### 1.3 Build and distribution facts
-
-- `build.sh` is the authoritative build system; `Package.swift` is a 13-line manifest that is not used to build the shipped app.
-- The build probes Command Line Tools SDKs for SwiftUI macro support, then compiles with `swiftc -O -whole-module-optimization`.
-- Universal build is `arm64` + `x86_64`, combined with `lipo`; the Intel slice is executed through Rosetta and must pass `--selftest` (`build.sh:173–188`).
-- Signing is ad-hoc (`codesign --force --sign -`). There are no entitlements, no App Sandbox, no hardened runtime and no notarization (`build.sh:159–160`).
-- `Resources/Info.plist` declares bundle id `app.retouchstudio.mac`, version 1.0.0 (1), macOS 14 minimum, image viewer and `app.retouchstudio.project` editor roles, and the `.retouch` UTI.
-- The worker runtime is either bundled or downloaded. The app bundle measured **1.3 GB** on disk with the helper present (`du -sh`); the downloadable archive is declared as **388,277,063 bytes** with SHA-256 `cb1485be…` and is arm64-only (`AIRuntime.swift:21–37`).
-- `build.sh` comments describe the helper runtime as ~1.6 GB. That is a build-time comment, not a measurement performed in this audit.
-
-### 1.4 Operation model
-
-`EditorModel` gates work with `OperationKind` and tokens (`begin` / `end` / `refuseIfBlocking`, lines 234–297): `preview`, `load`, `export`, `batch`, `save`, `open`, `smart`, `ai`. Loads and previews use a generation counter; batch uses a separate `batchGeneration`. Exports and batch jobs run in detached tasks. This is a good foundation, but cancellation is not uniformly propagated (see P1-08).
+**Method.** Inspected the current tree, the four test suites, the recovery and runtime transaction code, the build script and the bundled helper. Ran the suite natively (arm64) and under Rosetta (`RETOUCH_ARCH=x86_64`). Did not run the UI, did not install dependencies, did not download the AI runtime or model weights, and did not modify source.
 
 ---
 
-## 2. Dependency map
+## 2. Required item 3 — Previous P0/P1 status table
 
-### 2.1 Framework dependencies (VERIFIED by `grep '^import '`)
+The 2026-11-09 register is replaced by the following. A status is assigned only from implementation plus tests at `01da900`.
 
-| Framework | Files importing it | Role | Portable? |
-|---|---:|---|---|
-| Foundation | 47 | model, files, JSON, processes, sockets | Yes, with OS-specific pieces isolated |
-| CoreGraphics | 27 | geometry, color, bitmap types | Conceptually yes; types must be replaced |
-| SwiftUI | 24 | entire UI | macOS only in practice |
-| CoreImage | 19 | filter graph, masks, rendering | No; needs Rust/wgpu or CPU engine |
-| AppKit | 14 | panels, alerts, windows, pasteboard, fonts | No; needs platform adapter |
-| UniformTypeIdentifiers | 6 | image/project type filters | Replace with MIME/extension registry |
-| ImageIO | 6 | decode, EXIF, encode | Replace with WIC / libraw / libvips |
-| Vision | 2 | face landmarks, person segmentation, body pose | Replace with ONNX models |
-| Combine | 2 | observable plumbing | Swift-only |
-| CryptoKit | 1 | SHA-256 | Replace with RustCrypto/OpenSSL |
-| CoreVideo | 1 | pixel buffer plumbing | Replace with engine buffer type |
-| CoreText | 1 | analysis labels | Replace with DirectWrite/HarfBuzz |
-
-### 2.2 Internal coupling (VERIFIED)
-
-| Dependency direction | Nature | Risk |
-|---|---|---|
-| `Views` → `EditorModel` | one god object, 92 published fields | Any model change touches UI; hard to share view models |
-| `EditorModel` → `Core/*` | direct calls to concrete engines | No protocol boundary; engine cannot be swapped |
-| `Core/*` → `Models/*` | engines read `Adjustments`, `AnalysisSettings`, `HealSpot`, `Sticker`, `AIEdit` | “Core” is not independent of document types |
-| `EditorModel` → AppKit | 22 AppKit-panel/alert references in the model alone | Business logic cannot run off macOS |
-| `Core/ImageProcessor` → Vision | face/segmentation requests inside the image layer | Engine and ML runtime cannot be separated |
-| `AIWorker` / `WorkerClient` → POSIX socket | `AF_UNIX` | Windows needs named pipes or authenticated loopback |
-| `RetouchProject` → Apple bookmark | `Data` blob from `URL.bookmarkData` | Not portable, not readable by another platform |
-| Tests → whole source tree | `Tests/run.sh` links all sources except `App.swift`/`SelfCheck.swift` | Any new platform-specific import breaks the test harness |
-
-### 2.3 Build-time and runtime dependencies
-
-- macOS Command Line Tools with a SwiftUI-capable SDK.
-- `swiftc`, `lipo`, `codesign`, `ditto`, `/usr/bin/arch` (Rosetta for Intel self-test).
-- Python runtime and wheels from an external checkout (`$HOME/RetouchStudio-Phase0/worker`, `$HOME/RetouchStudio-Phase0/.venv`); not vendored in this repository.
-- Network only for the optional AI runtime and model downloads; the editor itself is offline.
-- No package manager dependencies, no third-party Swift packages, no CI configuration in the repository.
-
----
-
-## 3. Platform dependency inventory
-
-### 3.1 Portability classes
-
-**Class A — portable value/logic (can move almost unchanged to Rust or shared Swift):**
-
-`Adjustments`, `UserPreset`, `Recovery` model, `AppSettings` values, `StatusToken`, `ToolMode`, `SliderHints`, `TutorialCopy`, `DeveloperProfile`, `Digits`, localization string tables, export format/quality rules, operation-token policy, preset math.
-
-**Class B — portable geometry/model, but expressed in Apple types:**
-
-`Crop` (`CGRect`), `HealSpot`, `Sticker`, `AnalysisSettings` (`CGPoint` endpoints/anchors), `DocumentOrientation`, `Look`, `Makeup`, `Backdrop`, `Watermark`, `AIEdit`, `AIMask`, `RetouchProject`, `AIModelRow/Plan` (Foundation-only aside from file APIs).
-
-These are portable in principle, but `CGRect`, `CGPoint`, `CGSize`, `CGAffineTransform` and `Data`-bookmarks must be replaced by owned types or a math crate before sharing.
-
-**Class C — platform-bound today:**
-
-| Area | Files | Binding |
-|---|---|---|
-| Application shell | `App.swift` | SwiftUI `App`, `NSApplication`, menus, window delegate |
-| UI | all 18 `Views/*.swift` | SwiftUI + AppKit panels/colors/fonts |
-| Editor orchestration | `EditorModel.swift` | AppKit panels/alerts, SwiftUI `@Published` |
-| Image engine | `ImageProcessor`, `SkinEngine`, `LookEngine`, `SceneEngine`, `MakeupEngine`, `MaskBuilder`, `FeatureReshaper`, `HealRenderer`, `ArtRenderer`, `BackdropEngine`, `AICompositor`, `ExportUpscale` | Core Image, CoreGraphics, Vision, ImageIO |
-| Analysis overlay | `AnalysisRenderer` | CoreText, CoreGraphics |
-| AI runtime | `AIWorker`, `WorkerClient`, `AIRuntime`, `AIRuntimeInstaller` | `Process`, `AF_UNIX`, URLSession, CryptoKit |
-| Diagnostics | `SelfCheck.swift` | whole engine |
-
-### 3.2 Feature-level inventory
-
-| Feature | Depends on | Portable with work? |
-|---|---|---|
-| Decode JPEG/PNG/TIFF/HEIC | ImageIO | Yes: WIC + libheif/libvips; HEIC licensing must be checked |
-| RAW | ImageIO / Core Image RAW | Yes: LibRaw + camera profile pipeline; highest quality risk |
-| Color management | Core Image + `CGColorSpace` | Yes: lcms2 + ICC; must match rendering intents |
-| Face landmarks | Vision | Yes: ONNX face mesh + landmark model; parity must be benchmarked |
-| Person/background segmentation | Vision | Yes: ONNX segmentation/matting; different edges are a quality risk |
-| Body pose | Vision | Yes: ONNX pose model |
-| Healing | custom Core Image kernels | Yes: port kernels to WGSL/CPU; deterministic golden tests required |
-| Skin/look/scene/makeup | Core Image filters and kernels | Yes: port graph; color math must be frozen |
-| Reshape/warp | Core Image warp kernels | Yes: WGSL/CPU warp; interpolation must match |
-| Upscale | Core Image + AI helper tiles | Yes: ONNX upscaler + tiled compositor |
-| Text labels | CoreText | Yes: DirectWrite/HarfBuzz + font subset |
-| Menus/shortcuts/IME/RTL | AppKit/SwiftUI | Platform adapter; RTL already a product requirement |
-| File panels/alerts | AppKit | Platform adapter |
-| Project location | Apple bookmark | Replace with relative path + content hash + platform locator |
-| AI IPC | `AF_UNIX` | Named pipe or authenticated loopback on Windows |
-| Model download | URLSession + `Process` | Platform HTTP client + child process |
-| Updates/notarization | none today | New design required per platform |
-
----
-
-## 4. Technical debt
-
-Ranked by cost to the cross-platform goal and to near-term stability.
-
-| # | Debt | Evidence | Consequence |
-|---|---|---|---|
-| D1 | `EditorModel` is a 3,135-line god object with 92 `@Published` fields | `Models/EditorModel.swift` | Every platform shell and every feature touches one file; high merge/regression risk |
-| D2 | No enforced module boundaries | Core imports Models; Models import Core; single target | Cannot compile the engine without AppKit/SwiftUI; blocks reuse |
-| D3 | AppKit inside the model | 22 panel/alert references in `EditorModel` | Business logic is untestable headlessly and non-portable |
-| D4 | UI is 7,455 lines of SwiftUI | `Views/` | Cannot be reused by Windows/Linux; must be rebuilt as a second UI |
-| D5 | Image engine is 13,458 lines tied to Core Image/Vision | `Core/` | The core product value is the least portable part |
-| D6 | Python AI runtime is external and huge | no `worker/` in repo; 1.3 GB app; 388 MB archive | Reproducibility, auditability, Windows/Linux story, memory footprint |
-| D7 | Project format uses an absolute source path + Apple bookmark | `Models/Project.swift:20–24` | Projects break when moved across machines/platforms |
-| D8 | Metadata privacy is a blacklist | `ImageProcessor.strippedPrivacyMetadata` 1201–1219 | New/unknown identifying fields can leak |
-| D9 | No CI | no workflow/config in repo | 1.0.0 quality depends on manual local runs |
-| D10 | Localization parity is unenforced | `Localization.swift` 471 computed strings, `PersianL10n.swift` 471 overrides, no parity test | A forgotten Persian key falls back silently |
-| D11 | Accessibility is sparse | 16 `accessibility*` modifiers across 7,455 UI lines | Both platform shells need an accessibility baseline |
-| D12 | Distribution is ad-hoc and unsandboxed | `build.sh:159–160`, no entitlements | Gatekeeper/security expectations and future store distribution are unmet |
-| D13 | Test harness compiles the whole app | `Tests/run.sh:35` | Platform-specific imports will make the suite untestable off macOS |
-| D14 | Old audit docs contain stale line numbers | `Docs/TECHNICAL_AUDIT.md` | Risk of following outdated evidence |
-
----
-
-## 5. Verified defect register
-
-The directive's line numbers were treated as hypotheses and re-checked against `5d8642f`.
-
-| ID | Title | Status | Primary evidence | Test coverage today |
-|---|---|---|---|---|
-| P0-01 | Recovery data deleted on cancel | **VERIFIED** | `EditorModel.swift:2529–2575` | None |
-| P0-02 | Export can overwrite the original | **VERIFIED** | `EditorModel.swift:2685–2693`, `2718–2768`; `ExportService.swift:328–358` | None |
-| P0-03 | Runtime install deletes the old copy before the new one is in place | **VERIFIED** | `AIRuntime.swift:84–107` | None for rollback |
-| P0-04 | Privacy strip is incomplete | **PARTIAL** | `ImageProcessor.swift:1201–1219` | Only the current blacklist (`Tests/EngineTests.swift:1005`) |
-| P0-05 | Batch analysis/stamps can leak across photos | **PARTIAL** | `EditorModel.swift:3051–3070` | None |
-| P0-06 | Model download total is per-file | **NOT REPRODUCED** | `ModelManager.swift:206–216`; bundled `downloads.py:111–112,145–147` | None |
-| P1-07 | Failed load changes title/export name | **VERIFIED** | `EditorModel.swift:908–927`, `963–964`, `2641–2644`, `2661–2677` | None |
-| P1-08 | Batch cancel does not stop the running file | **PARTIAL** | `EditorModel.swift:2969–2971`, `3010–3020` | None |
-
-### P0-01 — Recovery data loss on cancel (VERIFIED)
-
-`offerRecoveryIfNeeded()` first checks `offeredRecovery` and sets it to `true`, so the prompt is once per session. If the source photo cannot be found, an alert offers **Locate** and **Discard**. The guard is:
-
-```swift
-guard alert.runModal() == .alertFirstButtonReturn,
-      let picked = locatePhoto(for: project) else {
-    RecoveryStore.clear()
-    return
-}
-```
-
-(Lines 2547–2551.) There is no Cancel button. Closing the alert or pressing Escape returns `.abort`, and cancelling the Locate panel returns `nil`; both paths delete the recovery file. The second alert (Restore / Discard, 2562–2574) also clears recovery in its `else`. **Cancel must mean postpone; only the explicit destructive button may delete.**
-
-Required tests: Escape/close on both alerts keeps the file; cancelled Locate keeps it; explicit Discard deletes it; the prompt does not reappear in the same session; recovery still restores after relaunch.
-
-### P0-02 — Export over the original (VERIFIED)
-
-`saveExport()` only sets a suggested name in `NSSavePanel`; `export(to:)` passes the chosen URL directly to the renderer. `ExportService.write` replaces whatever exists:
-
-```swift
-if FileManager.default.fileExists(atPath: url.path) {
-    _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
-} else {
-    try FileManager.default.moveItem(at: temporary, to: url)
-}
-```
-
-(`ExportService.swift:348–352`.) There is no canonical-path comparison and no symlink resolution against `imageURL`. A user can overwrite the source photo, destroying the original. The temporary-file write prevents a *partial* file, not a *replaced original*.
-
-Required tests: export to the exact source path is refused; export through a symlink/hardlink alias is refused; a different target succeeds; an explicit override (if the owner wants one) is confirmation-gated and never silent; batch output naming cannot collide with a source.
-
-### P0-03 — Runtime installation safety (VERIFIED)
-
-`AIRuntime.install` validates the staging layout, then:
-
-```swift
-if manager.fileExists(atPath: installDirectory.path) {
-    try manager.removeItem(at: installDirectory)
-}
-try manager.moveItem(at: staging, to: installDirectory)
-```
-
-(`AIRuntime.swift:103–106`.) The old runtime is deleted before the new one is moved. A failed move (permissions, disk full, crash, external interference) leaves no runtime; re-downloading 388 MB is the only recovery. There is no backup directory and no rollback.
-
-Required tests: injected `moveItem` failure restores the previous runtime; crash between delete and move is recoverable on next launch; staging is cleaned on every path; a corrupt archive never touches the installed copy; successful install replaces atomically.
-
-### P0-04 — Metadata privacy (PARTIAL)
-
-`strippedPrivacyMetadata` removes GPS, EXIF `UserComment`, `CameraOwnerName`, `BodySerialNumber`, `LensSerialNumber`, `ImageUniqueID`, and TIFF `Artist` (lines 1201–1219). It does **not** remove:
-
-- `kCGImagePropertyExifMakerNote` (can contain camera serial, focus data, proprietary identifiers);
-- `kCGImagePropertyIPTCDictionary` (can contain creator, contact, location, rights);
-- TIFF `Make` / `Model` (camera identity);
-- any future dictionary not on the blacklist.
-
-XMP is **not** represented by the properties dictionary the app copies, so its survival depends on ImageIO and is **unverified**; it needs a fixture test rather than an assumption. The current approach is a blacklist, which is structurally fragile. The directive's preferred whitelist is the right long-term design: copy only the fields required for rendering and explicitly requested provenance.
-
-Required tests: a fixture containing GPS, MakerNote, IPTC, XMP, serials, owner, artist, camera make/model, orientation, DPI and ICC. Assert every identifying field is absent when privacy is on, non-identifying EXIF/orientation/DPI/profile survive, and fields survive when privacy is explicitly off.
-
-### P0-05 — Batch isolation (PARTIAL)
-
-`exportOne` constructs a per-file snapshot and correctly clears AI edits and orientation for other files:
-
-```swift
-var fileSnapshot = snapshot
-fileSnapshot.crop = useCrop ? snapshot.crop : nil
-if url.resolvingSymlinksInPath() != documentURL {
-    fileSnapshot.aiEdits = []
-    fileSnapshot.orientation = .identity
-}
-```
-
-(Lines 3062–3070.) However, it leaves `analysis` and `selectedFaceIndex` untouched, and leaves `healSpots`/`stickers` untouched when `includeStamps` is enabled. `AnalysisRenderer` consumes `settings.endpoint(for:)` and `settings.anchor(for:)` in source coordinates (`AnalysisRenderer.swift:189`, `568`), so document-specific leader lines and crop adjustments can land on a different person's face. Batch defaults keep overlays and stamps off (`EditorModel.swift:77–78`), so the default path is safe; the opt-in path is not.
-
-Required tests: two photos with different face positions and counts; analysis on, stamps on; assert each output's overlay/stamp coordinates match its own image; `selectedFaceIndex` does not index into another photo's face list; shared settings (colors, labels, style) still apply.
-
-### P0-06 — Model download progress (NOT REPRODUCED)
-
-`ModelManager.consume` computes `received = offset + received` and assigns `total` from the progress line (lines 206–216). In the bundled worker, `total` is `plan["total_bytes"]` and `offset` is the cumulative bytes of already-completed files (`downloads.py:111–112,145–147`). Therefore the Swift UI already receives a plan-wide denominator; the reported bug does not reproduce against the inspected code.
-
-Caveat: the **published runtime archive was not downloaded or inspected**, only the worker bundled inside the local `.app`. If the published archive differs, this conclusion must be re-tested. Action: add a regression test with a two-file plan, one pre-installed file and one downloaded file; assert `totalBytes` stays plan-wide and progress never moves backwards.
-
-### P1-07 — Document state after a failed load (VERIFIED)
-
-`load` sets `statusToken = .readingImage` and then `imageName = url.lastPathComponent` **before** decoding (lines 908–909). On failure it only sets `.couldNotRead` (923–926); it never restores the previous name. `install` sets `imageName`/`imageURL` only on success (963–964). `windowTitle` and `suggestedFileName()` both derive from `imageName` (2641–2644, 2661–2677), so a failed open changes the title and the default export name of the document still on screen.
-
-Required tests: open A successfully, then attempt unreadable B; title and suggested export name must still describe A; with no prior document, a failed load must leave the app title, not B's name; status still reports the failure.
-
-### P1-08 — Batch cancellation (PARTIAL)
-
-`cancelBatchExport()` cancels only `batchTask` (2969–2971). The loop checks cancellation between files (3011), but each file runs in a new detached task (3014–3020) that does **not** inherit cancellation. `ExportService.run` checks `Task.isCancelled` (123, 133), but that detached task is never cancelled. A multi-minute AI upscale can therefore continue after Cancel and still write its output.
-
-Single-export cancellation is correct: `cancelExport()` cancels `exportJob` (2772–2773), and `ExportService.run` observes it. Output writes are temp-file + replace, so no partial file is left behind.
-
-Required tests: cancel during a slow batch file stops the work promptly, writes no file for the cancelled item, already-completed files remain valid, status is `.batchCancelled`, and a following batch can start cleanly.
-
----
-
-## 6. Recommended shared architecture
-
-This is a **proposal**, not a description of the current code. It is designed to preserve the existing macOS app as the reference implementation while enabling Windows and Linux.
-
-### 6.1 Principles
-
-1. **Quality reference first.** The macOS Core Image pipeline remains the oracle until a portable engine passes a frozen golden-image corpus.
-2. **One document model, two shells.** UI is a shell; document operations are shared.
-3. **No algorithm changes during extraction.** Ports are behavior-preserving; improvements are separate, approved changes.
-4. **Platform code at the edges.** File dialogs, menus, fonts, color profiles, IPC, signing and updates are adapters.
-5. **Local-first AI.** No cloud dependency for any offline workflow; model downloads are explicit, licensed and hash-verified.
-
-### 6.2 Target layers
-
-```text
-┌────────────────────────────────────────────────────────────────────┐
-│ UI shells                                                          │
-│  macOS: SwiftUI/AppKit (kept)                                      │
-│  Windows/Linux: Qt 6/QML (recommended)                             │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               │ command/query API, no UI types
-┌──────────────────────────────▼─────────────────────────────────────┐
-│ StudioCore                                                         │
-│  document model · operation graph (non-destructive) · undo/history │
-│  presets · export policy · project format · validation             │
-│  localization catalog · status/telemetry (local only)              │
-└───────────────┬──────────────────────────────┬─────────────────────┘
-                │                              │
-┌───────────────▼──────────────┐  ┌────────────▼─────────────────────┐
-│ ImageEngine                  │  │ AIEngine                         │
-│  decode/encode · color       │  │  face mesh/landmarks             │
-│  filter graph · masks        │  │  person/background segmentation  │
-│  heal/warp · analysis lines  │  │  body pose · upscale             │
-│  tiling · deterministic CPU  │  │  ONNX Runtime + EP selection     │
-│  GPU backend (wgpu)          │  │  model manifest/consent/license  │
-└───────────────┬──────────────┘  └────────────┬─────────────────────┘
-                │                              │
-┌───────────────▼──────────────────────────────▼─────────────────────┐
-│ Runtime + Platform adapters                                        │
-│  files · dialogs · windows/menus · fonts · color profiles · IPC    │
-│  process launch · HTTP · crypto · updates · signing · crash reports│
-└────────────────────────────────────────────────────────────────────┘
-```
-
-### 6.3 Proposed module boundaries
-
-| Module | Owns | Must not import |
-|---|---|---|
-| `studio-core` | document model, operation graph, project format, export rules, presets, recovery policy | UI, OS dialogs, GPU |
-| `image-engine` | buffers, color, filter DAG, masks, heal, warp, overlays | UI, dialogs, AI process |
-| `ai-engine` | model lifecycle, inference sessions, tiling, provenance | UI, document persistence |
-| `runtime` | filesystem, HTTP, processes, IPC, crypto, clock | UI, document logic |
-| `platform-macos` | SwiftUI/AppKit shell, Core Image reference backend, bookmarks | nothing above its adapter API |
-| `platform-windows` | Qt shell, DirectWrite/WIC/DirectML adapters | document internals |
-| `platform-linux` | Qt shell, fontconfig/lcms2/CUDA-or-CPU adapters | document internals |
-
-### 6.4 What should not be shared
-
-- SwiftUI views. They are macOS-specific.
-- Core Image kernels as the cross-platform implementation. They may remain the macOS fast path, but the portable engine must not depend on them.
-- Apple bookmarks in the shared project manifest.
-- Python as a mandatory runtime.
-
----
-
-## 7. Rust vs C++ vs Swift
-
-| Criterion | Rust | C++ | Swift |
-|---|---|---|---|
-| Memory safety | Strong, compile-time | Manual | Strong (ARC), but leaks/cycles possible |
-| Cross-platform UI | No first-class UI; bindings (Qt/Slint) | Mature Qt 6 | No viable Windows/Linux UI story |
-| Image ecosystem | Growing (`image`, `imgref`, `rawloader`, `lcms2`, ONNX bindings) | Deepest: OpenCV, LibRaw, lcms2, Qt, ONNX | Apple-only for production imaging |
-| GPU | `wgpu` (Metal/Vulkan/DX12), compute shaders | Native Metal/Vulkan/D3D; most mature | Metal only |
-| Build/reproducibility | Cargo, lockfiles, good CI story | CMake/vcpkg/conan complexity | SwiftPM + Xcode/CLT; Windows toolchain immature |
-| Talent/ramp-up | Steep initial curve | Large talent pool, older codebases | macOS talent only |
-| Interop with current app | C ABI / FFI, or rewrite behind a façade | C ABI, easiest with existing C APIs | Direct, but only on Apple platforms |
-| Risk for a 5-year product | Low long-term, medium short-term | Low performance risk, high safety risk | High platform risk |
-
-**Recommendation:** Rust for the shared core and portable image engine; Swift for the macOS shell and as the temporary reference backend; C++ only if the team already has deep Qt/OpenCV/LibRaw expertise and wants one language for engine + shell.
-
-**Why not Swift everywhere:** Swift on Windows/Linux exists, but there is no mature, production-grade SwiftUI/AppKit equivalent, the imaging ecosystem is Apple-centric, and the build/test/debug toolchain off macOS is not at the level this product needs. Choosing Swift as the sole language would still require a second UI framework and would add platform risk without removing the port.
-
-**Why not C++ everywhere:** C++ is viable and has the best imaging ecosystem, but memory-safety defects in a photo editor that handles user originals are a poor trade. Rust gives comparable performance with a safer core, and `wgpu` covers Metal/Vulkan/DX12.
-
----
-
-## 8. UI framework comparison
-
-| Framework | macOS | Windows | Linux | Pro-editor fit | Risks |
+| ID | Title | Previous (2026-11-09) | Current (2026-11-11) | Primary evidence at `01da900` | Regression tests |
 |---|---|---|---|---|---|
-| SwiftUI + AppKit | Native, current | No | No | Excellent on macOS | Cannot cross-compile |
-| Qt 6 (Widgets/QML) | Good | Native-quality | Native-quality | Strong: docks, menus, IME, RTL, tablet events, accessibility | Licensing (LGPL/commercial), QML performance discipline |
-| Flutter | Good | Good | Good | Medium: custom rendering, color-management/plugin gaps | Desktop plugin maturity, text/IME/RTL edge cases, memory |
-| Tauri + web UI | Good | Good | Good | Weak for pixel-accurate pro editing | WebView color/perf/memory, native integration |
-| Avalonia (.NET) | Good | Good | Good | Medium | Adds C# stack; imaging/GPU interop |
-| Slint | Good | Good | Good | Immature for complex pro UI | Ecosystem, accessibility, widgets |
-| Electron | Good | Good | Good | Weak | Memory, color management, bundle size |
+| P0-01 | Recovery data deleted on cancel | VERIFIED | **FIXED** | `Recovery.swift:181–232, 270–308`; `EditorModel.swift:2668, 2694` | `M1-R0`…`M1-R21`, `M1-R15` |
+| P0-02 | Export can overwrite the original | VERIFIED | **FIXED** | `EditorModel.swift:3054, 3084`; `ExportService.swift:363, 382, 404` | `M1-X`, `M1-B` |
+| P0-03 | Runtime install deletes the old copy before the new one is in place | VERIFIED | **FIXED** | `AIRuntimeTransaction.swift:162, 221, 273, 404, 536` | `M1-AI`, `M1-AI2`, `M1-AI3`, `M1-AI4` |
+| P0-04 | Privacy strip is incomplete | PARTIAL | **FIXED** | `ImageProcessor.swift:1204–1225` | Engine privacy fixtures, including XMP |
+| P0-05 | Batch analysis/stamps can leak across photos | PARTIAL | **PARTIALLY FIXED** | `BatchExportPolicy.swift:12–43`; `EditorModel.swift:77–78` | `P0-4`, `P1-1`, `P1-1b` |
+| P0-06 | Model download total is per-file | NOT REPRODUCED | **NOT REPRODUCED** | `ModelManager.swift:61, 177, 209`; `Docs/worker-regressions/test_two_file_download_progress.py:112` | manual worker regression (not in the 840-check suite) |
+| P1-07 | Failed load changes title/export name | VERIFIED | **FIXED** | `EditorModel.swift:1003, 1042–1043` | `M1-L` |
+| P1-08 | Batch cancel does not stop the running file | PARTIAL | **FIXED** | `EditorModel.swift:3315–3319, 3341–3342, 3437, 3450, 3471, 3476` | `P1-8` (two tests) |
 
-**Recommendation:** keep SwiftUI/AppKit for macOS; use **Qt 6/QML** for Windows and Linux. Reasons: native menus and file dialogs, robust IME/RTL/bidi support (a hard requirement for Persian), tablet/stylus events for retouching, mature accessibility, and a clear path to platform color management and GPU interop. Use a shared design-token layer and shared view models so Simple/Pro modes do not fork behavior.
+Counts: **6 FIXED, 1 PARTIALLY FIXED, 1 NOT REPRODUCED, 0 OPEN, 0 UNVERIFIED.**
 
-**Simple/Pro implications:** treat “Simple” and “Pro” as two presentations of the same document API, not two applications. Pro features (history panel, workspaces, batch recipes, color-managed soft proof) belong in the shell and core history layer, not in the image kernels.
+### 2.1 P0-01 — Recovery cancel semantics: FIXED
+
+**Implementation.** Recovery no longer has a single mutable session file that an alert can delete. `RecoveryStore` keeps a mutable `working` slot and immutable `candidates/<millis>-<UUID>.retouch` files (`Recovery.swift:122, 236, 250, 270, 279`). `prepareForLaunch()` classifies the working copy and candidates, quarantines damaged files, and sets a lock when the working copy must be preserved (`Recovery.swift:181–232`). A cancel, Escape, or a closed Locate panel returns `.stop` without deleting the candidate; only the explicit Discard path calls `discardRecoveryCandidate`. In the missing-source prompt, a cancelled Locate panel is explicitly not permission to delete the edit (`EditorModel.swift`, `offerRecoveryCandidate`).
+
+**Tests.** `M1-R0` (Escape and Cancel never delete), `M1-R1`…`M1-R5` (restore one candidate without losing another; Cancel while a third document autosaves; missing source; located photo restores only after Restore), `M1-R6`…`M1-R14` (failed writes, failed deletes, failed promotion, damaged candidate quarantine, changed source, unfinished working copy), `M1-R16`…`M1-R19` (restore cannot evict the live document; external opens promote exactly once), `M1-R20`/`M1-R21` (autosave invalidation), `M1-R15` (the suite never writes the production recovery tree).
+
+**Residual.** Durability is still `Data.write(.atomic)` plus a read-back byte comparison, with no `fsync` (`Recovery.swift:390–405`). This is recorded as debt D15, not as an open P0.
+
+### 2.2 P0-02 — Export over the original: FIXED
+
+**Implementation.** `export(to:)` refuses the destination before rendering when it resolves to the opened photo (`EditorModel.swift:3054`). `ExportService` checks again immediately before the atomic replace, closing the window in which the destination could be relinked to the source during the render (`ExportService.swift:363, 382`). `referencesSameFile` compares resolved paths, device/inode identity, and a case-insensitive fallback (`ExportService.swift:404`). Batch export passes each file's own URL as the protected source (`EditorModel.swift:3483`), so batch naming cannot overwrite an input.
+
+**Tests.** `M1-X` covers the source path, symlink and alias refusal; `M1-B` covers batch output that would collide with a source; the older `P0-1` test confirms an export is a copy, not a saved project.
+
+### 2.3 P0-03 — Transactional runtime installation: FIXED (code path disabled in production)
+
+**Implementation.** `AIRuntimeTransaction` implements a state machine: `preparing` → `swapping` → `committed` (`AIRuntimeTransaction.swift:404–523`). It extracts into a staging directory, runs structural and functional validation, records the transaction, moves the old runtime to a backup, moves staging live, validates the live copy, writes the commit marker, and only then removes backup and staging. Failures roll back (`:536`); launch recovery classifies interrupted states (`:221, 273`). The old "delete then move" sequence no longer exists.
+
+**Tests.** `M1-AI` (transactional install and failure injection), `M1-AI2` (damaged marker and symlink escape), `M1-AI3` (failed recovery retried, good recovery cached, AI waits), `M1-AI4` (concurrent installs serialize on one lock). `M1-AI-R` is skipped unless `RETOUCH_REAL_RUNTIME=1`, because no real runtime is installed in this environment.
+
+**Important qualification.** `AIRuntime.package` returns `nil` (`AIRuntime.swift:40`). No protocol-v2 archive URL, byte count or hash is configured, so the installer is not reachable in this build and the UI reports AI as unavailable. The fix is verified in code and tests; it is not verified against a published runtime.
+
+### 2.4 P0-04 — Metadata privacy: FIXED
+
+**Implementation.** The blacklist was replaced by an allowlist (`ImageProcessor.swift:1204–1225`). The output property dictionary starts empty and copies only DPI width/height, the three TIFF resolution keys, and orientation `1` (the pixels are already upright). GPS, EXIF identity, IPTC, XMP, maker notes, camera make/model, serials and unknown dictionaries are not copied unless a future explicit decision adds them.
+
+**Tests.** The engine privacy section (`Tests/EngineTests.swift:1013` onward) builds a fixture with GPS, EXIF, TIFF, IPTC and XMP data and checks the written files, with an XMP negative assertion and a positive control that can read XMP when present (`:1089, 1104`). The old audit's statement that XMP survival was "unverified" is **superseded**: it is now a fixture assertion.
+
+### 2.5 P0-05 — Batch isolation: PARTIALLY FIXED
+
+**Implementation.** `BatchExportPolicy.snapshot` (`BatchExportPolicy.swift:12`) returns the edited document's snapshot unchanged for the document's own file (`:22`). For every other file it:
+- keeps the crop only when the document shares the file's unturned frame and the crop applies to the file's aspect (`:27–33`);
+- clears AI edits and orientation (`:37–38`);
+- clears the selected face and resets analysis endpoint and anchor coordinates (`:40–42`).
+
+Batch defaults keep stamps and analysis overlays off (`EditorModel.swift:77–78`), so the default path is safe. Tests `P0-4`, `P1-1` and `P1-1b` cover shared settings, different image shapes, and a turned document.
+
+**Why not FIXED.** When the owner explicitly enables `batchIncludeStamps`, the document's `healSpots` and `stickers` still travel to every file. They are pixel-space edits made for one photo and are not adapted to another. This is an intentional opt-in product behavior, but it is still document-specific data applied across photos. Analysis label style and content remain shared by design; only coordinates are reset. Closing this would require a product decision (disable stamps for non-document files, or define a per-file placement policy), not just a code change.
+
+### 2.6 P0-06 — Model download total: NOT REPRODUCED
+
+**Evidence.** `ModelManager.plan.totalBytes` is the plan-wide total (`ModelManager.swift:177`). `consume` adds the cumulative `offset` from the worker to the current file's received bytes and keeps the plan total as the denominator (`:209`). When no total is known, the UI reports indeterminate progress instead of inventing a denominator (`:61`). The worker regression (`Docs/worker-regressions/test_two_file_download_progress.py:112`) asserts that a two-file plan reports `total_bytes` as the sum of both files.
+
+**Qualification.** The published 1.0.0 runtime archive was not downloaded; the legacy archive is documented as 388,277,063 bytes in `Docs/AI_RUNTIME.md:19`, but it is not a compatible protocol-v2 package and the installer is disabled. The repo's worker regression is manual and is not part of the 840-check Swift suite. The bug is not reproduced against the inspected code.
+
+### 2.7 P1-07 — Failed load identity: FIXED
+
+**Implementation.** `load` no longer assigns the incoming file name before decoding. `imageName` and `imageURL` are assigned only from a successful result (`EditorModel.swift:1042–1043`); failure sets `.couldNotRead` (`:1003`) and leaves the current document's title, URL and suggested export name untouched. Test `M1-L` opens A, attempts an unreadable B, and asserts that the document still describes A.
+
+### 2.8 P1-08 — Batch cancellation: FIXED
+
+**Implementation.** `cancelBatchExport` cancels both the batch loop and the detached file task (`EditorModel.swift:3315–3319`); the current file task is stored by reference (`:3341–3342`) and cancelled by name because it does not inherit the parent's cancellation. `exportOne` checks cancellation before loading, before rendering, before the write hook, and immediately before the write (`:3437, 3450, 3471, 3476`). Tests `P1-8` (cancel stops the file in flight before it writes) and `P1-8` (a failed write is not counted as saved) pass.
+
+### 2.9 Findings that are now superseded
+
+| Old statement | Disposition |
+|---|---|
+| P0-01…P1-08 statuses in the 2026-11-09 register | **Superseded** by §2; do not reuse. |
+| "69 Swift files, 31,788 lines" | **Superseded**: 78 files, 36,653 lines. |
+| "EditorModel 3,135 lines" | **Superseded**: 3,518 lines. |
+| "Views 18 files, 7,455 lines" | **Superseded**: 20 files, 7,463 lines. |
+| "Core 13,458 lines; Models 10,575" | **Superseded**: Core 17,433; Models 11,457. |
+| "Imports Foundation 47, CoreGraphics 27" | **Superseded**: Foundation 56, CoreGraphics 28. |
+| "336 assertions" | **Superseded**: 840 checks at this commit. |
+| "Metadata privacy is a blacklist (D8)" | **Resolved**: allowlist implemented; D8 closed. |
+| "XMP survival is unverified" | **Superseded**: fixture-tested. |
+| "388,277,063-byte archive declared in `AIRuntime.swift`" | **Superseded/stale**: current code has no package metadata; the figure is documented only as a legacy release asset. |
+| "Milestone 1 (data-integrity fixes) is the recommended next change" | **Completed**: commit `405ae2e`, merged as `01da900`. |
+| "Localization has 471 strings" | **Superseded**: 482 base properties and 482 Persian overrides. |
+| "P0-05 default path safe, opt-in path not" | **Partly superseded**: coordinates are now reset; opt-in stamps remain document-specific. |
 
 ---
 
-## 9. AI runtime recommendation
+## 3. Required item 4 — Updated architecture measurements
 
-### 9.1 Current state
+Measured at `01da900`; none of the previous counts were reused. Every value in this section is **VERIFIED** by a direct `find`, `wc`, `grep` or `du` command at this commit; the instrument is named beside each table.
 
-- Python process, JSON-RPC over `AF_UNIX`.
-- PyTorch, Transformers, ONNX Runtime and MLX are present in the runtime; the archive is 388,277,063 bytes and arm64-only.
-- Intel builds deliberately disable AI (`AIRuntime.package` returns `nil` under `x86_64`).
-- Models are downloaded separately with a consent hash; the bundled worker verifies SHA-256 and stages downloads.
-- Model weights are **not** in the repository or app bundle.
+### 3.1 Source inventory
 
-### 9.2 Recommended target
+| Area | Files | Lines |
+|---|---:|---:|
+| `Sources/RetouchStudio/Core/` | 28 | 17,433 |
+| `Sources/RetouchStudio/Models/` | 29 | 11,457 |
+| `Sources/RetouchStudio/Views/` | 20 | 7,463 |
+| `Sources/RetouchStudio/App.swift` | 1 | 300 |
+| **Total `Sources/`** | **78** | **36,653** |
 
-1. **ONNX Runtime as the common inference layer** with execution providers: Core ML on macOS, DirectML on Windows, CUDA/TensorRT optional on Linux, CPU as the guaranteed fallback.
-2. **A small Rust `ai-engine`** owning model manifests, sessions, tiling, tensor layout and provenance. No Python requirement for the core product.
-3. **Keep the Python/MLX path only for macOS-only experimental generation** (for example FLUX-style features), isolated behind the existing worker boundary and clearly marked. Do not make it a dependency of segmentation, face landmarks, pose or upscale.
-4. **Model manifest** per model: id, version, task, license, source URL, SHA-256, byte size, input/output contract, minimum RAM, hardware requirements. The UI must show license and source before download.
-5. **Provenance in projects:** for every AI edit, store model id/version/hash, prompt, seed, strength, mask hash and timestamp. Reproducibility is a product requirement, not metadata decoration.
-6. **Memory policy for 16 GB machines:** tiled inference, quantized models where quality permits, hard guards before loading a model, and a clear “not enough memory” path. These are targets until measured on the owner's hardware.
+Test code: 4 suites, 7,467 lines (`EngineTests` 1,604; `ModelTests` 4,231; `RuntimeProcessTests` 914; `RuntimeV2Tests` 718).
 
-### 9.3 Migration path
+### 3.2 Editor and UI coupling
 
-- Phase A: keep Python worker; add a shared request/response schema and provenance records.
-- Phase B: add ONNX sessions for segmentation/face/pose in the native engine; run both paths on a benchmark corpus.
-- Phase C: switch one feature at a time after quality gates; keep Python for the macOS-only generative feature.
-- Phase D: remove PyTorch/Transformers from the default runtime and shrink the download.
+| Measure | Value | Evidence |
+|---|---:|---|
+| `EditorModel.swift` lines | 3,518 | `wc -l` |
+| `@Published` properties | 92 | `grep -c '@Published'` |
+| Lines containing an `NS*` AppKit symbol in `EditorModel` | 38 | `grep -cE '\bNS[A-Z]'` |
+| `@ObservedObject` injections in `Views/` | 22 | `grep -r` |
+| `@EnvironmentObject` injections in `Views/` | 0 | `grep -r` |
+| View files | 20 | `find Views` |
+| Accessibility modifiers in `Views/` | 16 | `grep -r accessibility` |
 
-Never switch a model silently: a model change is a versioned, approved change with a visible diff in output quality.
+The model is passed explicitly into 22 view sites. There is no environment-object indirection; every view that needs editing state observes the same large object.
+
+### 3.3 Framework imports
+
+| Framework | Files importing it | Portability |
+|---|---:|---|
+| Foundation | 56 | Mostly portable; process/socket/file APIs need adapters |
+| CoreGraphics | 28 | Geometry and bitmap types must be replaced |
+| SwiftUI | 24 | macOS shell only |
+| CoreImage | 19 | No direct portable equivalent; needs a new engine |
+| AppKit | 14 | Platform shell/adapters only |
+| Darwin | 10 | POSIX locks, signals, process identity |
+| UniformTypeIdentifiers | 6 | MIME/extension registry |
+| ImageIO | 6 | WIC / libheif / libvips |
+| Vision | 2 | ONNX or platform ML |
+| Combine | 2 | Swift-only plumbing |
+| CryptoKit | 1 | RustCrypto/OpenSSL |
+| CoreVideo | 1 | Engine buffer type |
+| CoreText | 1 | DirectWrite/HarfBuzz |
+
+Core Image is still the image engine. Vision remains inside the image layer for face, segmentation and pose data. The test suite compiles every source except `App.swift` and `SelfCheck.swift`, so any new AppKit/SwiftUI import in a core file breaks off-macOS testability.
+
+### 3.4 Build, test and distribution
+
+| Concern | Current state | Evidence |
+|---|---|---|
+| Build system | Direct `swiftc -O`, WMO; `Package.swift` is not the shipping build | `build.sh`; 13-line manifest |
+| Architectures | arm64, x86_64, universal via `lipo` | `build.sh:71` |
+| Signing | Ad-hoc `codesign --force --sign -`; no notarization | `build.sh:160` |
+| Self-test | Native plus Intel slice through Rosetta | `build.sh:164, 179` |
+| Tests | Four compiled executables; custom harness; 840 checks at this commit | `Tests/run.sh` |
+| CI | None; `.github` absent | `ls -d .github` |
+| Coverage | No line/branch coverage instrumentation | harness prints check counts only |
+| Light app | README states about 3.5–4 MB | README |
+| App with helper | 1.3 GB measured | `du -sh "Retouch Studio.app"` |
+| Worker source | Not in this repository | no `worker/` directory |
+
+### 3.5 Project format and platform dependencies
+
+`RetouchProject.currentVersion` is 3 (`Project.swift:11`). It is a single JSON sidecar with:
+- absolute `imagePath` (`:21`);
+- Apple bookmark `Data` (`:24`);
+- `CGRect` crop and `CGPoint` analysis endpoints/anchors;
+- adjustments, heal spots, stickers, AI edits, analysis settings and selected face;
+- atomic write and hand-written decoding with defaults for older versions.
+
+The format is non-destructive and migration-aware, but it is not portable: the source location and every geometric type are Apple-specific.
+
+### 3.6 Localization and accessibility
+
+- `Localization.swift`: 482 string properties; `PersianL10n.swift`: 482 overrides. The key sets match structurally, but there is no parity test. A missing override falls back silently.
+- 16 `accessibility*` occurrences across 7,463 lines of view code. This is not an accessibility baseline for either future shell.
+
+### 3.7 AI runtime packaging
+
+- The worker is an external Python process reached over `AF_UNIX` and JSON-RPC; Python source is not in the repository.
+- The current local `.app` contains `Contents/Resources/Worker` and measures 1.3 GB (`du -sh` on the Worker directory itself: 1.3 GB).
+- The protocol-v2 installer exists but is disabled: `AIRuntime.package` is `nil` (`AIRuntime.swift:40`); install directory is `AI/runtimes/protocol-v2` (`:47`); a backup directory is reserved (`:50`).
+- The legacy 1.0.0 archive is documented as 388,277,063 bytes and explicitly not compatible (`Docs/AI_RUNTIME.md:19`); it was not downloaded in this audit.
+- Intel builds deliberately have no AI path; the editor, analysis and export work.
 
 ---
 
-## 10. Project format proposal (v4)
+## 4. Required item 5 — Remaining technical debt
 
-Current v3 is a single JSON sidecar with `imagePath` (absolute) and an Apple bookmark (`Models/Project.swift:20–24`), plus adjustments, crop, orientation, heal spots, stickers, AI edits, analysis and selected face. It is a good non-destructive foundation; it is not portable or asset-complete.
+Status at this commit. D8 is closed; D15 and D16 are new or newly precise.
 
-### 10.1 Proposed container
+| # | Debt | Status | Evidence / consequence |
+|---|---|---|---|
+| D1 | `EditorModel` is a 3,518-line god object with 92 `@Published` fields | Open, worse than 2026-11-09 | Every shell and feature touches one file; high regression and merge risk |
+| D2 | No enforced module boundary between Core and Models | Open | Core imports document types; the engine cannot compile without the app model |
+| D3 | AppKit inside the model | Open; 38 lines with `NS*` symbols | Business logic is not headless and not portable |
+| D4 | UI is 7,463 lines of SwiftUI | Open | A second UI must be built for Windows/Linux |
+| D5 | Image engine is 17,433 lines tied to Core Image/Vision | Open, larger than before | The product's core value is the least portable layer |
+| D6 | Python AI runtime is external and large | Open | Reproducibility, auditability, Windows/Linux story, 1.3 GB bundle |
+| D7 | Absolute source path + Apple bookmark in project v3 | Open | Projects break when moved across machines/platforms |
+| D8 | Metadata privacy was a blacklist | **Closed** | Allowlist at `ImageProcessor.swift:1204`; fixtures pass |
+| D9 | No CI | Open | Quality depends on manual local runs; no platform matrix |
+| D10 | Localization parity is unenforced | Open; 482/482 today | A forgotten Persian key falls back silently |
+| D11 | Accessibility is sparse | Open; 16 modifiers | Both future shells need a baseline |
+| D12 | Ad-hoc, unsandboxed distribution | Open | Gatekeeper/security expectations and store distribution unmet |
+| D13 | Test harness compiles the whole app | Open | Platform-specific imports block off-macOS testing |
+| D14 | Older audit docs contain stale line numbers and claims | Open | `Docs/TECHNICAL_AUDIT.md` still audits `8cc2d0c`; superseded claims are mapped here |
+| D15 | Recovery writes are atomic but not fsynced | Open | Read-back proves content, not power-loss durability (`Recovery.swift:390`) |
+| D16 | Batch opt-in stamps are document-specific | Open, product decision | `healSpots`/`stickers` apply to other photos when `batchIncludeStamps` is on |
 
-A `.retouch` **directory package** (zipped for transport), with a versioned manifest:
+---
+
+## 5. Genuine architectural blockers versus ordinary debt
+
+These are the items that must change before a second platform shell can share this product. Ordinary debt does not block portability and should be scheduled separately.
+
+### 5.1 Genuine blockers
+
+| ID | Blocker | Why it blocks portability | What must be designed |
+|---|---|---|---|
+| B1 | EditorModel/UI coupling | A 3,518-line main-actor object with 92 published fields cannot be reused or tested without SwiftUI/AppKit | Command/query document API; feature modules; observable view-model boundary |
+| B2 | No Core/Models boundary | Core engines depend on `Adjustments`, `Project`, `HealSpot`, `AnalysisSettings`; Models call concrete Core types | A shared document/operation model and engine protocols |
+| B3 | Apple geometry and bookmarks in the project format | `CGRect`, `CGPoint` and bookmarks are not portable or stable across platforms | Owned value types; relative paths; content hashes; platform-only extension block |
+| B4 | Core Image/Vision image engine | 19 files use Core Image; Vision supplies face/segmentation/pose | Portable engine contract; CPU reference path; GPU backend; golden corpus |
+| B5 | External Python AI runtime | No worker source in repo; 1.3 GB bundled helper; installer disabled; no compatible package | Model manifest, inference contract, runtime distribution, provenance |
+| B6 | macOS-only build and distribution | Direct `swiftc`, `lipo`, ad-hoc signing, no CI, no Windows/Linux toolchain | Reproducible build, CI matrix, per-platform packaging and signing |
+| B7 | No off-macOS testability | Tests compile the whole app except two files; core files import AppKit | A platform-neutral core test target and fakes for file/dialog/IPC adapters |
+
+### 5.2 Ordinary debt (does not require architecture change)
+
+D9 (CI), D10 (localization parity), D11 (accessibility), D12 (signing/notarization), D14 (stale docs), D15 (`fsync`), D16 (batch stamp policy), plus performance measurement and the missing published-runtime validation. These should be scheduled in the near-term macOS track, not folded into the portability design.
+
+### 5.3 What should not be rewritten
+
+The working Core Image pipeline, the analysis renderer, the export renderer and the tested recovery/runtime transaction logic are product assets. They should be characterized, wrapped and ported behind contracts. Rewriting them first would throw away the only quality reference the project has.
+
+---
+
+## 6. Required item 6 — Revised Rust / C++ / Swift evaluation
+
+Classifications: **Confirmed recommendation**, **Needs a technical prototype**, **Needs more research**, **Not recommended**.
+
+| Option | Classification | Rationale at this commit |
+|---|---|---|
+| Rust for `StudioCore` (document model, operations, project format, export policy, recovery/runtime transaction policy) | **Confirmed recommendation** | Pure data/logic; testable without UI or GPU; strong memory safety for code that handles user originals; stable C ABI for Swift and Qt. The API boundary still needs a design, not a prototype of the language choice. |
+| Rust for the portable image engine (`wgpu` + deterministic CPU tier) | **Needs a technical prototype** | The engine must reproduce 36,653 lines of Core Image/Vision behavior. No prototype exists. A single-kernel parity spike (skin, heal or warp) is required before committing. |
+| Swift for the macOS shell and the reference backend | **Confirmed recommendation** | It is the working product; keeping it preserves quality reference and delivery. |
+| C++ for engine and shell | **Not recommended** | The imaging ecosystem is strong, but memory-safety risk in a photo editor that writes user originals is a poor trade. Keep C++ only if the team already has deep Qt/OpenCV/LibRaw expertise. |
+| Swift on Windows/Linux as the sole language | **Not recommended** | No production-grade SwiftUI/AppKit equivalent; Apple-centric imaging; immature off-macOS toolchain. A second UI would still be required. |
+
+**Why this changed from 2026-11-09.** The previous audit recommended Rust broadly. After measuring the stabilized tree, the low-risk part (core logic) and the high-risk part (pixel parity) must be separated. The core choice is sound; the engine choice is not yet evidenced.
+
+---
+
+## 7. Required item 7 — Revised UI framework evaluation
+
+| Framework | macOS | Windows | Linux | Classification for this product |
+|---|---|---|---|---|
+| SwiftUI + AppKit | Native, current | No | No | **Confirmed recommendation** for the macOS shell |
+| Qt 6 / QML | Good | Native-quality | Native-quality | **Needs a technical prototype** for Windows/Linux: RTL/Persian shaping, IME, tablet events, color management, GPU interop, licensing |
+| Flutter | Good | Good | Good | **Not recommended** for a color-managed pro editor: plugin/text/IME/color gaps |
+| Tauri + web UI | Good | Good | Good | **Not recommended**: WebView color/performance/memory risk for pixel-accurate editing |
+| Avalonia (.NET) | Good | Good | Good | **Needs more research** only if the team chooses .NET; adds a third runtime |
+| Slint | Good | Good | Good | **Not recommended** now: ecosystem/accessibility maturity |
+| Electron | Good | Good | Good | **Not recommended**: memory, color management, bundle size |
+
+**Hard requirements for the prototype.** Persian/Arabic shaping and bidi, IME composition, menu shortcuts, tablet pressure, font fallback (Vazir), ICC-aware display, and a GPU surface that can host the engine's output. A Qt prototype that only draws a rectangle does not retire these risks.
+
+**Simple/Pro.** Treat them as two presentations of one document API. History, workspaces, batch recipes and soft proof belong in the shell/core, not in image kernels.
+
+---
+
+## 8. Required item 8 — Revised AI architecture
+
+### 8.1 Current state (VERIFIED)
+
+- A separate Python process over `AF_UNIX` and JSON-RPC.
+- The worker source is not in this repository; the local bundle contains a 1.3 GB `Worker` directory.
+- The protocol-v2 installer is implemented with a staged transaction, but `AIRuntime.package` is `nil`, so it is disabled. No URL, size or hash is current in code.
+- The legacy 1.0.0 arm64 archive is documented as 388,277,063 bytes and is not treated as compatible.
+- Model weights are not in the repository or the app; downloads require explicit consent and are hash-verified by the worker.
+- Intel builds have no AI path.
+
+### 8.2 Recommended target
+
+1. **Keep the Python worker for the near term.** It is the only working AI path and should not be replaced during portability design. **Confirmed recommendation.**
+2. **Define a platform-neutral inference contract** (request/response schema, tensor layout, tiling, cancellation, provenance) before choosing an inference runtime. **Confirmed recommendation.**
+3. **ONNX Runtime as the common inference layer** with Core ML, DirectML, CUDA/TensorRT (optional) and CPU execution providers. **Needs more research**: quality parity against Vision, model licensing, EP behavior, memory on 16 GB machines, and model size are all unmeasured.
+4. **A Rust `ai-engine` owning manifests, sessions and tiling.** **Needs a technical prototype** after the contract exists.
+5. **Provenance per AI edit** (model id/version/hash, prompt, seed, strength, mask hash, timestamp). **Confirmed recommendation** as a product requirement.
+
+### 8.3 Migration path
+
+- Phase A: keep Python; add the shared schema and provenance records.
+- Phase B: prototype ONNX sessions for one task (segmentation or face) and compare against Vision on a frozen corpus.
+- Phase C: switch one feature at a time behind quality gates.
+- Phase D: only then consider removing PyTorch/Transformers from the default runtime.
+
+Never switch a model silently. A model change is a versioned, approved change with a visible quality diff.
+
+---
+
+## 9. Required item 9 — Revised project-format recommendations
+
+**Recommendation: a v4 directory package with a versioned manifest, relative source location, content hashes and platform-only extensions. Classification: Confirmed recommendation. Exact schema: needs a design deliverable.**
+
+Current v3 is a good non-destructive foundation but stores an absolute path and an Apple bookmark (`Project.swift:11, 21, 24`) and uses Apple geometry types. It cannot be shared with a Windows or Linux shell without translation.
+
+### 9.1 Target shape
 
 ```text
 MyEdit.retouch/
   manifest.json          # format version, app version, created/modified, flags
-  source.json            # original filename, relative path, size, hash, dimensions, color profile
-  operations.json        # ordered non-destructive operations with stable IDs
-  masks/                 # content-addressed masks (PNG/16-bit where needed)
-  ai/                    # patches, alpha, provenance JSON, model references
-  previews/              # optional fast-open JPEG + thumbnail
-  platform/macos.json    # bookmark, security-scoped data (never read by other platforms)
+  source.json            # name, relative path, bytes, SHA-256, pixel size, color space
+  operations.json        # ordered operations with stable IDs and explicit spaces
+  masks/                 # content-addressed masks
+  ai/                    # patches, alpha, provenance, model references
+  previews/              # optional fast-open preview and thumbnail
+  platform/macos.json    # bookmark and security-scoped data; never read elsewhere
 ```
 
-### 10.2 Rules
+### 9.2 Rules
 
-- **Relative source paths by default.** Resolve against the project location, then a user-configured search list, then ask the user. No Apple bookmark in `source.json`.
-- **Content hashes** (SHA-256 or BLAKE3) for source and every asset. A moved file is relinkable; a changed file is detected.
-- **Original is never embedded by default.** Offer “include original” as an explicit, size-warning option for portable handoff.
-- **Explicit coordinate spaces.** Every geometric operation records its space (source pixels, normalized top-left, or post-crop pixels). No implicit Core Image coordinates.
-- **Stable operation IDs** and an ordered list; undo/history is derived, not stored as duplicated state.
-- **Unknown fields are preserved** on read/write so newer projects opened by older builds do not lose data silently.
-- **Atomic save:** write to a temporary sibling, fsync, then rename; keep one previous manifest for crash recovery.
-- **Migration chain:** v1→v2→v3→v4 with fixtures. A project that cannot be migrated must open read-only with a clear message, never be partially rewritten.
-- **No absolute paths, no bookmarks, no platform-only types in shared JSON.**
+- Relative source paths by default; resolve against the project location, then a user search list, then ask.
+- SHA-256 (or BLAKE3) for the source and every asset; a moved file is relinkable, a changed file is detected.
+- Never embed the original by default; offer it as an explicit, size-warning handoff option.
+- Record an explicit coordinate space for every geometric operation (source pixels, normalized top-left, post-crop pixels).
+- Stable operation IDs; history is derived, not duplicated.
+- Preserve unknown fields on read/write.
+- Atomic save with a previous-manifest fallback; `fsync` before rename.
+- Migration chain v1→v2→v3→v4 with fixtures; an unmigratable project opens read-only with a clear message.
+- No absolute paths, no bookmarks and no platform-only types in shared JSON.
 
-### 10.3 Sketch
-
-```json
-{
-  "format": "retouch-project",
-  "version": 4,
-  "source": {
-    "name": "portrait.jpg",
-    "path": "originals/portrait.jpg",
-    "bytes": 12345678,
-    "sha256": "…",
-    "pixelSize": { "width": 6000, "height": 4000 },
-    "colorSpace": "Display P3"
-  },
-  "operations": [
-    { "id": "op-001", "type": "crop", "space": "source-pixels",
-      "rect": { "x": 0, "y": 0, "width": 6000, "height": 4000 } },
-    { "id": "op-002", "type": "orient", "turns": 0, "mirror": false, "straighten": 0.0 },
-    { "id": "op-003", "type": "skin", "params": { "…": "…" } }
-  ],
-  "assets": {
-    "masks": [{ "id": "mask-face-1", "path": "masks/face-1.png", "sha256": "…" }],
-    "ai": [{ "id": "ai-001", "patch": "ai/001.png", "alpha": "ai/001-alpha.png",
-             "model": { "id": "…", "version": "…", "sha256": "…" },
-             "prompt": "…", "seed": 42, "created": "2026-11-09T12:00:00Z" }]
-  },
-  "ui": { "selectedFace": 0, "tool": "skin" },
-  "platform": { "macos": { "bookmark": "…" } }
-}
-```
-
-The exact schema is a Phase 1 design deliverable; the rules above are the non-negotiable parts.
+The v4 schema is a Phase 1 design deliverable. The rules are the non-negotiable part.
 
 ---
 
-## 11. Cross-platform feasibility
+## 10. Required item 10 — Updated migration roadmap
 
-| Area | Feasibility | Work | Risk |
-|---|---|---|---|
-| Document model + project format | High | Replace Apple geometry/bookmarks; add migration | Medium |
-| UI shell | High | Build Qt 6/QML shell; keep SwiftUI macOS | High effort, medium quality risk |
-| Decode/encode (JPEG/PNG/TIFF/HEIC) | High | WIC/libvips/libheif; golden corpus | Medium |
-| RAW | Medium | LibRaw + profile pipeline; lens corrections | High quality risk |
-| Color management | Medium | lcms2/WCS/ColorSync adapters; ICC fixtures | High |
-| Core Image filter graph | Medium | Rust/wgpu + CPU fallback; port kernels | High |
-| Vision face/segmentation/pose | Medium | ONNX models; benchmark against Vision | High |
-| Healing/warp | Medium | Port kernels; deterministic interpolation | High |
-| Analysis overlay/text | High | DirectWrite/HarfBuzz/CoreText adapters | Medium |
-| AI runtime | Medium | ONNX Runtime + EPs; provenance | Medium |
-| IPC | High | Named pipes / authenticated loopback | Low |
-| File dialogs/menus/shortcuts | High | Qt adapters | Low |
-| RTL/IME/Persian typography | High | Qt + HarfBuzz + Vazir; test both languages | Medium |
-| Accessibility | Medium | Per-shell baseline | Medium |
-| Packaging/signing/updates | Medium | Per-platform toolchains; notarization | High |
-| Performance parity | Unknown | Benchmark on real hardware | High |
+macOS remains the quality reference and the only shipping platform throughout. All durations are person-weeks, ±40%, for a team already familiar with the code.
 
-**What cannot be claimed without hardware:** native Windows validation, native Linux validation, DirectML/CUDA behavior, Windows color management, Linux distro packaging, Windows Ink/tablet behavior. This audit ran only on macOS (arm64). Every cross-platform statement above is a feasibility judgment, not a validation result.
-
----
-
-## 12. Migration roadmap
-
-| Phase | Scope | Duration (pw) | Exit gate |
+| Phase | Scope | Duration | Exit gate |
 |---|---|---:|---|
-| 0 | This read-only audit | done | Owner approval |
-| 1 | Data-integrity fixes: P0-01, P0-02, P0-03, P1-07 + tests | 6–10 | All new tests pass; self-test passes; no algorithm change |
-| 2 | Privacy, batch isolation, batch cancellation (P0-04/05, P1-08) + P0-06 regression test | 6–10 | Fixture and batch tests pass |
-| 3 | Freeze a golden-image corpus and characterize the current engine | 8–12 | Hashes/tolerances recorded for every tool |
-| 4 | Extract `StudioCore` boundaries without changing output | 12–18 | Core compiles/tests without AppKit or SwiftUI |
-| 5 | Rust `image-engine` + wgpu/CPU; parity harness | 24–36 | Parity gate on corpus; macOS can opt in |
-| 6 | Project format v4 + v1–v3 migration | 6–10 | Round-trip and migration fixtures pass |
-| 7 | Windows shell + platform adapters | 20–28 | Native Windows test pass on real hardware |
-| 8 | Linux shell + packaging | 8–14 | Native Linux test pass on target distros |
-| 9 | AI engine unification on ONNX Runtime | 14–22 | Feature-by-feature quality gates |
-| 10 | Pro UI: history, workspaces, Simple/Pro | 18–28 | UX acceptance, both languages |
-| 11 | Hardening: CI, signing, notarization, accessibility, docs | 10–14 | Release checklist complete |
+| 0 | 2026-11-09 audit | done | superseded by this refresh |
+| 1 | Stabilization: recovery, runtime transaction, privacy, batch, failed load, export protection, autosave invalidation | **done** (`405ae2e`, merged `01da900`) | 840 checks / 0 failures; self-test passes |
+| 2 | Near-term macOS hardening: CI, `fsync`, localization parity test, accessibility baseline, signing plan, docs cleanup | 6–10 | CI green on arm64 and Rosetta; new tests pass |
+| 3 | **Portability design milestone** (recommended next): StudioCore interface spec, engine contract, corpus plan, one kernel spike, one Qt/RTL/color spike | **4–8** | Owner approves the written design; no shipping code replaced |
+| 4 | Freeze golden-image corpus and characterize current engine | 8–12 | Hashes/tolerances recorded for every tool |
+| 5 | Extract `StudioCore` behind contracts without changing output | 12–18 | Core compiles/tests without AppKit or SwiftUI |
+| 6 | Rust image engine prototype and parity harness (`wgpu` + CPU tier) | 16–24 | Parity gate on the corpus; macOS can opt in |
+| 7 | Project format v4 + v1–v3 migration | 6–10 | Round-trip and migration fixtures pass |
+| 8 | Windows shell + platform adapters | 20–28 | Native Windows test pass on real hardware |
+| 9 | Linux shell + packaging | 8–14 | Native Linux test pass on target distributions |
+| 10 | AI engine unification on ONNX Runtime | 14–22 | Feature-by-feature quality gates |
+| 11 | Pro UI: history, workspaces, Simple/Pro | 18–28 | UX acceptance in both languages |
+| 12 | Release hardening: signing, notarization, accessibility, docs | 10–14 | Release checklist complete |
+
+**Remaining total (phases 2–12): 122–188 person-weeks (±40%)**, roughly 9–14 months with three engineers, or 28–43 months with one senior engineer. Excluded: model research/training, legal licensing, hardware purchase, cloud services, mobile.
 
 **Sequencing rules**
 
-- Phases 1–2 are independent of the architecture work and should land first.
-- Phase 3 must precede any engine port; without a frozen oracle, “it looks the same” is not evidence.
-- Phase 5 must ship behind a feature flag/alternate backend until parity is proven.
-- Phases 7 and 8 can run in parallel once `StudioCore` and `ImageEngine` are stable, but Windows and Linux validation require separate hardware/CI.
-- No phase may remove a working macOS feature; the macOS shell remains shippable throughout.
+- Phase 2 is independent of portability and should land first.
+- Phase 3 must precede any extraction; it is a design deliverable, not a rewrite.
+- Phase 4 must precede the engine port; without a frozen oracle, "it looks the same" is not evidence.
+- Phase 5 must produce a core that tests without SwiftUI/AppKit before Phase 6 starts.
+- Phases 8 and 9 require separate hardware and CI; they can run in parallel only after Phases 5–7 are stable.
+- No phase may remove a working macOS feature. The macOS app remains shippable throughout.
 
 ---
 
-## 13. Risk matrix
+## 11. Required item 11 — Remaining risks and unknowns
 
-| Risk | Probability | Impact | Mitigation |
+| Risk / unknown | Probability | Impact | Mitigation / next evidence |
 |---|---|---|---|
-| Image-quality regression during engine port | High | High | Golden corpus, per-tool tolerances, dual-run, owner sign-off |
-| UI divergence / feature lag between shells | High | Medium | Shared view models + design tokens; screenshot tests |
-| Color-management mismatch | High | High | ICC fixtures, lcms2 validation, soft-proof tests |
+| Image-quality regression during an engine port | High | High | Corpus, per-tool tolerances, dual-run, owner sign-off |
+| UI divergence between shells | High | Medium | Shared view models/design tokens; screenshot tests |
+| Color-management mismatch | High | High | ICC fixtures, lcms2/ColorSync validation, soft-proof tests |
+| Qt RTL/IME/tablet/accessibility gaps | Medium | High | Phase 3 prototype on real Windows hardware |
 | GPU/driver differences | Medium | High | Deterministic CPU tier; shader tests; per-vendor CI |
-| No native Windows/Linux validation | Certain | High | Acquire hardware, CI matrix, explicit “unvalidated” labels |
-| Rust ramp-up slows delivery | Medium | Medium | Early spike, pair programming, keep C++ escape hatch |
-| Qt licensing/plugin gaps | Low | Medium | Legal review; LGPL dynamic linking or commercial license |
-| Model licensing/size | Medium | High | License field in manifest, consent, optional downloads |
-| 16 GB memory pressure | Medium | High | Quantization, tiling, guards, measured limits |
-| Project backward compatibility | Medium | High | Migration fixtures, read-only fallback, no silent rewrite |
-| Scope creep (cloud, social, mobile) | High | High | Milestone gates; explicit non-goals per phase |
-| Unsigned/unsandboxed distribution | High | Medium | Signing/notarization plan; sandbox feasibility study |
-| Build non-reproducibility | Medium | Medium | Pin SDK/toolchains, lockfiles, CI |
-| Bus factor | Medium | High | Docs, tests, pairing, no single-owner modules |
+| No native Windows/Linux validation | Certain today | High | Acquire hardware and CI; label all claims unvalidated until then |
+| No native Intel validation | Certain today | Medium | Rosetta tests only; native Intel hardware still required |
+| Published runtime archive unverified | Certain today | Medium | Download only with owner approval; verify hash/size; installer is disabled |
+| AI quality parity with Vision | Unknown | High | Benchmark one task before adopting ONNX |
+| Model licensing/size | Medium | High | Manifest license/source; consent; optional downloads |
+| 16 GB memory pressure | Medium | High | Quantization, tiling, measured limits |
+| Project backward compatibility | Medium | High | v1–v4 fixtures, read-only fallback, no silent rewrite |
+| EditorModel churn during extraction | High | Medium | Contract-first extraction; small commits; regression suite |
+| Swift toolchain/CI reproducibility | Medium | Medium | Pin SDK/toolchain; CI; document the CLT/SDK matrix |
+| Ad-hoc signing and Gatekeeper | High | Medium | Signing/notarization plan; sandbox feasibility study |
+| Scope creep (cloud, social, mobile) | High | High | Milestone gates and explicit non-goals |
+
+**Not claimed by this audit:** Windows compatibility, Linux compatibility, native Intel behavior, DirectML/CUDA behavior, Windows color management, Windows Ink behavior, Linux packaging, published-runtime compatibility, or image-quality parity on any non-macOS backend. All cross-platform statements are feasibility judgments.
 
 ---
 
-## 14. Estimated development effort
+## 12. Required item 12 — Evidence and test references
 
-Person-weeks (pw), ±40%. Estimates assume the current team is familiar with the code, that the macOS reference stays shippable, and that model licensing does not block release.
+### 12.1 Test runs at this commit
 
-| Work package | pw |
-|---|---:|
-| Stabilization (P0/P1 fixes + regression tests) | 12–20 |
-| Engine characterization + golden corpus | 8–12 |
-| Shared core extraction | 12–18 |
-| Rust image engine + wgpu/CPU parity | 24–36 |
-| Project format v4 + migration | 6–10 |
-| Windows shell + adapters | 20–28 |
-| Linux shell + packaging | 8–14 |
-| AI engine unification | 14–22 |
-| Pro UI (history, workspaces, Simple/Pro) | 18–28 |
-| Hardening, CI, signing, accessibility, docs | 10–14 |
-| **Total** | **132–202** |
+| Run | Command | Result |
+|---|---|---|
+| Native arm64 | `./Tests/run.sh` | **PASS** — 840 checks, 0 failures: Engine 130, Model 609, Runtime Process 55, Runtime V2 46 |
+| Rosetta x86_64 | `RETOUCH_ARCH=x86_64 ./Tests/run.sh` | **PASS** — 840 checks, 0 failures (same four suites); Rosetta is not native Intel validation |
+| Real runtime contract | `M1-AI-R` | skipped by default (`RETOUCH_REAL_RUNTIME=1` required) |
+| Worker progress regression | `Docs/worker-regressions/test_two_file_download_progress.py` | manual; asserts plan-wide `total_bytes` for a two-file plan |
 
-Calendar scenarios:
+The suite is a custom harness: it compiles the sources into four executables and links every source except `App.swift` and `SelfCheck.swift`. It has no line-coverage instrumentation and no CI.
 
-- **Three engineers** (Rust/imaging, Qt/platform, Swift/AI): ~10–16 months, with platform validation as the critical path.
-- **Two engineers:** ~15–24 months.
-- **One senior engineer:** ~31–47 months.
-- An earlier planning figure of 126–192 pw covered roughly the same work; this table adds an explicit stabilization line and contingency for platform certification.
+### 12.2 Code references
 
-Excluded: model research/training, legal licensing work, hardware purchase, cloud services, mobile apps, and any feature not already in the directive.
+| Area | Location |
+|---|---|
+| Recovery store, candidates, launch classification | `Sources/RetouchStudio/Models/Recovery.swift:94, 122, 143, 181, 236, 250, 270, 279, 390` |
+| Recovery prompts, barrier, autosave invalidation | `Sources/RetouchStudio/Models/EditorModel.swift:767, 797, 860, 2602, 2638, 2668, 2694` |
+| Failed load identity | `Sources/RetouchStudio/Models/EditorModel.swift:1003, 1042–1043` |
+| Export protection | `Sources/RetouchStudio/Models/EditorModel.swift:3049, 3054, 3084`; `Core/ExportService.swift:346, 362, 404` |
+| Batch policy and cancellation | `Sources/RetouchStudio/Models/EditorModel.swift:77–78, 3315–3319, 3426–3483`; `Core/BatchExportPolicy.swift:12–43` |
+| Privacy allowlist | `Sources/RetouchStudio/Core/ImageProcessor.swift:1141, 1176, 1204` |
+| Runtime transaction | `Sources/RetouchStudio/Core/AIRuntimeTransaction.swift:162, 221, 273, 404, 536` |
+| Disabled installer | `Sources/RetouchStudio/Core/AIRuntime.swift:40, 47, 50` |
+| Project v3 | `Sources/RetouchStudio/Models/Project.swift:11, 21, 24` |
+| Model progress | `Sources/RetouchStudio/Models/ModelManager.swift:61, 177, 209` |
+| Build and signing | `build.sh:20, 71, 160, 164, 179`; `Package.swift` |
 
----
+### 12.3 Regression tests
 
-## 15. Recommended first implementation milestone
+| Test | Location | Covers |
+|---|---|---|
+| `M1-R0`…`M1-R21` | `Tests/ModelTests.swift:1972–3127` | Recovery cancel, candidates, failures, promotion, autosave invalidation |
+| `M1-R15` | `Tests/ModelTests.swift:4121` | No production recovery writes from the suite |
+| `M1-L` | `Tests/ModelTests.swift:3181` | Failed open leaves the current document intact |
+| `M1-X` | `Tests/ModelTests.swift:3228` | Export refuses source path and aliases |
+| `M1-B` | `Tests/ModelTests.swift:3299` | Batch output cannot replace a source |
+| `M1-AI`, `M1-AI2`, `M1-AI3`, `M1-AI4`, `M1-AI-R` | `Tests/ModelTests.swift:3331, 3750, 3915, 4015, 4080` | Transactional install, rollback, recovery, concurrency, real runtime (skipped) |
+| `P0-4`, `P1-1`, `P1-1b` | `Tests/ModelTests.swift:399, 494, 594` | Batch snapshot policy, per-file shape, turned crop |
+| `P1-8` (two tests) | `Tests/ModelTests.swift:981, 1052` | Cancellation stops the file in flight; failed write is not saved |
+| Privacy fixtures | `Tests/EngineTests.swift:1013–1240` | GPS/EXIF/TIFF/IPTC/XMP absent; DPI/orientation survive; XMP control |
+| Runtime process and v2 suites | `Tests/RuntimeProcessTests.swift`, `Tests/RuntimeV2Tests.swift` | Lease, identity, registry, recovery ordering, production-default support |
 
-### Milestone 1 — Data integrity (no architecture change)
+### 12.4 Documentation evidence and stale artifacts
 
-**Fix, in this order:**
-
-1. **P0-01 Recovery cancel semantics.** Add an explicit Cancel, make Escape/close defer, never delete on cancel; delete only on the explicit destructive action.
-2. **P0-02 Original protection.** Canonicalize and resolve symlinks for destination and source; refuse equality; if an override is desired, require an explicit confirmation. Keep the atomic temp-file write.
-3. **P0-03 Transactional runtime install.** Stage → validate → back up current → atomic swap → verify → delete backup; roll back on failure or crash.
-4. **P1-07 Failed-load document identity.** Set `imageName`/`imageURL` only after a successful decode; restore the previous document's title and export name on failure.
-
-**Tests to add (the milestone is not done without them):**
-
-- Recovery: Escape, close, cancelled Locate, explicit Discard, once-per-session, relaunch restore.
-- Export: exact source path, symlink alias, hardlink alias (where detectable), safe target, batch naming.
-- Runtime: injected move failure, crash-between-steps recovery, corrupt archive, successful replacement, staging cleanup.
-- Load: failed load with and without a prior document; title and suggested filename unchanged; status correct.
-- Both UI languages for every new alert/string.
-- Full `./Tests/run.sh` and app `--selftest` must pass.
-
-**Acceptance:** all existing 336 assertions still pass; new tests pass; no image algorithm changes; no project-format change; no UI redesign.
-
-**Duration:** 1.5–2.5 weeks for one engineer familiar with `EditorModel`, `ExportService`, `AIRuntime` and `Recovery`.
-
-**Explicit non-goals:** Rust, Qt, ONNX migration, project format v4, new features, UI changes, model changes.
-
-**Then stop for a second approval.** Milestone 2 (P0-04, P0-05, P1-08, P0-06 regression test) should follow only after Milestone 1 is verified, because privacy and batch isolation need fixtures that are easier to add on a stable base.
+- `README.md` — arm64/Intel images, AI requires Apple silicon, runtime download disabled, light app 3.5–4 MB, helper 1.3–1.6 GB.
+- `Docs/AI_RUNTIME.md:19` — legacy 1.0.0 archive 388,277,063 bytes, not installed.
+- `Docs/RELEASING.md` — installer disabled; release procedure.
+- `Docs/TECHNICAL_AUDIT.md` — still audits `8cc2d0c`; treat as historical (D14).
+- `Docs/PHASE5_ACCEPTANCE.md`, `Docs/PRIVACY_AUDIT.md` — post-audit history; not re-verified here.
 
 ---
 
-## Appendix A — Verified facts vs assumptions
+## 13. Recommended next milestone
 
-### Verified in this audit
+### Milestone A — Portability design package (4–8 person-weeks, no rewrite)
 
-- Working tree clean at `5d8642f`; no source changes made.
-- 69 Swift files, 31,788 lines under `Sources/`; Views 7,455; Core 13,458; Models 10,575.
-- `EditorModel` 3,135 lines; `ImageProcessor` 1,233; `ExportService` 358; `Localization` 471 string properties + 471 Persian overrides.
-- Imports: Foundation 47, CoreGraphics 27, SwiftUI 24, CoreImage 19, AppKit 14, UTI 6, ImageIO 6, Vision 2, Combine 2, CryptoKit/CoreVideo/CoreText 1 each.
-- 16 `accessibility*` modifiers across the Views.
-- Build: direct `swiftc`, universal, ad-hoc signing, self-test gate, Rosetta Intel self-test.
-- App bundle 1.3 GB with helper; declared runtime archive 388,277,063 bytes, SHA-256 `cb1485be…`, arm64 only.
-- Python worker source absent from the repository; bundled copy present inside the `.app`.
-- All P0/P1 code paths quoted above.
-- Test suite: see Appendix B.
+This is the first architecture milestone. It produces decisions and evidence, not a second shipping app.
 
-### Assumptions / open questions
+**Deliverables**
 
-- The published runtime archive was not downloaded; only the bundled worker was inspected.
-- XMP survival through the current ImageIO write path is unverified.
-- No performance measurement was made with Instruments; no Windows/Linux hardware was used.
-- Model licenses and redistribution terms were not legally reviewed.
-- The owner has not yet chosen Qt vs another shell, or Simple/Pro UX specifics.
-- The directive's long-term cloud-AI option was not designed; it is out of scope for offline workflows.
-- Effort estimates are planning ranges, not commitments.
+1. **StudioCore interface specification**: document, operation graph, project manifest, export policy, recovery/runtime policy; explicit non-UI types; ownership of undo/history.
+2. **Image-engine contract**: buffer/color-space model, filter graph, mask and coordinate spaces, deterministic CPU tier, GPU backend boundary, tiling and cancellation.
+3. **Frozen corpus plan**: 8–12 test photos covering portrait, group, landscape, RAW, HEIC, rotated crop, mixed aspect, Persian text overlay; expected outputs and tolerances.
+4. **One kernel spike**: port one real kernel (skin or heal) to Rust CPU and `wgpu`; measure output difference and runtime against macOS.
+5. **One shell spike**: Qt 6/QML window on Windows hardware with Persian shaping, IME, tablet input and an ICC-managed image surface. If hardware is unavailable, record the blocker and do not claim the risk retired.
+6. **AI decision memo**: one task (segmentation or face) benchmarked on ONNX Runtime versus Vision, including license and memory.
+7. **Project v4 schema draft** with migration fixtures for v1–v3.
+
+**Exit gate:** the owner approves the written design and the corpus plan. No production source is replaced; macOS remains the reference and stays shippable.
+
+**Explicit non-goals:** no Rust/Qt migration, no engine replacement, no installer enablement, no project-format rewrite in shipping code, no new features.
+
+**Then stop for a second approval.** Near-term macOS hardening (Phase 2) can run in parallel; it does not depend on the design.
 
 ---
 
-## Appendix B — Test evidence
+## Appendix A — Method and limits
 
-Command: `./Tests/run.sh`
-Environment: macOS arm64, Command Line Tools SDK, commit `5d8642f`.
-Result: **PASS** — 336 assertions, 0 failures (engine + model suites), 2026-11-09.
+- Read the current tree, not only the previous audit: build script, plist, project/recovery/runtime/export code, tests, docs, and the bundled worker directory.
+- Re-ran the Swift suites at `01da900` natively and under Rosetta; did not run the UI, did not download the runtime or models, did not install dependencies.
+- Counted files, lines, imports, published properties and test checks directly with `find`, `wc`, `grep` and the test harness output.
+- Did not use Instruments; no performance numbers are claimed.
+- No Windows, Linux or native Intel hardware was used. Rosetta results are not native validation.
+- Older `Docs/TECHNICAL_AUDIT.md` evidence was not trusted; its snapshot predates this commit.
+- The metadata-privacy test reads XMP from written files; XMP survival is therefore tested, not assumed.
+- The disabled installer means its production behavior is unexercised; the transaction is verified by tests only.
 
-The suite is a custom harness because the project builds with `swiftc` and has no Xcode test runner. It links all sources except `App.swift` and `SelfCheck.swift`. It does not cover most P0/P1 items listed above.
+## Appendix B — Approval request
 
----
+Phase 0 refresh is complete. No source code, test, build file or project file was changed. No commit, push or PR metadata change was made.
 
-## Appendix C — Method and limits
-
-- Read the build, manifest, plist, all engine/model entry points, the views inventory, tests, and the bundled worker's download path.
-- Re-ran the test suite.
-- Did not run the app UI, did not install dependencies, did not download the AI runtime, did not modify files.
-- Older `Docs/TECHNICAL_AUDIT.md` line numbers were not trusted; they describe an earlier commit.
-- This document supersedes earlier line-number claims where they differ.
-
----
-
-## Appendix D — Approval request
-
-Phase Zero is complete. No code has been changed.
-
-**Requested approval:** Milestone 1 only (P0-01, P0-02, P0-03, P1-07 plus tests), as described in section 15. Architecture extraction, Rust/Qt work, project v4 and AI migration remain blocked until separate approval.
+**Requested approval:** Milestone A only — the portability design package described in §13. Near-term macOS hardening (§10, phase 2) may be approved separately. Architecture extraction, Rust/Qt migration, installer enablement, project v4 implementation and AI migration remain blocked until separate approval.
