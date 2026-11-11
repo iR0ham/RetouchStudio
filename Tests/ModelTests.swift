@@ -2925,6 +2925,258 @@ func testWorkingSlotIsPromotedAtLaunch() async {
 }
 
 @MainActor
+func testExternalOpenPromotesWorkingSnapshotFirst() async {
+    print("\n[M1-R17] an external open promotes the previous working copy first")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let previous = recoveryFixture("h1-previous.png", width: 320, height: 400),
+          let incoming = recoveryFixture("h1-incoming.png", width: 400, height: 320) else {
+        check(false, "H1 fixtures written")
+        return
+    }
+    let staged = RecoverySnapshot.capture(recoveryProject(for: previous, exposure: 0.37),
+                                          savedAt: Date().addingTimeInterval(-30))
+    check(RecoveryStore.writeWorking(staged), "a crash copy is staged in the working slot")
+    guard let workingBytes = recoveryBytes(RecoveryStore.workingURL) else {
+        check(false, "the crash copy is readable")
+        return
+    }
+
+    // requestOpen is the production entry point for a Finder / Open With /
+    // drag-and-drop event, including one that arrives before the launch pass.
+    let model = EditorModel()
+    model.requestOpen(url: incoming)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the incoming photo opens")
+    check(model.imageURL?.standardizedFileURL == incoming.standardizedFileURL,
+          "the incoming photo is the document", model.imageName)
+    check(RecoveryStore.readWorking() == nil,
+          "the working slot was promoted instead of removed")
+    let listing = recoveryCandidates()
+    check(listing.count == 1, "the previous session became a candidate", "\(listing.count)")
+    check(listing.first.map { recoveryBytes($0.url) == workingBytes } ?? false,
+          "the candidate is byte-identical to the crash copy")
+    check(listing.first?.snapshot.project.adjustments.exposure == 0.37,
+          "the candidate carries the unsaved edits")
+
+    model.adjustments.exposure = 0.71
+    model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.imagePath == incoming.path,
+          "the incoming document autosaves into the working slot")
+    check(recoveryCandidates().count == 1
+            && (listing.first.map { recoveryBytes($0.url) == workingBytes } ?? false),
+          "the promoted candidate survives the new autosave")
+}
+
+@MainActor
+func testExternalOpenPromotionFailureKeepsWorking() async {
+    print("\n[M1-R18] a failed promotion blocks the open and keeps the crash copy")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let previous = recoveryFixture("h1-fail-previous.png", width: 320, height: 400),
+          let incoming = recoveryFixture("h1-fail-incoming.png", width: 400, height: 320) else {
+        check(false, "H1 failure fixtures written")
+        return
+    }
+    let staged = RecoverySnapshot.capture(recoveryProject(for: previous, exposure: 0.37),
+                                          savedAt: Date().addingTimeInterval(-30))
+    check(RecoveryStore.writeWorking(staged), "a crash copy is staged in the working slot")
+    guard let workingBytes = recoveryBytes(RecoveryStore.workingURL) else {
+        check(false, "the crash copy is readable")
+        return
+    }
+
+    RecoveryStore.injectedFailures = [.migrate]
+    defer { RecoveryStore.injectedFailures = [] }
+
+    let model = EditorModel()
+    model.requestOpen(url: incoming)
+    check(model.statusToken == .recoveryStorageFailed,
+          "the failed promotion is reported", "\(model.statusToken)")
+    check(!model.hasImage, "the incoming document is not allowed to replace it")
+    check(recoveryBytes(RecoveryStore.workingURL) == workingBytes,
+          "the crash copy is byte-identical")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.37,
+          "the crash copy is still readable")
+    check(recoveryCandidates().isEmpty, "no candidate was fabricated")
+    check(!RecoveryStore.removeWorking(),
+          "the unpromoted copy cannot be removed by a later discard")
+
+    // Once promotion can succeed, the same entry point retries the barrier.
+    RecoveryStore.injectedFailures = []
+    model.requestOpen(url: incoming)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the retry opens the photo")
+    check(RecoveryStore.readWorking() == nil, "the crash copy was promoted on retry")
+    let listing = recoveryCandidates()
+    check(listing.count == 1
+            && (listing.first.map { recoveryBytes($0.url) == workingBytes } ?? false),
+          "the retry produced the byte-identical candidate")
+}
+
+@MainActor
+func testQueuedExternalOpensKeepOneCandidate() async {
+    print("\n[M1-R19] queued external opens promote the working copy exactly once")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let first = recoveryFixture("h1-queue-first.png", width: 320, height: 400),
+          let second = recoveryFixture("h1-queue-second.png", width: 400, height: 320) else {
+        check(false, "H1 queue fixtures written")
+        return
+    }
+    let staged = RecoverySnapshot.capture(recoveryProject(for: first, exposure: 0.29),
+                                          savedAt: Date().addingTimeInterval(-30))
+    check(RecoveryStore.writeWorking(staged), "a crash copy is staged in the working slot")
+    guard let workingBytes = recoveryBytes(RecoveryStore.workingURL) else {
+        check(false, "the crash copy is readable")
+        return
+    }
+
+    let model = EditorModel()
+    model.requestOpen(url: first)
+    // The first open owns the load operation; a request that arrives while it
+    // is in flight is refused instead of queueing in front of the replacement.
+    model.requestOpen(url: second)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the first accepted open finishes")
+    check(model.imageURL?.standardizedFileURL == first.standardizedFileURL,
+          "the first request is the one that ran", model.imageName)
+    check(recoveryCandidates().count == 1,
+          "the working copy was promoted exactly once")
+    check(RecoveryStore.readWorking() == nil,
+          "the refused request did not write over the promoted slot")
+
+    model.requestOpen(url: second)
+    check(await waitUntil(60) {
+        model.hasImage && !model.isBusy
+            && model.imageURL?.standardizedFileURL == second.standardizedFileURL
+    }, "the next request runs once the load is done")
+    let listing = recoveryCandidates()
+    check(listing.count == 1
+            && (listing.first.map { recoveryBytes($0.url) == workingBytes } ?? false),
+          "the candidate is untouched by both opens")
+}
+
+@MainActor
+func testDiscardInvalidatesInFlightAutosave() async {
+    print("\n[M1-R20] Discard invalidates an autosave that already started")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let photo = recoveryFixture("m1-discard.png", width: 320, height: 400) else {
+        check(false, "M1 discard fixture written")
+        return
+    }
+    let model = EditorModel()
+    model.load(url: photo)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy }, "the photo loads")
+
+    model.autosaveDebounceNanoseconds = 0
+    defer {
+        model.autosaveDebounceNanoseconds = 1_500_000_000
+        model.autosaveWillWrite = nil
+    }
+
+    var reachedDecision = false
+    model.autosaveWillWrite = {
+        reachedDecision = true
+        model.discardUnsavedChanges()
+    }
+    model.adjustments.exposure = 0.47
+    check(await waitUntil(10) { reachedDecision },
+          "the scheduled autosave reached its write decision")
+    check(RecoveryStore.readWorking() == nil,
+          "the invalidated task did not recreate the discarded copy")
+    check(recoveryCandidates().isEmpty,
+          "Discard does not leave a candidate behind")
+    check(!model.hasUnsavedChanges, "the document is clean after Discard")
+
+    model.autosaveWillWrite = nil
+    model.autosaveDebounceNanoseconds = 1_500_000_000
+    model.adjustments.exposure = 0.63
+    model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.63,
+          "the next legitimate autosave still lands")
+}
+
+@MainActor
+func testReplacementInvalidatesOldDocumentAutosave() async {
+    print("\n[M1-R21] replacing a document invalidates the old autosave")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let first = recoveryFixture("m1-replace-first.png", width: 320, height: 400),
+          let second = recoveryFixture("m1-replace-second.png", width: 400, height: 320) else {
+        check(false, "M1 replacement fixtures written")
+        return
+    }
+    let model = EditorModel()
+    model.load(url: first)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the first photo loads")
+
+    model.discardChoiceHandler = { true }
+    model.autosaveDebounceNanoseconds = 0
+    defer {
+        model.autosaveDebounceNanoseconds = 1_500_000_000
+        model.discardChoiceHandler = nil
+        model.autosaveWillWrite = nil
+    }
+
+    var oldSnapshotStarted = false
+    model.autosaveWillWrite = {
+        oldSnapshotStarted = true
+        model.requestOpen(url: second)
+    }
+    model.adjustments.exposure = 0.39
+    check(await waitUntil(10) { oldSnapshotStarted },
+          "the old document's autosave reached its write decision")
+    check(await waitUntil(60) {
+        model.hasImage && !model.isBusy
+            && model.imageURL?.standardizedFileURL == second.standardizedFileURL
+    }, "the incoming photo replaces it")
+    check(RecoveryStore.readWorking() == nil,
+          "the old snapshot never reached the working slot")
+
+    model.autosaveWillWrite = nil
+    model.autosaveDebounceNanoseconds = 1_500_000_000
+    model.adjustments.exposure = 0.82
+    model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.imagePath == second.path,
+          "the new document's autosave describes the new document")
+    check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.82,
+          "the new document's legitimate autosave still lands")
+}
+
+@MainActor
 func testFailedLoadPreservesDocument() async {
     print("\n[M1-L] a failed open leaves the current document intact")
 
@@ -3942,6 +4194,11 @@ func runAll() async {
     await testCorruptCandidateIsQuarantined()
     await testChangedSourceAsksBeforeRestore()
     await testWorkingSlotIsPromotedAtLaunch()
+    await testExternalOpenPromotesWorkingSnapshotFirst()
+    await testExternalOpenPromotionFailureKeepsWorking()
+    await testQueuedExternalOpensKeepOneCandidate()
+    await testDiscardInvalidatesInFlightAutosave()
+    await testReplacementInvalidatesOldDocumentAutosave()
     await testFailedLoadPreservesDocument()
     await testExportProtectsSource()
     await testBatchDoesNotOverwriteSource()

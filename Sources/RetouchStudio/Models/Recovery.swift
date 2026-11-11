@@ -84,8 +84,11 @@ enum RecoveryStore {
 
     static var injectedFailures: Set<Failure> = []
 
-    /// Incremented whenever the scratch store is reset, so a debounced write
-    /// scheduled by an earlier scenario cannot land in the next one.
+    /// Invalidates every debounced write that captured an earlier value. Tests
+    /// reset it with the scratch store so a task cannot follow them into the
+    /// next scenario; EditorModel also bumps it when the active document is
+    /// discarded or replaced, so a task that already woke up cannot write the
+    /// old document's snapshot afterwards.
     private(set) static var epoch = 0
 
     static func invalidatePendingAutosaves() {

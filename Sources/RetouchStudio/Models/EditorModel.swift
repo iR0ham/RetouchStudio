@@ -760,6 +760,11 @@ final class EditorModel: ObservableObject {
     private var recentsObserver: AnyCancellable?
     private var smartGeneration = 0
     private var offeredRecovery = false
+    /// Set once the launch slots have been lifted into candidates. Every
+    /// document-entry path checks it before it may touch the working copy, so
+    /// an external open that arrives before the launch prompt cannot replace
+    /// the previous session's only copy.
+    private var recoveryPrepared = false
     /// A document restored from a recovery candidate stays here until the
     /// owner saves it as a project. Its only durable copy is the working slot,
     /// so autosave must not clear that slot just because no slider differs from
@@ -781,6 +786,15 @@ final class EditorModel: ObservableObject {
     /// nil and the methods below use AppKit.
     var recoveryChoiceHandler: ((Bool, String?) -> RecoveryChoice)?
     var recoveryLocateHandler: ((RetouchProject) -> URL?)?
+    /// Headless tests answer the unsaved-changes prompt without AppKit.
+    /// Production leaves this nil.
+    var discardChoiceHandler: (() -> Bool)?
+    /// Headless tests shorten the autosave debounce so they can exercise the
+    /// scheduled task without a real-time wait.
+    var autosaveDebounceNanoseconds: UInt64 = 1_500_000_000
+    /// Runs after the debounce and before the write decision, so a test can
+    /// invalidate a task that has already started. Production leaves it nil.
+    var autosaveWillWrite: (() -> Void)?
     /// Headless tests pause the file here to deliver a cancellation exactly
     /// before the write. Production leaves this nil.
     var batchFileWillWriteHook: (@Sendable (URL) -> Void)?
@@ -830,17 +844,25 @@ final class EditorModel: ObservableObject {
         panel.canChooseDirectories = false
         panel.message = s.choosePhotoToRetouch
         present(panel) { [weak self] url in
-            guard let self else { return }
-            self.prepareToReplaceDocument()
+            guard let self, self.prepareToReplaceDocument() else { return }
             self.load(url: url)
         }
     }
 
     /// A user-confirmed open replaces the document, so the autosave copy of the
     /// old one may be discarded. Candidate copies are never touched here.
-    private func prepareToReplaceDocument() {
+    ///
+    /// Promotion runs before anything is removed: at launch the working slot may
+    /// still hold the previous session's only copy. When it cannot be promoted
+    /// the slot stays locked, and `false` tells the caller to keep the current
+    /// document instead of replacing it.
+    @discardableResult
+    private func prepareToReplaceDocument() -> Bool {
+        guard ensureRecoveryPrepared() else { return false }
+        invalidatePendingAutosave()
         _ = RecoveryStore.removeWorking()
         documentRecovered = false
+        return true
     }
 
     /// Attaches the picker to the editor window so it slides in as a sheet
@@ -863,12 +885,14 @@ final class EditorModel: ObservableObject {
     /// Entry point for drag-and-drop and for Finder / Open With.
     func requestLoad(url: URL) {
         guard !refuseIfBlocking() else { return }
-        // Choosing a photo answers the launch question, so the recovery copy
-        // stays on disk for the next plain launch instead of interrupting this
-        // one (and is never silently deleted).
+        // Choosing a photo answers the launch question, but only after the
+        // previous session's working copy has been lifted into a candidate.
+        // Otherwise the incoming document's autosave would overwrite the only
+        // recoverable copy before the launch pass ever ran.
+        guard ensureRecoveryPrepared() else { return }
         offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
-        prepareToReplaceDocument()
+        guard prepareToReplaceDocument() else { return }
         load(url: url)
     }
 
@@ -884,6 +908,7 @@ final class EditorModel: ObservableObject {
     /// True when it is safe to replace the current photo.
     func confirmDiscardIfNeeded() -> Bool {
         guard hasUnsavedChanges else { return true }
+        if let discardChoiceHandler { return discardChoiceHandler() }
         let alert = NSAlert()
         alert.messageText = s.unsavedTitle
         alert.informativeText = s.unsavedMessage
@@ -924,6 +949,9 @@ final class EditorModel: ObservableObject {
     /// values become the clean baseline. Without this, closing the window would
     /// ask again during the termination that follows.
     func discardUnsavedChanges() {
+        // A task already past its sleep must not recreate the copy this
+        // discard is about to remove.
+        invalidatePendingAutosave()
         cleanState = currentState
         // The owner explicitly ended this document. Its autosave copy goes with
         // it; candidate copies waiting for their own decision stay.
@@ -2586,12 +2614,31 @@ final class EditorModel: ObservableObject {
         }
         let snapshot = RecoverySnapshot.capture(project)
         let epoch = RecoveryStore.epoch
+        let delay = autosaveDebounceNanoseconds
         autosaveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            guard !Task.isCancelled, RecoveryStore.epoch == epoch else { return }
-            guard let self, !self.isLoadingState else { return }
+            try? await Task.sleep(nanoseconds: delay)
+            guard let self, !Task.isCancelled else { return }
+            // Tests park here to invalidate a task that already started but has
+            // not committed. Production leaves the hook nil.
+            self.autosaveWillWrite?()
+            guard !Task.isCancelled,
+                  RecoveryStore.epoch == epoch,
+                  !self.isLoadingState,
+                  self.imageURL?.path == snapshot.project.imagePath else { return }
             self.persistAutosave(snapshot)
         }
+    }
+
+    /// Cancels the debounced autosave of a document that is being discarded or
+    /// replaced and invalidates a task that already resumed past its sleep.
+    /// `Task.cancel()` cannot stop that task on its own because nothing
+    /// suspends between the check and the write, so the store epoch is bumped
+    /// as well. The bump happens before the next document schedules anything,
+    /// which keeps a legitimate autosave of the new document valid.
+    private func invalidatePendingAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        RecoveryStore.invalidatePendingAutosaves()
     }
 
     private func persistAutosave(_ snapshot: RecoverySnapshot) {
@@ -2620,12 +2667,42 @@ final class EditorModel: ObservableObject {
     /// of them on disk.
     func offerRecoveryIfNeeded() {
         guard !offeredRecovery, !hasImage, settings.recoveryEnabled else { return }
+        // The pass only counts as offered after the launch slots are safe. A
+        // failed promotion leaves the working copy in place, and the next
+        // document entry retries the barrier instead of pretending it ran.
+        guard ensureRecoveryPrepared() else { return }
         offeredRecovery = true
         handledRecovery.removeAll()
+        offerNextRecoveryCandidate()
+    }
+
+    /// The single recovery-readiness barrier shared by the launch pass and
+    /// every document-entry path. It lifts `working.retouch` and the legacy
+    /// slots into independent candidates once per session, before a new
+    /// document can remove the working copy or autosave over it.
+    ///
+    /// A working copy that could not be promoted is still the only copy of the
+    /// previous session: the store is locked, so autosave and removal both
+    /// refuse to touch it, and this returns `false` so the caller keeps the
+    /// current document. A legacy file that could not be renamed stays in its
+    /// read-only slot, is reported, and does not block the open. A failed
+    /// attempt is retried by the next caller because `recoveryPrepared` is only
+    /// set after a safe launch. Promotion is not gated on the recovery
+    /// preference: the preference controls offering and new autosaves, not
+    /// whether an existing copy may be destroyed by an open.
+    @discardableResult
+    private func ensureRecoveryPrepared() -> Bool {
+        if recoveryPrepared { return true }
         let launch = RecoveryStore.prepareForLaunch()
         if launch.quarantined > 0 { statusToken = .recoveryQuarantined(launch.quarantined) }
-        if launch.failed { statusToken = .recoveryStorageFailed }
-        offerNextRecoveryCandidate()
+        if launch.failed {
+            statusToken = .recoveryStorageFailed
+            if FileManager.default.fileExists(atPath: RecoveryStore.workingURL.path) {
+                return false
+            }
+        }
+        recoveryPrepared = true
+        return true
     }
 
     private enum RecoveryPassStep {
@@ -3117,6 +3194,7 @@ final class EditorModel: ObservableObject {
     /// guard with normal loading.
     func openProject(at url: URL) {
         guard !refuseIfBlocking() else { return }
+        guard ensureRecoveryPrepared() else { return }
         offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
         do {
@@ -3133,7 +3211,7 @@ final class EditorModel: ObservableObject {
             }
             let recorded = URL(fileURLWithPath: project.imagePath).standardizedFileURL
             let relocated = source.standardizedFileURL != recorded
-            prepareToReplaceDocument()
+            guard prepareToReplaceDocument() else { return }
             load(url: source, restoring: project, projectURL: url,
                  relinkURL: relocated ? url : nil)
         } catch {
