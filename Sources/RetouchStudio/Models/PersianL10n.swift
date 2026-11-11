@@ -248,6 +248,9 @@ final class PersianL10n: L10n {
     }
     override func saved(_ name: String) -> String { "\(name) ذخیره شد" }
     override var exportFailed: String { "خروجی ذخیره نشد." }
+    override var exportRefusedOriginal: String {
+        "این همان عکسی است که ویرایش می‌کنی. نام یا پوشهٔ دیگری انتخاب کن."
+    }
     override var exportCancelled: String { "خروجی لغو شد." }
     override var cancelExport: String { "لغو خروجی" }
     override var operationBusy: String {
@@ -285,6 +288,17 @@ final class PersianL10n: L10n {
         "این پروژه با نسخهٔ تازه‌تری از برنامه (نسخهٔ \(Digits.num(version))) نوشته شده است."
     }
     override var projectRelinked: String { "پروژه باز شد و جای تازهٔ عکس ذخیره شد." }
+    override var recoveryStorageFailed: String {
+        "نسخهٔ بازیابی به‌روز نشد؛ کار ذخیره‌نشده برای اجرای بعدی محافظت نشده است."
+    }
+    override func recoveryQuarantined(_ count: Int) -> String {
+        count == 1
+            ? "یک نسخهٔ بازیابی آسیب‌دیده کنار گذاشته شد و پاک نشد."
+            : "\(Digits.num(count)) نسخهٔ بازیابی آسیب‌دیده کنار گذاشته شدند و پاک نشدند."
+    }
+    override var recoveryCandidateNotRemoved: String {
+        "عکس بازیابی‌شده ذخیره شد، اما نسخهٔ بازیابی قدیمی‌اش حذف نشد."
+    }
 
     // MARK: - Batch
 
@@ -412,6 +426,9 @@ final class PersianL10n: L10n {
     }
     override var analysisExportMode: String { "خروجی" }
     override var analysisMargin: String { "حاشیه" }
+    override var analysisNeedsFace: String {
+        "چهره‌ای تشخیص داده نشد، پس لایهٔ آنالیز کشیده نمی‌شود. این نسخه به‌صورت عکس معمولی ذخیره می‌شود."
+    }
 
     override func analysisRegionTitle(_ region: AnalysisRegion) -> String {
         switch region {
@@ -594,9 +611,9 @@ final class PersianL10n: L10n {
     override var settingsExportHelp: String {
         "قالب، کیفیت و مشخصات فایل برای نسخه‌های ذخیره‌شده."
     }
-    override var settingsStripMetadata: String { "حذف موقعیت مکانی و مشخصات دوربین" }
+    override var settingsStripMetadata: String { "حذف مشخصات هویتی تصویر" }
     override var settingsStripMetadataNote: String {
-        "GPS، نام مالک دوربین، شمارهٔ سریال و یادداشت‌ها از خروجی حذف می‌شوند. جهت، پروفایل رنگ و ابعاد حفظ می‌شوند."
+        "GPS، سازنده و مدل دوربین، شمارهٔ سریال، نام پدیدآورنده، زمان ثبت و دیگر مشخصات هویتی از خروجی حذف می‌شوند. جهت، وضوح و پروفایل رنگ حفظ می‌شوند."
     }
     override var settingsTools: String { "ابزارها" }
     override var settingsToolsHelp: String { "اندازهٔ قلم ترمیم و نمایش کادر چهره." }
@@ -644,6 +661,7 @@ final class PersianL10n: L10n {
     override func modelsDownloading(_ percent: Int) -> String {
         "در حال دانلود… \(Digits.num(percent))٪"
     }
+    override var modelsDownloadingUnknown: String { "در حال دانلود…" }
     override func modelsDownloaded(_ name: String) -> String { "\(name) نصب شد." }
     override var modelsDownloadCancelled: String { "دانلود لغو شد. چیزی نصب نشد." }
     override var modelsDownloadFailed: String { "دانلود کامل نشد. چیزی نصب نشد." }
@@ -654,6 +672,59 @@ final class PersianL10n: L10n {
     override var modelsRemoveAction: String { "حذف" }
     override func modelsRemoved(_ name: String) -> String { "\(name) حذف شد." }
     override var modelsSizeUnknown: String { "اندازه نامعلوم" }
+    override var aiRuntimeTitle: String { "دستیار هوش مصنوعی" }
+    override var aiRuntimeInstalledChip: String { "نصب شده" }
+    override var aiRuntimeMissingChip: String { "نصب نیست" }
+    override var aiRuntimeBody: String {
+        "ابزارهای هوش مصنوعی به یک دستیار محلی، حدود ۳۹۰ مگابایت، نیاز دارند. اپ آن را فقط بعد از نمایش فایل، حجم و SHA256 و تأیید شما دانلود می‌کند."
+    }
+    override var aiRuntimeInstall: String { "دانلود دستیار" }
+    override var aiRuntimeDownloadTitle: String { "دستیار هوش مصنوعی دانلود شود؟" }
+    override func aiRuntimeDownloadBody(file: String, size: String, hash: String) -> String {
+        "فایل \(file) (\(size)) از github.com دانلود می‌شود و SHA256 آن (\(hash)) پیش از نصب بررسی می‌شود. وزن مدل‌ها همچنان جداگانه و با تأیید خودشان دانلود می‌شوند."
+    }
+    override var aiRuntimeDownloading: String { "در حال دانلود دستیار…" }
+    override var aiRuntimeVerifying: String { "در حال بررسی دانلود…" }
+    override var aiRuntimeInstalling: String { "در حال نصب دستیار…" }
+    override var aiRuntimeDownloadFailed: String { "دستیار دانلود نشد. چیزی نصب نشد." }
+    override var aiRuntimeChecksumFailed: String {
+        "فایل دانلودشده با SHA256 مطابقت ندارد. چیزی نصب نشد."
+    }
+    override var aiRuntimeExtractFailed: String { "دستیار باز نشد. چیزی نصب نشد." }
+    override var aiRuntimeInstallFailed: String {
+        "دستیار نصب نشد. نسخهٔ قبلی حفظ شد."
+    }
+    override var aiRuntimeInstallFailedNothing: String {
+        "دستیار نصب نشد. نسخهٔ قبلی‌ای وجود نداشت که جایگزین شود."
+    }
+    override var aiRuntimeInstallFailedRollback: String {
+        "دستیار نصب نشد و نسخهٔ قبلی هم بازگردانده نشد. از تنظیمات دوباره دانلودش کن."
+    }
+    override var aiRuntimeInstallFailedPreserved: String {
+        "دستیار نصب نشد. نسخهٔ قبلی برای بازیابی حفظ شد و دوباره تلاش می‌شود."
+    }
+    override var aiRuntimeRecoveryFailed: String {
+        "دستیار هوش مصنوعی به‌طور ایمن بازیابی نشد. فایل‌های موجود حفظ شدند؛ اپ را دوباره باز کن یا از تنظیمات دستیار را دوباره دانلود کن."
+    }
+    override var aiRuntimeValidationFailed: String {
+        "دستیار نصب‌شده آزمون راه‌اندازی را نگذراند. اپ را دوباره باز کن یا از تنظیمات دستیار را دوباره دانلود کن."
+    }
+    override var aiRuntimeBusy: String {
+        "دستیار هوش مصنوعی همین حالا در پنجرهٔ دیگری از برنامه در حال استفاده است. آن پنجره را ببند و دوباره تلاش کن."
+    }
+    override var aiRuntimeInstalledNote: String { "نصب شد — حالا می‌توانی مدل‌ها را دانلود کنی." }
+    override var aiRuntimeNotInstalled: String {
+        "دستیار هوش مصنوعی نصب نیست. از تنظیمات → مدل‌های AI دانلودش کن و دوباره تلاش کن."
+    }
+    override var aiRuntimeIntelUnavailable: String {
+        "دستیار هوش مصنوعی فقط روی Apple silicon اجرا می‌شود. این مک اینتل ویرایشگر کامل را بدون AI دارد."
+    }
+    override var aiRuntimeUnavailable: String {
+        "دستیار هوش مصنوعی هنوز در این نسخه در دسترس نیست. بقیهٔ ویرایشگر بدون آن کار می‌کند."
+    }
+    override var aiHelperStarting: String {
+        "دستیار هوش مصنوعی هنوز در حال راه‌اندازی است. لحظه‌ای بعد دوباره تلاش کن."
+    }
     override var modelsHelperMissing: String {
         "دستیار هوش مصنوعی روی این مک در دسترس نیست."
     }
@@ -735,6 +806,9 @@ final class PersianL10n: L10n {
     override var recoveryTitle: String { "کار ذخیره‌نشده باز شود؟" }
     override func recoveryMessage(_ name: String) -> String {
         "Retouch Studio ویرایش‌های ذخیره‌نشدهٔ \(name) را پیدا کرد؛ وقتی اپ غیرمنتظره بسته شد از باقی مانده بود."
+    }
+    override func recoveryChangedMessage(_ name: String) -> String {
+        "\(name) پس از ذخیرهٔ این ویرایش‌ها روی دیسک تغییر کرده است. بازیابی، ویرایش‌ها را روی عکس کنونی اعمال می‌کند."
     }
     override var recoveryRestore: String { "بازیابی ویرایش‌ها" }
     override var recoveryDiscard: String { "دور ریختن" }

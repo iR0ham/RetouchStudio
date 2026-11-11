@@ -17,14 +17,42 @@ struct AIWorkerFailure: LocalizedError {
 final class WorkerClient {
     static let shared = WorkerClient()
 
-    /// Where the helper listens. The app launches the helper with this path.
+    private static let pathLock = NSLock()
+    private static var selectedPath: String?
+
+    /// Where the helper listens. The legacy checkout/bundled helper uses
+    /// `AI/worker.sock`; once a protocol-v2 helper is adopted this points at its
+    /// socket instead, so every job call follows the registry.
     static var socketPath: String {
+        pathLock.lock()
+        let selected = selectedPath
+        pathLock.unlock()
+        if let selected { return selected }
         if let override = ProcessInfo.processInfo.environment["RETOUCH_AI_SOCKET"] {
             return override
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                            in: .userDomainMask)[0]
         return base.appendingPathComponent("RetouchStudio/AI/worker.sock").path
+    }
+
+    /// Routes the shared client after a v2 adoption. `nil` restores the legacy
+    /// socket so a stopped v2 helper is never reached by a later call.
+    static func selectSocket(_ path: String?) {
+        pathLock.lock()
+        selectedPath = path
+        pathLock.unlock()
+    }
+
+    /// A client bound to one socket. Used for the v2 health handshake, which
+    /// must be answered by the exact helper the registry names. The shared
+    /// client passes no path, so it keeps following `selectSocket`.
+    private let fixedPath: String?
+
+    var socketPath: String { fixedPath ?? WorkerClient.socketPath }
+
+    init(socketPath: String? = nil) {
+        self.fixedPath = socketPath
     }
 
     func isAvailable(timeout: TimeInterval = 1.2) -> Bool {
@@ -43,11 +71,20 @@ final class WorkerClient {
             let thread = Thread.current.threadDictionary
             guard thread[key] == nil else { throw failure }
             guard AIWorker.isInstalled else {
-                throw AIWorkerFailure(code: -32000, message: L10n.current.aiHelperMissing)
+                throw AIWorkerFailure(code: -32000, message: AIWorker.missingHelperMessage)
             }
             thread[key] = true
             defer { thread.removeObject(forKey: key) }
-            guard AIWorker.restartIfStopped() else { throw failure }
+            guard AIWorker.restartIfStopped() else {
+                if AIWorker.installedRuntimeProblem != nil {
+                    throw AIWorkerFailure(code: -32000,
+                                          message: AIWorker.missingHelperMessage)
+                }
+                if let problem = AIWorker.lastLaunchFailure {
+                    throw AIWorkerFailure(code: -32000, message: problem)
+                }
+                throw failure
+            }
             return try callOnce(method, params, timeout: timeout)
         }
     }
@@ -146,7 +183,7 @@ final class WorkerClient {
     private func unixAddress() throws -> sockaddr_un {
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
-        let path = WorkerClient.socketPath
+        let path = socketPath
         let capacity = MemoryLayout.size(ofValue: address.sun_path)
         guard path.utf8.count < capacity else {
             throw AIWorkerFailure(code: -32000, message: "the helper socket path is too long")
@@ -160,6 +197,14 @@ final class WorkerClient {
     }
 
     private func exchange(_ request: Data, timeout: TimeInterval) throws -> Data {
+        try exchangeWithPeer(request, timeout: timeout).reply
+    }
+
+    /// The same exchange, plus the kernel's answer for which process is on the
+    /// other end. The peer PID is captured after `connect` and is what makes a
+    /// health reply attributable to one helper rather than to any socket file.
+    private func exchangeWithPeer(_ request: Data, timeout: TimeInterval) throws
+        -> (reply: Data, peer: Int32?) {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw AIWorkerFailure(code: -32000, message: "could not open a socket")
@@ -181,6 +226,10 @@ final class WorkerClient {
             throw AIWorkerFailure(code: -32000,
                                   message: L10n.current.aiHelperStopped)
         }
+        var peer = pid_t()
+        var peerSize = socklen_t(MemoryLayout<pid_t>.size)
+        let peerPID: Int32? = getsockopt(fd, 0, 0x002, &peer, &peerSize) == 0
+            ? Int32(peer) : nil
 
         try request.withUnsafeBytes { raw in
             var sent = 0
@@ -206,8 +255,51 @@ final class WorkerClient {
             if reply.isEmpty {
                 throw AIWorkerFailure(code: -32000, message: "the helper closed the connection")
             }
-            return reply
+            return (reply, peerPID)
         }
-        return reply[..<newline]
+        return (Data(reply[..<newline]), peerPID)
+    }
+
+    // MARK: - Protocol-v2 health handshake
+
+    /// Asks the helper to prove it is the exact launch the registry describes.
+    ///
+    /// The check is deliberately strict: protocol version, helper generation,
+    /// launch nonce and PID must all match the registry record, and the kernel's
+    /// peer PID must equal the recorded helper identity, which is re-captured
+    /// right now (PID plus start time plus executable). A stale or substituted
+    /// helper therefore cannot be adopted even if it answers health.
+    @discardableResult
+    func verifiedHealth(generation: String, nonce: String,
+                        helper: ProcessIdentity) throws -> [String: Any] {
+        let payload: [String: Any] = ["jsonrpc": "2.0", "id": 1,
+                                      "method": "health", "params": [String: Any]()]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let exchange = try exchangeWithPeer(data + Data([0x0A]), timeout: 10)
+        guard let object = try JSONSerialization.jsonObject(with: exchange.reply)
+                as? [String: Any] else {
+            throw AIWorkerFailure(code: -32700, message: "the helper sent an unreadable reply")
+        }
+        if let error = object["error"] as? [String: Any] {
+            throw AIWorkerFailure(code: (error["code"] as? Int) ?? -32603,
+                                  message: (error["message"] as? String) ?? "helper error")
+        }
+        guard let result = object["result"] as? [String: Any] else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the helper did not prove its identity")
+        }
+        guard let peer = exchange.peer, peer == helper.pid,
+              ProcessIdentity.capture(peer) == helper else {
+            throw AIWorkerFailure(code: -32000,
+                                  message: "the AI helper is not the recorded process")
+        }
+        guard result["protocol_version"] as? Int == HelperRegistry.protocolVersion,
+              result["helper_generation"] as? String == generation,
+              result["launch_nonce"] as? String == nonce,
+              result["pid"] as? Int == Int(helper.pid) else {
+            throw AIWorkerFailure(code: -32000,
+                                  message: "the AI helper did not match its registry record")
+        }
+        return result
     }
 }

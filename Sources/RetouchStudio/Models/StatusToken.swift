@@ -42,6 +42,7 @@ enum StatusToken: Equatable {
     case upscaling(Int, Int)
     case saved(String)
     case exportFailed
+    case exportRefusedOriginal
     case exportCancelled
     case operationBusy
     case projectSaved(String)
@@ -50,6 +51,9 @@ enum StatusToken: Equatable {
     case projectOpenFailed
     case projectTooNew(Int)
     case projectRelinked
+    case recoveryStorageFailed
+    case recoveryQuarantined(Int)
+    case recoveryCandidateNotRemoved
     case batchStarting
     case batchProgress(Int, Int)
     case batchFinished(saved: Int, total: Int, cropsSkipped: Int)

@@ -5,7 +5,12 @@ import Foundation
 /// the document stores the stored filename, so a project stays small and can be
 /// reopened after the original backdrop was moved or deleted.
 enum BackdropStore {
+    /// Tests point this at a scratch directory so a copied backdrop never
+    /// reaches the store belonging to the app the owner is working in.
+    static var rootOverride: URL?
+
     static var root: URL {
+        if let rootOverride { return rootOverride }
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask)[0]
         return base.appendingPathComponent("RetouchStudio/backdrops", isDirectory: true)

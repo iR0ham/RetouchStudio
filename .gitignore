@@ -19,3 +19,5 @@ Tests/Fixtures/portraits/
 # Release packages
 *.dmg
 *.dmg.sha256
+*.zip
+*.zip.sha256

@@ -244,6 +244,9 @@ class L10n {
     }
     func saved(_ name: String) -> String { "Saved \(name)" }
     var exportFailed: String { "Could not save the export." }
+    var exportRefusedOriginal: String {
+        "That is the photo you are editing. Choose a different name or folder."
+    }
     var exportCancelled: String { "Export cancelled." }
     var cancelExport: String { "Cancel Export" }
     var operationBusy: String {
@@ -281,6 +284,17 @@ class L10n {
         "This project was written by a newer version of the app (v\(Digits.num(version)))."
     }
     var projectRelinked: String { "Project opened and the photo's new location was saved." }
+    var recoveryStorageFailed: String {
+        "Recovery could not be updated. The unsaved work is not protected for the next launch."
+    }
+    func recoveryQuarantined(_ count: Int) -> String {
+        count == 1
+            ? "A damaged recovery copy was set aside instead of deleted."
+            : "\(Digits.num(count)) damaged recovery copies were set aside instead of deleted."
+    }
+    var recoveryCandidateNotRemoved: String {
+        "The recovered photo is saved, but its old recovery copy could not be removed."
+    }
 
     // Batch
     var batchExportMenu: String { "Batch Export…" }
@@ -401,6 +415,9 @@ class L10n {
     }
     var analysisExportMode: String { "Export as" }
     var analysisMargin: String { "Margin" }
+    var analysisNeedsFace: String {
+        "No face was detected, so the analysis cannot be drawn. This copy is saved as an ordinary photo."
+    }
 
     func analysisRegionTitle(_ region: AnalysisRegion) -> String {
         switch region {
@@ -581,9 +598,9 @@ class L10n {
     var settingsExportHelp: String {
         "File format, quality and metadata for saved copies."
     }
-    var settingsStripMetadata: String { "Remove location and camera info" }
+    var settingsStripMetadata: String { "Remove identifying image metadata" }
     var settingsStripMetadataNote: String {
-        "Leaves GPS, camera owner, serial numbers and comments out of exports. Orientation, colour profile and size are kept."
+        "Leaves GPS, camera make and model, serial numbers, creator, capture time and other identifying details out of exports. Orientation, resolution and colour profile are kept."
     }
     var settingsTools: String { "TOOLS" }
     var settingsToolsHelp: String { "Healing brush size and the face overlay." }
@@ -628,6 +645,7 @@ class L10n {
     var modelsDownloadAction: String { "Download" }
     var modelsCancel: String { "Cancel" }
     func modelsDownloading(_ percent: Int) -> String { "Downloading… \(percent)%" }
+    var modelsDownloadingUnknown: String { "Downloading…" }
     func modelsDownloaded(_ name: String) -> String { "\(name) is installed." }
     var modelsDownloadCancelled: String { "Download cancelled. Nothing was installed." }
     var modelsDownloadFailed: String { "The download did not finish. Nothing was installed." }
@@ -639,6 +657,60 @@ class L10n {
     func modelsRemoved(_ name: String) -> String { "\(name) was removed." }
     var modelsSizeUnknown: String { "Size unknown" }
     var modelsHelperMissing: String { "The AI helper is not available on this Mac." }
+
+    var aiRuntimeTitle: String { "AI runtime" }
+    var aiRuntimeInstalledChip: String { "Installed" }
+    var aiRuntimeMissingChip: String { "Not installed" }
+    var aiRuntimeBody: String {
+        "The AI tools need a local helper runtime, about 390 MB. The app downloads it only after showing the file, its size and its SHA256 and receiving your approval."
+    }
+    var aiRuntimeInstall: String { "Download runtime" }
+    var aiRuntimeDownloadTitle: String { "Download the AI runtime?" }
+    func aiRuntimeDownloadBody(file: String, size: String, hash: String) -> String {
+        "This downloads \(file) (\(size)) from github.com and verifies its SHA256 (\(hash)) before installing it. Model weights are still downloaded separately, after their own approval."
+    }
+    var aiRuntimeDownloading: String { "Downloading the runtime…" }
+    var aiRuntimeVerifying: String { "Verifying the download…" }
+    var aiRuntimeInstalling: String { "Installing the runtime…" }
+    var aiRuntimeDownloadFailed: String { "The runtime did not download. Nothing was installed." }
+    var aiRuntimeChecksumFailed: String {
+        "The downloaded file did not match its SHA256. Nothing was installed."
+    }
+    var aiRuntimeExtractFailed: String { "The runtime could not be unpacked. Nothing was installed." }
+    var aiRuntimeInstallFailed: String {
+        "The runtime could not be installed. The previous runtime was kept."
+    }
+    var aiRuntimeInstallFailedNothing: String {
+        "The runtime could not be installed. No previous runtime was replaced."
+    }
+    var aiRuntimeInstallFailedRollback: String {
+        "The runtime could not be installed, and the previous runtime could not be restored. Download it again in Settings."
+    }
+    var aiRuntimeInstallFailedPreserved: String {
+        "The runtime could not be installed. The previous runtime was preserved for recovery and will be retried."
+    }
+    var aiRuntimeRecoveryFailed: String {
+        "The AI runtime could not be recovered safely. Existing runtime files were preserved; restart the app to retry, or download the runtime again in Settings."
+    }
+    var aiRuntimeValidationFailed: String {
+        "The installed AI runtime did not pass its startup check. Restart the app to retry, or download the runtime again in Settings."
+    }
+    var aiRuntimeBusy: String {
+        "The AI runtime is in use by another Retouch Studio window. Close it, then try again."
+    }
+    var aiRuntimeInstalledNote: String { "Installed — models can be downloaded now." }
+    var aiRuntimeNotInstalled: String {
+        "The AI runtime is not installed. Download it in Settings → AI models, then try again."
+    }
+    var aiRuntimeIntelUnavailable: String {
+        "The AI helper runs only on Apple silicon. This Intel Mac uses the full editor without AI."
+    }
+    var aiRuntimeUnavailable: String {
+        "The AI helper is not available in this build yet. The rest of the editor works without it."
+    }
+    var aiHelperStarting: String {
+        "The AI helper is still starting. Try again in a moment."
+    }
     func modelsTaskName(_ task: String) -> String {
         switch task {
         case "segmentation": return "Selection"
@@ -718,6 +790,9 @@ class L10n {
     func recoveryMessage(_ name: String) -> String {
         "Retouch Studio found edits to \(name) that were never saved, left behind when the app closed unexpectedly."
     }
+    func recoveryChangedMessage(_ name: String) -> String {
+        "\(name) changed on disk after these edits were saved. Restoring applies the edits to the photo as it is now."
+    }
     var recoveryRestore: String { "Restore Edits" }
     var recoveryDiscard: String { "Discard" }
 
@@ -767,6 +842,7 @@ class L10n {
         case .upscaling(let done, let total): return upscaling(done, total)
         case .saved(let name): return saved(name)
         case .exportFailed: return exportFailed
+        case .exportRefusedOriginal: return exportRefusedOriginal
         case .exportCancelled: return exportCancelled
         case .operationBusy: return operationBusy
         case .projectSaved(let name): return projectSaved(name)
@@ -775,6 +851,9 @@ class L10n {
         case .projectOpenFailed: return projectOpenFailed
         case .projectTooNew(let version): return projectTooNew(version)
         case .projectRelinked: return projectRelinked
+        case .recoveryStorageFailed: return recoveryStorageFailed
+        case .recoveryQuarantined(let count): return recoveryQuarantined(count)
+        case .recoveryCandidateNotRemoved: return recoveryCandidateNotRemoved
         case .batchStarting: return batchStarting
         case .batchProgress(let index, let total): return batchProgress(index, total)
         case .batchFinished(let saved, let total, let skipped):

@@ -12,6 +12,8 @@ This audit answers one requirement from the Phase 0 specification:
 
 The result is a measured claim, not an assertion about intent: every scenario below was executed on the shipping bundle and the sockets of the app and its helper were sampled while it ran.
 
+> **Update for the stabilization branch (2026-11-10).** The on-demand protocol-v2 runtime installer was added after the 1.0.0 tag (`c32eb0b feat: download the local AI runtime on demand`). It is disabled in the current build because no official protocol-v2 package has been approved: `AIRuntime.package` is nil, so Settings offers no runtime download and no runtime transfer occurs. The installer code, once an approved package is configured, downloads one fixed archive with an ephemeral `URLSession` only after a sheet shows its name, its size and a 16-character SHA256 prefix; it then verifies the full size and hash and installs it under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`. The `v1.0.0` tag does not contain `AIRuntimeInstaller.swift`; the `RetouchStudio-1.0.0-ai-runtime-arm64.zip` asset on that release page is a legacy archive, not a verified protocol-v2 package. A published binary cannot be tied to a source commit from this repository alone, so this document makes no claim that a released 1.0.0 binary fetched a runtime. The static inventory in §2.1 describes the audited 2.1 build; every other conclusion below still applies to that build.
+
 ---
 
 ## 1. Scope
@@ -28,7 +30,9 @@ Image editing, masking, upscaling and export all happen in the app or in the hel
 
 ## 2. Static inventory
 
-### 2.1 The app has no network API
+### 2.1 The audited 2.1 app had no network API
+
+(For the disabled stabilization-branch runtime downloader, see the update at the top of this document.)
 
 Every framework imported by the app:
 
@@ -57,9 +61,9 @@ Models are loaded from local paths. The Swin2SR loader uses `from_pretrained(<lo
 `downloads.py` documents and enforces the flow:
 
 1. `models.plan` returns a manifest (file list, sizes, SHA256) plus its hash.
-2. The app shows the exact manifest in a sheet — file count, total size, license — and the consent text states that this is the only step that uses the internet.
+2. The app shows a sheet with the file count, total size and license — not a per-file list or SHA256 — and the consent text states that this is the only step that uses the internet. The approved manifest hash is passed to the downloader, not displayed.
 3. The downloader is launched with `--yes` and the approved `--consent-hash`. If the catalog changed after the sheet was shown, the hash no longer matches and nothing is downloaded.
-4. Each file is written under `<root>/.staging/...`, hashed, and only moved into place when the SHA256 matches. A partial download can never be treated as an installed model.
+4. Each file is written under `<root>/.staging/...`, hashed when the catalog provides a SHA256, and moved into place only when it matches. The SAM 2.1 tiny entry has no SHA256, so that file is moved without a checksum check. A partial download can never be treated as an installed model.
 
 `ConsentStore` records the approved manifest and a timestamp in `~/Library/Application Support/RetouchStudio/AI/download-consent.json`.
 
@@ -167,7 +171,7 @@ The downloader prints a JSON progress object on stderr for every chunk; the last
 | No cloud inference | **Pass** — inference runs in the local helper; zero sockets during a real job |
 | No automatic external image uploads | **Pass** — no upload API exists in app or helper; images never leave the machine |
 | No hidden network requests | **Pass** — zero sockets in idle and edit windows; the only traffic in the audit was the explicitly approved download |
-| Explicit consent before model downloads | **Pass** — manifest hash shown and required; checksum verified; staged and atomic |
+| Explicit consent before model downloads | **Pass** — consent sheet shown and the approved manifest hash required; checksums verified where the catalog provides one (SAM 2.1 tiny has none); staged and atomic |
 | Offline after installation | **Pass** — edit, upscale and export need no network (scenario B) |
 
-The only outbound connections this build can make are the HTTPS transfers of a model download that the owner approved, after the exact manifest was displayed.
+The only outbound connections the audited 2.1 build can make are the HTTPS transfers of a model download that the owner approved, after a sheet showing the file count, total size and license was accepted. The stabilization branch adds a runtime-download code path, but it is disabled (`AIRuntime.package` is nil) and makes no transfer in the current build; an enabled approved package would add one equally explicit, SHA256-verified transfer from a single fixed release URL.

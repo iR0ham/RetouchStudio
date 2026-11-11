@@ -40,7 +40,12 @@ struct AIEdit: Codable, Equatable, Identifiable {
 /// cache, so a project file stays a small sidecar and two projects that share
 /// an edit share the same bytes.
 enum AIEditStore {
+    /// Tests point this at a scratch directory so adopting an edit never writes
+    /// into the store belonging to the app the owner is working in.
+    static var rootOverride: URL?
+
     static var root: URL {
+        if let rootOverride { return rootOverride }
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask)[0]
         return base.appendingPathComponent("RetouchStudio/AI/edits", isDirectory: true)

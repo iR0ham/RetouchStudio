@@ -8,6 +8,7 @@ struct ModelManagerView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var manager = ModelManager()
     @ObservedObject private var activity = ModelActivity.shared
+    @ObservedObject private var runtime = AIRuntimeInstaller.shared
     @State private var planningID: String?
     @State private var prompt: Prompt?
 
@@ -21,11 +22,13 @@ struct ModelManagerView: View {
     private enum Prompt: Identifiable {
         case download(PendingDownload)
         case remove(AIModelRow)
+        case runtime(AIRuntime.Package)
 
         var id: String {
             switch self {
             case .download(let item): return "download-\(item.row.id)"
             case .remove(let row): return "remove-\(row.id)"
+            case .runtime(let package): return "runtime-\(package.version)"
             }
         }
     }
@@ -33,6 +36,9 @@ struct ModelManagerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
+            if showsRuntimeCard {
+                runtimeCard
+            }
 
             if manager.loading && manager.rows.isEmpty {
                 HStack(spacing: 8) {
@@ -43,7 +49,7 @@ struct ModelManagerView: View {
                 }
                 .padding(.vertical, 20)
                 Spacer(minLength: 0)
-            } else if let error = manager.helperError {
+            } else if let error = manager.helperError, !runtimeNeedsSetup {
                 Text(error)
                     .font(Theme.Font.caption)
                     .foregroundStyle(Theme.warning)
@@ -75,6 +81,9 @@ struct ModelManagerView: View {
         .preferredColorScheme(.dark)
         .environment(\.layoutDirection, editor.language.layoutDirection)
         .task { await manager.refresh() }
+        .onChange(of: runtime.phase) { _, phase in
+            if phase == .installed { Task { await manager.refresh() } }
+        }
         .alert(item: $prompt) { item in
             switch item {
             case .download(let pending):
@@ -106,8 +115,27 @@ struct ModelManagerView: View {
                         }
                     },
                     secondaryButton: .cancel(Text(editor.s.modelsCancel)))
+            case .runtime(let package):
+                return Alert(
+                    title: Text(editor.s.aiRuntimeDownloadTitle),
+                    message: Text(editor.s.aiRuntimeDownloadBody(
+                        file: package.fileName,
+                        size: sizeText(Int(package.bytes)),
+                        hash: package.hashPrefix)),
+                    primaryButton: .default(Text(editor.s.modelsDownloadAction)) {
+                        runtime.install(package)
+                    },
+                    secondaryButton: .cancel(Text(editor.s.modelsCancel)))
             }
         }
+    }
+
+    private var showsRuntimeCard: Bool {
+        AIRuntime.package != nil && AIWorker.bundledRoot == nil
+    }
+
+    private var runtimeNeedsSetup: Bool {
+        showsRuntimeCard && runtime.phase != .installed
     }
 
     private var header: some View {
@@ -126,6 +154,89 @@ struct ModelManagerView: View {
                 .font(Theme.Font.caption)
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var runtimeCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(editor.s.aiRuntimeTitle)
+                    .font(Theme.Font.face(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                Text(runtime.phase == .installed
+                     ? editor.s.aiRuntimeInstalledChip
+                     : editor.s.aiRuntimeMissingChip)
+                    .font(Theme.Font.face(size: 9.5, weight: .medium))
+                    .foregroundStyle(runtime.phase == .installed ? Theme.accentInk : Theme.muted)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(runtime.phase == .installed ? Theme.accent : Theme.inset))
+                Spacer(minLength: 8)
+                if !runtime.isBusy && runtime.phase != .installed,
+                   let package = runtime.package {
+                    chipButton(editor.s.aiRuntimeInstall) { prompt = .runtime(package) }
+                        .disabled(manager.isDownloading || runtime.isBusy)
+                }
+            }
+            if runtime.phase == .installed {
+                Text(editor.s.aiRuntimeInstalledNote)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.positive)
+            } else {
+                Text(editor.s.aiRuntimeBody)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                if runtime.isBusy { runtimeBar }
+                if case .failed(let message) = runtime.phase {
+                    Text(message)
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                .fill(Theme.panel)
+        )
+    }
+
+    private var runtimeBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(runtimeLabel)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(Theme.text)
+                Spacer(minLength: 8)
+                if runtime.phase == .downloading {
+                    Text("\(sizeText(Int(runtime.received))) / \(sizeText(Int(runtime.total)))")
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.muted)
+                    chipButton(editor.s.modelsCancel) { runtime.cancel() }
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            if runtime.phase == .downloading && runtime.total > 0 {
+                ProgressView(value: Double(runtime.percent), total: 100)
+                    .tint(Theme.accent)
+            } else {
+                ProgressView()
+                    .tint(Theme.accent)
+            }
+        }
+    }
+
+    private var runtimeLabel: String {
+        switch runtime.phase {
+        case .downloading: return editor.s.aiRuntimeDownloading
+        case .verifying: return editor.s.aiRuntimeVerifying
+        case .installing: return editor.s.aiRuntimeInstalling
+        default: return ""
         }
     }
 
@@ -173,17 +284,17 @@ struct ModelManagerView: View {
                     chipButton(editor.s.modelsVerify) {
                         Task { await manager.verify(row.id) }
                     }
-                    .disabled(manager.isDownloading)
+                    .disabled(manager.isDownloading || runtime.isBusy)
                 }
                 if row.installed {
                     chipButton(editor.s.modelsDownloadAgain) {
                         beginDownload(row, again: true)
                     }
-                    .disabled(manager.isDownloading || planningID != nil || activity.isRunning(row.id))
+                    .disabled(manager.isDownloading || runtime.isBusy || planningID != nil || activity.isRunning(row.id))
                     chipButton(editor.s.modelsRemove) {
                         prompt = .remove(row)
                     }
-                    .disabled(manager.isDownloading || activity.isRunning(row.id))
+                    .disabled(manager.isDownloading || runtime.isBusy || activity.isRunning(row.id))
                 } else {
                     if planningID == row.id {
                         ProgressView().controlSize(.small)
@@ -191,7 +302,7 @@ struct ModelManagerView: View {
                         chipButton(editor.s.modelsDownload) {
                             beginDownload(row, again: false)
                         }
-                        .disabled(manager.isDownloading || planningID != nil)
+                        .disabled(manager.isDownloading || runtime.isBusy || planningID != nil)
                     }
                 }
             }
@@ -272,20 +383,28 @@ struct ModelManagerView: View {
     private var downloadBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text(editor.s.modelsDownloading(manager.percent))
+                Text(manager.progressIsIndeterminate
+                     ? editor.s.modelsDownloadingUnknown
+                     : editor.s.modelsDownloading(manager.percent))
                     .font(Theme.Font.label)
                     .foregroundStyle(Theme.text)
                 Spacer(minLength: 8)
-                Text("\(sizeText(manager.receivedBytes)) / \(sizeText(manager.totalBytes))")
-                    .font(Theme.Font.value)
-                    .foregroundStyle(Theme.muted)
+                if manager.progressIsIndeterminate {
+                    Text(sizeText(manager.receivedBytes))
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.muted)
+                } else {
+                    Text("\(sizeText(manager.receivedBytes)) / \(sizeText(manager.totalBytes))")
+                        .font(Theme.Font.value)
+                        .foregroundStyle(Theme.muted)
+                }
                 chipButton(editor.s.modelsCancel) { manager.cancelDownload() }
             }
-            if manager.totalBytes > 0 {
-                ProgressView(value: Double(manager.percent), total: 100)
+            if manager.progressIsIndeterminate {
+                ProgressView()
                     .tint(Theme.accent)
             } else {
-                ProgressView()
+                ProgressView(value: Double(manager.percent), total: 100)
                     .tint(Theme.accent)
             }
         }

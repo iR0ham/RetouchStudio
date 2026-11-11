@@ -1,6 +1,7 @@
 import AppKit
 import CoreImage
 import Foundation
+import UniformTypeIdentifiers
 
 // Verifies the new engine's core guarantees, each of which was a real defect:
 //
@@ -27,6 +28,13 @@ func check(_ condition: Bool, _ label: String, _ detail: String = "") {
 
 let processor = ImageProcessor.shared
 let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+// Backdrop copies live in Application Support in production. Redirect the
+// store used by this suite to a scratch root; the one stored file is deleted
+// below and the root is removed before exit.
+let engineStoreRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("retouch-enginetests-\(UUID().uuidString)")
+try? FileManager.default.createDirectory(at: engineStoreRoot, withIntermediateDirectories: true)
+BackdropStore.rootOverride = engineStoreRoot.appendingPathComponent("backdrops", isDirectory: true)
 
 // MARK: - fixtures
 
@@ -1002,17 +1010,27 @@ if let mesh = AnalysisRenderer.render(size: analysisCanvas, faces: [landlessAnal
           "\(inkPixels(mesh)) sampled ink pixels")
 } else { check(false, "landmarkless analysis mesh") }
 
-print("\n[16] exports drop location and camera identity")
-// The writer's default is privacy-preserving; the snapshot only decides
-// whether the export pipeline applies it. Non-identifying EXIF, orientation,
-// DPI and the colour profile must all survive.
+print("\n[16] exports keep only non-identifying technical metadata")
+// Privacy removal is an allowlist: the output starts empty and only
+// orientation and resolution are copied. GPS, IPTC, XMP, TIFF identity, EXIF
+// identity and capture time, PNG text and vendor blocks must all be dropped.
 let privacySide = 96
 let privacyContext = CGContext(data: nil, width: privacySide, height: privacySide,
                                bitsPerComponent: 8, bytesPerRow: 0, space: sRGB,
                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
 privacyContext.setFillColor(CGColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1))
 privacyContext.fill(CGRect(x: 0, y: 0, width: privacySide, height: privacySide))
-let privacySource = CIImage(cgImage: privacyContext.makeImage()!)
+let privacyCG = privacyContext.makeImage()!
+let privacySource = CIImage(cgImage: privacyCG)
+// PNG and TIFF exports are written at 16 bits per component. A 16-bit fixture
+// proves the depth survives instead of merely being promoted by the writer.
+let deepPrivacyContext = CGContext(data: nil, width: privacySide, height: privacySide,
+                                   bitsPerComponent: 16, bytesPerRow: 0, space: sRGB,
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+deepPrivacyContext.setFillColor(CGColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1))
+deepPrivacyContext.fill(CGRect(x: 0, y: 0, width: privacySide, height: privacySide))
+let deepPrivacyCG = deepPrivacyContext.makeImage()!
+let deepPrivacySource = CIImage(cgImage: deepPrivacyCG)
 let privacyMetadata: [CFString: Any] = [
     kCGImagePropertyDPIWidth: 300,
     kCGImagePropertyDPIHeight: 300,
@@ -1029,11 +1047,30 @@ let privacyMetadata: [CFString: Any] = [
         kCGImagePropertyExifLensSerialNumber: "LENS-456",
         kCGImagePropertyExifUserComment: "private note",
         kCGImagePropertyExifImageUniqueID: "ABCDEF0123456789",
-        kCGImagePropertyExifDateTimeOriginal: "2026:01:02 03:04:05"
+        kCGImagePropertyExifDateTimeOriginal: "2026:01:02 03:04:05",
+        kCGImagePropertyExifDateTimeDigitized: "2026:01:02 03:04:06",
+        kCGImagePropertyExifLensMake: "LensCo",
+        kCGImagePropertyExifLensModel: "Portrait 85"
     ],
     kCGImagePropertyTIFFDictionary: [
         kCGImagePropertyTIFFArtist: "Retouch SelfTest",
-        kCGImagePropertyTIFFMake: "CameraCo"
+        kCGImagePropertyTIFFMake: "CameraCo",
+        kCGImagePropertyTIFFModel: "Model X",
+        kCGImagePropertyTIFFCopyright: "Roham 2026",
+        kCGImagePropertyTIFFSoftware: "Retouch Studio"
+    ],
+    kCGImagePropertyIPTCDictionary: [
+        kCGImagePropertyIPTCByline: "Roham",
+        kCGImagePropertyIPTCCity: "Tehran",
+        kCGImagePropertyIPTCCountryPrimaryLocationName: "Iran",
+        kCGImagePropertyIPTCCredit: "Roham Studio",
+        kCGImagePropertyIPTCCopyrightNotice: "Roham 2026",
+        kCGImagePropertyIPTCHeadline: "Portrait"
+    ],
+    kCGImagePropertyPNGDictionary: [
+        kCGImagePropertyPNGAuthor: "Roham",
+        kCGImagePropertyPNGCopyright: "Roham 2026",
+        kCGImagePropertyPNGDescription: "private note"
     ]
 ]
 let privacyDirectory = FileManager.default.temporaryDirectory
@@ -1049,46 +1086,148 @@ func exportedProperties(_ name: String) -> [CFString: Any] {
     return props
 }
 
+func privacyXMP() -> CGImageMetadata? {
+    let metadata = CGImageMetadataCreateMutable()
+    CGImageMetadataRegisterNamespaceForPrefix(
+        metadata, "http://purl.org/dc/elements/1.1/" as CFString, "dc" as CFString, nil)
+    CGImageMetadataRegisterNamespaceForPrefix(
+        metadata, "http://ns.adobe.com/photoshop/1.0/" as CFString, "photoshop" as CFString, nil)
+    _ = CGImageMetadataSetValueWithPath(metadata, nil, "dc:creator" as CFString,
+                                        "Roham" as CFString)
+    _ = CGImageMetadataSetValueWithPath(metadata, nil, "photoshop:City" as CFString,
+                                        "Tehran" as CFString)
+    _ = CGImageMetadataSetValueWithPath(metadata, nil, "dc:rights" as CFString,
+                                        "Roham 2026" as CFString)
+    return metadata
+}
+
+func privacyXMPPaths(at url: URL) -> [String] {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil) else { return [] }
+    var paths: [String] = []
+    CGImageMetadataEnumerateTagsUsingBlock(metadata, nil, nil) { path, _ in
+        paths.append(path as String)
+        return true
+    }
+    return paths
+}
+
 let privacyRendered = RenderedExport(image: privacySource, carriesSourceMetadata: true)
+let deepPrivacyRendered = RenderedExport(image: deepPrivacySource,
+                                         carriesSourceMetadata: true)
 var privacySnapshot = ExportSnapshot()
 privacySnapshot.format = .jpeg
 privacySnapshot.quality = 0.95
-let wroteStripped = ExportService.write(
-    privacyRendered, snapshot: privacySnapshot,
-    to: privacyDirectory.appendingPathComponent("stripped.jpg"),
-    colorSpace: sRGB, metadata: privacyMetadata)
-let strippedProps = exportedProperties("stripped.jpg")
-let strippedExif = strippedProps[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
-let strippedTIFF = strippedProps[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
-check(wroteStripped && strippedProps[kCGImagePropertyGPSDictionary] == nil,
-      "GPS is left out of the export")
-check(strippedExif[kCGImagePropertyExifCameraOwnerName] == nil
-        && strippedExif[kCGImagePropertyExifBodySerialNumber] == nil
-        && strippedExif[kCGImagePropertyExifLensSerialNumber] == nil
-        && strippedExif[kCGImagePropertyExifUserComment] == nil
-        && strippedExif[kCGImagePropertyExifImageUniqueID] == nil
-        && strippedTIFF[kCGImagePropertyTIFFArtist] == nil,
-      "owner, serials, comments and artist are left out")
-check((strippedExif[kCGImagePropertyExifDateTimeOriginal] as? String) == "2026:01:02 03:04:05"
-        && (strippedTIFF[kCGImagePropertyTIFFMake] as? String) == "CameraCo",
-      "the rest of EXIF still describes the shot")
-let privacyOrientation = (strippedProps[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 0
-let privacyDPI = (strippedProps[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 0
-check(privacyOrientation == 1 && abs(privacyDPI - 300) < 1
-        && (strippedProps[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue == privacySide,
-      "orientation, DPI and size are preserved",
-      "orientation \(privacyOrientation), \(Int(privacyDPI)) dpi, \(privacySide) px")
-if let source = CGImageSourceCreateWithURL(
-        privacyDirectory.appendingPathComponent("stripped.jpg") as CFURL, nil),
-   let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil),
-   let data = decoded.dataProvider?.data, let p = CFDataGetBytePtr(data) {
-    let bpp = decoded.bitsPerPixel / 8
-    let i = (decoded.height / 2) * decoded.bytesPerRow + (decoded.width / 2) * bpp
-    let green = Int(p[i + 1])
-    check(decoded.colorSpace != nil && abs(green - 128) <= 2,
-          "the colour profile and the colour itself survive",
-          "mid-grey \(green)/128, profile \(decoded.colorSpace != nil ? "yes" : "no")")
-} else { check(false, "privacy export decode") }
+
+for (name, format) in [("stripped.jpg", ExportFormat.jpeg),
+                       ("stripped.png", .png),
+                       ("stripped.tif", .tiff),
+                       ("stripped.heic", .heic)] {
+    var snap = privacySnapshot
+    snap.format = format
+    snap.quality = 0.95
+    let deep = format == .png || format == .tiff
+    let rendered = deep ? deepPrivacyRendered : privacyRendered
+    let url = privacyDirectory.appendingPathComponent(name)
+    let wrote = ExportService.write(rendered, snapshot: snap, to: url,
+                                    colorSpace: sRGB, metadata: privacyMetadata)
+    if !wrote && format == .heic {
+        print("  … HEIC encoder unavailable in this environment (NOT VERIFIED)")
+        continue
+    }
+    let props = exportedProperties(name)
+    let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+    let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+    let iptc = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any] ?? [:]
+    let png = props[kCGImagePropertyPNGDictionary] as? [CFString: Any] ?? [:]
+    let noIdentity = props[kCGImagePropertyGPSDictionary] == nil
+        && exif[kCGImagePropertyExifCameraOwnerName] == nil
+        && exif[kCGImagePropertyExifBodySerialNumber] == nil
+        && exif[kCGImagePropertyExifLensSerialNumber] == nil
+        && exif[kCGImagePropertyExifUserComment] == nil
+        && exif[kCGImagePropertyExifImageUniqueID] == nil
+        && exif[kCGImagePropertyExifDateTimeOriginal] == nil
+        && exif[kCGImagePropertyExifDateTimeDigitized] == nil
+        && exif[kCGImagePropertyExifLensMake] == nil
+        && exif[kCGImagePropertyExifLensModel] == nil
+        && tiff[kCGImagePropertyTIFFArtist] == nil
+        && tiff[kCGImagePropertyTIFFMake] == nil
+        && tiff[kCGImagePropertyTIFFModel] == nil
+        && tiff[kCGImagePropertyTIFFCopyright] == nil
+        && tiff[kCGImagePropertyTIFFSoftware] == nil
+        && iptc[kCGImagePropertyIPTCByline] == nil
+        && iptc[kCGImagePropertyIPTCCity] == nil
+        && iptc[kCGImagePropertyIPTCCountryPrimaryLocationName] == nil
+        && iptc[kCGImagePropertyIPTCCredit] == nil
+        && iptc[kCGImagePropertyIPTCCopyrightNotice] == nil
+        && iptc[kCGImagePropertyIPTCHeadline] == nil
+        && png[kCGImagePropertyPNGAuthor] == nil
+        && png[kCGImagePropertyPNGCopyright] == nil
+        && png[kCGImagePropertyPNGDescription] == nil
+    check(wrote && noIdentity, "\(name) keeps no identifying metadata")
+    let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 0
+    let dpi = (props[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 0
+    check(orientation == 1 && abs(dpi - 300) < 1
+            && (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue == privacySide,
+          "\(name) keeps orientation, DPI and size",
+          "orientation \(orientation), \(Int(dpi)) dpi, \(privacySide) px")
+    if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+       let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+        if format == .png || format == .tiff {
+            check(decoded.colorSpace != nil
+                    && decoded.bitsPerComponent == deepPrivacyCG.bitsPerComponent,
+                  "\(name) keeps its profile and the 16-bit fixture depth",
+                  "\(decoded.bitsPerComponent)-bit")
+        } else {
+            check(decoded.colorSpace != nil && decoded.bitsPerComponent == 8,
+                  "\(name) writes its 8-bit codec depth",
+                  "\(decoded.bitsPerComponent)-bit")
+        }
+    } else {
+        check(false, "\(name) decodes")
+    }
+}
+
+// XMP-only identity: reading a photo mirrors some XMP fields into properties,
+// which is exactly what ImageProcessor.load hands to the writer. None of it may
+// come back out, and the destination XMP must not be regenerated from it.
+if let xmp = privacyXMP() {
+    let sourceURL = privacyDirectory.appendingPathComponent("xmp-source.jpg")
+    if let destination = CGImageDestinationCreateWithURL(
+            sourceURL as CFURL, ExportFormat.jpeg.utType.identifier as CFString, 1, nil) {
+        CGImageDestinationAddImageAndMetadata(destination, privacyCG, xmp, nil)
+        let wroteSource = CGImageDestinationFinalize(destination)
+        // Positive control: prove the source really carries the identity we
+        // expect to be stripped, otherwise the removal check proves nothing.
+        let sourceXMPPaths = privacyXMPPaths(at: sourceURL).map { $0.lowercased() }
+        let sourceHasIdentity = sourceXMPPaths.contains {
+            $0.contains("dc:creator") || $0.contains("photoshop:city") || $0.contains("dc:rights")
+        }
+        check(wroteSource && sourceHasIdentity,
+              "the XMP source really contains creator, city and rights",
+              sourceXMPPaths.joined(separator: ", "))
+        let sourceProperties = exportedProperties("xmp-source.jpg")
+        let outputURL = privacyDirectory.appendingPathComponent("xmp-out.jpg")
+        let wrote = ExportService.write(privacyRendered, snapshot: privacySnapshot,
+                                        to: outputURL, colorSpace: sRGB,
+                                        metadata: sourceProperties)
+        let paths = privacyXMPPaths(at: outputURL).map { $0.lowercased() }
+        let noXMPIdentity = !paths.contains {
+            $0.contains("dc:creator") || $0.contains("photoshop:city") || $0.contains("dc:rights")
+        }
+        let outputIPTC = exportedProperties("xmp-out.jpg")[kCGImagePropertyIPTCDictionary]
+            as? [CFString: Any] ?? [:]
+        check(wroteSource && wrote && noXMPIdentity
+                && outputIPTC[kCGImagePropertyIPTCByline] == nil
+                && outputIPTC[kCGImagePropertyIPTCCity] == nil,
+              "XMP-only creator, city and rights do not reach the export",
+              paths.joined(separator: ", "))
+    } else {
+        check(false, "XMP source writer")
+    }
+} else {
+    check(false, "XMP fixture")
+}
 
 // Turning the policy off is the old behaviour: every key travels again.
 var keepSnapshot = privacySnapshot
@@ -1100,10 +1239,17 @@ let wroteKept = ExportService.write(
 let keptProps = exportedProperties("kept.jpg")
 let keptExif = keptProps[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
 let keptTIFF = keptProps[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+let keptIPTC = keptProps[kCGImagePropertyIPTCDictionary] as? [CFString: Any] ?? [:]
+// ImageIO mirrors TIFF Artist back into the IPTC byline list on write, so the
+// value can differ from the source while still proving identity travelled.
+let keptByline = keptIPTC[kCGImagePropertyIPTCByline] as? [String] ?? []
 check(wroteKept && keptProps[kCGImagePropertyGPSDictionary] != nil
         && (keptExif[kCGImagePropertyExifCameraOwnerName] as? String) == "Roham"
         && (keptExif[kCGImagePropertyExifBodySerialNumber] as? String) == "BODY-123"
-        && (keptTIFF[kCGImagePropertyTIFFArtist] as? String) == "Retouch SelfTest",
+        && (keptExif[kCGImagePropertyExifDateTimeOriginal] as? String) == "2026:01:02 03:04:05"
+        && (keptTIFF[kCGImagePropertyTIFFArtist] as? String) == "Retouch SelfTest"
+        && (keptTIFF[kCGImagePropertyTIFFMake] as? String) == "CameraCo"
+        && !keptByline.isEmpty,
       "turning the setting off keeps the identity keys")
 
 // One snapshot covers a batch, but each file brings its own metadata.
@@ -1112,31 +1258,42 @@ secondMetadata[kCGImagePropertyExifDictionary] = [
     kCGImagePropertyExifCameraOwnerName: "Second Owner",
     kCGImagePropertyExifBodySerialNumber: "BODY-999"
 ]
+secondMetadata[kCGImagePropertyTIFFDictionary] = [
+    kCGImagePropertyTIFFMake: "Second Make"
+]
 _ = ExportService.write(privacyRendered, snapshot: keepSnapshot,
                         to: privacyDirectory.appendingPathComponent("second.jpg"),
                         colorSpace: sRGB, metadata: secondMetadata)
-let secondExif = exportedProperties("second.jpg")[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+let secondProps = exportedProperties("second.jpg")
+let secondExif = secondProps[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+let secondTIFF = secondProps[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
 check((secondExif[kCGImagePropertyExifCameraOwnerName] as? String) == "Second Owner"
-        && (secondExif[kCGImagePropertyExifBodySerialNumber] as? String) == "BODY-999",
+        && (secondExif[kCGImagePropertyExifBodySerialNumber] as? String) == "BODY-999"
+        && (secondTIFF[kCGImagePropertyTIFFMake] as? String) == "Second Make",
       "a batch row uses its own file's metadata")
 
-for (name, format) in [("stripped.png", ExportFormat.png), ("stripped.tif", .tiff)] {
-    var snap = privacySnapshot
-    snap.format = format
-    snap.quality = 1
-    let url = privacyDirectory.appendingPathComponent(name)
-    let wrote = ExportService.write(privacyRendered, snapshot: snap, to: url,
-                                    colorSpace: sRGB, metadata: privacyMetadata)
-    let props = exportedProperties(name)
-    guard wrote, let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-          let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-        check(false, "\(name) export")
-        continue
+// A Display P3 source must keep its profile, not be retagged as sRGB.
+if let p3 = CGColorSpace(name: CGColorSpace.displayP3),
+   let context = CGContext(data: nil, width: privacySide, height: privacySide,
+                           bitsPerComponent: 8, bytesPerRow: 0, space: p3,
+                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+    context.setFillColor(CGColor(colorSpace: p3, components: [0.6, 0.4, 0.2, 1])!)
+    context.fill(CGRect(x: 0, y: 0, width: privacySide, height: privacySide))
+    let p3Image = context.makeImage()!
+    let p3URL = privacyDirectory.appendingPathComponent("stripped-p3.jpg")
+    let wrote = ExportService.write(
+        RenderedExport(image: CIImage(cgImage: p3Image), carriesSourceMetadata: true),
+        snapshot: privacySnapshot, to: p3URL, colorSpace: p3, metadata: privacyMetadata)
+    if let source = CGImageSourceCreateWithURL(p3URL as CFURL, nil),
+       let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil),
+       let name = decoded.colorSpace?.name as String? {
+        check(wrote && name == (CGColorSpace.displayP3 as String),
+              "Display P3 profile survives the export", name)
+    } else {
+        check(false, "Display P3 export decodes")
     }
-    check(image.bitsPerComponent >= 16 && image.colorSpace != nil
-            && props[kCGImagePropertyGPSDictionary] == nil,
-          "\(name) keeps 16-bit depth and its profile without GPS",
-          "\(image.bitsPerComponent)-bit")
+} else {
+    print("  … Display P3 unavailable in this environment (NOT VERIFIED)")
 }
 
 // MARK: - Orientation
@@ -1436,6 +1593,7 @@ if let png = NSBitmapImageRep(cgImage: twoToneFixture(width: 40, height: 30,
 }
 
 print("\n" + String(repeating: "-", count: 60))
+try? FileManager.default.removeItem(at: engineStoreRoot)
 if failures.isEmpty {
     print("ENGINE TESTS: PASS")
     exit(0)

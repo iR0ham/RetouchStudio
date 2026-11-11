@@ -1,6 +1,6 @@
 # Releasing Retouch Studio
 
-This is the checklist for turning the working tree into a public build. It is written for the current state of the project: universal (Apple silicon and Intel), ad-hoc signed, with an optional local AI helper and downloaded model weights. The helper itself is Apple-silicon-only.
+This is the checklist for turning the working tree into a public build. It is written for the current state of the project: universal (Apple silicon and Intel), ad-hoc signed, with an optional local AI helper. Release builds ship without the helper. In the current stabilization build the protocol-v2 runtime installer is disabled (`AIRuntime.package` is nil), so the AI tools report the runtime as unavailable and the app downloads no runtime. When an official protocol-v2 package is configured, the app will fetch it only after the owner approves its name, size and SHA256; model weights stay a separate download. A build with the worker bundled is still supported for offline use. The helper itself is Apple-silicon-only.
 
 ## 1. Public identity
 
@@ -31,7 +31,7 @@ Without the overrides the values in `Resources/Info.plist` are used. Bump `CFBun
 
 ```bash
 git status                                  # expect a clean tree
-./Tests/run.sh                              # engine + model suites
+./Tests/run.sh                              # Engine, Model, Runtime Process and Runtime V2 suites
 cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # worker suite, if shipping the helper
 ```
 
@@ -40,7 +40,7 @@ The build itself runs the engine self-test (`--selftest`) and stops if it fails;
 ## 4. Build and verify
 
 ```bash
-RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=42 ./build.sh release   # universal by default
+RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=42 RETOUCH_SKIP_WORKER=1 ./build.sh release   # light universal app
 codesign --verify --deep --strict "Retouch Studio.app"
 lipo -archs "Retouch Studio.app/Contents/MacOS/RetouchStudio"   # arm64 x86_64
 "Retouch Studio.app/Contents/MacOS/RetouchStudio" --selftest --out /tmp/rs-selftest
@@ -51,12 +51,12 @@ The build runs the self-test natively and, on an Apple-silicon machine with Rose
 Check the bundle contents:
 
 ```bash
-du -sh "Retouch Studio.app"                                # ~1.3–1.6 GB with the helper, ~30 MB without
+du -sh "Retouch Studio.app"                                # ~16 MB light universal; ~1.3–1.6 GB with the helper
 ls "Retouch Studio.app/Contents/Resources/Worker"          # only if the helper was bundled; Apple-silicon runtime
 find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only
 ```
 
-Model weights must not appear inside the bundle. They belong in `~/Library/Application Support/RetouchStudio/AI/models` after the owner approves a download.
+Model weights must not appear inside the bundle. They belong in `~/Library/Application Support/RetouchStudio/AI/models` after the owner approves a download. The on-demand protocol-v2 runtime installs under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`; the installer is currently disabled because `AIRuntime.package` is nil, so this build does not install a runtime.
 
 ## 5. Signing and notarization
 
@@ -72,20 +72,28 @@ xcrun notarytool submit RetouchStudio.zip --keychain-profile <profile> --wait
 xcrun stapler staple "Retouch Studio.app"
 ```
 
-Until then, release notes must state that the build is ad-hoc signed, universal (AI needs Apple silicon), and opened with **right-click → Open** on first launch.
+Until then, release notes must state that the build is ad-hoc signed, light (the current build offers no runtime download; a future approved runtime package would be a separate Apple-silicon download), and opened with **right-click → Open** on first launch.
 
 ## 6. Package and publish
 
-The two disk images are built separately, because the AI helper only ships with the Apple-silicon one:
+The two disk images are light builds. The current build offers no runtime download (`AIRuntime.package` is nil); packaging a future runtime is a separate step, enabled only when an official protocol-v2 package is approved. That archive is cut from a helper build first:
 
 ```bash
-RETOUCH_ARCH=arm64 ./build.sh release
+RETOUCH_ARCH=arm64 ./build.sh release                 # helper build, source available
+./Tools/make-runtime.sh "Retouch Studio.app/Contents/Resources/Worker"
+                                         # RetouchStudio-1.0.0-ai-runtime-arm64.zip + checksum
+```
+
+Do not publish that archive as installable until an official protocol-v2 package exists. Enabling the installer requires an `AIRuntime.Package` entry (URL, byte count and SHA256) in `Sources/RetouchStudio/Core/AIRuntime.swift`; the current build keeps `package` nil, so no runtime is offered, verified or installed. When an approved package is configured, the app verifies both size and SHA256 before installing under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`.
+
+```bash
+RETOUCH_ARCH=arm64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 ./Tools/make-dmg.sh                                  # RetouchStudio-1.0.0-arm64.dmg
 
 RETOUCH_ARCH=x86_64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 ./Tools/make-dmg.sh                                  # RetouchStudio-1.0.0-x86_64.dmg
 
-./build.sh release                                   # universal app for the zip
+RETOUCH_ARCH=universal RETOUCH_SKIP_WORKER=1 ./build.sh release
 ditto -c -k --keepParent "Retouch Studio.app" "RetouchStudio-1.0.0-universal.zip"
 shasum -a 256 "RetouchStudio-1.0.0-universal.zip" > "RetouchStudio-1.0.0-universal.zip.sha256"
 
@@ -98,29 +106,29 @@ gh release create v1.0.0 \
   --title "Retouch Studio 1.0.0" --notes-file Docs/RELEASE_NOTES_1.0.0.md
 ```
 
-Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 image carries the helper and full AI; the x86_64 image omits it and is much smaller because the helper cannot run there. The universal zip stays as a single-download alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
+Attach a runtime archive only when an approved `AIRuntime.Package` points at that exact file; an archive without that entry cannot be installed by the app. Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 and x86_64 images are the same light editor, and the universal zip is a single-file alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
 
 Release notes should include:
 
 - what changed, and the minimum macOS version (14.0);
-- that the build is universal and ad-hoc signed, with first-launch instructions;
-- that the editor runs on Intel while the AI tools require Apple silicon;
-- whether the AI helper is bundled and that models are downloaded separately;
-- the SHA256 of the archive;
-- a link to `PRIVACY_AUDIT.md` for the no-cloud claim.
+- that the build is ad-hoc signed, with first-launch instructions;
+- that the editor runs on Intel while the AI tools require Apple silicon and a runtime that the current build does not offer;
+- that the current build offers no runtime download; a future approved protocol-v2 runtime would be about 390 MB and fetched only after its size and SHA256 are shown, and models are always downloaded separately;
+- the SHA256 of every archive;
+- a link to `PRIVACY_AUDIT.md` for the network claim.
 
 ## 7. Post-publish checks
 
 - Download the DMG from the release page, verify its checksum, mount it, drag the app to Applications and launch it from a different account or folder. Repeat once with the zip.
 - Open a photo, run one Auto Retouch, export, and reopen the saved `.retouch` project.
-- If the helper is bundled: approve/download a model, run one AI job, and repeat the idle socket check described in `PRIVACY_AUDIT.md` §5.
+- In the current build, confirm **Settings → Manage Models…** offers no runtime download and the AI tools report the runtime as unavailable. When an approved protocol-v2 package is configured, approve its download, watch the SHA256 check and install, then confirm the helper answers and a model downloads and runs one AI job. Repeat the idle socket check described in `PRIVACY_AUDIT.md` §5.
 - Confirm the About window and Settings show the stamped version.
 
 ## 8. Known limitations to repeat in the release notes
 
 1. Ad-hoc signature, no notarization — Gatekeeper asks once on other Macs.
 2. No clean-machine install has been tested on a second physical Mac.
-3. The helper adds ~1.3–1.6 GB before any model download and is Apple-silicon-only; on Intel the editor works and AI is unavailable.
+3. The current build offers no AI runtime download. A future approved protocol-v2 runtime would be an optional ~390 MB Apple-silicon download (about 1.3 GB unpacked); models add tens of megabytes to several gigabytes on top. Intel has no AI.
 4. Windows and Linux are not supported by this codebase.
-5. The worker source lives outside this repository; a build from a fresh clone without it produces an app whose AI tools report the helper as missing.
+5. The worker source lives outside this repository; a build from a fresh clone without it produces a light app whose AI tools report that the runtime is unavailable.
 6. Downloaded models range from tens of megabytes to several gigabytes under Application Support; removing the app and that folder is the documented uninstall.

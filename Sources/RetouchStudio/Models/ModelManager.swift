@@ -49,11 +49,16 @@ final class ModelManager: ObservableObject {
     @Published private(set) var verdicts: [String: Verdict] = [:]
     @Published var notice: String?
 
-    private var download: Process?
+    private var modelTool: RuntimeModelTool?
     private var activeName = ""
     private var cancelled = false
 
     var isDownloading: Bool { activeID != nil }
+
+    /// A plan can contain a file whose catalog entry has no verified size
+    /// (SAM2 today). A determinate bar would sit at a misleading 0%, so the
+    /// sheet shows an activity indicator instead.
+    var progressIsIndeterminate: Bool { totalBytes <= 0 }
 
     var percent: Int {
         guard totalBytes > 0 else { return 0 }
@@ -119,6 +124,7 @@ final class ModelManager: ObservableObject {
         verdicts[id] = nil
         do {
             let verdict: Verdict = try await Task.detached(priority: .userInitiated) {
+                try AIWorker.ensureRunning()
                 let reply = try WorkerClient.shared.call(
                     "models.verify", ["model": id]) as? [String: Any] ?? [:]
                 if reply["ok"] as? Bool == true { return .ok }
@@ -136,19 +142,33 @@ final class ModelManager: ObservableObject {
     // MARK: - Transfer
 
     func startDownload(_ plan: AIModelPlan, name: String) {
-        guard download == nil else { return }
+        guard modelTool == nil else { return }
         let arguments = ["models", "download"]
             + plan.models
             + ["--models", AIWorker.modelsDirectory.path,
                "--yes", "--consent-hash", plan.hash]
-        guard let process = try? AIWorker.launchModelTool(arguments) else {
-            notice = L10n.current.modelsHelperMissing
-            return
-        }
 
         let errors = Pipe()
-        process.standardError = errors
-        process.standardOutput = FileHandle.nullDevice
+        let splitter = LineSplitter()
+        let handle = errors.fileHandleForReading
+        // The tool is resolved, leased and started inside one locked sequence;
+        // by the time this returns, the process is already running (or the
+        // call threw and nothing was started). The CLI owns the lease from here
+        // on, so a crash of this app cannot let the runtime be replaced under
+        // it, and cancellation is acknowledged only on the real exit.
+        let tool: RuntimeModelTool
+        do {
+            tool = try AIWorker.startModelTool(arguments, standardError: errors,
+                onExit: { [weak self] status in
+                    handle.readabilityHandler = nil
+                    Task { @MainActor in
+                        self?.finish(status)
+                    }
+                })
+        } catch {
+            notice = error.localizedDescription
+            return
+        }
 
         cancelled = false
         activeName = name
@@ -156,10 +176,8 @@ final class ModelManager: ObservableObject {
         receivedBytes = 0
         totalBytes = plan.totalBytes
         notice = nil
-        download = process
+        modelTool = tool
 
-        let splitter = LineSplitter()
-        let handle = errors.fileHandleForReading
         handle.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
@@ -167,27 +185,12 @@ final class ModelManager: ObservableObject {
                 self?.consume(line)
             }
         }
-
-        process.terminationHandler = { [weak self] process in
-            handle.readabilityHandler = nil
-            Task { @MainActor in
-                self?.finish(process)
-            }
-        }
-
-        do {
-            try process.run()
-        } catch {
-            download = nil
-            activeID = nil
-            notice = L10n.current.modelsDownloadFailed
-        }
     }
 
     func cancelDownload() {
-        guard let process = download else { return }
+        guard let tool = modelTool else { return }
         cancelled = true
-        process.terminate()
+        tool.terminate()
     }
 
     func remove(_ id: String) async {
@@ -233,12 +236,12 @@ final class ModelManager: ObservableObject {
         }
     }
 
-    private func finish(_ process: Process) {
-        download = nil
+    private func finish(_ status: Int32?) {
+        modelTool = nil
         activeID = nil
         if cancelled {
             notice = L10n.current.modelsDownloadCancelled
-        } else if process.terminationStatus == 0 {
+        } else if status == 0 {
             notice = L10n.current.modelsDownloaded(activeName)
             receivedBytes = totalBytes
         } else {

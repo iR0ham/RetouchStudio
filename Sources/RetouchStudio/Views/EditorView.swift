@@ -265,9 +265,11 @@ struct ExportSheet: View {
     }
 
     /// Line-only exports are always PNG, so the format and quality controls
-    /// have nothing to say while that mode is chosen.
+    /// have nothing to say while that mode is chosen. Without a face the export
+    /// is a normal photo, so the ordinary format and quality rows stay.
     private var linesOnly: Bool {
         model.analysis.isEnabled && model.analysis.exportMode == .overlayOnly
+            && !model.faces.isEmpty
     }
 
     /// The upscaler only has a job when the chosen edge is above the photo's
@@ -315,6 +317,13 @@ struct ExportSheet: View {
                 .foregroundStyle(Theme.faint)
                 .help(model.s.analysisExportSectionHelp)
 
+            if model.faces.isEmpty {
+                Text(model.s.analysisNeedsFace)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             VStack(spacing: 2) {
                 ForEach(AnalysisExportMode.allCases) { mode in
                     let active = model.analysis.exportMode == mode
@@ -346,8 +355,10 @@ struct ExportSheet: View {
                 RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                     .fill(Theme.background)
             )
+            .disabled(model.faces.isEmpty)
+            .opacity(model.faces.isEmpty ? 0.5 : 1)
 
-            if model.analysis.exportMode == .poster {
+            if model.analysis.exportMode == .poster, !model.faces.isEmpty {
                 ParameterRow(title: model.s.analysisMargin,
                              hint: model.s.sliderHint(.analysisMargin),
                              value: model.analysisMarginBinding,
