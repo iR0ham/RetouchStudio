@@ -4194,6 +4194,438 @@ func testRecoveryIsolation(productionBefore: RecoveryFingerprint) async {
           "the production recovery tree is untouched by the whole suite")
 }
 
+// MARK: - R4.0 document-state characterization
+
+/// Loads a fresh model from a throwaway photo. The characterization tests use
+/// only public editor API, so the R4.1 extraction must leave them unchanged.
+@MainActor
+func makeCharacterizationModel(_ name: String) async -> (EditorModel, URL)? {
+    let url = workDir.appendingPathComponent("\(name)-\(UUID().uuidString).png")
+    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: url) else {
+        check(false, "\(name): fixture written")
+        return nil
+    }
+    let model = EditorModel()
+    model.load(url: url)
+    guard await waitUntil(60, { model.hasImage && !model.isBusy }) else {
+        check(false, "\(name): fixture loads")
+        return nil
+    }
+    return (model, url)
+}
+
+/// Pins the eight values `EditState` covers and the three things they drive:
+/// the clean baseline, undo/redo and the snapshots taken for export and
+/// autosave. Nothing here depends on the debounce elapsing.
+@MainActor
+func testDocumentStateDefaultsAndDirtyTracking() async {
+    print("\n[R4.0] the eight document fields, their defaults and dirty tracking")
+
+    guard let (model, _) = await makeCharacterizationModel("r4-defaults") else { return }
+
+    check(model.adjustments == Adjustments(), "a fresh load starts with zeroed adjustments")
+    check(model.healSpots.isEmpty, "a fresh load starts with no healing stamps")
+    check(model.stickers.isEmpty, "a fresh load starts with no stickers")
+    check(model.aiEdits.isEmpty, "a fresh load starts with no AI edits")
+    check(model.analysis == AnalysisSettings(), "a fresh load starts with default analysis settings")
+    check(model.appliedCrop == nil, "a fresh load starts with the whole frame")
+    check(model.documentOrientation == .identity, "a fresh load starts upright")
+    check(model.selectedFaceIndex == nil, "a fresh load leaves the face on automatic")
+    check(model.isDocumentPristine, "a fresh load is pristine")
+    check(!model.hasUnsavedChanges && !model.canUndo && !model.canRedo,
+          "a fresh load is clean with no history")
+
+    // Adjustments
+    model.adjustments.smooth = 18
+    check(model.hasUnsavedChanges, "an adjustment marks the document dirty")
+    check(model.canUndo, "an uncommitted adjustment is already undoable")
+    model.undo()
+    check(model.adjustments.smooth == 0 && !model.hasUnsavedChanges,
+          "undo restores the slider and the clean baseline")
+    check(model.canRedo, "the undone adjustment is redoable")
+    model.redo()
+    check(model.adjustments.smooth == 18 && model.hasUnsavedChanges, "redo reapplies the adjustment")
+    model.undo()
+    check(!model.hasUnsavedChanges, "the document is clean again")
+
+    // Healing stamp
+    model.tapHeal(at: CGPoint(x: 0.5, y: 0.5))
+    check(model.healSpots.count == 1, "a tap places one healing stamp")
+    check(model.hasUnsavedChanges && model.canUndo, "a healing stamp is document data")
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.healSpots.isEmpty && !model.hasUnsavedChanges,
+          "undo removes the stamp and the dirty flag")
+    model.redo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.healSpots.count == 1 && model.hasUnsavedChanges, "redo brings the stamp back")
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+
+    // Sticker
+    model.tapArt(at: CGPoint(x: 0.4, y: 0.4))
+    check(model.stickers.count == 1, "a tap places one sticker")
+    check(model.hasUnsavedChanges && model.canUndo, "a sticker is document data")
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.stickers.isEmpty && !model.hasUnsavedChanges,
+          "undo removes the sticker and the dirty flag")
+    model.redo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.stickers.count == 1 && model.hasUnsavedChanges, "redo brings the sticker back")
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+
+    // Analysis overlay
+    model.analysis.isEnabled = true
+    check(model.hasUnsavedChanges && model.canUndo, "the analysis overlay is document data")
+    model.undo()
+    check(model.analysis == AnalysisSettings() && !model.hasUnsavedChanges,
+          "undo restores the default analysis settings")
+    model.redo()
+    check(model.analysis.isEnabled && model.hasUnsavedChanges, "redo re-enables the overlay")
+    model.undo()
+    check(!model.hasUnsavedChanges, "the document is clean again")
+
+    // AI edit
+    let box = CGRect(x: 0.25, y: 0.25, width: 0.3, height: 0.3)
+    guard let edit = storedAIEdit(box: box) else {
+        check(false, "the AI edit files are staged")
+        return
+    }
+    defer { AIEditStore.remove(edit) }
+    model.addAIEdit(edit)
+    _ = await waitUntil { !model.isBusy }
+    check(model.aiEdits == [edit], "the AI edit joins the document")
+    check(model.hasUnsavedChanges && model.canUndo, "an AI edit is document data")
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.aiEdits.isEmpty && !model.hasUnsavedChanges, "one undo removes the AI edit")
+    model.redo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.aiEdits == [edit] && model.hasUnsavedChanges, "redo restores the AI edit")
+    model.removeLastAIEdit()
+    _ = await waitUntil { !model.isBusy }
+    check(model.aiEdits.isEmpty && !model.hasUnsavedChanges,
+          "removing the last AI edit returns to the clean baseline")
+    model.undo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.aiEdits == [edit] && model.hasUnsavedChanges,
+          "undo restores an AI edit that was removed")
+    model.redo()
+    _ = await waitUntil { !model.isBusy }
+    check(model.aiEdits.isEmpty && !model.hasUnsavedChanges, "redo removes it again")
+
+    // Preferences a project carries but the document does not own.
+    let previousSettings = (model.exportQuality, model.exportLongEdge, model.exportFormat,
+                            model.autoRetouchStrength, model.autoColorStrength,
+                            model.comparePosition, model.showFaceOverlay)
+    defer {
+        model.exportQuality = previousSettings.0
+        model.exportLongEdge = previousSettings.1
+        model.exportFormat = previousSettings.2
+        model.autoRetouchStrength = previousSettings.3
+        model.autoColorStrength = previousSettings.4
+        model.comparePosition = previousSettings.5
+        model.showFaceOverlay = previousSettings.6
+    }
+    let undoBefore = model.canUndo
+    model.exportQuality = 0.5
+    model.exportLongEdge = 2400
+    model.exportFormat = .png
+    model.autoRetouchStrength = 25
+    model.autoColorStrength = 40
+    model.comparePosition = 0.2
+    model.showFaceOverlay = true
+    check(!model.hasUnsavedChanges,
+          "export settings and auto strengths do not mark the document dirty")
+    check(model.canUndo == undoBefore, "they also add no undo step")
+}
+
+/// Pins when a change becomes a step: a pending debounce is flushed by undo,
+/// repeated commits are no-ops, a new edit discards the redo branch and the
+/// stack keeps the last 100 states.
+@MainActor
+func testDocumentStateHistoryBehavior() async {
+    print("\n[R4.0] undo/redo step rules")
+
+    guard let (model, _) = await makeCharacterizationModel("r4-history") else { return }
+
+    model.commitAdjustments()
+    check(!model.canUndo, "committing an unchanged document records no step")
+
+    model.adjustments.contrast = 30
+    check(model.canUndo && model.hasUnsavedChanges,
+          "a debounced change is undoable before the idle window elapses")
+    model.undo()
+    check(model.adjustments.contrast == 0 && !model.hasUnsavedChanges,
+          "undo flushes a pending debounce and restores the baseline")
+    model.redo()
+    check(model.adjustments.contrast == 30 && model.hasUnsavedChanges, "redo replays it")
+    model.undo()
+
+    model.adjustments.exposure = 10
+    model.commitAdjustments()
+    model.commitAdjustments()
+    model.undo()
+    check(model.adjustments.exposure == 0 && !model.hasUnsavedChanges,
+          "a repeated commit does not add a second step")
+
+    model.adjustments.exposure = 10
+    model.commitAdjustments()
+    model.adjustments.exposure = 20
+    model.commitAdjustments()
+    model.undo()
+    check(model.adjustments.exposure == 10 && model.canRedo, "undo returns one step")
+    model.adjustments.exposure = 40
+    model.commitAdjustments()
+    check(!model.canRedo, "editing after undo discards the redo branch")
+    model.undo()
+    check(model.adjustments.exposure == 10, "the new branch undoes to its own base")
+    model.undo()
+    check(model.adjustments.exposure == 0, "the older branch is still reachable")
+
+    for value in 1...105 {
+        model.adjustments.smooth = Double(value)
+        model.commitAdjustments()
+    }
+    for _ in 0..<100 { model.undo() }
+    check(model.adjustments.smooth == 5,
+          "history keeps the most recent 100 steps", "oldest retained value is 5")
+    check(!model.canUndo, "older steps were dropped")
+    model.adjustments.smooth = 0
+    model.commitAdjustments()
+    check(!model.hasUnsavedChanges, "the document returns to its clean baseline")
+}
+
+/// Pins what autosave sees: the same `RetouchProject` save writes, captured by
+/// value, with empty fields normalized away and removed once the document is
+/// clean again.
+@MainActor
+func testDocumentStateAutosaveCapture() async {
+    print("\n[R4.0] autosave captures the same document value")
+
+    let previousRecovery = AppSettings.shared.recoveryEnabled
+    AppSettings.shared.recoveryEnabled = true
+    defer {
+        RecoveryStore.invalidatePendingAutosaves()
+        _ = RecoveryStore.removeWorking()
+        AppSettings.shared.recoveryEnabled = previousRecovery
+    }
+    RecoveryStore.invalidatePendingAutosaves()
+    _ = RecoveryStore.removeWorking()
+
+    guard let (model, url) = await makeCharacterizationModel("r4-autosave") else { return }
+    check(RecoveryStore.readWorking() == nil, "a clean document has no working copy")
+
+    model.adjustments.smooth = 22
+    model.flushAutosave()
+    let working = RecoveryStore.readWorking()
+    check(working?.project.imagePath == url.path, "the working copy names the open photo")
+    check(working?.project.adjustments.smooth == 22, "autosave carries the adjustment")
+    check(working?.project.healSpots == nil, "empty stamps stay normalized away")
+    check(working?.project.version == RetouchProject.currentVersion,
+          "the copy is a current-version project")
+
+    var project = RetouchProject(imagePath: url.path, adjustments: Adjustments(),
+                                 exportFormat: "jpeg", exportQuality: 0.92,
+                                 autoRetouchStrength: 70)
+    project.adjustments.smooth = 11
+    let snapshot = RecoverySnapshot.capture(project)
+    project.adjustments.smooth = 64
+    check(snapshot.project.adjustments.smooth == 11,
+          "a snapshot owns a copy of the project, not a reference")
+
+    model.adjustments.smooth = 0
+    check(!model.hasUnsavedChanges && RecoveryStore.readWorking() == nil,
+          "returning to the clean baseline removes the working copy")
+}
+
+/// Pins what Save Project writes: every document field, the preferences the
+/// project carries, and the nil normalization of empty/default values.
+@MainActor
+func testDocumentStateProjectNormalization() async {
+    print("\n[R4.0] project save writes the document and normalizes defaults")
+
+    let folder = workDir.appendingPathComponent("r4-project-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let photoURL = folder.appendingPathComponent("photo.png")
+    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: photoURL) else {
+        check(false, "project fixture")
+        return
+    }
+    let projectURL = folder.appendingPathComponent("edit.retouch")
+    let initial = RetouchProject(imagePath: photoURL.path,
+                                 adjustments: Adjustments(),
+                                 exportFormat: "jpeg", exportQuality: 0.9,
+                                 autoRetouchStrength: 70)
+    check(writeProject(initial, to: projectURL), "the project fixture is written")
+
+    let model = EditorModel()
+    model.openProject(at: projectURL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "the project opens")
+    check(!model.hasUnsavedChanges && model.projectURL == projectURL,
+          "an opened project starts clean")
+
+    let previous = (model.exportQuality, model.autoRetouchStrength, model.autoColorStrength)
+    defer {
+        model.exportQuality = previous.0
+        model.autoRetouchStrength = previous.1
+        model.autoColorStrength = previous.2
+    }
+    model.exportQuality = 0.77
+    model.autoRetouchStrength = 33
+    model.autoColorStrength = 44
+    check(!model.hasUnsavedChanges,
+          "export and auto preferences are written to a project but are not document dirt")
+
+    model.adjustments.smooth = 33
+    check(model.hasUnsavedChanges, "a slider change is still dirt")
+    model.saveProject()
+    check(!model.hasUnsavedChanges && model.projectURL == projectURL,
+          "save moves the clean baseline")
+
+    guard let data = try? Data(contentsOf: projectURL),
+          let saved = try? JSONDecoder().decode(RetouchProject.self, from: data) else {
+        check(false, "the saved project decodes")
+        return
+    }
+    check(saved.version == RetouchProject.currentVersion, "the project is written at version 3")
+    check(saved.imagePath == photoURL.path, "the project names the photo")
+    check(saved.adjustments.smooth == 33, "the adjustment is written")
+    check(saved.exportQuality == 0.77 && saved.autoRetouchStrength == 33
+              && saved.autoColorStrength == 44,
+          "export and auto preferences are written")
+    check(saved.exportLongEdge == nil && saved.crop == nil
+              && saved.healSpots == nil && saved.stickers == nil
+              && saved.aiEdits == nil && saved.analysis == nil
+              && saved.orientation == nil && saved.selectedFace == nil,
+          "empty and default fields are normalized away")
+}
+
+/// Pins that the export snapshot reads the same eight fields the history and
+/// dirty comparison use, and gets its remaining switches from the caller.
+@MainActor
+func testDocumentStateExportSnapshot() async {
+    print("\n[R4.0] the export snapshot reads the same eight document fields")
+
+    guard let (model, _) = await makeCharacterizationModel("r4-export") else { return }
+
+    model.adjustments.smooth = 21
+    model.tapHeal(at: CGPoint(x: 0.6, y: 0.4))
+    model.tapArt(at: CGPoint(x: 0.35, y: 0.6))
+    model.analysis.isEnabled = true
+    _ = await waitUntil { !model.isBusy }
+
+    let previous = (model.exportQuality, model.exportLongEdge, model.stripLocationMetadata)
+    defer {
+        model.exportQuality = previous.0
+        model.exportLongEdge = previous.1
+        model.stripLocationMetadata = previous.2
+    }
+    model.exportQuality = 0.66
+    model.exportLongEdge = 2400
+    model.stripLocationMetadata = false
+
+    guard let snapshot = model.makeExportSnapshot(includeStamps: false,
+                                                  includeAnalysis: false) else {
+        check(false, "an export snapshot exists for an open photo")
+        return
+    }
+    check(snapshot.adjustments == model.adjustments, "adjustments travel")
+    check(snapshot.healSpots == model.healSpots, "healing stamps travel")
+    check(snapshot.stickers == model.stickers, "stickers travel")
+    check(snapshot.aiEdits == model.aiEdits, "AI edits travel")
+    check(snapshot.analysis == model.analysis, "analysis settings travel")
+    check(snapshot.crop == model.appliedCrop, "the crop travels")
+    check(snapshot.orientation == model.documentOrientation, "the orientation travels")
+    check(snapshot.selectedFaceIndex == model.selectedFaceIndex, "the face selection travels")
+    check(snapshot.quality == 0.66 && snapshot.longEdge == 2400
+              && snapshot.stripsPrivacyMetadata == false,
+          "export settings are supplied by the application layer")
+    check(snapshot.includeStamps == false && snapshot.includeAnalysis == false,
+          "batch switches are supplied by the caller")
+    check(snapshot.aiUpscale == model.usesExportUpscale,
+          "the upscale choice follows the same runtime gate as the sheet")
+
+    model.resetAll()
+    _ = await waitUntil { !model.isBusy }
+}
+
+// MARK: - R4.1 DocumentState value semantics
+
+/// Pins the extracted value itself: the eight fields, their defaults, equality
+/// and copy behavior. The model-level characterization above proves the editor
+/// still observes the same values through it.
+@MainActor
+func testDocumentStateValueSemantics() {
+    print("\n[R4.1] DocumentState defaults, equality and copying")
+
+    let empty = DocumentState()
+    check(empty.adjustments == Adjustments(), "default adjustments are the identity")
+    check(empty.healSpots.isEmpty && empty.stickers.isEmpty && empty.aiEdits.isEmpty,
+          "default collections are empty")
+    check(empty.analysis == AnalysisSettings(), "default analysis settings are the defaults")
+    check(empty.crop == nil, "the default crop is the whole frame")
+    check(empty.orientation == .identity, "the default orientation is identity")
+    check(empty.selectedFaceIndex == nil, "the default face is automatic")
+    check(empty == DocumentState(), "two fresh states are equal")
+
+    var edit = DocumentState()
+    edit.adjustments.smooth = 12
+    edit.healSpots = [HealSpot(center: CGPoint(x: 0.1, y: 0.2), radius: 0.03)]
+    edit.stickers = [Sticker(center: CGPoint(x: 0.3, y: 0.4), size: 0.2)]
+    edit.aiEdits = [AIEdit(preset: "removeObject", prompt: "test", seed: 7,
+                           patchFile: "patch.png", alphaFile: "alpha.png",
+                           box: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3),
+                           imagePixels: CGSize(width: 64, height: 64))]
+    edit.analysis.isEnabled = true
+    edit.crop = CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.6)
+    edit.orientation = DocumentOrientation(quarterTurns: 1)
+    edit.selectedFaceIndex = 2
+
+    check(empty.adjustments.isIdentity && empty.healSpots.isEmpty
+              && empty.stickers.isEmpty && empty.aiEdits.isEmpty
+              && empty.analysis == AnalysisSettings() && empty.crop == nil
+              && empty.orientation == .identity && empty.selectedFaceIndex == nil,
+          "building another state leaves the first one untouched")
+
+    var copy = edit
+    copy.adjustments.contrast = 9
+    copy.healSpots.append(HealSpot(center: CGPoint(x: 0.5, y: 0.5), radius: 0.04))
+    copy.stickers.removeAll()
+    copy.crop = nil
+    check(edit.adjustments.contrast == 0 && edit.healSpots.count == 1
+              && edit.stickers.count == 1 && edit.crop != nil,
+          "a copy owns its own values and arrays")
+
+    let same = DocumentState(adjustments: edit.adjustments,
+                             healSpots: edit.healSpots,
+                             stickers: edit.stickers,
+                             aiEdits: edit.aiEdits,
+                             analysis: edit.analysis,
+                             crop: edit.crop,
+                             orientation: edit.orientation,
+                             selectedFaceIndex: edit.selectedFaceIndex)
+    check(same == edit, "equal fields compare equal")
+
+    let mutations: [(String, (inout DocumentState) -> Void)] = [
+        ("adjustments", { $0.adjustments.smooth += 1 }),
+        ("healSpots", { $0.healSpots.append(HealSpot(center: .zero, radius: 0.01)) }),
+        ("stickers", { $0.stickers.append(Sticker(center: .zero, size: 0.1)) }),
+        ("aiEdits", { $0.aiEdits.removeAll() }),
+        ("analysis", { $0.analysis.isEnabled.toggle() }),
+        ("crop", { $0.crop = nil }),
+        ("orientation", { $0.orientation = .identity }),
+        ("selectedFaceIndex", { $0.selectedFaceIndex = nil }),
+    ]
+    for (label, mutate) in mutations {
+        var variant = edit
+        mutate(&variant)
+        check(variant != edit, "equality distinguishes \(label)")
+    }
+}
+
 // MARK: - runner
 
 @MainActor
@@ -4252,6 +4684,12 @@ func runAll() async {
     testRuntimeConcurrentInstall()
     testRealRuntimeValidation()
     await testRecoveryIsolation(productionBefore: productionRecoveryBefore)
+    await testDocumentStateDefaultsAndDirtyTracking()
+    await testDocumentStateHistoryBehavior()
+    await testDocumentStateAutosaveCapture()
+    await testDocumentStateProjectNormalization()
+    await testDocumentStateExportSnapshot()
+    testDocumentStateValueSemantics()
 
     // Invalidate any debounced write left by the last scenario: the scratch
     // directory is about to disappear, and no timer may outlive it.

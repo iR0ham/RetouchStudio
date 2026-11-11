@@ -310,32 +310,22 @@ final class EditorModel: ObservableObject {
 
     /// Everything one undo step covers. Stamping the healing brush and reframing
     /// with the crop tool are edits exactly like moving a slider, so all of them
-    /// travel through history together.
-    private struct EditState: Equatable {
-        var adjustments = Adjustments()
-        var healSpots: [HealSpot] = []
-        var stickers: [Sticker] = []
-        var aiEdits: [AIEdit] = []
-        var analysis = AnalysisSettings()
-        var crop: CGRect?
-        var orientation = DocumentOrientation.identity
-        var selectedFaceIndex: Int?
-    }
-
-    private var undoStack: [EditState] = []
-    private var redoStack: [EditState] = []
-    private var lastCommitted = EditState()
-    private var cleanState = EditState()
+    /// travel through history together. The value itself lives in
+    /// `DocumentState.swift`; the editor keeps owning how it is used.
+    private var undoStack: [DocumentState] = []
+    private var redoStack: [DocumentState] = []
+    private var lastCommitted = DocumentState()
+    private var cleanState = DocumentState()
     private var coalesceTask: Task<Void, Never>?
 
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
-    private var currentState: EditState {
-        EditState(adjustments: adjustments, healSpots: healSpots,
-                  stickers: stickers, aiEdits: aiEdits, analysis: analysis,
-                  crop: appliedCrop, orientation: documentOrientation,
-                  selectedFaceIndex: selectedFaceIndex)
+    private var currentState: DocumentState {
+        DocumentState(adjustments: adjustments, healSpots: healSpots,
+                      stickers: stickers, aiEdits: aiEdits, analysis: analysis,
+                      crop: appliedCrop, orientation: documentOrientation,
+                      selectedFaceIndex: selectedFaceIndex)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -406,7 +396,7 @@ final class EditorModel: ObservableObject {
     /// the masks and repaints the canvas, so history never leaves a stale stamp
     /// on screen. A crop change also has to re-read the pixels, which happens
     /// off the main actor without touching the history stack.
-    private func restore(_ state: EditState) {
+    private func restore(_ state: DocumentState) {
         let cropChanged = state.crop != appliedCrop
         let orientationChanged = state.orientation != documentOrientation
         let selectionChanged = state.selectedFaceIndex != selectedFaceIndex
@@ -1101,8 +1091,8 @@ final class EditorModel: ObservableObject {
             // Until the working slot is written below, a crash copy lives
             // nowhere else. It counts as unsaved so closing warns and the
             // recovery data stays.
-            cleanState = EditState()
-            hasUnsavedChanges = hasImage && currentState != EditState()
+            cleanState = DocumentState()
+            hasUnsavedChanges = hasImage && currentState != DocumentState()
         }
         isLoadingState = false
         resetView()
