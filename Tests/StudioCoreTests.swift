@@ -241,6 +241,195 @@ if let data = try? Data(contentsOf: renderPlanURL),
 }
 check(r1Result, "the R1 render-plan parameters object decodes as Adjustments")
 
+print("Portable geometry: construction and equality")
+let point = StudioPoint(x: 0.25, y: 0.5)
+check(StudioPoint.zero == StudioPoint(x: 0, y: 0), "zero is the origin")
+check(StudioPoint(x: 0, y: 0).distance(to: StudioPoint(x: 3, y: 4)) == 5,
+      "distance is Euclidean")
+check(point.distance(to: point) == 0, "a point is zero away from itself")
+check(Set([point, StudioPoint(x: 0.25, y: 0.5)]).count == 1, "points hash by value")
+var movedPoint = point
+movedPoint.x = 0.75
+check(point.x == 0.25 && movedPoint != point, "points have value semantics")
+
+let size = StudioSize(width: 0.3, height: 0.4)
+check(size.isValid && !size.isEmpty, "a positive size is valid and not empty")
+let zeroWidth = StudioSize(width: 0, height: 0.4)
+check(zeroWidth.isValid && zeroWidth.isEmpty, "a zero side is valid and empty")
+let negativeSize = StudioSize(width: -0.3, height: 0.4)
+check(!negativeSize.isValid && negativeSize.isEmpty,
+      "a negative side is representable but invalid")
+check(StudioSize(width: 0, height: 0).isValid, "a fully zero size is valid")
+check(Set([size, StudioSize(width: 0.3, height: 0.4)]).count == 1, "sizes hash by value")
+
+let rect = StudioRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4)
+check(rect.minX == 0.1 && rect.midX == 0.25 && rect.maxX == 0.4,
+      "x edges match the stored origin and width")
+check(abs(rect.minY - 0.2) < 1e-12 && abs(rect.midY - 0.4) < 1e-12
+      && abs(rect.maxY - 0.6) < 1e-12,
+      "y edges match the stored origin and height")
+check(rect.origin == StudioPoint(x: 0.1, y: 0.2)
+      && rect.size == StudioSize(width: 0.3, height: 0.4),
+      "origin and size expose the stored fields")
+check(StudioRect(origin: rect.origin, size: rect.size) == rect,
+      "the origin/size initializer round-trips")
+check(StudioRect.unit == StudioRect(x: 0, y: 0, width: 1, height: 1),
+      "the unit rectangle is the normalized full frame")
+check(StudioRect.zero.isEmpty && StudioRect.unit.isEmpty == false,
+      "zero is empty and unit is not")
+check(StudioRect(x: 0, y: 0, width: -0.3, height: 0.2).isValid == false,
+      "a negative extent makes a rectangle invalid")
+var resized = rect
+resized.size = StudioSize(width: 0.5, height: 0.6)
+check(resized.width == 0.5 && resized.height == 0.6 && resized.x == 0.1,
+      "setting the size keeps the origin")
+var shifted = rect
+shifted.origin = StudioPoint(x: 0, y: 0)
+check(shifted.x == 0 && shifted.y == 0 && shifted.size == rect.size,
+      "setting the origin keeps the size")
+let flippedRect = StudioRect(x: 0.75, y: 0.9, width: -0.25, height: -0.4)
+check(flippedRect.standardized() == StudioRect(x: 0.5, y: 0.5, width: 0.25, height: 0.4),
+      "standardizing flips a negative extent onto its min corner")
+check(flippedRect.x == 0.75 && flippedRect.width == -0.25,
+      "standardizing returns a new value and leaves the original alone")
+
+print("Portable geometry: boundaries and non-finite values")
+check(rect.contains(StudioPoint(x: 0.1, y: 0.2)), "the min corner belongs to the rectangle")
+check(rect.contains(StudioPoint(x: 0.3999, y: 0.5999)), "the interior belongs to the rectangle")
+check(!rect.contains(StudioPoint(x: rect.maxX, y: rect.midY)),
+      "the max x edge is excluded")
+check(!rect.contains(StudioPoint(x: rect.midX, y: rect.maxY)),
+      "the max y edge is excluded")
+check(!rect.contains(StudioPoint(x: 0.05, y: 0.3)), "a point left of the rectangle is outside")
+check(!rect.contains(StudioPoint(x: .nan, y: 0.3)),
+      "a non-finite point is never contained")
+check(!StudioRect(x: 0, y: 0, width: 0, height: 1).contains(StudioPoint(x: 0, y: 0.5)),
+      "an empty rectangle contains nothing")
+check(!StudioPoint(x: .nan, y: 0).isFinite
+      && !StudioPoint(x: 0, y: .infinity).isFinite,
+      "points report non-finite components")
+check(!StudioSize(width: .infinity, height: 1).isValid
+      && !StudioRect(x: 0, y: 0, width: .infinity, height: 1).isValid,
+      "sizes and rectangles reject non-finite extents")
+let geometryEncoder = JSONEncoder()
+check((try? geometryEncoder.encode(StudioPoint(x: .nan, y: 0))) == nil,
+      "a non-finite point is not encodable")
+check((try? geometryEncoder.encode(
+        StudioRect(x: 0, y: 0, width: .infinity, height: 1))) == nil,
+      "a non-finite rectangle is not encodable")
+check((try? JSONDecoder().decode(StudioPoint.self,
+                                 from: Data(#"{"x":NaN,"y":0}"#.utf8))) == nil,
+      "the decoder rejects a NaN literal")
+
+print("Portable geometry: coordinate spaces")
+let topLeft = StudioCoordinateSpace.sourceNormalizedTopLeft
+let bottomLeft = StudioCoordinateSpace.sourceNormalizedBottomLeft
+check(topLeft.rawValue == "source_normalized",
+      "the canonical raw value is unchanged")
+check(topLeft.isNormalized && topLeft.hasTopLeftOrigin
+      && bottomLeft.isNormalized && !bottomLeft.hasTopLeftOrigin,
+      "normalized spaces differ only by origin")
+check(topLeft.sameUnit(as: bottomLeft) && !topLeft.sameUnit(as: .sourcePixelTopLeft),
+      "spaces compare by unit, not by origin")
+check(topLeft.convert(StudioPoint(x: 0.25, y: 0.1), to: bottomLeft)
+      == StudioPoint(x: 0.25, y: 0.9),
+      "a normalized point flips y")
+check(topLeft.convert(StudioPoint(x: 0.25, y: 0), to: bottomLeft)
+      == StudioPoint(x: 0.25, y: 1),
+      "the top edge maps to the bottom edge")
+check(topLeft.convert(StudioPoint(x: 0.25, y: 1), to: bottomLeft)
+      == StudioPoint(x: 0.25, y: 0),
+      "the bottom edge maps to the top edge")
+check(topLeft.convert(StudioPoint(x: 0.25, y: 1.25), to: bottomLeft)
+      == StudioPoint(x: 0.25, y: -0.25),
+      "values outside 0...1 are flipped, not clamped")
+let restoredPoint = bottomLeft.convert(StudioPoint(x: 0.25, y: 0.9), to: topLeft)
+check(restoredPoint.map { abs($0.x - 0.25) < 1e-12 && abs($0.y - 0.1) < 1e-12 } ?? false,
+      "the reverse flip returns the original point")
+let canonicalBox = StudioRect(x: 0.1, y: 0.2, width: 0.3, height: 0.2)
+let flippedBox = topLeft.convert(canonicalBox, to: bottomLeft)
+check(flippedBox.map { abs($0.x - 0.1) < 1e-12 && abs($0.y - 0.6) < 1e-12
+        && $0.width == 0.3 && $0.height == 0.2 } ?? false,
+      "a normalized rectangle flips its min edge")
+let roundTrippedBox = flippedBox.flatMap { bottomLeft.convert($0, to: topLeft) }
+check(roundTrippedBox.map { abs($0.x - canonicalBox.x) < 1e-12
+        && abs($0.y - canonicalBox.y) < 1e-12
+        && $0.width == canonicalBox.width && $0.height == canonicalBox.height } ?? false,
+      "a normalized rectangle round-trips")
+check(topLeft.convert(StudioPoint(x: 0.1, y: 0.1), to: .sourcePixelTopLeft) == nil,
+      "a normalized point never converts to pixels without a frame")
+check(StudioCoordinateSpace.sourcePixelTopLeft.convert(
+        StudioPoint(x: 10, y: 40), to: .sourcePixelBottomLeft, frameHeight: 200)
+      == StudioPoint(x: 10, y: 160),
+      "a pixel point flips against the frame height")
+check(StudioCoordinateSpace.sourcePixelTopLeft.convert(
+        StudioPoint(x: 10, y: 0), to: .sourcePixelBottomLeft, frameHeight: 200)
+      == StudioPoint(x: 10, y: 200),
+      "the pixel top edge maps to the frame height")
+check(StudioCoordinateSpace.sourcePixelTopLeft.convert(
+        StudioPoint(x: 10, y: 200), to: .sourcePixelBottomLeft, frameHeight: 200)
+      == StudioPoint(x: 10, y: 0),
+      "the pixel bottom edge maps to zero")
+check(StudioCoordinateSpace.sourcePixelTopLeft.convert(
+        StudioPoint(x: 10, y: 40), to: .sourcePixelBottomLeft, frameHeight: 0) == nil,
+      "a zero frame height is refused")
+check(StudioCoordinateSpace.sourcePixelTopLeft.convert(
+        StudioPoint(x: 10, y: 40), to: .sourcePixelBottomLeft, frameHeight: .nan) == nil,
+      "a non-finite frame height is refused")
+check(topLeft.convert(StudioPoint(x: .nan, y: 0), to: bottomLeft) == nil,
+      "a non-finite point is refused")
+check(topLeft.convert(StudioRect(x: 0, y: 0, width: -1, height: 1), to: bottomLeft) == nil,
+      "an unstandardized rectangle is refused")
+check(topLeft.convert(point, to: topLeft) == point,
+      "converting to the same space is identity")
+check(topLeft.convert(StudioRect(x: 0.75, y: 0.9, width: -0.25, height: -0.4),
+                      to: topLeft)
+      == StudioRect(x: 0.75, y: 0.9, width: -0.25, height: -0.4),
+      "identity conversion keeps an unstandardized rectangle")
+check(topLeft.convert(StudioPoint(x: .infinity, y: 0), to: topLeft)
+      == StudioPoint(x: .infinity, y: 0),
+      "identity conversion keeps a non-finite point")
+check(Set([topLeft, bottomLeft, bottomLeft]).count == 2, "spaces hash by value")
+
+print("Portable geometry: Codable")
+func compactJSON<T: Encodable>(_ value: T) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return String(data: try! encoder.encode(value), encoding: .utf8)!
+}
+check(compactJSON(point) == #"{"x":0.25,"y":0.5}"#,
+      "a point encodes as a keyed x/y object")
+check(compactJSON(size) == #"{"height":0.4,"width":0.3}"#,
+      "a size encodes as a keyed width/height object")
+check(compactJSON(rect) == #"{"height":0.4,"width":0.3,"x":0.1,"y":0.2}"#,
+      "a rectangle encodes with the canonical keys")
+let decodedPoint = try! JSONDecoder().decode(StudioPoint.self,
+                                            from: compactJSON(point).data(using: .utf8)!)
+check(decodedPoint == point, "a point round-trips through JSON")
+let decodedSize = try! JSONDecoder().decode(StudioSize.self,
+                                            from: compactJSON(size).data(using: .utf8)!)
+check(decodedSize == size, "a size round-trips through JSON")
+let decodedRect = try! JSONDecoder().decode(StudioRect.self,
+                                            from: compactJSON(rect).data(using: .utf8)!)
+check(decodedRect == rect, "a rectangle round-trips through JSON")
+let extraKeys = try? JSONDecoder().decode(
+    StudioPoint.self, from: Data(#"{"x":1,"y":2,"z":3}"#.utf8))
+check(extraKeys == StudioPoint(x: 1, y: 2), "unknown keys are ignored")
+check((try? JSONDecoder().decode(StudioPoint.self, from: Data("[0.1,0.2]".utf8))) == nil,
+      "the legacy unkeyed point shape is not accepted")
+check((try? JSONDecoder().decode(StudioRect.self,
+                                 from: Data("[[0.1,0.2],[0.3,0.4]]".utf8))) == nil,
+      "the legacy unkeyed rectangle shape is not accepted")
+let tricky = StudioRect(x: 0.1 / 3, y: -0.7, width: 1e-300,
+                        height: 1.7976931348623157e308)
+let trickyBack = try! JSONDecoder().decode(
+    StudioRect.self, from: try! JSONEncoder().encode(tricky))
+check(trickyBack.x.bitPattern == tricky.x.bitPattern
+      && trickyBack.y.bitPattern == tricky.y.bitPattern
+      && trickyBack.width.bitPattern == tricky.width.bitPattern
+      && trickyBack.height.bitPattern == tricky.height.bitPattern,
+      "doubles round-trip bit-exactly")
+
 print("")
 print(failures.isEmpty
       ? "StudioCore: \(checks) checks passed"

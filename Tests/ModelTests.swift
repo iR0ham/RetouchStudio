@@ -1685,6 +1685,48 @@ func testExportUpscalePolicy() async {
           "no request means the full 4x")
 }
 
+// MARK: - Portable geometry
+
+@MainActor
+func testStudioGeometryBridge() {
+    print("\n[R3] portable geometry reaches CoreGraphics without changing a bit")
+
+    let point = CGPoint(x: 0.1, y: -0.25)
+    let bridgedPoint = StudioPoint(point)
+    check(bridgedPoint == StudioPoint(x: 0.1, y: -0.25), "a point keeps its components")
+    check(bridgedPoint.cgPoint == point, "the point round-trips")
+    check(bridgedPoint.cgPoint.x.bitPattern == point.x.bitPattern
+          && bridgedPoint.cgPoint.y.bitPattern == point.y.bitPattern,
+          "the point bits are identical")
+
+    let size = CGSize(width: 1600, height: 1067)
+    let bridgedSize = StudioSize(size)
+    check(bridgedSize == StudioSize(width: 1600, height: 1067),
+          "a size keeps its components")
+    check(bridgedSize.cgSize == size, "the size round-trips")
+    check(bridgedSize.cgSize.width.bitPattern == size.width.bitPattern
+          && bridgedSize.cgSize.height.bitPattern == size.height.bitPattern,
+          "the size bits are identical")
+
+    let rect = CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25)
+    let bridgedRect = StudioRect(rect)
+    check(bridgedRect == StudioRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25),
+          "a rectangle keeps its origin and extents")
+    check(bridgedRect.cgRect == rect, "the rectangle round-trips")
+    check(bridgedRect.cgRect.origin.x.bitPattern == rect.origin.x.bitPattern
+          && bridgedRect.cgRect.size.height.bitPattern == rect.size.height.bitPattern,
+          "the rectangle bits are identical")
+
+    let draft = CGRect(x: 0.75, y: 0.9, width: -0.25, height: -0.4)
+    let bridgedDraft = StudioRect(draft)
+    check(bridgedDraft.cgRect == draft, "a negative-extent draft round-trips")
+    check(bridgedDraft.cgRect.origin.x == 0.75
+          && bridgedDraft.cgRect.size.width == -0.25,
+          "the bridge does not standardize or clamp")
+    check(bridgedDraft.standardized() != bridgedDraft,
+          "standardizing stays an explicit call")
+}
+
 // MARK: - Orientation
 
 @MainActor
@@ -4161,6 +4203,7 @@ func runAll() async {
     await testResetAllClearsEverything()
     await testCropIsUndoable()
     await testOrientationKeepsEditsAttached()
+    testStudioGeometryBridge()
     testBatchExportPolicy()
     await testBatchMatchesSingleExport()
     await testBatchKeepsCropAfterQuarterTurn()
