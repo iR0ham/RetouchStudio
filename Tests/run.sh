@@ -34,6 +34,9 @@ done
 # directions, so linking only a hand-picked subset drifts out of date.
 SOURCES=$(find Sources/RetouchStudio -name '*.swift' ! -name 'App.swift' ! -name 'SelfCheck.swift')
 
+CORE_DIR="build/studiocore/$TARGET_ARCH"
+./Tests/build-studiocore.sh "$TARGET_ARCH" "$SDK" "$CORE_DIR"
+
 run_suite() {
   local suite="$1" name="$2"
   local work out
@@ -41,8 +44,9 @@ run_suite() {
   cp "$suite" "$work/main.swift"
   out="$work/$name"
   swiftc -O -target "${TARGET_ARCH}-apple-macosx14.0" -sdk "$SDK" -o "$out" \
+    -I "$CORE_DIR" \
     "$work/main.swift" \
-    $SOURCES \
+    $SOURCES "$CORE_DIR/libStudioCore.a" \
     -framework SwiftUI -framework AppKit -framework CoreImage \
     -framework Vision -framework UniformTypeIdentifiers 2>&1 | grep -E "error:" && exit 1
   "$out"

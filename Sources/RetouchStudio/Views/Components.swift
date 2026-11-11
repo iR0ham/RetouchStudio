@@ -1,3 +1,4 @@
+import StudioCore
 import SwiftUI
 
 /// A rectangle covering only the leading fraction of its width — the before/after

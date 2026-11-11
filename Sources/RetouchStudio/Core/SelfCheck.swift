@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import CoreImage
 import Foundation
+import StudioCore
 
 /// تست خودکار موتور پردازش. با سوئیچ --selftest اجرا می‌شود و رابط کاربری بالا نمی‌آید.
 ///

@@ -31,6 +31,8 @@ done
 [ -n "$SDK" ] || { echo "no compatible SDK found" >&2; exit 1; }
 
 SOURCES=$(find Sources/RetouchStudio -name '*.swift' ! -name 'App.swift' ! -name 'SelfCheck.swift')
+CORE_DIR="build/studiocore/$TARGET_ARCH"
+./Tests/build-studiocore.sh "$TARGET_ARCH" "$SDK" "$CORE_DIR"
 work="$(mktemp -d)"
 cp Tests/CorpusTests.swift "$work/main.swift"
 cp Tests/CorpusSupport.swift "$work/CorpusSupport.swift"
@@ -39,8 +41,9 @@ cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
 
 if ! swiftc -O -target "${TARGET_ARCH}-apple-macosx14.0" -sdk "$SDK" -o "$out" \
+  -I "$CORE_DIR" \
   "$work/main.swift" "$work/CorpusSupport.swift" \
-  $SOURCES \
+  $SOURCES "$CORE_DIR/libStudioCore.a" \
   -framework SwiftUI -framework AppKit -framework CoreImage \
   -framework Vision -framework UniformTypeIdentifiers -framework Metal \
   >"$work/build.log" 2>&1; then

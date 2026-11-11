@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreImage
 import Foundation
+import StudioCore
 
 /// Colour cosmetics: lips, cheeks, lids, lash line and brows.
 ///

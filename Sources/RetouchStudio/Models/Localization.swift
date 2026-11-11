@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// Every user-facing string in the app, kept in one table so the copy stays
 /// consistent and is easy to audit.

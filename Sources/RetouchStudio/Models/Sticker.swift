@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import StudioCore
 
 /// The shapes the art tool can stamp on a portrait. Each one is drawn
 /// procedurally by `ArtRenderer`, so there is no image asset to ship and every

@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// The Persian table. Every line of `L10n` is overridden here, so the two
 /// languages stay in step: a new string in one file fails to compile until the

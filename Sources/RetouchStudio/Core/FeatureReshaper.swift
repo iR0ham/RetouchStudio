@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreImage
 import Foundation
+import StudioCore
 
 /// Localized geometric reshaping of facial features.
 ///

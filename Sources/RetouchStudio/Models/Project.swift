@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import StudioCore
 import UniformTypeIdentifiers
 
 /// The sidecar document for one photo. The photo itself is never copied or

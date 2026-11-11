@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import StudioCore
 
 /// Reads a photo the way a retoucher would, on the same 512 px buffer the
 /// automatic tools already use: what the skin texture is like, where the

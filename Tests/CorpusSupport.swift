@@ -5,6 +5,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import Metal
+import StudioCore
 import UniformTypeIdentifiers
 
 // Deterministic golden-corpus fixtures and measurement helpers.

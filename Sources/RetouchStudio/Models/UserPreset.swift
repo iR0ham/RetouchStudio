@@ -1,11 +1,5 @@
 import Foundation
-
-/// A look the owner saved from their own slider positions.
-struct UserPreset: Identifiable, Codable, Equatable {
-    var id: String = UUID().uuidString
-    var name: String
-    var adjustments: Adjustments = Adjustments()
-}
+import StudioCore
 
 /// Saved looks live in one small JSON file in Application Support. They belong
 /// to the person rather than to a photo, so they have to survive closing a

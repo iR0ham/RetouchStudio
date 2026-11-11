@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreImage
 import Dispatch
 import Foundation
+import StudioCore
 import UniformTypeIdentifiers
 
 // Model-level regressions. These drive the real `EditorModel` through the same

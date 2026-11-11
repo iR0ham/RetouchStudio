@@ -1,6 +1,7 @@
 import AppKit
 import CoreImage
 import Foundation
+import StudioCore
 import UniformTypeIdentifiers
 
 // Verifies the new engine's core guarantees, each of which was a real defect:

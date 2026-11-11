@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreImage
 import Foundation
+import StudioCore
 
 /// یک بافر پیکسلی ساده‌ی RGBA8 برای تحلیل آماری تصویر.
 struct PixelBuffer {

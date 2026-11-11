@@ -1,4 +1,5 @@
 import AppKit
+import StudioCore
 import SwiftUI
 
 /// The inspector is one card of collapsible rows, the way the reference stacks

@@ -1,0 +1,142 @@
+{
+  "backgroundBlur" : 55,
+  "backgroundFill" : 70,
+  "backgroundFillColor" : {
+    "hue" : 200,
+    "saturation" : 0.2,
+    "value" : 0.3
+  },
+  "backgroundImage" : "backdrop-1.heic",
+  "backgroundImageAmount" : 71,
+  "backgroundImageName" : "Studio Backdrop",
+  "backgroundRemove" : true,
+  "backgroundSaturation" : 57,
+  "backgroundTone" : 56,
+  "blacks" : 32,
+  "blemish" : 12,
+  "blush" : 42,
+  "blushColor" : {
+    "hue" : 8,
+    "saturation" : 0.48,
+    "value" : 0.88
+  },
+  "bodyArms" : 59,
+  "bodyLegs" : 60,
+  "bodySlim" : 54,
+  "bodySmooth" : 52,
+  "bodyTone" : 53,
+  "bodyWaist" : 58,
+  "browColor" : {
+    "hue" : 26,
+    "saturation" : 0.38,
+    "value" : 0.38
+  },
+  "browDefine" : 43,
+  "cheekSize" : 25,
+  "chinLength" : 27,
+  "clarity" : 37,
+  "contour" : 63,
+  "contourColor" : {
+    "hue" : 22,
+    "saturation" : 0.3,
+    "value" : 0.3
+  },
+  "contrast" : 31,
+  "curveHighlights" : 66,
+  "curveMidtones" : 65,
+  "curveShadows" : 64,
+  "darkCircles" : 15,
+  "exposure" : 30,
+  "eyeBrighten" : 19,
+  "eyeSharpen" : 20,
+  "eyeSize" : 21,
+  "eyeliner" : 45,
+  "eyeshadow" : 44,
+  "faceLength" : 29,
+  "faceWidth" : 28,
+  "grain" : 40,
+  "hairColor" : 61,
+  "hairShine" : 62,
+  "hairTint" : {
+    "hue" : 30,
+    "saturation" : 0.46,
+    "value" : 0.6
+  },
+  "hairVolume" : 69,
+  "hslHue" : [
+    -100,
+    -50,
+    -30,
+    -10,
+    10,
+    30,
+    50,
+    100
+  ],
+  "hslLuminance" : [
+    -60,
+    -40,
+    -20,
+    0,
+    20,
+    40,
+    60,
+    80
+  ],
+  "hslSaturation" : [
+    -65,
+    -45,
+    -25,
+    -5,
+    5,
+    25,
+    45,
+    65
+  ],
+  "irisEnhance" : 48,
+  "jawWidth" : 26,
+  "lashDarken" : 49,
+  "lensColor" : {
+    "hue" : 123,
+    "saturation" : 0.33,
+    "value" : 0.44
+  },
+  "lensTint" : 67,
+  "linerColor" : {
+    "hue" : 225,
+    "saturation" : 0.55,
+    "value" : 0.24
+  },
+  "lipColor" : {
+    "hue" : 340,
+    "saturation" : 0.52,
+    "value" : 0.62
+  },
+  "lipGloss" : 50,
+  "lipSize" : 24,
+  "lipTint" : 41,
+  "lookID" : "portraitFilm",
+  "lookStrength" : 39,
+  "noseSize" : 22,
+  "noseTip" : 23,
+  "saturation" : 34,
+  "shadowColor" : {
+    "hue" : 315,
+    "saturation" : 0.32,
+    "value" : 0.42
+  },
+  "shine" : 47,
+  "skinBrighten" : 16,
+  "skinFinish" : 46,
+  "skinToneEvens" : 14,
+  "smooth" : 11,
+  "splitTone" : 51,
+  "teethAlign" : 68,
+  "teethWhiten" : 18,
+  "texturePreserve" : 17,
+  "vibrance" : 35,
+  "vignette" : 38,
+  "warmth" : 36,
+  "whites" : 33,
+  "wrinkle" : 13
+}

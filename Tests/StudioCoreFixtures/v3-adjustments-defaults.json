@@ -1,0 +1,142 @@
+{
+  "backgroundBlur" : 0,
+  "backgroundFill" : 0,
+  "backgroundFillColor" : {
+    "hue" : 0,
+    "saturation" : 0,
+    "value" : 0.96
+  },
+  "backgroundImage" : "",
+  "backgroundImageAmount" : 100,
+  "backgroundImageName" : "",
+  "backgroundRemove" : false,
+  "backgroundSaturation" : 0,
+  "backgroundTone" : 0,
+  "blacks" : 0,
+  "blemish" : 0,
+  "blush" : 0,
+  "blushColor" : {
+    "hue" : 25,
+    "saturation" : 0.35,
+    "value" : 0.95
+  },
+  "bodyArms" : 0,
+  "bodyLegs" : 0,
+  "bodySlim" : 0,
+  "bodySmooth" : 0,
+  "bodyTone" : 0,
+  "bodyWaist" : 0,
+  "browColor" : {
+    "hue" : 28,
+    "saturation" : 0.22,
+    "value" : 0.4
+  },
+  "browDefine" : 0,
+  "cheekSize" : 0,
+  "chinLength" : 0,
+  "clarity" : 0,
+  "contour" : 0,
+  "contourColor" : {
+    "hue" : 26,
+    "saturation" : 0.24,
+    "value" : 0.52
+  },
+  "contrast" : 0,
+  "curveHighlights" : 0,
+  "curveMidtones" : 0,
+  "curveShadows" : 0,
+  "darkCircles" : 0,
+  "exposure" : 0,
+  "eyeBrighten" : 0,
+  "eyeSharpen" : 0,
+  "eyeSize" : 0,
+  "eyeliner" : 0,
+  "eyeshadow" : 0,
+  "faceLength" : 0,
+  "faceWidth" : 0,
+  "grain" : 0,
+  "hairColor" : 0,
+  "hairShine" : 0,
+  "hairTint" : {
+    "hue" : 22,
+    "saturation" : 0.34,
+    "value" : 0.24
+  },
+  "hairVolume" : 0,
+  "hslHue" : [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "hslLuminance" : [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "hslSaturation" : [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "irisEnhance" : 0,
+  "jawWidth" : 0,
+  "lashDarken" : 0,
+  "lensColor" : {
+    "hue" : 210,
+    "saturation" : 0.45,
+    "value" : 0.48
+  },
+  "lensTint" : 0,
+  "linerColor" : {
+    "hue" : 240,
+    "saturation" : 0.06,
+    "value" : 0.1
+  },
+  "lipColor" : {
+    "hue" : 350,
+    "saturation" : 0.6,
+    "value" : 0.77
+  },
+  "lipGloss" : 0,
+  "lipSize" : 0,
+  "lipTint" : 0,
+  "lookID" : "",
+  "lookStrength" : 0,
+  "noseSize" : 0,
+  "noseTip" : 0,
+  "saturation" : 0,
+  "shadowColor" : {
+    "hue" : 28,
+    "saturation" : 0.2,
+    "value" : 0.58
+  },
+  "shine" : 0,
+  "skinBrighten" : 0,
+  "skinFinish" : 0,
+  "skinToneEvens" : 0,
+  "smooth" : 0,
+  "splitTone" : 0,
+  "teethAlign" : 0,
+  "teethWhiten" : 0,
+  "texturePreserve" : 0,
+  "vibrance" : 0,
+  "vignette" : 0,
+  "warmth" : 0,
+  "whites" : 0,
+  "wrinkle" : 0
+}

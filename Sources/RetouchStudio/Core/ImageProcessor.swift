@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreImage
 import Foundation
 import ImageIO
+import StudioCore
 import UniformTypeIdentifiers
 
 enum ExportFormat: String, CaseIterable, Identifiable {

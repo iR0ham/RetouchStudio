@@ -3,6 +3,7 @@ import Combine
 import CoreGraphics
 import CoreImage
 import SwiftUI
+import StudioCore
 import UniformTypeIdentifiers
 
 @MainActor

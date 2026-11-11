@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreImage
 import CoreVideo
 import Foundation
+import StudioCore
 import Vision
 
 /// Joints from Vision's body-pose pass, in normalized image coordinates with a

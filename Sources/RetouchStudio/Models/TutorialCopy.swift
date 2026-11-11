@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// One step inside a tutorial section: a short imperative heading and the
 /// sentence that explains it.

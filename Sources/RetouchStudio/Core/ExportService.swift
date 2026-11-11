@@ -3,6 +3,7 @@ import CoreImage
 import Darwin
 import Foundation
 import ImageIO
+import StudioCore
 
 /// Everything an export takes from the document instead of from the pixels it
 /// lands on. The single-photo export and the batch export both build one of

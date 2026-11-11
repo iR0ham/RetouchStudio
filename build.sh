@@ -55,12 +55,18 @@ if [ "$CONFIG" = "release" ]; then
 else
   FLAGS+=(-Onone -g)
 fi
-SOURCES=$(find Sources -name '*.swift')
+SOURCES=$(find Sources/RetouchStudio -name '*.swift')
 
 for ARCH in "${ARCHS[@]}"; do
+  # StudioCore is a separate Foundation-only module; the app consumes it
+  # through its module interface and links the static library. Build one
+  # module per architecture because a .swiftmodule is architecture-specific.
+  CORE_DIR="build/studiocore/$ARCH"
+  ./Tests/build-studiocore.sh "$ARCH" "$SDK" "$CORE_DIR"
   # shellcheck disable=SC2046,SC2086
   swiftc "${FLAGS[@]}" -target "${ARCH}-apple-macosx14.0" \
-    -o "$OUT_DIR/$BINARY_NAME-$ARCH" $SOURCES \
+    -I "$CORE_DIR" \
+    -o "$OUT_DIR/$BINARY_NAME-$ARCH" $SOURCES "$CORE_DIR/libStudioCore.a" \
     -framework SwiftUI -framework AppKit -framework CoreImage \
     -framework Vision -framework UniformTypeIdentifiers
 done

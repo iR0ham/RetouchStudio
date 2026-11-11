@@ -1,5 +1,6 @@
 import CoreImage
 import Foundation
+import StudioCore
 
 /// Turns a `LookGrade` into a colour cube, and lays film grain over the
 /// result. Both are single passes so a look behaves exactly the same in the
