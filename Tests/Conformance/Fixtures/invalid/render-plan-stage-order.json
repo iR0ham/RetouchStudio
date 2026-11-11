@@ -1,0 +1,152 @@
+{
+  "aiPatches": [],
+  "analysis": null,
+  "crop": null,
+  "determinism": {
+    "ai": "nondeterministic",
+    "color": "exact",
+    "heal": "exact",
+    "vision": "platform"
+  },
+  "documentRevision": 42,
+  "engine": {
+    "name": "coreimage",
+    "version": "macos-27"
+  },
+  "heal": [],
+  "masks": [],
+  "orientation": {
+    "angle": 0.0,
+    "flipped": false,
+    "quarterTurns": 0
+  },
+  "parameters": {
+    "exposure": 12,
+    "schema": 1,
+    "smooth": 34
+  },
+  "schema": 1,
+  "source": {
+    "colorSpace": {
+      "name": "sRGB"
+    },
+    "height": 512,
+    "width": 512
+  },
+  "stages": [
+    {
+      "enabled": false,
+      "index": 1,
+      "operationIds": [],
+      "stage": "heal"
+    },
+    {
+      "enabled": false,
+      "index": 2,
+      "operationIds": [],
+      "stage": "aiPatch"
+    },
+    {
+      "enabled": true,
+      "index": 4,
+      "operationIds": [
+        "018f3200-0000-7000-8000-000000000001"
+      ],
+      "stage": "localSkin"
+    },
+    {
+      "enabled": true,
+      "index": 3,
+      "operationIds": [
+        "018f3200-0000-7000-8000-000000000001"
+      ],
+      "stage": "bodySkin"
+    },
+    {
+      "enabled": false,
+      "index": 5,
+      "operationIds": [],
+      "stage": "underEye"
+    },
+    {
+      "enabled": false,
+      "index": 6,
+      "operationIds": [],
+      "stage": "teeth"
+    },
+    {
+      "enabled": false,
+      "index": 7,
+      "operationIds": [],
+      "stage": "eyes"
+    },
+    {
+      "enabled": false,
+      "index": 8,
+      "operationIds": [],
+      "stage": "makeup"
+    },
+    {
+      "enabled": false,
+      "index": 9,
+      "operationIds": [],
+      "stage": "hair"
+    },
+    {
+      "enabled": false,
+      "index": 10,
+      "operationIds": [],
+      "stage": "featureReshape"
+    },
+    {
+      "enabled": false,
+      "index": 11,
+      "operationIds": [],
+      "stage": "silhouetteReshape"
+    },
+    {
+      "enabled": false,
+      "index": 12,
+      "operationIds": [],
+      "stage": "bodySlim"
+    },
+    {
+      "enabled": false,
+      "index": 13,
+      "operationIds": [],
+      "stage": "pose"
+    },
+    {
+      "enabled": true,
+      "index": 14,
+      "operationIds": [
+        "018f3200-0000-7000-8000-000000000001"
+      ],
+      "stage": "globalColor"
+    },
+    {
+      "enabled": false,
+      "index": 15,
+      "operationIds": [],
+      "stage": "background"
+    },
+    {
+      "enabled": false,
+      "index": 16,
+      "operationIds": [],
+      "stage": "art"
+    },
+    {
+      "enabled": false,
+      "index": 17,
+      "operationIds": [],
+      "stage": "finalCrop"
+    }
+  ],
+  "stickers": [],
+  "target": {
+    "kind": "preview",
+    "maxLongEdge": 2048,
+    "scale": 1.0
+  }
+}

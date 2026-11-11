@@ -1,0 +1,269 @@
+{
+  "aiPatches": [
+    {
+      "alphaAsset": "018f3600-0000-7000-8000-000000000002",
+      "box": {
+        "height": 0.25,
+        "width": 0.3,
+        "x": 0.1,
+        "y": 0.2
+      },
+      "orientation": {
+        "angle": 0.0,
+        "flipped": false,
+        "quarterTurns": 0
+      },
+      "patchAsset": "018f3600-0000-7000-8000-000000000001"
+    },
+    {
+      "alphaAsset": "018f3600-0000-7000-8000-000000000004",
+      "box": {
+        "height": 0.2,
+        "width": 0.2,
+        "x": 0.5,
+        "y": 0.1
+      },
+      "orientation": {
+        "angle": 0.0,
+        "flipped": false,
+        "quarterTurns": 0
+      },
+      "patchAsset": "018f3600-0000-7000-8000-000000000003"
+    }
+  ],
+  "analysis": {
+    "anchors": {},
+    "endpoints": {},
+    "exportMode": "onPhoto",
+    "glow": false,
+    "isEnabled": true,
+    "lineOpacity": 0.65,
+    "lineWeight": 1.5,
+    "marginPercent": 4.0,
+    "regions": [
+      "face",
+      "eyes",
+      "nose",
+      "mouth"
+    ],
+    "showsFaceOutline": true,
+    "showsMesh": false,
+    "tint": "#8BD3FF"
+  },
+  "crop": {
+    "height": 0.7,
+    "width": 0.8,
+    "x": 0.05,
+    "y": 0.1
+  },
+  "determinism": {
+    "ai": "nondeterministic",
+    "color": "exact",
+    "heal": "exact",
+    "vision": "platform"
+  },
+  "documentRevision": 43,
+  "engine": {
+    "name": "coreimage",
+    "version": "macos-27"
+  },
+  "heal": [
+    {
+      "radius": 0.018,
+      "x": 0.42,
+      "y": 0.37
+    },
+    {
+      "radius": 0.012,
+      "x": 0.58,
+      "y": 0.41
+    }
+  ],
+  "masks": [],
+  "orientation": {
+    "angle": 1.5,
+    "flipped": false,
+    "quarterTurns": 1
+  },
+  "parameters": {
+    "backgroundBlur": 20,
+    "exposure": 8,
+    "eyeSize": 15,
+    "lipTint": 12,
+    "schema": 1,
+    "smooth": 20,
+    "warmth": 10
+  },
+  "schema": 1,
+  "source": {
+    "colorSpace": {
+      "name": "sRGB"
+    },
+    "height": 512,
+    "width": 512
+  },
+  "stages": [
+    {
+      "enabled": true,
+      "index": 1,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000002"
+      ],
+      "stage": "heal"
+    },
+    {
+      "enabled": true,
+      "index": 2,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000003",
+        "018f3100-0000-7000-8000-000000000004"
+      ],
+      "stage": "aiPatch"
+    },
+    {
+      "enabled": true,
+      "index": 3,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000005"
+      ],
+      "stage": "bodySkin"
+    },
+    {
+      "enabled": true,
+      "index": 4,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000005"
+      ],
+      "stage": "localSkin"
+    },
+    {
+      "enabled": false,
+      "index": 5,
+      "operationIds": [],
+      "stage": "underEye"
+    },
+    {
+      "enabled": false,
+      "index": 6,
+      "operationIds": [],
+      "stage": "teeth"
+    },
+    {
+      "enabled": true,
+      "index": 7,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000005"
+      ],
+      "stage": "eyes"
+    },
+    {
+      "enabled": true,
+      "index": 8,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000005"
+      ],
+      "stage": "makeup"
+    },
+    {
+      "enabled": false,
+      "index": 9,
+      "operationIds": [],
+      "stage": "hair"
+    },
+    {
+      "enabled": false,
+      "index": 10,
+      "operationIds": [],
+      "stage": "featureReshape"
+    },
+    {
+      "enabled": false,
+      "index": 11,
+      "operationIds": [],
+      "stage": "silhouetteReshape"
+    },
+    {
+      "enabled": false,
+      "index": 12,
+      "operationIds": [],
+      "stage": "bodySlim"
+    },
+    {
+      "enabled": false,
+      "index": 13,
+      "operationIds": [],
+      "stage": "pose"
+    },
+    {
+      "enabled": true,
+      "index": 14,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000005"
+      ],
+      "stage": "globalColor"
+    },
+    {
+      "enabled": true,
+      "index": 15,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000005"
+      ],
+      "stage": "background"
+    },
+    {
+      "enabled": true,
+      "index": 16,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000006"
+      ],
+      "stage": "art"
+    },
+    {
+      "enabled": true,
+      "index": 17,
+      "operationIds": [
+        "018f3100-0000-7000-8000-000000000007"
+      ],
+      "stage": "finalCrop"
+    }
+  ],
+  "stickers": [
+    {
+      "center": {
+        "x": 0.2,
+        "y": 0.3
+      },
+      "color": {
+        "h": 42,
+        "s": 0.8,
+        "v": 0.9
+      },
+      "id": "018f3400-0000-7000-8000-000000000001",
+      "kind": "star",
+      "opacity": 0.85,
+      "rotation": 12.0,
+      "size": 0.08
+    },
+    {
+      "center": {
+        "x": 0.8,
+        "y": 0.25
+      },
+      "color": {
+        "h": 320,
+        "s": 0.7,
+        "v": 0.95
+      },
+      "id": "018f3400-0000-7000-8000-000000000002",
+      "kind": "heart",
+      "opacity": 0.9,
+      "rotation": -8.0,
+      "size": 0.06
+    }
+  ],
+  "target": {
+    "kind": "preview",
+    "maxLongEdge": 1024,
+    "scale": 1.0
+  }
+}

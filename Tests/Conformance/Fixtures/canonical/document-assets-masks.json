@@ -1,0 +1,141 @@
+{
+  "document": {
+    "assets": {
+      "assets": [
+        {
+          "assetId": "018f3600-0000-7000-8000-000000000006",
+          "bytes": 510223,
+          "kind": "aiPatch",
+          "mediaType": "image/png",
+          "path": "sha256/bb/bb899aa91a1a3f6071cff9d1d24e72477ca8880972ca74c2bda90a0c6852ee04.png",
+          "sha256": "bb899aa91a1a3f6071cff9d1d24e72477ca8880972ca74c2bda90a0c6852ee04"
+        },
+        {
+          "assetId": "018f3600-0000-7000-8000-000000000007",
+          "bytes": 15331,
+          "kind": "aiAlpha",
+          "mediaType": "image/png",
+          "path": "sha256/7b/7b7b051b6df23b371aacf947ea309caf6cc92438e72553b0353ddbd076a064bf.png",
+          "sha256": "7b7b051b6df23b371aacf947ea309caf6cc92438e72553b0353ddbd076a064bf"
+        },
+        {
+          "assetId": "018f3600-0000-7000-8000-000000000005",
+          "bytes": 262144,
+          "kind": "mask",
+          "mediaType": "image/png",
+          "path": "sha256/07/071fdba9b592f430016b2bba38b794e428ab4afc42900b2ee06ec86d905f8228.png",
+          "sha256": "071fdba9b592f430016b2bba38b794e428ab4afc42900b2ee06ec86d905f8228"
+        }
+      ],
+      "schema": 1
+    },
+    "capabilities": [
+      "ai.provenance.v1",
+      "masks.v1",
+      "operations.v1"
+    ],
+    "id": "018f3000-0000-7000-8000-000000000004",
+    "metadata": {
+      "appVersion": "1.1.0",
+      "coreVersion": "0.1.0",
+      "createdAt": "2026-11-10T18:00:00.000Z",
+      "modifiedAt": "2026-11-11T12:00:00.000Z",
+      "title": "Masked wide-gamut document",
+      "unknown": {}
+    },
+    "operations": {
+      "coordinateSpace": "source_normalized",
+      "operations": [
+        {
+          "alpha": {
+            "assetId": "018f3600-0000-7000-8000-000000000007",
+            "sha256": "7b7b051b6df23b371aacf947ea309caf6cc92438e72553b0353ddbd076a064bf"
+          },
+          "box": {
+            "height": 0.35,
+            "width": 0.4,
+            "x": 0.15,
+            "y": 0.1
+          },
+          "editId": "018f3500-0000-7000-8000-000000000003",
+          "id": "018f3100-0000-7000-8000-000000000010",
+          "imagePixels": {
+            "height": 1067,
+            "width": 1600
+          },
+          "orientation": {
+            "angle": 0.0,
+            "flipped": false,
+            "quarterTurns": 0
+          },
+          "patch": {
+            "assetId": "018f3600-0000-7000-8000-000000000006",
+            "sha256": "bb899aa91a1a3f6071cff9d1d24e72477ca8880972ca74c2bda90a0c6852ee04"
+          },
+          "provenance": {
+            "engine": "patch",
+            "modelId": "flux2-klein-4b-q4",
+            "modelVersion": "catalog-2026-11",
+            "preset": "removeObject",
+            "prompt": "replace a background object",
+            "seconds": 24.1,
+            "seed": 42,
+            "startedAt": "2026-11-11T12:00:00.000Z",
+            "workerProtocol": 2
+          },
+          "schema": 1,
+          "type": "aiPatch"
+        },
+        {
+          "id": "018f3100-0000-7000-8000-000000000011",
+          "params": {
+            "backgroundFill": 25,
+            "smooth": 18,
+            "teethWhiten": 12
+          },
+          "schema": 1,
+          "type": "retouchParameters"
+        },
+        {
+          "id": "018f3100-0000-7000-8000-000000000012",
+          "rect": {
+            "height": 0.8,
+            "width": 0.8,
+            "x": 0.1,
+            "y": 0.1
+          },
+          "schema": 1,
+          "type": "crop"
+        }
+      ],
+      "schema": 1
+    },
+    "requires": [],
+    "revision": 44,
+    "selectedFace": null,
+    "source": {
+      "assetId": "018f3010-0000-7000-8000-000000000002",
+      "bytes": 253786,
+      "colorSpace": {
+        "iccHash": null,
+        "name": "Display P3"
+      },
+      "contentHash": {
+        "algorithm": "sha256",
+        "hex": "9aafb99ff2dcbe14b6c0d2a5e49ea2da6331cb01e057b31661c9343f1cb7b952"
+      },
+      "embedded": false,
+      "external": true,
+      "fileName": "F11_p3_16bit.png",
+      "orientationNormalized": true,
+      "pixelHeight": 512,
+      "pixelWidth": 512,
+      "quickIdentity": {
+        "modifiedAt": "2026-11-10T18:02:11.000Z",
+        "size": 253786
+      },
+      "relativePath": null
+    }
+  },
+  "schema": 1
+}

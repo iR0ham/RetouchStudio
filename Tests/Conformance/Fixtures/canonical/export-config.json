@@ -1,0 +1,35 @@
+{
+  "exportPlan": {
+    "documentRevision": 42,
+    "intent": {
+      "aiUpscale": false,
+      "analysisMode": "none",
+      "backgroundColor": null,
+      "format": "jpeg",
+      "maxLongEdge": 2048,
+      "quality": 0.92,
+      "stripLocationMetadata": true,
+      "watermark": null
+    },
+    "metadataPolicy": {
+      "allow": [
+        "dpi",
+        "orientationNormalized",
+        "tiffResolution"
+      ],
+      "mode": "privacyStrip"
+    },
+    "outputName": "F01_portrait_srgb_8-retouched.jpg",
+    "proposedURL": "Exports/F01_portrait_srgb_8-retouched.jpg",
+    "requiresEngine": {
+      "features": [
+        "rgba8_premultiplied"
+      ],
+      "minVersion": "0.1.0"
+    },
+    "sourceProtection": {
+      "refuseIfDestinationIsSource": true
+    }
+  },
+  "schema": 1
+}

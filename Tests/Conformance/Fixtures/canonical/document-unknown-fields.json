@@ -1,0 +1,60 @@
+{
+  "document": {
+    "assets": {
+      "assets": [],
+      "schema": 1
+    },
+    "capabilities": [
+      "operations.v1"
+    ],
+    "futureDocumentField": {
+      "keep": true
+    },
+    "id": "018f3000-0000-7000-8000-000000000005",
+    "metadata": {
+      "appVersion": "1.1.0",
+      "coreVersion": "0.1.0",
+      "createdAt": "2026-11-10T18:00:00.000Z",
+      "modifiedAt": "2026-11-11T12:00:00.000Z",
+      "title": "Unknown optional fields",
+      "unknown": {
+        "futureFlag": true,
+        "vendor": {
+          "x": 1
+        }
+      }
+    },
+    "operations": {
+      "coordinateSpace": "source_normalized",
+      "operations": [],
+      "schema": 1
+    },
+    "requires": [],
+    "revision": 0,
+    "selectedFace": null,
+    "source": {
+      "assetId": "018f3010-0000-7000-8000-000000000001",
+      "bytes": 336739,
+      "colorSpace": {
+        "iccHash": null,
+        "name": "sRGB"
+      },
+      "contentHash": {
+        "algorithm": "sha256",
+        "hex": "8e0bdc284c5c62ca6728416b99fd17cc832158335f0108c444c6b1224de39867"
+      },
+      "embedded": false,
+      "external": true,
+      "fileName": "F01_portrait_srgb_8.png",
+      "orientationNormalized": true,
+      "pixelHeight": 512,
+      "pixelWidth": 512,
+      "quickIdentity": {
+        "modifiedAt": "2026-11-10T18:02:11.000Z",
+        "size": 336739
+      },
+      "relativePath": null
+    }
+  },
+  "schema": 1
+}

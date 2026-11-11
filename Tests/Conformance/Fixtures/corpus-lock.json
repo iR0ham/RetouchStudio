@@ -1,0 +1,154 @@
+{
+  "baselinesSha256": "aea08d46c116b303c2766797f5b31e603d2f6ecf5d3cbc33c9e2cb363c411ed1",
+  "comparisonMethodology": "Docs/IMAGE_COMPARISON_METHODOLOGY.md",
+  "counts": {
+    "baselineCases": 78,
+    "corpusFixtures": 12,
+    "exportFiles": 11,
+    "referenceFiles": 21
+  },
+  "exports": [
+    {
+      "file": "F01_export_256.heic"
+    },
+    {
+      "file": "F01_export_256.jpg"
+    },
+    {
+      "file": "F01_export_256.png"
+    },
+    {
+      "file": "F01_export_256.tif"
+    },
+    {
+      "file": "F01_metadata_kept.png"
+    },
+    {
+      "file": "F01_stripped.png"
+    },
+    {
+      "file": "F08_export_256.png"
+    },
+    {
+      "file": "F09_alpha_export.jpg"
+    },
+    {
+      "file": "F09_alpha_export.png"
+    },
+    {
+      "file": "F10_upright.png"
+    },
+    {
+      "file": "F11_export_256.png"
+    }
+  ],
+  "manifestSha256": "84f4b81cb994627ad501a677526a833cc501116f8aad6eaa10b17180f902d254",
+  "referenceFiles": [
+    {
+      "caseId": "BG01_BLUR",
+      "file": "BG01_BLUR.png",
+      "sha256": "ca93ca2a00dab83519addd163d44650408a0715644b50ea1a9f0d581aa580d0a"
+    },
+    {
+      "caseId": "BG05_REMOVE",
+      "file": "BG05_REMOVE.png",
+      "sha256": "ef402f83df477f2ce8d9f6f8ae9440abda8bfab5f2936cd6826d54c5a00654de"
+    },
+    {
+      "caseId": "G01_EXPOSURE_UP",
+      "file": "G01_EXPOSURE_UP.png",
+      "sha256": "25cee437536b4d9a41a6763b099a801177e3567937537166e659cac6627ac8f1"
+    },
+    {
+      "caseId": "G04_BLACKS",
+      "file": "G04_BLACKS.png",
+      "sha256": "a9e2e4473e4e0d45a0502efcb04ec068c0904fd8920a1be7905f9e9b00065334"
+    },
+    {
+      "caseId": "G09_CLARITY_UP",
+      "file": "G09_CLARITY_UP.png",
+      "sha256": "ca97b83d7aa1beb5a4ff0b8ed86172624017898b325cb9e7fcfc93cce16b4136"
+    },
+    {
+      "caseId": "G11_VIGNETTE",
+      "file": "G11_VIGNETTE.png",
+      "sha256": "af9bebfdf82059264cf38bb2c3debc31ec65014d428874c254c3aa7012709537"
+    },
+    {
+      "caseId": "G12_CURVE",
+      "file": "G12_CURVE.png",
+      "sha256": "1878beec1ab0295cef0e1e4fa171656e29918489ee5734e89186f910a63b4192"
+    },
+    {
+      "caseId": "G15_LOOK_WARM_GOLD",
+      "file": "G15_LOOK_WARM_GOLD.png",
+      "sha256": "2f44ea44f1d6d7e39b26992ff14cdb3aeb30590533cfc8a262b9cdc82769dad1"
+    },
+    {
+      "caseId": "G17_GRAIN",
+      "file": "G17_GRAIN.png",
+      "sha256": "025cdb9cfee18acd4d9850235ff021e692524edb895a239d4cc6237c4da11731"
+    },
+    {
+      "caseId": "M01_LIPS",
+      "file": "M01_LIPS.png",
+      "sha256": "3a4c911512b7a988c9afd1ff7e110c65ea4126e17027976ddd50dbee9c98dbc5"
+    },
+    {
+      "caseId": "M02_BLUSH",
+      "file": "M02_BLUSH.png",
+      "sha256": "b91cae0d19dae3bb89438b56dc08c7acc63e88db80efd59d6077fd992da86e69"
+    },
+    {
+      "caseId": "R01_EYE_SIZE",
+      "file": "R01_EYE_SIZE.png",
+      "sha256": "3684e9a9e619d28193334b92c594cea1e50a8099b78b0ebd1ca4e7db849266c2"
+    },
+    {
+      "caseId": "R06_JAW",
+      "file": "R06_JAW.png",
+      "sha256": "45c2651ba085d31fd383d98be35c869a8b88bf79d9317df18df150b3a9ffc388"
+    },
+    {
+      "caseId": "S01_BLEMISH",
+      "file": "S01_BLEMISH.png",
+      "sha256": "7bf43df527c4d89b38cfa57dbc9ca223beb96d0f0a5875151cd3475c0049b089"
+    },
+    {
+      "caseId": "S04_SMOOTH",
+      "file": "S04_SMOOTH.png",
+      "sha256": "728290b5f901094c5e7cbfc68b373ae2c4a99275c1aa83ed19dad0929d9f933e"
+    },
+    {
+      "caseId": "S09_DARK_CIRCLES",
+      "file": "S09_DARK_CIRCLES.png",
+      "sha256": "22d940f7c6716b6cf13b8a7563ae93cc6e6f65605b6323e6d4018e21302e3707"
+    },
+    {
+      "caseId": "S10_TEETH_WHITEN",
+      "file": "S10_TEETH_WHITEN.png",
+      "sha256": "986e319d49faec24440a9fd9faa6ce5d2a0b12e237c41e8e1f3a87cf67d7f93a"
+    },
+    {
+      "caseId": "X01_HEAL",
+      "file": "X01_HEAL.png",
+      "sha256": "cbcfd19421f8451d378422fefa28879287a900970f78277677ca330572599f02"
+    },
+    {
+      "caseId": "X02_STICKER",
+      "file": "X02_STICKER.png",
+      "sha256": "a8d2b0b5291e401c4ea28e96bc08217687fa5fbba402d9542097e43d6055133a"
+    },
+    {
+      "caseId": "X03_ANALYSIS_PHOTO",
+      "file": "X03_ANALYSIS_PHOTO.png",
+      "sha256": "ec7d6d4ff75385bb45f397a7dd83b1b67dc4fdb0a68a3726ab5e32fa5db617f3"
+    },
+    {
+      "caseId": "X06_WATERMARK",
+      "file": "X06_WATERMARK.png",
+      "sha256": "84b19c0f23dd55a67d3386f902a7c7634071f549f237912e4c7b5d86a92864e4"
+    }
+  ],
+  "schema": 1
+}

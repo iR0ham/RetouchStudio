@@ -1,0 +1,244 @@
+{
+  "fixtures": [
+    {
+      "corpusFixtures": [
+        "F11_P3_16BIT"
+      ],
+      "expect": "valid",
+      "id": "DOC-ASSETS-MASKS",
+      "kind": "document",
+      "path": "canonical/document-assets-masks.json",
+      "schemaVersion": 1,
+      "sha256": "d3934484383691eb1ab0da6b199e7ea4e6ef180d147540d980a9285bd02f6638"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "invalid",
+      "expectedCode": "VALIDATION_FAILED",
+      "id": "DOC-BAD-CROP",
+      "kind": "document",
+      "path": "invalid/document-bad-crop.json",
+      "schemaVersion": 1,
+      "sha256": "5e5171c95d8464c2ef59d6d380e7264dd9642c2c3e5870bf33165619bc562bcb"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "invalid",
+      "expectedCode": "VALIDATION_FAILED",
+      "id": "DOC-BAD-HSL",
+      "kind": "document",
+      "path": "invalid/document-bad-hsl.json",
+      "schemaVersion": 1,
+      "sha256": "b66c0db6c6c9d96bf570f0ede0c7a05ea9430e7920a68c1a3312ede42ed776ed"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "valid",
+      "id": "DOC-BASIC",
+      "kind": "document",
+      "path": "canonical/document-basic.json",
+      "schemaVersion": 1,
+      "sha256": "75a34f712551d4236bfa21ff98697cc3c63d01f4d471d5b951e6a0ea62a5e286"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "valid",
+      "id": "DOC-CROP-ORIENTATION",
+      "kind": "document",
+      "path": "canonical/document-crop-orientation.json",
+      "schemaVersion": 1,
+      "sha256": "dfb9a699f9e8923782b26f491815981177cd4734e6912e02e15ed11b9f07f29f"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "invalid",
+      "expectedCode": "VALIDATION_FAILED",
+      "id": "DOC-DUPLICATE-SINGLETON",
+      "kind": "document",
+      "path": "invalid/document-duplicate-singleton.json",
+      "schemaVersion": 1,
+      "sha256": "7d593f7af109c8d315dd7cc2441b0b64b9418878e269d126067c255377056469"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "valid",
+      "id": "DOC-EMPTY",
+      "kind": "document",
+      "path": "canonical/document-empty.json",
+      "schemaVersion": 1,
+      "sha256": "c261304bf58a294e16b7992fbe79e622bfebac4dcb0ac3a7f50bbe966ff6b97a"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "valid",
+      "id": "DOC-MULTI-OPERATION",
+      "kind": "document",
+      "path": "canonical/document-multi-operation.json",
+      "schemaVersion": 1,
+      "sha256": "4227d27109dd05f67ea113e3dc17097e2745ca799bc90ff6f55f8d563d092f4c"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "valid",
+      "id": "DOC-UNKNOWN-FIELDS",
+      "kind": "document",
+      "path": "canonical/document-unknown-fields.json",
+      "schemaVersion": 1,
+      "sha256": "ea0138d06bbc0164d95df743dbf204df0b36fbec76ae056cd7239003d5d00b2c"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "invalid",
+      "expectedCode": "UNSUPPORTED_FEATURE",
+      "id": "DOC-UNKNOWN-REQUIRED",
+      "kind": "document",
+      "path": "invalid/document-unknown-required.json",
+      "schemaVersion": 1,
+      "sha256": "8ffdf2aa653b1179581da809729b0a988c08fbe5866cd3d3b27fb584ee0abda9"
+    },
+    {
+      "expect": "valid",
+      "id": "ERROR-SOURCE-CHANGED",
+      "kind": "error",
+      "path": "canonical/error-source-changed.json",
+      "schemaVersion": 1,
+      "sha256": "16c03cee11920223902a83a8e793264c3236539678b5ef665900c5126764c01b"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "expect": "valid",
+      "id": "EXPORT-CONFIG",
+      "kind": "export",
+      "path": "canonical/export-config.json",
+      "schemaVersion": 1,
+      "sha256": "af5e0dd32b91a8e4da70c485cfa2e1429dd440b47d3a9e305c6ccc499a861f95"
+    },
+    {
+      "expect": "valid",
+      "id": "PROGRESS-CANCELLATION",
+      "kind": "progress",
+      "path": "canonical/progress-cancellation.json",
+      "schemaVersion": 1,
+      "sha256": "7f5f69f3317f4280d0631574433dfa81da02e39126f8a89da7ad2b3d6ac15551"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "documentFixture": "DOC-BASIC",
+      "expect": "invalid",
+      "expectedCode": "VALIDATION_FAILED",
+      "id": "RP-BAD-ORDER",
+      "kind": "renderPlan",
+      "path": "invalid/render-plan-stage-order.json",
+      "schemaVersion": 1,
+      "sha256": "069b85400e1a65c1bd62e3bb4e59880949525279dd71e87342c28a02d6dce33a"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "documentFixture": "DOC-BASIC",
+      "expect": "valid",
+      "id": "RP-BASIC",
+      "kind": "renderPlan",
+      "path": "canonical/render-plan-basic.json",
+      "schemaVersion": 1,
+      "sha256": "5143bd649731831a34b1b92f82099cade1a0522b82be9676b237ef498901ece5"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "documentFixture": "DOC-CROP-ORIENTATION",
+      "expect": "valid",
+      "id": "RP-CROP-ORIENTATION",
+      "kind": "renderPlan",
+      "path": "canonical/render-plan-crop-orientation.json",
+      "schemaVersion": 1,
+      "sha256": "e95e5c9b264581f86882c3c62922317b295bac2804b731aaf98b085186191db5"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "documentFixture": "DOC-EMPTY",
+      "expect": "valid",
+      "id": "RP-DISABLED",
+      "kind": "renderPlan",
+      "path": "canonical/render-plan-disabled.json",
+      "schemaVersion": 1,
+      "sha256": "acd9a3edee16fd042267e8fbb0cbbf0ce94ea740c98767dec9e85357605ef771"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "documentFixture": "DOC-BASIC",
+      "expect": "valid",
+      "id": "RP-EXPORT",
+      "kind": "renderPlan",
+      "path": "canonical/render-plan-export.json",
+      "schemaVersion": 1,
+      "sha256": "24a0474a71d058bddc5ec204c9a5f30b1e8d419c48363adf45de8fc03b3e18cd"
+    },
+    {
+      "corpusFixtures": [
+        "F11_P3_16BIT"
+      ],
+      "documentFixture": "DOC-ASSETS-MASKS",
+      "expect": "valid",
+      "id": "RP-MASKS",
+      "kind": "renderPlan",
+      "path": "canonical/render-plan-masks.json",
+      "schemaVersion": 1,
+      "sha256": "131e013abe752298b543f678e98564913347d97a53e45a1d19def34e9d195757"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "documentFixture": "DOC-EMPTY",
+      "expect": "invalid",
+      "expectedCode": "INVALID_ARGUMENT",
+      "id": "RP-MISSING-STAGES",
+      "kind": "renderPlan",
+      "path": "invalid/render-plan-missing-stages.json",
+      "schemaVersion": 1,
+      "sha256": "e7e7f631cd015d4394a736fe860f75beb5f9ffdc7d03abedac364b75217c4f85"
+    },
+    {
+      "corpusFixtures": [
+        "F01_PORTRAIT_SRGB_8"
+      ],
+      "documentFixture": "DOC-MULTI-OPERATION",
+      "expect": "valid",
+      "id": "RP-MULTIPLE",
+      "kind": "renderPlan",
+      "path": "canonical/render-plan-multiple.json",
+      "schemaVersion": 1,
+      "sha256": "5a7b166821473386157d17efd39623ae195fee355d6377d6f6e5867b4840bde9"
+    }
+  ],
+  "schema": 1
+}

@@ -1,0 +1,284 @@
+{
+  "document": {
+    "assets": {
+      "assets": [
+        {
+          "assetId": "018f3600-0000-7000-8000-000000000001",
+          "bytes": 482113,
+          "kind": "aiPatch",
+          "mediaType": "image/png",
+          "path": "sha256/71/7119a1f9d897dc4e2c6abf8d53998dee7f1f167f41f44396db9dec0b128dae56.png",
+          "sha256": "7119a1f9d897dc4e2c6abf8d53998dee7f1f167f41f44396db9dec0b128dae56"
+        },
+        {
+          "assetId": "018f3600-0000-7000-8000-000000000002",
+          "bytes": 12031,
+          "kind": "aiAlpha",
+          "mediaType": "image/png",
+          "path": "sha256/9a/9aa0594bca8a32b4b717d71bd4182597342f5d6472c05b06bf0e8ccd455e1b4d.png",
+          "sha256": "9aa0594bca8a32b4b717d71bd4182597342f5d6472c05b06bf0e8ccd455e1b4d"
+        },
+        {
+          "assetId": "018f3600-0000-7000-8000-000000000003",
+          "bytes": 39107,
+          "kind": "aiPatch",
+          "mediaType": "image/png",
+          "path": "sha256/88/88ab8601c090a76a01d2bbbde143ed0aefe1744e293065bef3a232b186d9e4c4.png",
+          "sha256": "88ab8601c090a76a01d2bbbde143ed0aefe1744e293065bef3a232b186d9e4c4"
+        },
+        {
+          "assetId": "018f3600-0000-7000-8000-000000000004",
+          "bytes": 9987,
+          "kind": "aiAlpha",
+          "mediaType": "image/png",
+          "path": "sha256/53/537f1f57aacd1e75eb3bb06b9e9b9c1eee45389aa4c02eda08bca9acfe6c2a98.png",
+          "sha256": "537f1f57aacd1e75eb3bb06b9e9b9c1eee45389aa4c02eda08bca9acfe6c2a98"
+        }
+      ],
+      "schema": 1
+    },
+    "capabilities": [
+      "ai.provenance.v1",
+      "operations.v1"
+    ],
+    "id": "018f3000-0000-7000-8000-000000000003",
+    "metadata": {
+      "appVersion": "1.1.0",
+      "coreVersion": "0.1.0",
+      "createdAt": "2026-11-10T18:00:00.000Z",
+      "modifiedAt": "2026-11-11T12:00:00.000Z",
+      "title": "Multi-operation document",
+      "unknown": {}
+    },
+    "operations": {
+      "coordinateSpace": "source_normalized",
+      "operations": [
+        {
+          "angle": 1.5,
+          "flipped": false,
+          "id": "018f3100-0000-7000-8000-000000000001",
+          "quarterTurns": 1,
+          "schema": 1,
+          "type": "orientation"
+        },
+        {
+          "id": "018f3100-0000-7000-8000-000000000002",
+          "schema": 1,
+          "spots": [
+            {
+              "center": {
+                "x": 0.42,
+                "y": 0.37
+              },
+              "radius": 0.018
+            },
+            {
+              "center": {
+                "x": 0.58,
+                "y": 0.41
+              },
+              "radius": 0.012
+            }
+          ],
+          "type": "heal"
+        },
+        {
+          "alpha": {
+            "assetId": "018f3600-0000-7000-8000-000000000002",
+            "sha256": "9aa0594bca8a32b4b717d71bd4182597342f5d6472c05b06bf0e8ccd455e1b4d"
+          },
+          "box": {
+            "height": 0.25,
+            "width": 0.3,
+            "x": 0.1,
+            "y": 0.2
+          },
+          "editId": "018f3500-0000-7000-8000-000000000001",
+          "id": "018f3100-0000-7000-8000-000000000003",
+          "imagePixels": {
+            "height": 1067,
+            "width": 1600
+          },
+          "orientation": {
+            "angle": 0.0,
+            "flipped": false,
+            "quarterTurns": 0
+          },
+          "patch": {
+            "assetId": "018f3600-0000-7000-8000-000000000001",
+            "sha256": "7119a1f9d897dc4e2c6abf8d53998dee7f1f167f41f44396db9dec0b128dae56"
+          },
+          "provenance": {
+            "engine": "patch",
+            "modelId": "flux2-klein-4b-q4",
+            "modelVersion": "catalog-2026-11",
+            "preset": "removeObject",
+            "prompt": "remove a small object",
+            "seconds": 24.1,
+            "seed": 42,
+            "startedAt": "2026-11-11T12:00:00.000Z",
+            "workerProtocol": 2
+          },
+          "schema": 1,
+          "type": "aiPatch"
+        },
+        {
+          "alpha": {
+            "assetId": "018f3600-0000-7000-8000-000000000004",
+            "sha256": "537f1f57aacd1e75eb3bb06b9e9b9c1eee45389aa4c02eda08bca9acfe6c2a98"
+          },
+          "box": {
+            "height": 0.2,
+            "width": 0.2,
+            "x": 0.5,
+            "y": 0.1
+          },
+          "editId": "018f3500-0000-7000-8000-000000000002",
+          "id": "018f3100-0000-7000-8000-000000000004",
+          "imagePixels": {
+            "height": 1067,
+            "width": 1600
+          },
+          "orientation": {
+            "angle": 0.0,
+            "flipped": false,
+            "quarterTurns": 0
+          },
+          "patch": {
+            "assetId": "018f3600-0000-7000-8000-000000000003",
+            "sha256": "88ab8601c090a76a01d2bbbde143ed0aefe1744e293065bef3a232b186d9e4c4"
+          },
+          "provenance": {
+            "engine": "patch",
+            "modelId": "flux2-klein-4b-q4",
+            "modelVersion": "catalog-2026-11",
+            "preset": "removeObject",
+            "prompt": "extend the background",
+            "seconds": 24.1,
+            "seed": 42,
+            "startedAt": "2026-11-11T12:00:00.000Z",
+            "workerProtocol": 2
+          },
+          "schema": 1,
+          "type": "aiPatch"
+        },
+        {
+          "id": "018f3100-0000-7000-8000-000000000005",
+          "params": {
+            "backgroundBlur": 20,
+            "exposure": 8,
+            "eyeSize": 15,
+            "lipTint": 12,
+            "smooth": 20,
+            "warmth": 10
+          },
+          "schema": 1,
+          "type": "retouchParameters"
+        },
+        {
+          "id": "018f3100-0000-7000-8000-000000000006",
+          "items": [
+            {
+              "center": {
+                "x": 0.2,
+                "y": 0.3
+              },
+              "color": {
+                "h": 42,
+                "s": 0.8,
+                "v": 0.9
+              },
+              "id": "018f3400-0000-7000-8000-000000000001",
+              "kind": "star",
+              "opacity": 0.85,
+              "rotation": 12.0,
+              "size": 0.08
+            },
+            {
+              "center": {
+                "x": 0.8,
+                "y": 0.25
+              },
+              "color": {
+                "h": 320,
+                "s": 0.7,
+                "v": 0.95
+              },
+              "id": "018f3400-0000-7000-8000-000000000002",
+              "kind": "heart",
+              "opacity": 0.9,
+              "rotation": -8.0,
+              "size": 0.06
+            }
+          ],
+          "schema": 1,
+          "type": "stickers"
+        },
+        {
+          "id": "018f3100-0000-7000-8000-000000000007",
+          "rect": {
+            "height": 0.7,
+            "width": 0.8,
+            "x": 0.05,
+            "y": 0.1
+          },
+          "schema": 1,
+          "type": "crop"
+        },
+        {
+          "id": "018f3100-0000-7000-8000-000000000008",
+          "schema": 1,
+          "settings": {
+            "anchors": {},
+            "endpoints": {},
+            "exportMode": "onPhoto",
+            "glow": false,
+            "isEnabled": true,
+            "lineOpacity": 0.65,
+            "lineWeight": 1.5,
+            "marginPercent": 4.0,
+            "regions": [
+              "face",
+              "eyes",
+              "nose",
+              "mouth"
+            ],
+            "showsFaceOutline": true,
+            "showsMesh": false,
+            "tint": "#8BD3FF"
+          },
+          "snapshot": null,
+          "type": "analysis"
+        }
+      ],
+      "schema": 1
+    },
+    "requires": [],
+    "revision": 43,
+    "selectedFace": 0,
+    "source": {
+      "assetId": "018f3010-0000-7000-8000-000000000001",
+      "bytes": 336739,
+      "colorSpace": {
+        "iccHash": null,
+        "name": "sRGB"
+      },
+      "contentHash": {
+        "algorithm": "sha256",
+        "hex": "8e0bdc284c5c62ca6728416b99fd17cc832158335f0108c444c6b1224de39867"
+      },
+      "embedded": false,
+      "external": true,
+      "fileName": "F01_portrait_srgb_8.png",
+      "orientationNormalized": true,
+      "pixelHeight": 512,
+      "pixelWidth": 512,
+      "quickIdentity": {
+        "modifiedAt": "2026-11-10T18:02:11.000Z",
+        "size": 336739
+      },
+      "relativePath": null
+    }
+  },
+  "schema": 1
+}

@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "SOURCE_CHANGED",
+    "detail": {
+      "actualBytes": 812400,
+      "expectedBytes": 812345
+    },
+    "messageKey": "error.source.changed"
+  },
+  "schema": 1
+}

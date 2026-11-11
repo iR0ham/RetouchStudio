@@ -1,0 +1,17 @@
+{
+  "progress": {
+    "cancellation": {
+      "acknowledgedAt": "2026-11-11T12:00:01.250Z",
+      "requestedAt": "2026-11-11T12:00:01.000Z",
+      "state": "acknowledged"
+    },
+    "fraction": 0.62,
+    "operationId": "018f3700-0000-7000-8000-000000000001",
+    "stage": "globalColor",
+    "stageIndex": 14,
+    "state": "cancelled",
+    "unitsDone": 62,
+    "unitsTotal": 100
+  },
+  "schema": 1
+}
