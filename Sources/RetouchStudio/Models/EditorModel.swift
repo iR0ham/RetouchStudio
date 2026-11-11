@@ -310,12 +310,10 @@ final class EditorModel: ObservableObject {
 
     /// Everything one undo step covers. Stamping the healing brush and reframing
     /// with the crop tool are edits exactly like moving a slider, so all of them
-    /// travel through history together. The value itself lives in
-    /// `DocumentState.swift`; the editor keeps owning how it is used.
-    private var undoStack: [DocumentState] = []
-    private var redoStack: [DocumentState] = []
-    private var lastCommitted = DocumentState()
-    private var cleanState = DocumentState()
+    /// travel through history together. The value lives in `DocumentState.swift`
+    /// and the stacks live in `DocumentSession.swift`; the editor keeps the
+    /// timer, guards and the work of applying a restored state.
+    private var session = DocumentSession()
     private var coalesceTask: Task<Void, Never>?
 
     @Published private(set) var canUndo = false
@@ -344,15 +342,7 @@ final class EditorModel: ObservableObject {
     func commitAdjustments() {
         coalesceTask?.cancel()
         coalesceTask = nil
-        let current = currentState
-        guard current != lastCommitted else {
-            updateUndoFlags()
-            return
-        }
-        undoStack.append(lastCommitted)
-        if undoStack.count > 100 { undoStack.removeFirst() }
-        redoStack.removeAll()
-        lastCommitted = current
+        session.commit(currentState)
         updateUndoFlags()
     }
 
@@ -366,10 +356,8 @@ final class EditorModel: ObservableObject {
         // Flush a change whose debounce is still waiting, so ⌘Z right after a
         // drag undoes that drag instead of skipping past it.
         commitAdjustments()
-        guard let previous = undoStack.popLast() else { return }
-        redoStack.append(currentState)
+        guard let previous = session.undo(current: currentState) else { return }
         restore(previous)
-        lastCommitted = previous
         updateUndoFlags()
         refreshStatusAfterHistoryChange()
     }
@@ -380,14 +368,12 @@ final class EditorModel: ObservableObject {
             return
         }
         // Editing after an undo starts a new branch; the old redo history goes.
-        guard currentState == lastCommitted else {
+        guard currentState == session.lastCommitted else {
             commitAdjustments()
             return
         }
-        guard let next = redoStack.popLast() else { return }
-        undoStack.append(currentState)
+        guard let next = session.redo(current: currentState) else { return }
         restore(next)
-        lastCommitted = next
         updateUndoFlags()
         refreshStatusAfterHistoryChange()
     }
@@ -428,8 +414,8 @@ final class EditorModel: ObservableObject {
     }
 
     private func updateUndoFlags() {
-        canUndo = !undoStack.isEmpty || currentState != lastCommitted
-        canRedo = !redoStack.isEmpty && currentState == lastCommitted
+        canUndo = session.canUndo(current: currentState)
+        canRedo = session.canRedo(current: currentState)
     }
 
     private func adjustmentsChanged() {
@@ -509,7 +495,7 @@ final class EditorModel: ObservableObject {
     }
 
     private func updateCleanState() {
-        hasUnsavedChanges = hasImage && currentState != cleanState
+        hasUnsavedChanges = hasImage && currentState != session.cleanState
         scheduleAutosave()
     }
 
@@ -518,10 +504,7 @@ final class EditorModel: ObservableObject {
     private func resetHistory() {
         coalesceTask?.cancel()
         coalesceTask = nil
-        undoStack.removeAll()
-        redoStack.removeAll()
-        lastCommitted = currentState
-        cleanState = currentState
+        session.reset(to: currentState)
         updateUndoFlags()
         updateCleanState()
     }
@@ -943,7 +926,7 @@ final class EditorModel: ObservableObject {
         // A task already past its sleep must not recreate the copy this
         // discard is about to remove.
         invalidatePendingAutosave()
-        cleanState = currentState
+        session.markClean(currentState)
         // The owner explicitly ended this document. Its autosave copy goes with
         // it; candidate copies waiting for their own decision stay.
         documentRecovered = false
@@ -1083,7 +1066,7 @@ final class EditorModel: ObservableObject {
         refreshAnalysisOverlay()
 
         cropAspect = .free
-        cleanState = currentState
+        session.markClean(currentState)
         comparePosition = settings.comparePosition
         resetHistory()
         documentRecovered = recoveryRestore != nil
@@ -1091,7 +1074,7 @@ final class EditorModel: ObservableObject {
             // Until the working slot is written below, a crash copy lives
             // nowhere else. It counts as unsaved so closing warns and the
             // recovery data stays.
-            cleanState = DocumentState()
+            session.markClean(DocumentState())
             hasUnsavedChanges = hasImage && currentState != DocumentState()
         }
         isLoadingState = false
@@ -3161,7 +3144,7 @@ final class EditorModel: ObservableObject {
             recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
             // protect until the next change, and the autosave copy is redundant.
-            cleanState = currentState
+            session.markClean(currentState)
             documentRecovered = false
             updateCleanState()
             statusToken = .projectSaved(url.lastPathComponent)

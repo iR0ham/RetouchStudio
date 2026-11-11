@@ -4626,6 +4626,95 @@ func testDocumentStateValueSemantics() {
     }
 }
 
+// MARK: - R4.2 DocumentSession history value
+
+/// Pins the history transitions themselves, without a model or a window. The
+/// R4.0 suite above proves `EditorModel` still produces the same steps and
+/// dirty transitions through this value.
+@MainActor
+func testDocumentSessionHistoryValue() {
+    print("\n[R4.2] DocumentSession owns undo, redo, cap and baseline")
+
+    var session = DocumentSession()
+    let base = DocumentState()
+    check(!session.canUndo(current: base) && !session.canRedo(current: base),
+          "a fresh session offers no history")
+    check(session.lastCommitted == base && session.cleanState == base,
+          "a fresh session records and cleans the empty document")
+
+    var contrast = base
+    contrast.adjustments.contrast = 30
+    check(session.canUndo(current: contrast),
+          "an uncommitted change is already undoable")
+    session.commit(contrast)
+    check(session.undoStack.count == 1 && session.lastCommitted == contrast,
+          "a commit records the previous state")
+
+    session.commit(contrast)
+    check(session.undoStack.count == 1, "committing the same state again adds no step")
+
+    guard let undone = session.undo(current: contrast) else {
+        check(false, "undo returns the recorded state")
+        return
+    }
+    check(undone == base && session.redoStack.count == 1 && session.lastCommitted == base,
+          "undo returns the previous state and keeps the branch")
+    check(session.canRedo(current: undone), "redo is offered while the branch is intact")
+
+    guard let redone = session.redo(current: undone) else {
+        check(false, "redo returns the branch state")
+        return
+    }
+    check(redone == contrast && session.undoStack.count == 1
+              && session.lastCommitted == contrast,
+          "redo replays it and restores the undo side")
+
+    var exposure = base
+    exposure.adjustments.exposure = 12
+    session.commit(exposure)
+    check(session.redoStack.isEmpty, "a new commit discards the redo branch")
+
+    var cap = DocumentSession()
+    for value in 1...105 {
+        var state = DocumentState()
+        state.adjustments.smooth = Double(value)
+        cap.commit(state)
+    }
+    check(cap.undoStack.count == DocumentSession.stepLimit,
+          "the stack keeps the most recent \(DocumentSession.stepLimit) steps")
+    var walked = DocumentState()
+    walked.adjustments.smooth = 105
+    var oldest = walked
+    for _ in 0..<DocumentSession.stepLimit {
+        guard let previous = cap.undo(current: walked) else { break }
+        walked = previous
+        oldest = previous
+    }
+    check(oldest.adjustments.smooth == 5,
+          "the oldest retained step is the 100th before the last",
+          "\(oldest.adjustments.smooth)")
+    check(!cap.canUndo(current: walked), "steps beyond the cap are gone")
+    check(cap.undo(current: walked) == nil, "undoing past the cap returns nothing")
+
+    var reset = DocumentSession()
+    reset.commit(contrast)
+    reset.markClean(exposure)
+    check(reset.cleanState == exposure && reset.lastCommitted == contrast
+              && reset.undoStack.count == 1,
+          "marking clean moves only the baseline")
+    reset.reset(to: exposure)
+    check(reset.undoStack.isEmpty && reset.redoStack.isEmpty
+              && reset.lastCommitted == exposure && reset.cleanState == exposure,
+          "reset starts a new document with no history")
+
+    var original = DocumentSession()
+    original.commit(contrast)
+    var copy = original
+    copy.commit(exposure)
+    check(original.undoStack.count == 1 && copy.undoStack.count == 2,
+          "a copied session owns its own stacks")
+}
+
 // MARK: - runner
 
 @MainActor
@@ -4690,6 +4779,7 @@ func runAll() async {
     await testDocumentStateProjectNormalization()
     await testDocumentStateExportSnapshot()
     testDocumentStateValueSemantics()
+    testDocumentSessionHistoryValue()
 
     // Invalidate any debounced write left by the last scenario: the scratch
     // directory is about to disappear, and no timer may outlive it.
