@@ -136,7 +136,7 @@ clean.
 
 ## 9. Hardening addendum (2026-11-12)
 
-This addendum supersedes the recovery statements in Sections 6 and 8.
+This addendum supersedes the recovery statements in Sections 5, 6 and 8.
 
 - Recovery snapshots now optionally store `fileContext`, a `ProjectWriteContext`
   describing the open document's file: its version, unknown top-level keys and
@@ -147,13 +147,22 @@ This addendum supersedes the recovery statements in Sections 6 and 8.
 - The stored payload is still the v3 `RetouchProject`. Only the file-level facts
   travel beside it; `ProjectV4` JSON is never written into `project`.
 - A context that carries no file metadata is not stored at all
-  (`ProjectWriteContext.carriesFileMetadata`), so a v3 snapshot is
-  byte-identical to what earlier builds wrote and a legacy version 0 bare
-  project still decodes.
+  (`ProjectWriteContext.carriesFileMetadata`), so a snapshot of a v3 document
+  with no extra file metadata is byte-identical to what earlier builds wrote and
+  a legacy version 0 bare project still decodes. A v3 document that did carry
+  unknown top-level keys does store the context, so those keys survive.
 - A recovery copy whose `fileContext` reports a newer version, or a required
   feature this build does not support, is refused: no prompt is shown, nothing
-  is restored, and the candidate stays on disk byte-identical for a build that
-  can read it. It is never deleted, quarantined or promoted.
+  is restored, and the candidate is left byte-identical on disk for a build that
+  can read it. It is not deleted and not promoted. This refusal-and-retention
+  behavior applies when the snapshot decodes and its `fileContext` can be
+  inspected.
+- That guarantee does not extend to unreadable snapshots. A snapshot whose
+  payload this build cannot decode at all is quarantined by
+  `RecoveryStore.loadCandidates()` and `prepareForLaunch()` before the refusal
+  logic can run; `quarantine(_:)` moves the file into `quarantine/` without
+  deleting it. Refusal is therefore not an unconditional guarantee against
+  quarantine for unreadable future formats.
 - Nested unknown fields remain a documented limitation. The writer rule for
   future changes is: nested additions require a version or `requiredFeatures`
   bump. A build that adds a nested key without one cannot count on it

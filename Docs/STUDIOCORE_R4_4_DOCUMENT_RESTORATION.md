@@ -40,6 +40,16 @@ rewrite.
 The recovery files and `RecoverySnapshot` are untouched; recovery handoff
 ordering is identical to R4.3.
 
+**Correction (2026-11-12, commit `f989142`).** `RecoverySnapshot` now
+carries an optional `fileContext`, while the stored `project` payload is still
+the v3 projection. Project v4 metadata (file version, required top-level
+features and unknown top-level keys) is preserved through autosave and recovery
+restoration. The field is optional and decoding is tolerant, so older snapshot
+formats still decode, and a context without file metadata is not stored, so a
+v3 snapshot remains byte-identical. An older app build that predates the field
+may ignore `fileContext` and restore a v4 recovery copy as v3; that is a known
+downgrade risk when recovery data is opened with an older build.
+
 ## 3. Tests
 
 - `testDocumentRestorationFromProject` — all restored fields, including a
