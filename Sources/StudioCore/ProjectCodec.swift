@@ -117,7 +117,8 @@ public enum ProjectCodec {
         if context.isV4 {
             return try encodeV4(project,
                                 unknownFields: context.unknownFields,
-                                requiredFeatures: context.requiredFeatures)
+                                requiredFeatures: context.requiredFeatures,
+                                nestedUnknowns: context.nestedUnknowns)
         }
         let base = try encode(project)
         guard !context.unknownFields.isEmpty else { return base }
@@ -128,11 +129,15 @@ public enum ProjectCodec {
     /// The portable v4 document: named geometry records and a stable key order.
     public static func encodeV4(_ project: RetouchProject,
                                 unknownFields: [String: ProjectJSONValue] = [:],
-                                requiredFeatures: [String] = []) throws -> Data {
+                                requiredFeatures: [String] = [],
+                                nestedUnknowns: ProjectUnknownFields? = nil) throws -> Data {
         let record = ProjectV4(project: project, requiredFeatures: requiredFeatures)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let typed = try encoder.encode(record)
+        var typed = try encoder.encode(record)
+        if let nestedUnknowns {
+            typed = try applying(nestedUnknowns, to: typed)
+        }
         guard !unknownFields.isEmpty else { return typed }
         return try merging(typed, unknown: unknownFields, known: ProjectV4.knownKeys)
     }
@@ -161,7 +166,8 @@ public enum ProjectCodec {
                 context: ProjectWriteContext(
                     version: version,
                     unknownFields: object.filter { !ProjectV4.knownKeys.contains($0.key) },
-                    requiredFeatures: required))
+                    requiredFeatures: required,
+                    nestedUnknowns: try nestedUnknownFields(in: object, of: record)))
         }
         let project = try decoder.decode(RetouchProject.self, from: data)
         return ProjectFile(
@@ -179,6 +185,43 @@ public enum ProjectCodec {
         var object = try decoder.decode([String: ProjectJSONValue].self, from: data)
         for (key, value) in unknown where !known.contains(key) {
             object[key] = value
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(object)
+    }
+
+    /// The difference between a v4 file and the record this build writes back,
+    /// captured per known key so a save can keep it.
+    private static func nestedUnknownFields(in raw: [String: ProjectJSONValue],
+                                            of record: ProjectV4) throws -> ProjectUnknownFields? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let typedData = try encoder.encode(record)
+        guard let typed = try? JSONDecoder().decode(ProjectJSONValue.self, from: typedData),
+              case .object(let typedFields) = typed else { return nil }
+        var children: [String: ProjectUnknownFields] = [:]
+        for key in ProjectV4.knownKeys {
+            guard let rawValue = raw[key], let typedValue = typedFields[key] else { continue }
+            if let nested = ProjectUnknownFieldCapture.capture(raw: rawValue, typed: typedValue) {
+                children[key] = nested
+            }
+        }
+        return children.isEmpty ? nil : .object(children)
+    }
+
+    /// Writes the captured nested data back over a freshly encoded record.
+    private static func applying(_ nested: ProjectUnknownFields,
+                                 to data: Data) throws -> Data {
+        var object = try JSONDecoder().decode([String: ProjectJSONValue].self, from: data)
+        if case .object(let children) = nested {
+            for (key, child) in children {
+                if let typed = object[key] {
+                    object[key] = ProjectUnknownFieldCapture.applying(child, to: typed)
+                } else if case .value(let value) = child {
+                    object[key] = value
+                }
+            }
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -241,21 +284,204 @@ public enum ProjectJSONValue: Codable, Equatable {
     }
 }
 
+/// JSON a newer writer put inside records this build already models.
+///
+/// A file is captured against the record this build writes back, so a value is
+/// kept only when the typed model did not consume it. Applying the captured
+/// data over a later save keeps forward-compatible fields without letting them
+/// shadow an edit: a known key always wins, and a record the owner removed
+/// takes its unknown data with it.
+public indirect enum ProjectUnknownFields: Equatable {
+    /// A whole value at a key the record does not know.
+    case value(ProjectJSONValue)
+    /// Unknown data inside the object at a known key.
+    case object([String: ProjectUnknownFields])
+    /// Unknown data inside a known array, one entry per element.
+    case array([Element])
+
+    /// One array element the overlay was captured from.
+    public struct Element: Equatable, Codable {
+        /// The element's position when it was read.
+        public var index: Int
+        /// The element's `id` field, when its record has one.
+        public var id: ProjectJSONValue?
+        /// The element's known JSON as it was read. It re-matches the element
+        /// after the owner edits or removes its neighbours.
+        public var known: ProjectJSONValue
+        /// Nil for an element that carried no unknown data.
+        public var unknown: ProjectUnknownFields?
+
+        public init(index: Int, id: ProjectJSONValue?, known: ProjectJSONValue,
+                    unknown: ProjectUnknownFields?) {
+            self.index = index
+            self.id = id
+            self.known = known
+            self.unknown = unknown
+        }
+    }
+}
+
+extension ProjectUnknownFields: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case value, object, array
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let value = try c.decodeIfPresent(ProjectJSONValue.self, forKey: .value) {
+            self = .value(value)
+        } else if let object = try c.decodeIfPresent([String: ProjectUnknownFields].self,
+                                                     forKey: .object) {
+            self = .object(object)
+        } else if let array = try c.decodeIfPresent([Element].self, forKey: .array) {
+            self = .array(array)
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: c.codingPath,
+                                      debugDescription: "unknown-field overlay without a case"))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .value(let value): try c.encode(value, forKey: .value)
+        case .object(let object): try c.encode(object, forKey: .object)
+        case .array(let array): try c.encode(array, forKey: .array)
+        }
+    }
+}
+
+/// Compares the file with the record this build writes back, and merges the
+/// difference into a later save.
+enum ProjectUnknownFieldCapture {
+    static func capture(raw: ProjectJSONValue,
+                        typed: ProjectJSONValue) -> ProjectUnknownFields? {
+        switch (raw, typed) {
+        case (.object(let rawFields), .object(let typedFields)):
+            var children: [String: ProjectUnknownFields] = [:]
+            for (key, rawValue) in rawFields {
+                guard let typedValue = typedFields[key] else {
+                    children[key] = .value(rawValue)
+                    continue
+                }
+                if let nested = capture(raw: rawValue, typed: typedValue) {
+                    children[key] = nested
+                }
+            }
+            return children.isEmpty ? nil : .object(children)
+        case (.array(let rawItems), .array(let typedItems)):
+            // A different length means the typed model re-shaped the array, so
+            // there is no reliable element to attach unknown data to.
+            guard rawItems.count == typedItems.count else { return nil }
+            var elements: [ProjectUnknownFields.Element] = []
+            var carriesUnknown = false
+            for (index, pair) in zip(rawItems, typedItems).enumerated() {
+                let unknown = capture(raw: pair.0, typed: pair.1)
+                carriesUnknown = carriesUnknown || unknown != nil
+                elements.append(.init(index: index, id: identity(of: pair.1),
+                                      known: pair.1, unknown: unknown))
+            }
+            return carriesUnknown ? .array(elements) : nil
+        default:
+            return nil
+        }
+    }
+
+    /// A record's stable identity, when it has one.
+    static func identity(of value: ProjectJSONValue) -> ProjectJSONValue? {
+        guard case .object(let fields) = value,
+              case .string? = fields["id"] else { return nil }
+        return fields["id"]
+    }
+
+    static func applying(_ unknown: ProjectUnknownFields,
+                         to typed: ProjectJSONValue) -> ProjectJSONValue {
+        switch unknown {
+        case .value:
+            // A key this build now owns is never replaced by an older payload.
+            return typed
+        case .object(let children):
+            guard case .object(var fields) = typed else { return typed }
+            for (key, child) in children {
+                if let current = fields[key] {
+                    fields[key] = applying(child, to: current)
+                } else if case .value(let value) = child {
+                    fields[key] = value
+                }
+                // A nested overlay for a known record that is now absent is
+                // dropped: there is nothing left to attach its keys to.
+            }
+            return .object(fields)
+        case .array(let elements):
+            guard case .array(var items) = typed else { return typed }
+            apply(elements, to: &items)
+            return .array(items)
+        }
+    }
+
+    private static func apply(_ elements: [ProjectUnknownFields.Element],
+                              to items: inout [ProjectJSONValue]) {
+        let carrying = elements.filter { $0.unknown != nil }
+        guard !carrying.isEmpty, !items.isEmpty else { return }
+        var used = Array(repeating: false, count: items.count)
+
+        func claim(_ element: ProjectUnknownFields.Element, at index: Int) {
+            used[index] = true
+            if let unknown = element.unknown {
+                items[index] = applying(unknown, to: items[index])
+            }
+        }
+
+        var pending: [ProjectUnknownFields.Element] = []
+        for element in carrying {
+            if let id = element.id,
+               let index = items.indices.first(where: {
+                   !used[$0] && identity(of: items[$0]) == id
+               }) {
+                claim(element, at: index)
+            } else {
+                pending.append(element)
+            }
+        }
+        var unmatched: [ProjectUnknownFields.Element] = []
+        for element in pending {
+            if let index = items.indices.first(where: {
+                !used[$0] && items[$0] == element.known
+            }) {
+                claim(element, at: index)
+            } else {
+                unmatched.append(element)
+            }
+        }
+        // Position is the last resort, and only when the array kept its length,
+        // so a removed element cannot hand its data to a neighbour.
+        guard elements.count == items.count else { return }
+        for element in unmatched where !used[element.index] {
+            claim(element, at: element.index)
+        }
+    }
+}
+
 /// What the open document's file looked like, so a save can keep it that way.
 /// A v3 file stays v3; a v4 file stays v4 and keeps its unknown keys.
 public struct ProjectWriteContext: Equatable {
     public var version: Int
     public var unknownFields: [String: ProjectJSONValue]
     public var requiredFeatures: [String]
+    /// Unknown data inside records this build models, captured while reading.
+    public var nestedUnknowns: ProjectUnknownFields?
 
     public static let v3 = ProjectWriteContext(version: RetouchProject.currentVersion,
                                                unknownFields: [:], requiredFeatures: [])
 
     public init(version: Int, unknownFields: [String: ProjectJSONValue],
-                requiredFeatures: [String]) {
+                requiredFeatures: [String],
+                nestedUnknowns: ProjectUnknownFields? = nil) {
         self.version = version
         self.unknownFields = unknownFields
         self.requiredFeatures = requiredFeatures
+        self.nestedUnknowns = nestedUnknowns
     }
 
     public var isV4: Bool { version >= ProjectV4.currentVersion }
@@ -274,7 +500,7 @@ public struct ProjectWriteContext: Equatable {
 /// to the v3 defaults instead of failing the whole snapshot.
 extension ProjectWriteContext: Codable {
     private enum CodingKeys: String, CodingKey {
-        case version, unknownFields, requiredFeatures
+        case version, unknownFields, requiredFeatures, nestedUnknowns
     }
 
     public init(from decoder: Decoder) throws {
@@ -285,6 +511,8 @@ extension ProjectWriteContext: Codable {
                                                       forKey: .unknownFields) ?? [:]
         requiredFeatures = try container.decodeIfPresent([String].self,
                                                          forKey: .requiredFeatures) ?? []
+        nestedUnknowns = try container.decodeIfPresent(ProjectUnknownFields.self,
+                                                       forKey: .nestedUnknowns)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -292,6 +520,7 @@ extension ProjectWriteContext: Codable {
         try container.encode(version, forKey: .version)
         try container.encode(unknownFields, forKey: .unknownFields)
         try container.encode(requiredFeatures, forKey: .requiredFeatures)
+        try container.encodeIfPresent(nestedUnknowns, forKey: .nestedUnknowns)
     }
 }
 

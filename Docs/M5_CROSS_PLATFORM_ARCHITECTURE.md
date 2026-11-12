@@ -427,11 +427,13 @@ milestone.
   field must be added to both the value and the wire record; the fixture
   byte-identity test and the self-test round trip are the guard, and they only
   cover what they exercise.
-- **Unknown fields are preserved at the top level only.** `ProjectWriteContext`
-  re-emits unknown top-level keys and required features byte-for-byte; an
-  unknown key nested inside a known object is dropped on re-save, and fixing
-  that would change the format. The v4 fixture and the round-trip tests cover
-  the top-level contract.
+- **Unknown fields are preserved at the top level and inside known records.**
+  `ProjectWriteContext` re-emits unknown top-level keys and required features
+  byte-for-byte, and since the M8.1 addendum it also captures unknown data
+  inside known objects and array elements as a nested overlay, so an edit and
+  save no longer drops it. v3 is deliberately frozen: it keeps its top-level
+  extra keys but does not gain nested capture. See
+  `Docs/STUDIOCORE_R4_8_PROJECT_V4.md` §10 for the matching rules.
 - **No Linux run yet.** `Tests/run-studiocore-linux.sh` compiles the module and
   runs its tests without an SDK probe, now prints the toolchain target triple,
   and was smoke-tested on the macOS host, but no Linux runner has executed it.

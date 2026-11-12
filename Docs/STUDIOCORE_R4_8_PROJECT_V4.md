@@ -65,8 +65,19 @@ there is nothing unknown, which keeps v3 output byte-identical.
 
 `ProjectJSONValue` preserves null, booleans, integers, doubles, strings,
 arrays and nested objects, so a key added by a newer build survives a round
-trip unchanged. Nested unknown fields inside known objects are not preserved:
-the known object is decoded into its typed model and re-encoded.
+trip unchanged.
+
+Inside the records this build models (the top-level known keys), the same
+guarantee now holds recursively. `ProjectCodec.read` re-encodes the decoded
+`ProjectV4` and diffs it against the file: every key, object value or array
+entry the typed model did not explain is captured as a `ProjectUnknownFields`
+overlay in the write context, and a later save writes that overlay back over
+the freshly encoded record. Known keys always win, and an overlay never
+re-introduces a record the owner deleted. Array entries are matched by their
+`id` first, then by their exact known JSON, and by position only when the array
+kept its length, so inserting or removing a neighbour cannot hand one record's
+unknown data to another. This replaces the earlier limitation that nested
+unknown fields were dropped (Section 10).
 
 ## 5. EditorModel wiring
 
@@ -129,7 +140,8 @@ clean.
   The document itself is intact; only unknown future data is dropped. Carrying
   the context through `RecoverySnapshot` would be a format change and was left
   out of R4.8.
-- Unknown fields nested inside known objects are not preserved.
+- ~~Unknown fields nested inside known objects are not preserved.~~ Superseded
+  by Section 10 (2026-11-12).
 - No Windows or Linux build or test was run. StudioCore itself is
   Foundation-only and the v4 encoding uses Foundation JSON, but that is a
   design property, not a validated platform claim.
@@ -163,10 +175,43 @@ This addendum supersedes the recovery statements in Sections 5, 6 and 8.
   logic can run; `quarantine(_:)` moves the file into `quarantine/` without
   deleting it. Refusal is therefore not an unconditional guarantee against
   quarantine for unreadable future formats.
-- Nested unknown fields remain a documented limitation. The writer rule for
-  future changes is: nested additions require a version or `requiredFeatures`
-  bump. A build that adds a nested key without one cannot count on it
-  surviving a round trip through an older build.
+- ~~Nested unknown fields remain a documented limitation.~~ Superseded by
+  Section 10 (2026-11-12): nested unknown fields are now captured and written
+  back. The recovery context stores the nested overlay beside the top-level
+  keys, so a crash-restored v4 document keeps it too.
 - This is preservation of the file facts the document was opened with, not a
   full forward-compatibility claim. A newer build's semantics, nested data and
   unknown enum values are still outside this build's contract.
+
+## 10. Nested unknown-field addendum (2026-11-12)
+
+This section supersedes the "nested fields are dropped" statements in Sections
+4, 8 and 9.
+
+- `ProjectCodec.read` now captures the difference between the file and the
+  record this build writes back, for every top-level key it models. The
+  difference is stored as a `ProjectUnknownFields` overlay (a value, an object
+  or an array of elements) in `ProjectWriteContext.nestedUnknowns`.
+  `ProjectWriteContext` is Codable, so recovery snapshots carry the overlay
+  beside `unknownFields` and `requiredFeatures`. A context without an overlay
+  encodes without the key, so v3 snapshot bytes are unchanged.
+- `ProjectCodec.encode(_:context:)` applies the overlay after encoding the
+  typed record. A known key is never replaced by captured data, and an overlay
+  for a record that no longer exists is dropped instead of resurrecting it.
+- Array elements are matched by `id` (stickers, AI edits), then by their exact
+  known JSON, and by position only when the captured and current arrays have
+  the same length. Inserting a neighbour keeps each record's unknown data with
+  it; removing a record discards that record's data.
+- v3 is intentionally unchanged: `read` captures no nested data for a v3 file,
+  and the baseline fixture still round-trips byte for byte.
+- Tests: `testProjectV4NestedUnknownFieldsArePreserved` (four depths, every
+  JSON value kind, edits on known siblings, byte-identical second save),
+  `testProjectV4UnknownFieldsFollowArrayRecords` (inserted, surviving and
+  removed records), `testProjectV3NestedCaptureIsAbsent` (v3 untouched), and
+  the `ProjectStore` read-modify-write and failed-write checks in
+  `Tests/StudioCoreTests.swift`.
+- Residual limitation: when the owner edits an id-less array element (for
+  example a healing stamp's centre) *and* the array length changes in the same
+  save, the element can no longer be matched, so its unknown data is dropped
+  rather than attached to the wrong record. Elements with an `id`, and id-less
+  elements whose array length is unchanged, keep their data.

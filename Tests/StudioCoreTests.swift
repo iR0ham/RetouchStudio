@@ -793,6 +793,142 @@ memory.writeFailure = nil
 check(memory.files[projectURL] == v4Bytes,
       "a refused write leaves the previous project untouched")
 
+print("\n[M7] unknown data nested in a v4 document survives the store")
+
+/// The store's read-modify-write path end to end: a file with unknown data at
+/// several depths is read, a known field is edited, and the write keeps the
+/// unknown data without disturbing the edit.
+let nestedStoreChecks: () -> Void = {
+    var nestedProject = RetouchProject(
+        imagePath: "/portable/nested.heic", adjustments: Adjustments(),
+        exportFormat: "png", exportQuality: 0.9, autoRetouchStrength: 60,
+        crop: StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8),
+        healSpots: [HealSpot(center: StudioPoint(x: 0.25, y: 0.35), radius: 0.02)],
+        stickers: [Sticker(kind: .heart, center: StudioPoint(x: 0.6, y: 0.4), size: 0.1)])
+    nestedProject.adjustments.exposure = 4
+
+    let jsonEncoder = JSONEncoder()
+    jsonEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let encoded = try? ProjectCodec.encodeV4(nestedProject),
+          var nestedObject = try? JSONDecoder().decode([String: ProjectJSONValue].self,
+                                                       from: encoded),
+          case .object(var nestedAdjustments)? = nestedObject["adjustments"],
+          case .array(var nestedSpots)? = nestedObject["healSpots"],
+          case .object(var nestedSpot)? = nestedSpots.first,
+          case .array(var nestedStickers)? = nestedObject["stickers"],
+          case .object(var nestedSticker)? = nestedStickers.first else {
+        check(false, "the nested store fixture is built")
+        return
+    }
+    let tree: ProjectJSONValue = .object([
+        "rows": .array([.object(["label": .string("first"), "value": .null])])
+    ])
+    nestedAdjustments["futureTree"] = tree
+    nestedObject["adjustments"] = .object(nestedAdjustments)
+    nestedSpot["futureFeather"] = .double(0.5)
+    nestedSpots[0] = .object(nestedSpot)
+    nestedObject["healSpots"] = .array(nestedSpots)
+    nestedSticker["futureStyle"] = .string("dashed")
+    nestedStickers[0] = .object(nestedSticker)
+    nestedObject["stickers"] = .array(nestedStickers)
+    nestedObject["futureFlag"] = .bool(true)
+    guard let staged = try? jsonEncoder.encode(nestedObject) else {
+        check(false, "the nested store fixture encodes")
+        return
+    }
+
+    let nestedURL = URL(fileURLWithPath: "/portable/nested.retouch")
+    memory.files[nestedURL] = staged
+    guard let readBack = try? store.read(at: nestedURL) else {
+        check(false, "the store reads a nested v4 document")
+        return
+    }
+    var edited = readBack.project
+    edited.adjustments.exposure = 12
+    guard (try? store.write(edited, context: readBack.context, to: nestedURL)) != nil,
+          let savedData = memory.files[nestedURL],
+          let savedObject = try? JSONDecoder().decode([String: ProjectJSONValue].self,
+                                                      from: savedData),
+          case .object(let savedAdjustments)? = savedObject["adjustments"],
+          case .array(let savedSpots)? = savedObject["healSpots"],
+          case .object(let savedSpot)? = savedSpots.first,
+          case .array(let savedStickers)? = savedObject["stickers"],
+          case .object(let savedSticker)? = savedStickers.first else {
+        check(false, "the store writes the nested v4 document")
+        return
+    }
+    check(savedObject["version"] == .int(4), "the store keeps the file v4")
+    check(savedObject["futureFlag"] == .bool(true),
+          "the store keeps a top-level unknown key")
+    check(savedAdjustments["futureTree"] == tree,
+          "the store keeps unknown data nested in a known object")
+    check(savedSpot["futureFeather"] == .double(0.5),
+          "the store keeps unknown data on an array element")
+    check(savedSticker["futureStyle"] == .string("dashed"),
+          "the store keeps unknown data on an identified array element")
+    check(savedAdjustments["exposure"] == .int(12),
+          "the store writes the edit made since the read")
+
+    guard let secondRead = try? store.read(at: nestedURL),
+          (try? store.write(secondRead.project, context: secondRead.context,
+                            to: nestedURL)) != nil,
+          let rewrittenData = memory.files[nestedURL] else {
+        check(false, "the store rewrites the nested v4 document")
+        return
+    }
+    check(rewrittenData == savedData,
+          "an unchanged read-modify-write is byte identical")
+
+    memory.writeFailure = .writeFailed
+    var failing = secondRead.project
+    failing.adjustments.exposure = 99
+    do {
+        _ = try store.write(failing, context: secondRead.context, to: nestedURL)
+        check(false, "a failed nested write is reported")
+    } catch ProjectIOError.writeFailed {
+        check(true, "a failed nested write is reported as a write failure")
+    } catch {
+        check(false, "a failed nested write keeps the port's error domain", "\(error)")
+    }
+    memory.writeFailure = nil
+    check(memory.files[nestedURL] == rewrittenData,
+          "a failed write leaves the nested document and its unknown data untouched")
+}
+nestedStoreChecks()
+
+// The recovery snapshot stores the write context as JSON, so the nested
+// overlay has to survive that encoding unchanged.
+let overlayContext = ProjectWriteContext(
+    version: 4,
+    unknownFields: ["futureFlag": .string("kept")],
+    requiredFeatures: ["portable_geometry"],
+    nestedUnknowns: .object([
+        "adjustments": .object(["futureNested": .value(.string("kept"))]),
+        "healSpots": .array([
+            .init(index: 0, id: nil,
+                  known: .object(["radius": .double(0.02)]),
+                  unknown: .object(["futureFeather": .value(.double(0.5))]))
+        ])
+    ]))
+let overlayData = try? JSONEncoder().encode(overlayContext)
+let overlayReread = overlayData.flatMap {
+    try? JSONDecoder().decode(ProjectWriteContext.self, from: $0)
+}
+check(overlayReread == overlayContext,
+      "the write context round-trips its nested overlay")
+let overlayJSON = overlayData
+    .flatMap { try? JSONDecoder().decode([String: ProjectJSONValue].self, from: $0) }
+check(overlayJSON?["nestedUnknowns"] != nil,
+      "a context with an overlay writes the nested key")
+let legacyContextData = Data("""
+    {"version": 4, "unknownFields": {}, "requiredFeatures": ["portable_geometry"]}
+    """.utf8)
+let legacyContext = try? JSONDecoder().decode(ProjectWriteContext.self,
+                                              from: legacyContextData)
+check(legacyContext?.nestedUnknowns == nil
+      && legacyContext?.requiredFeatures == ["portable_geometry"],
+      "a context written before the overlay decodes with none")
+
 // MARK: - Renderer contract and policy
 
 print("\n[M8] the renderer contract is portable and its policy is exact")

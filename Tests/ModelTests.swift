@@ -1513,45 +1513,249 @@ func testProjectV4Capabilities() {
     }
 }
 
-/// Unknown top-level keys are preserved whole, but an unknown key nested inside
-/// a known object is not: that object is decoded into its typed model and
-/// re-encoded. This test pins the limitation so a later change to it has to be
-/// deliberate.
+/// A v4 file keeps unknown data at every depth: inside known objects, inside
+/// the objects of a known array, and inside the arrays and objects nested in
+/// those. The capture is a diff, so a later save keeps the data without letting
+/// it shadow a field this build owns.
 @MainActor
-func testProjectV4NestedUnknownFieldsAreDropped() {
-    print("\n[R4.8] nested unknown fields stay a documented limitation")
+func testProjectV4NestedUnknownFieldsArePreserved() {
+    print("\n[R4.8] unknown data inside known records survives a save")
 
-    let fixture = projectV4Fixture()
-    guard var object = projectJSON(fixture.data),
-          case .object(var adjustments)? = object["adjustments"] else {
-        check(false, "the v4 fixture is JSON with an adjustments object")
+    guard var object = projectJSON(projectV4Fixture().data),
+          case .object(var adjustments)? = object["adjustments"],
+          case .array(var edits)? = object["aiEdits"],
+          case .object(var edit)? = edits.first,
+          case .object(var box)? = edit["box"],
+          case .array(var stickers)? = object["stickers"],
+          case .object(var sticker)? = stickers.first,
+          case .object(var color)? = sticker["color"],
+          case .array(var spots)? = object["healSpots"],
+          case .object(var spot)? = spots.first,
+          case .object(var analysis)? = object["analysis"] else {
+        check(false, "the v4 fixture has the nested records the test needs")
         return
     }
-    adjustments["futureNested"] = .string("dropped")
+
+    // An unknown object field, every JSON scalar kind, and an array of objects
+    // nested inside a known object.
+    let tree: ProjectJSONValue = .object([
+        "rows": .array([
+            .object(["label": .string("first"), "values": .array([.int(1), .null])]),
+            .object(["label": .string("second"), "enabled": .bool(true)])
+        ])
+    ])
+    adjustments["futureText"] = .string("kept")
+    adjustments["futureNull"] = .null
+    adjustments["futureFlagOff"] = .bool(false)
+    adjustments["futureCount"] = .int(42)
+    adjustments["futureRatio"] = .double(0.125)
+    adjustments["futureTree"] = tree
     object["adjustments"] = .object(adjustments)
-    guard let nested = projectJSONData(object),
-          let file = try? ProjectCodec.read(nested) else {
-        check(false, "a v4 file with a nested unknown key reads")
+
+    // Unknown data inside the objects of known arrays, one of them two levels
+    // deep (an AI edit's box, a sticker's colour).
+    let anchor: ProjectJSONValue = .object(["x": .double(0.5), "y": .double(0.25)])
+    box["futureAnchor"] = anchor
+    edit["box"] = .object(box)
+    edits[0] = .object(edit)
+    object["aiEdits"] = .array(edits)
+
+    let channels: ProjectJSONValue = .array([.int(1), .int(2)])
+    color["futureChannel"] = channels
+    sticker["color"] = .object(color)
+    stickers[0] = .object(sticker)
+    object["stickers"] = .array(stickers)
+
+    spot["futureFeather"] = .double(0.5)
+    spots[0] = .object(spot)
+    object["healSpots"] = .array(spots)
+
+    let badge: ProjectJSONValue = .object(["text": .string("new"), "offset": .int(3)])
+    analysis["futureBadge"] = badge
+    object["analysis"] = .object(analysis)
+
+    guard let staged = projectJSONData(object),
+          let file = try? ProjectCodec.read(staged) else {
+        check(false, "a v4 file with nested unknown keys reads")
         return
     }
     check(file.context.unknownFields["futureFlag"] == .string("kept"),
           "the top-level unknown key is still captured")
     check(file.context.unknownFields["adjustments"] == nil,
           "a known container is not treated as an unknown key")
-    guard let saved = try? ProjectCodec.encodeV4(
-            file.project,
-            unknownFields: file.context.unknownFields,
-            requiredFeatures: file.context.requiredFeatures),
+    check(file.context.nestedUnknowns != nil,
+          "the difference inside known records is captured")
+
+    // A known sibling is edited before the save. The unknown data must survive
+    // the edit, and the edit must survive the unknown data.
+    var project = file.project
+    project.adjustments.exposure = 21
+    project.stickers?[0].rotation = 33
+    project.aiEdits?[0].seconds = 9.5
+
+    guard let saved = try? ProjectCodec.encode(project, context: file.context),
           let savedObject = projectJSON(saved),
-          case .object(let savedAdjustments)? = savedObject["adjustments"] else {
-        check(false, "the nested fixture saves")
+          case .object(let savedAdjustments)? = savedObject["adjustments"],
+          case .array(let savedEdits)? = savedObject["aiEdits"],
+          case .object(let savedEdit)? = savedEdits.first,
+          case .object(let savedBox)? = savedEdit["box"],
+          case .array(let savedStickers)? = savedObject["stickers"],
+          case .object(let savedSticker)? = savedStickers.first,
+          case .object(let savedColor)? = savedSticker["color"],
+          case .array(let savedSpots)? = savedObject["healSpots"],
+          case .object(let savedSpot)? = savedSpots.first,
+          case .object(let savedAnalysis)? = savedObject["analysis"] else {
+        check(false, "the v4 document with nested unknown keys saves")
         return
     }
+
     check(savedObject["futureFlag"] == .string("kept"),
           "the top-level unknown key survives the save")
-    check(savedAdjustments["futureNested"] == nil,
-          "the nested unknown key is dropped, as documented")
+    check(savedAdjustments["futureText"] == .string("kept")
+            && savedAdjustments["futureNull"] == .null
+            && savedAdjustments["futureFlagOff"] == .bool(false)
+            && savedAdjustments["futureCount"] == .int(42)
+            && savedAdjustments["futureRatio"] == .double(0.125),
+          "an unknown field of every JSON kind survives inside a known object")
+    check(savedAdjustments["futureTree"] == tree,
+          "an array of objects nested in a known object survives whole")
+    check(savedBox["futureAnchor"] == anchor,
+          "an unknown object inside an array element survives")
+    check(savedColor["futureChannel"] == channels,
+          "an unknown array two objects deep inside an array element survives")
+    check(savedSpot["futureFeather"] == .double(0.5),
+          "an unknown key on an id-less array element survives")
+    check(savedAnalysis["futureBadge"] == badge,
+          "an unknown object inside a known sub-record survives")
+
+    check(savedAdjustments["exposure"] == .int(21),
+          "the edited known sibling is written")
+    check(savedSticker["rotation"] == .int(33),
+          "an edit on the same array element as unknown data is written")
+    check(savedEdit["seconds"] == .double(9.5),
+          "an edit on a nested array element is written")
+    check(savedAdjustments["smooth"] == adjustments["smooth"]
+            && savedObject["crop"] == object["crop"],
+          "untouched known fields are unchanged")
+    check(savedObject["version"] == .int(4), "the save stays v4")
+    check(savedObject["requiredFeatures"] == .array([.string("portable_geometry")]),
+          "the required capability survives the save")
+
+    // Repeated save/load cycles are stable: the captured difference is exactly
+    // what the typed record does not explain, so it cannot grow or drift.
+    guard let again = try? ProjectCodec.read(saved),
+          let resaved = try? ProjectCodec.encode(again.project, context: again.context) else {
+        check(false, "the saved v4 document reads back")
+        return
+    }
+    check(resaved == saved, "a second save of the same document is byte identical")
+    check(again.context.requiredFeatures == ["portable_geometry"],
+          "the second read still carries the required capability")
 }
+
+/// Unknown array data is attached to its record, not to a position: inserting
+/// a neighbour keeps it where it belongs, and a removed record takes its data
+/// with it instead of handing it to a survivor.
+@MainActor
+func testProjectV4UnknownFieldsFollowArrayRecords() {
+    print("\n[R4.8] unknown array data follows its record, not its position")
+
+    guard var object = projectJSON(projectV4Fixture().data),
+          case .array(var stickers)? = object["stickers"],
+          case .object(var sticker)? = stickers.first,
+          case .array(var spots)? = object["healSpots"],
+          spots.count == 2,
+          case .object(var firstSpot)? = spots.first,
+          case .object(var secondSpot) = spots[1],
+          case .array(var edits)? = object["aiEdits"],
+          case .object(var edit)? = edits.first else {
+        check(false, "the v4 fixture has the arrays the test needs")
+        return
+    }
+    sticker["futureStyle"] = .string("dashed")
+    stickers[0] = .object(sticker)
+    object["stickers"] = .array(stickers)
+    firstSpot["futureFeather"] = .double(0.25)
+    spots[0] = .object(firstSpot)
+    secondSpot["futureFeather"] = .double(0.75)
+    spots[1] = .object(secondSpot)
+    object["healSpots"] = .array(spots)
+    edit["futureNote"] = .string("gone with the edit")
+    edits[0] = .object(edit)
+    object["aiEdits"] = .array(edits)
+
+    guard let staged = projectJSONData(object),
+          let file = try? ProjectCodec.read(staged) else {
+        check(false, "the array fixture reads")
+        return
+    }
+
+    var project = file.project
+    // A new sticker is placed before the known one.
+    var leading = project.stickers![0]
+    leading.id = UUID()
+    leading.kind = .star
+    project.stickers = [leading] + project.stickers!
+    // The first healing stamp is removed; the second one keeps its own data.
+    let survivor = project.healSpots![1]
+    project.healSpots = [survivor]
+    // The AI edit is removed entirely.
+    project.aiEdits = []
+
+    guard let saved = try? ProjectCodec.encode(project, context: file.context),
+          let savedObject = projectJSON(saved),
+          case .array(let savedStickers)? = savedObject["stickers"],
+          case .object(let newSticker)? = savedStickers.first,
+          case .object(let knownSticker)? = savedStickers.last,
+          case .array(let savedSpots)? = savedObject["healSpots"],
+          case .object(let savedSpot)? = savedSpots.first else {
+        check(false, "the rearranged document saves")
+        return
+    }
+
+    check(savedStickers.count == 2 && savedStickers.first != savedStickers.last,
+          "both stickers are written")
+    check(newSticker["futureStyle"] == nil,
+          "an inserted record does not inherit its neighbour's unknown data")
+    check(knownSticker["futureStyle"] == .string("dashed"),
+          "the original record keeps its unknown data after the insert")
+    check(savedSpots.count == 1 && savedSpot["futureFeather"] == .double(0.75),
+          "the surviving id-less record keeps its own unknown data")
+    check(savedObject["aiEdits"] == .array([]),
+          "a removed record's unknown data is not resurrected")
+}
+
+/// The v4 overlay is a v4 concern: reading a v3 file captures nothing nested,
+/// so the frozen v3 path stays byte-for-byte what it always was.
+@MainActor
+func testProjectV3NestedCaptureIsAbsent() {
+    print("\n[R4.8] the nested capture never touches the frozen v3 path")
+
+    let fixture = projectV3Fixture()
+    guard var object = projectJSON(fixture.data),
+          case .object(var adjustments)? = object["adjustments"] else {
+        check(false, "the v3 fixture is JSON")
+        return
+    }
+    adjustments["futureNested"] = .string("frozen")
+    object["adjustments"] = .object(adjustments)
+    guard let staged = projectJSONData(object),
+          let file = try? ProjectCodec.read(staged) else {
+        check(false, "a v3 file with a nested extra key reads")
+        return
+    }
+    check(file.context.version == 3 && file.context.nestedUnknowns == nil,
+          "a v3 read captures no nested data")
+    check(!file.context.carriesFileMetadata,
+          "a v3 read with no top-level extra carries no file metadata")
+    guard let saved = try? ProjectCodec.encode(file.project, context: file.context) else {
+        check(false, "the v3 file saves")
+        return
+    }
+    check(saved == fixture.data,
+          "a v3 save stays byte identical to the frozen baseline")
+}
+
 
 @MainActor
 func testProjectV4EditorRoundTrip() async {
@@ -6199,7 +6403,9 @@ func runAll() async {
     testProjectV4FixtureCrossArchitecture()
     testProjectUnknownFieldsSurvive()
     testProjectV4Capabilities()
-    testProjectV4NestedUnknownFieldsAreDropped()
+    testProjectV4NestedUnknownFieldsArePreserved()
+    testProjectV4UnknownFieldsFollowArrayRecords()
+    testProjectV3NestedCaptureIsAbsent()
     await testProjectV4EditorRoundTrip()
     testDocumentRestorationFromProject()
     testDocumentRestorationDefaultsAndPhoto()
