@@ -1052,7 +1052,7 @@ func testProjectCodecFieldMapping() {
     check(project.exportLongEdge == 2048, "a real long edge is kept")
     check(project.autoRetouchStrength == 55 && project.autoColorStrength == 45,
           "both auto strengths are copied")
-    check(project.crop == state.crop?.cgRect, "the crop is copied")
+    check(project.crop == state.crop, "the crop is copied")
     check(project.healSpots == state.healSpots, "healing stamps are copied")
     check(project.stickers == state.stickers, "stickers are copied")
     check(project.aiEdits == state.aiEdits, "AI edits are copied")
@@ -1256,7 +1256,7 @@ private func fullV4Project() -> RetouchProject {
         adjustments: adjustments,
         exportFormat: "heic", exportQuality: 0.83, exportLongEdge: 3000,
         autoRetouchStrength: 66, autoColorStrength: 44,
-        crop: CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8),
+        crop: StudioRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8),
         healSpots: [HealSpot(center: CGPoint(x: 0.25, y: 0.35), radius: 0.015)],
         stickers: [Sticker(kind: .sparkle, center: CGPoint(x: 0.6, y: 0.4),
                            size: 0.12, rotation: 12, opacity: 0.8)],
@@ -1653,7 +1653,7 @@ func testDocumentRestorationFromProject() {
         exportLongEdge: 2048,
         autoRetouchStrength: 55,
         autoColorStrength: 45,
-        crop: CGRect(x: 0.1, y: 0.2, width: 0.6, height: 0.5),
+        crop: StudioRect(x: 0.1, y: 0.2, width: 0.6, height: 0.5),
         healSpots: [HealSpot(center: CGPoint(x: 0.3, y: 0.4), radius: 0.01)],
         stickers: [Sticker(kind: .heart, center: CGPoint(x: 0.5, y: 0.5), size: 0.1)],
         aiEdits: [AIEdit(preset: "cleanup", prompt: "wall", seed: 1,
@@ -1678,7 +1678,7 @@ func testDocumentRestorationFromProject() {
     check(restoration.state.stickers == project.stickers, "stickers are restored")
     check(restoration.state.aiEdits == project.aiEdits, "AI edits are restored")
     check(restoration.state.analysis == project.analysis, "analysis is restored")
-    check(restoration.state.crop == project.crop.map(StudioRect.init), "the crop is restored")
+    check(restoration.state.crop == project.crop, "the crop is restored")
     check(restoration.state.orientation == project.orientation, "the orientation is restored")
     check(restoration.state.selectedFaceIndex == 2, "the chosen face is restored")
 }
@@ -3213,7 +3213,7 @@ func recoveryProject(for url: URL, exposure: Double = 0, contrast: Double = 0,
     adjustments.contrast = contrast
     return RetouchProject(imagePath: url.path, adjustments: adjustments,
                           exportFormat: "png", exportQuality: 0.81,
-                          autoRetouchStrength: 63, crop: crop,
+                          autoRetouchStrength: 63, crop: crop.map(StudioRect.init),
                           healSpots: healSpots, orientation: orientation)
 }
 
@@ -4436,7 +4436,7 @@ func testRecoveryV3RoundTripPreservesDocument() async {
     check(working.project.adjustments.exposure == 0.27
             && working.project.adjustments.contrast == 4,
           "the working copy carries the restored edits")
-    check(working.project.crop == crop, "the working copy keeps the crop")
+    check(working.project.crop == StudioRect(crop), "the working copy keeps the crop")
     check(working.project.version == 3, "the working copy is a v3 projection")
     check(working.fileContext == nil, "a v3 document stores no file context")
     check(await waitUntil(10) { !FileManager.default.fileExists(atPath: candidate.path) },

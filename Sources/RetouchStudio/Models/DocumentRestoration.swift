@@ -31,7 +31,7 @@ struct DocumentRestoration: Equatable {
         state.stickers = project.stickers ?? []
         state.aiEdits = project.aiEdits ?? []
         state.analysis = project.analysis ?? AnalysisSettings()
-        state.crop = project.crop.map(StudioRect.init)
+        state.crop = project.crop
         state.orientation = project.orientation ?? .identity
         state.selectedFaceIndex = project.selectedFace
 

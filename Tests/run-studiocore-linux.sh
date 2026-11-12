@@ -3,9 +3,24 @@
 # Foundation, then runs the same checks. This is the executable form of the
 # Linux claim: no SDK probe, no macOS frameworks, no Apple-only linker.
 #
+# Running this on macOS only proves the module is Foundation-only; it is a
+# smoke test, not Linux evidence. Real evidence requires a Linux host with a
+# Swift toolchain, and the printed target triple below must say linux.
+#
 #   ./Tests/run-studiocore-linux.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+command -v swiftc >/dev/null 2>&1 || {
+  echo "swiftc is not on PATH; install a Swift toolchain for this host" >&2
+  exit 1
+}
+TARGET_TRIPLE=$(swiftc -print-target-info 2>/dev/null | grep -o '"triple"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+echo "→ toolchain target: ${TARGET_TRIPLE:-unknown} on $(uname -s) $(uname -m)"
+case "$TARGET_TRIPLE" in
+  *linux*) ;;
+  *) echo "  note: this host is not Linux — a pass here is a Foundation-only smoke test" >&2 ;;
+esac
 
 FORBIDDEN_IMPORTS='AppKit|SwiftUI|CoreImage|Vision|ImageIO|CoreGraphics|UIKit|UniformTypeIdentifiers|CoreVideo|Metal|AVFoundation|Cocoa|RetouchStudio'
 PLATFORM_TYPES='NSColor|NSImage|NSFont|NSBezierPath|CIImage|CIColor|CIFilter|CGImage|CGColor|CGContext|CGRect|CGSize|CGPoint|CGFloat|CGAffineTransform|VNDetect[A-Za-z]*|VNImageRequestHandler|VNRecognize[A-Za-z]*|UTType|\bColor\b|\bImage\b|\bView\b'

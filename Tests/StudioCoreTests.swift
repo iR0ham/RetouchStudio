@@ -689,6 +689,110 @@ check(documentHistory.undo(current: portable) == DocumentState()
 check(documentHistory.redo(current: DocumentState()) == portable,
       "redo returns the edited document")
 
+print("Project document: the v3 fixture and the portable ports")
+
+/// A host's byte storage without a file system: the store's order of
+/// operations must be observable without one.
+final class MemoryProjectBytes: ProjectByteStore {
+    var files: [URL: Data] = [:]
+    var readFailure: ProjectIOError?
+    var writeFailure: ProjectIOError?
+
+    func readProjectData(at url: URL) throws -> Data {
+        if let readFailure { throw readFailure }
+        guard let data = files[url] else { throw ProjectIOError.readFailed }
+        return data
+    }
+
+    func writeProjectData(_ data: Data, to url: URL) throws {
+        if let writeFailure { throw writeFailure }
+        files[url] = data
+    }
+}
+
+struct MissingProjectSources: ProjectSourceAccess {
+    func fileExists(at url: URL) -> Bool { false }
+}
+
+struct EmptyProjectBookmarks: ProjectBookmarkStore {
+    func bookmark(for url: URL) -> Data? { nil }
+    func resolveBookmark(_ data: Data) -> URL? { nil }
+}
+
+let v3FixtureURL = URL(fileURLWithPath: root)
+    .appendingPathComponent("Tests/Fixtures/ProjectV3/project-v3-full.retouch")
+if let fixtureBytes = try? Data(contentsOf: v3FixtureURL),
+   let fixtureProject = try? ProjectCodec.decode(fixtureBytes) {
+    check((try? ProjectCodec.encode(fixtureProject)) == fixtureBytes,
+          "StudioCore reproduces the v3 fixture byte for byte")
+    check(fixtureProject.crop == StudioRect(x: 0.08, y: 0.12, width: 0.76, height: 0.74),
+          "the v3 array crop decodes to portable geometry")
+    check(fixtureProject.healSpots?.first?.center == StudioPoint(x: 0.42, y: 0.37),
+          "the v3 array point decodes to a portable point")
+    check(fixtureProject.aiEdits?.first?.imagePixels == StudioSize(width: 1024, height: 768),
+          "the v3 array size decodes to a portable size")
+    check(fixtureProject.stickers?.first?.color == MakeupColor(hue: 330, saturation: 0.65, value: 0.95),
+          "the v3 sticker keeps its colour")
+} else {
+    check(false, "the v3 fixture is readable", v3FixtureURL.path)
+}
+
+let memory = MemoryProjectBytes()
+let store = ProjectStore(bytes: memory, sources: MissingProjectSources(),
+                         bookmarks: EmptyProjectBookmarks())
+let projectURL = URL(fileURLWithPath: "/portable/project.retouch")
+var ported = RetouchProject(imagePath: "/portable/photo.heic", adjustments: Adjustments(),
+                            exportFormat: "jpeg", exportQuality: 0.9,
+                            autoRetouchStrength: 70,
+                            crop: StudioRect(x: 0.1, y: 0.2, width: 0.5, height: 0.6))
+ported.adjustments.exposure = 8
+try! store.write(ported, context: .v3, to: projectURL)
+check(memory.files[projectURL] == (try? ProjectCodec.encode(ported)),
+      "the store writes the codec's exact v3 bytes")
+let loaded = try? store.read(at: projectURL)
+check(loaded?.project.crop == ported.crop && loaded?.project.adjustments == ported.adjustments,
+      "the store reads back the project through the port")
+check(loaded?.context == ProjectWriteContext.v3,
+      "a v3 file keeps a v3 write context")
+
+let v4Context = ProjectWriteContext(version: 4,
+                                    unknownFields: ["futureFlag": .string("kept")],
+                                    requiredFeatures: ["portable_geometry"])
+_ = try! store.write(ported, context: v4Context, to: projectURL)
+let v4Bytes = memory.files[projectURL]!
+let reread = try? store.read(at: projectURL)
+check(reread?.context.isV4 == true
+      && reread?.context.unknownFields["futureFlag"] == .string("kept")
+      && reread?.context.requiredFeatures == ["portable_geometry"],
+      "a v4 file keeps its version, unknown field and required feature")
+_ = try! store.write(reread!.project, context: reread!.context, to: projectURL)
+check(memory.files[projectURL] == v4Bytes,
+      "saving a read v4 document reproduces its bytes")
+
+memory.readFailure = .readFailed
+do {
+    _ = try store.read(at: projectURL)
+    check(false, "a failed read is reported")
+} catch ProjectIOError.readFailed {
+    check(true, "a failed read is reported as a read failure")
+} catch {
+    check(false, "a failed read keeps the port's error domain", "\(error)")
+}
+memory.readFailure = nil
+
+memory.writeFailure = .writeFailed
+do {
+    _ = try store.write(ported, context: .v3, to: projectURL)
+    check(false, "a failed write is reported")
+} catch ProjectIOError.writeFailed {
+    check(true, "a failed write is reported as a write failure")
+} catch {
+    check(false, "a failed write keeps the port's error domain", "\(error)")
+}
+memory.writeFailure = nil
+check(memory.files[projectURL] == v4Bytes,
+      "a refused write leaves the previous project untouched")
+
 print("")
 print(failures.isEmpty
       ? "StudioCore: \(checks) checks passed"

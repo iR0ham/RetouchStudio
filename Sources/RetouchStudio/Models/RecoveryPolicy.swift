@@ -64,8 +64,7 @@ enum RecoveryPolicy {
         guard context.version <= ProjectCodec.currentVersion else {
             return .tooNew(context.version)
         }
-        let unsupported = context.requiredFeatures
-            .filter { !ProjectV4.supportedFeatures.contains($0) }.sorted()
+        let unsupported = ProjectCodec.unsupportedFeatures(context.requiredFeatures)
         return unsupported.isEmpty ? nil : .unsupportedFeatures(unsupported)
     }
 

@@ -82,12 +82,14 @@ StudioCore (Foundation only, still one import)
   DocumentHistory<State: HistoryState>       (new)
   RecoveryRules                              (new)
   ProjectSourceAccess, ProjectBookmarkStore  (new ports)
+  RetouchProject, ProjectCodec, ProjectV4     (M7)
+  ProjectByteStore, ProjectIOError, ProjectStore (M7)
+  DocumentState and the document values       (M6)
 
 App model layer
-  DocumentState (unchanged value, now conforms to HistoryState)
   DocumentSession = DocumentHistory<DocumentState>   (typealias)
   RecoveryPolicy (delegates name/date rules; keeps snapshot rules)
-  ProjectCodec (imports StudioCore; adapters stay here)
+  FileProjectByteStore, URLBookmarkStore, FileProjectSourceAccess (M7)
   ...unchanged...
 
 Platform layer
@@ -176,6 +178,37 @@ Roadmap item 2 (section 14) is done on the same branch:
   straighten; portable JSON with named coordinates and no Core Graphics array
   shape; and `DocumentState` as a step in the shared `DocumentHistory`.
 
+### 5.2 M7 — portable project I/O
+
+Roadmap item 3 (section 14) is done on the same branch. The project model,
+both wire formats and the read/write ordering moved into StudioCore; only the
+host APIs stayed behind.
+
+**Moved into `Sources/StudioCore`**
+
+| File | Contents |
+|---|---|
+| `ProjectDocument.swift` | `RetouchProject` (v3 in memory), its tolerant decode, and the frozen v3 wire records `WirePoint`, `WireSize`, `WireRect`, `HealSpotWire`, `StickerWire`, `AIEditWire`, `AnalysisSettingsWire`. The unkeyed Core Graphics arrays are written by these records, not by Core Graphics. |
+| `ProjectCodec.swift` | `ProjectCodec`, `ProjectCodecError`, `ProjectJSONValue`, `ProjectWriteContext`, `ProjectFile`, `ProjectV4`, `AnalysisSettingsV4`, and `ProjectSourceResolver`. The codec preserves every unknown top-level key and required feature through `ProjectWriteContext`, so a v4 file re-saves with the same bytes. |
+| `ProjectIO.swift` | `ProjectByteStore`, `ProjectIOError` and `ProjectStore`. The store owns the order read bytes → decode and encode → write bytes, and maps every host failure onto a structured error. |
+
+`Sources/RetouchStudio/Models/Project.swift`, `ProjectV4.swift` and
+`ProjectCodec.swift` are deleted. There is one codec, not a parallel one.
+
+**Kept on macOS (`Sources/RetouchStudio/Models/ProjectAdapters.swift`,
+`Recovery.swift`)**
+
+- `FileProjectByteStore` reads/writes `Data` with `.atomic`.
+- `FileProjectSourceAccess` answers path existence through `FileManager`.
+- `URLBookmarkStore` creates and resolves security-scoped bookmarks.
+- `RetouchProject.contentType` maps the shared type onto `UTType`.
+- Open/save panels, photo relocation prompts and crash recovery remain in
+  `EditorModel` and `Recovery.swift`; recovery keeps writing its own snapshot
+  wrapper around the shared `RetouchProject` and `ProjectWriteContext`.
+
+No file-system, bookmark or `UTType` type appears in a portable public API.
+The only Foundation types crossing the seam are `Data` and `URL`.
+
 ## 6. What remains macOS-specific
 
 These are deliberate boundaries, not unfinished moves:
@@ -183,7 +216,7 @@ These are deliberate boundaries, not unfinished moves:
 | Area | Why it stays on macOS | Evidence |
 |---|---|---|
 | CoreGraphics adapters | The document value moved to StudioCore in M6; only the `CGPoint`/`CGRect` adapters and the renderers that consume them stay on macOS. | `Sources/StudioCore/DocumentValue.swift`, `Sources/StudioCore/StudioGeometry.swift` |
-| `ProjectCodec`, `ProjectV4`, `Project` | v3 JSON is CoreGraphics' unkeyed encoding, frozen behind `HealSpotV3`, `StickerV3`, `AIEditV3` and `AnalysisSettingsV3` inside `Project.swift`; v4 uses portable geometry but is file-only. Changing those records would change existing file bytes. | `Sources/RetouchStudio/Models/Project.swift`, `Sources/RetouchStudio/Models/ProjectCodec.swift`, `Docs/STUDIOCORE_R4_8_PROJECT_V4.md` |
+| Project bytes, bookmarks, panels | The model and codec moved to StudioCore in M7. `Data` I/O, `URL` bookmarks, `UTType`, open/save panels and photo relocation stay in the host; `URLBookmarkStore`, `FileProjectByteStore` and `FileProjectSourceAccess` implement the shared ports. | `Sources/RetouchStudio/Models/ProjectAdapters.swift`, `Sources/StudioCore/ProjectIO.swift`, `Docs/STUDIOCORE_R4_8_PROJECT_V4.md` |
 | `ExportPlanner`, `BatchPlanner` | Use `CGRect`/`CGSize` and `UTType`-adjacent policy. | `Sources/RetouchStudio/Models/ExportPlanner.swift`, `BatchPlanner.swift` |
 | `RecoveryStore` | Directory layout, renames, durability and quarantine execution. | `Sources/RetouchStudio/Models/Recovery.swift` |
 | Image engines | Core Image, Vision, ImageIO, CoreText, AppKit. | imports in `Sources/RetouchStudio/Core` |
@@ -224,17 +257,25 @@ All runs on the same Mac (Apple silicon), macOS 27.2, Command Line Tools
 
 | Gate | Arch | Result |
 |---|---|---|
-| `Tests/run-studiocore.sh` (boundary scan, independent build, core suite) | arm64 | PASS — `StudioCore: 188 checks passed` (34 added in M6), binary links only Foundation/StudioCore |
+| `Tests/run-studiocore.sh` (boundary scan, independent build, core suite) | arm64 | PASS — `StudioCore: 201 checks passed` (13 added in M7), binary links only Foundation/StudioCore |
 | `Tests/Conformance/run-conformance.sh` (read-only corpus gate) | architecture-neutral (Python) | PASS — 21 fixtures, 78 cases, 21 references, 11 exports, SHA-256 verified; no baseline regenerated |
-| `RETOUCH_ARCH=arm64 Tests/run.sh` | arm64 | PASS — `StudioCore: 188 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
-| `RETOUCH_ARCH=x86_64 Tests/run.sh` | x86_64 under Rosetta (supplementary, not native Intel) | PASS — `StudioCore: 188 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
-| `Tests/run-corpus.sh` (golden image corpus) | arm64 | PASS — 376 checks, 0 failures, verified against `baselines.json`; the two exported PNGs the harness rewrote were restored, not accepted as new baselines |
-| `RETOUCH_ARCH=arm64 ./build.sh` and `./build/bin/RetouchStudio --selftest` | arm64 | PASS — the app builds with `SelfCheck.swift` included and the headless self-test prints `SELFTEST: PASS` |
+| `RETOUCH_ARCH=arm64 Tests/run.sh` | arm64 | PASS — `StudioCore: 201 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
+| `RETOUCH_ARCH=x86_64 Tests/run.sh` | x86_64 under Rosetta (supplementary, not native Intel) | PASS — `StudioCore: 201 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
+| `Tests/run-corpus.sh` (golden image corpus) | arm64 | PASS — 376 checks, 0 failures, verified against `baselines.json` twice; the four exported files the harness rewrote were restored, not accepted as new baselines |
+| `RETOUCH_ARCH=arm64 ./build.sh release` and `./build/bin/RetouchStudio --selftest` | arm64 | PASS — the app builds with `SelfCheck.swift` included and the headless self-test prints `SELFTEST: PASS` |
+| `Tests/run-studiocore-linux.sh` | macOS smoke test only | PASS — 201 checks, toolchain target `arm64-apple-macosx27.2.0`; this is **not** a Linux run (section 13) |
+
+The M7 core checks add: the v3 fixture decodes to portable geometry and
+re-encodes byte for byte, the store writes exactly the codec's v3 bytes, a v3
+file keeps a v3 write context, a v4 file keeps its version, unknown top-level
+field and required feature, saving a read v4 document reproduces its bytes,
+and read/write failures map onto `ProjectIOError` without touching the
+previous file.
 
 The Linux runner (`Tests/run-studiocore-linux.sh`) compiles and runs the same
-188 checks without an SDK probe; it was exercised on the macOS host with the
-generic driver but not yet on a Linux runner, so no Linux result is claimed
-here (section 13).
+201 checks without an SDK probe; it was exercised on the macOS host and now
+prints the toolchain target triple, but no Linux runner has executed it, so no
+Linux result is claimed here (section 13).
 
 ### 9.1 Rosetta result
 
@@ -274,6 +315,12 @@ PASS.
   renderers, the new core tests and the Linux runner. Exact SHAs are recorded
   in PR #5 and the delivery report, not here (a commit cannot contain its own
   hash).
+- M7 commit(s): `Sources/StudioCore/ProjectDocument.swift`,
+  `ProjectCodec.swift` and `ProjectIO.swift`; deletion of the three app-side
+  project files; `Sources/RetouchStudio/Models/ProjectAdapters.swift`; the
+  `EditorModel`, `Recovery`, `RecoveryPolicy`, `DocumentRestoration` and
+  `SelfCheck` call-site changes; the M7 core tests; the Linux runner target
+  check; and this document.
 - No rebase, no amend, no force push, no reset.
 
 ## 12. Pull request
@@ -297,18 +344,25 @@ milestone.
 - **Generic history init.** `DocumentHistory` takes its initial state
   explicitly; the app adds a convenience `init()` constrained to
   `DocumentState`. A future platform must supply its own initial state.
-- **Ports are only two.** File existence and bookmarks are separated; HTTP,
-  image decoding and process supervision are not.
+- **Ports are only three.** Project bytes, file existence and bookmarks are
+  separated; HTTP, image decoding and process supervision are not.
 - **v3 remains CoreGraphics-shaped on the wire.** The in-memory values are
   portable since M6, but `RetouchProject` still converts through the frozen
-  `*V3` records to keep old file bytes. Every future field must be added to
-  both the value and the wire record; the fixture byte-identity test and the
-  self-test round trip are the guard, and they only cover what they exercise.
+  `WirePoint`/`WireRect`/`*Wire` records to keep old file bytes. Every future
+  field must be added to both the value and the wire record; the fixture
+  byte-identity test and the self-test round trip are the guard, and they only
+  cover what they exercise.
+- **Unknown fields are preserved at the top level only.** `ProjectWriteContext`
+  re-emits unknown top-level keys and required features byte-for-byte; an
+  unknown key nested inside a known object is dropped on re-save, and fixing
+  that would change the format. The v4 fixture and the round-trip tests cover
+  the top-level contract.
 - **No Linux run yet.** `Tests/run-studiocore-linux.sh` compiles the module and
-  runs its tests without an SDK probe and was smoke-tested on the macOS host,
-  but no Linux runner has executed it. Wiring it into `.github/workflows/ci.yml`
-  requires a token with the `workflow` scope, which this checkout does not
-  have. Linux coverage is therefore a prepared runner, not evidence.
+  runs its tests without an SDK probe, now prints the toolchain target triple,
+  and was smoke-tested on the macOS host, but no Linux runner has executed it.
+  Wiring it into `.github/workflows/ci.yml` requires a token with the
+  `workflow` scope, which this checkout does not have. Linux coverage is
+  therefore a prepared runner, not evidence.
 - **The boundary gate is textual.** It scans imports and type names; it
   cannot prove that a Foundation API behaves the same on another platform.
 - **Rosetta is not Intel.** The x86_64 run exercises translation, not native
@@ -323,11 +377,11 @@ milestone.
 2. ~~Extract the document value itself.~~ Done in M6 (section 5.1): the value
    types and `DocumentState` live in StudioCore, with the v3 wire records
    frozen at the codec boundary.
-3. **Next:** extract project reading/writing behind the shared ports, keeping
-   v3 bytes frozen and v4 as the portable shape. The file-system and bookmark
-   adapters stay on the host; the codec, restoration and codec tests move. A
-   Linux file round-trip test belongs to this step, because it is the first
-   non-Apple behaviour claim that would be worth making.
+3. ~~Extract project reading/writing behind the shared ports.~~ Done in M7
+   (section 5.2): the model, codec and store live in StudioCore and the file,
+   bookmark and content-type adapters stay on the host. The next step is
+   running the Linux file round-trip on a real Linux runner; the runner exists
+   but has not executed there.
 4. Define a renderer interface and prove it with the existing canonical
    fixtures before choosing a backend; do not assume Core Image parity.
 5. Port the AI transport seam (newline framing and peer identity) behind a

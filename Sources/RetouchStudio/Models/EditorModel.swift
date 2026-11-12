@@ -111,6 +111,11 @@ final class EditorModel: ObservableObject {
     /// The version and unknown keys of the file this document came from. A new
     /// photo starts at v3; a v4 project stays v4 across its saves.
     private var projectWriteContext = ProjectWriteContext.v3
+    /// Project bytes and source resolution go through the shared ports; the
+    /// panels, bookmarks and file system stay in this shell.
+    private let projectStore = ProjectStore(bytes: FileProjectByteStore(),
+                                            sources: FileProjectSourceAccess(),
+                                            bookmarks: URLBookmarkStore())
     /// Looks the owner saved from their own sliders, in the order they made them.
     @Published private(set) var userPresets: [UserPreset] = UserPresetStore.load()
     /// One small render per preset, made from the photo that is open.
@@ -977,7 +982,7 @@ final class EditorModel: ObservableObject {
 
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
-        let crop = project?.crop
+        let crop = project?.crop?.cgRect
         let orientation = project?.orientation ?? .identity
 
         loadTask = Task { [weak self] in
@@ -3138,21 +3143,20 @@ final class EditorModel: ObservableObject {
     /// and by the crash-recovery copy, so the two can never drift apart.
     private func makeProject() -> RetouchProject? {
         guard let imageURL else { return nil }
-        return ProjectCodec.makeProject(ProjectInput(imageURL: imageURL,
-                                                     state: currentState,
-                                                     exportFormat: exportFormat.rawValue,
-                                                     exportQuality: exportQuality,
-                                                     exportLongEdge: exportLongEdge,
-                                                     autoRetouchStrength: autoRetouchStrength,
-                                                     autoColorStrength: autoColorStrength),
-                                        bookmarks: URLBookmarkStore())
+        return projectStore.makeProject(
+            ProjectInput(imageURL: imageURL,
+                         state: currentState,
+                         exportFormat: exportFormat.rawValue,
+                         exportQuality: exportQuality,
+                         exportLongEdge: exportLongEdge,
+                         autoRetouchStrength: autoRetouchStrength,
+                         autoColorStrength: autoColorStrength))
     }
 
     private func writeProject(to url: URL) {
         guard let project = makeProject() else { return }
         do {
-            try ProjectCodec.encode(project, context: projectWriteContext)
-                .write(to: url, options: .atomic)
+            try projectStore.write(project, context: projectWriteContext, to: url)
             projectURL = url
             recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
@@ -3185,7 +3189,7 @@ final class EditorModel: ObservableObject {
         guard confirmDiscardIfNeeded() else { return }
         offeredRecovery = true
         do {
-            let file = try ProjectCodec.read(Data(contentsOf: url))
+            let file = try projectStore.read(at: url)
             let project = file.project
             var source = resolveProjectImage(project, projectURL: url)
             if source == nil { source = locatePhoto(for: project) }
@@ -3214,9 +3218,7 @@ final class EditorModel: ObservableObject {
     /// a file sitting next to the project covers a moved folder. `nil` means
     /// the owner has to point at it.
     func resolveProjectImage(_ project: RetouchProject, projectURL: URL?) -> URL? {
-        ProjectSourceResolver(sources: FileProjectSourceAccess(),
-                              bookmarks: URLBookmarkStore())
-            .resolve(project, projectURL: projectURL)
+        projectStore.resolveSource(project, projectURL: projectURL)
     }
 
     private func bookmark(for url: URL) -> Data? {
@@ -3240,8 +3242,7 @@ final class EditorModel: ObservableObject {
     private func rewriteProject(at url: URL) {
         guard let project = makeProject() else { return }
         do {
-            try ProjectCodec.encode(project, context: projectWriteContext)
-                .write(to: url, options: .atomic)
+            try projectStore.write(project, context: projectWriteContext, to: url)
         } catch {
             // The photo still opens; only the next launch will ask again.
         }

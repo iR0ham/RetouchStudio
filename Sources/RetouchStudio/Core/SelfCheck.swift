@@ -2153,7 +2153,7 @@ enum SelfCheck {
     }
 
     private static func checkProjectRoundTrip() -> Bool {
-        let crop = CGRect(x: 0.1, y: 0.2, width: 0.5, height: 0.6)
+        let crop = StudioRect(x: 0.1, y: 0.2, width: 0.5, height: 0.6)
         let spots = [HealSpot(center: CGPoint(x: 0.3, y: 0.7), radius: 0.02),
                      HealSpot(center: CGPoint(x: 0.8, y: 0.15), radius: 0.035)]
         var adjustments = Adjustments()
@@ -2243,7 +2243,7 @@ enum SelfCheck {
                                      exportFormat: "png",
                                      exportQuality: 1,
                                      autoRetouchStrength: 50,
-                                     crop: CGRect(x: 0, y: 0.5, width: 0.5, height: 0.5))
+                                     crop: StudioRect(x: 0, y: 0.5, width: 0.5, height: 0.5))
         guard let data = try? JSONEncoder().encode(project),
               let reopened = try? JSONDecoder().decode(RetouchProject.self, from: data) else {
             print("  ✗ could not encode/decode the crop-flow project")
@@ -2251,7 +2251,7 @@ enum SelfCheck {
         }
         guard let loaded = processor.load(from: URL(fileURLWithPath: reopened.imagePath),
                                           previewMaxDimension: 400,
-                                          crop: reopened.crop) else {
+                                          crop: reopened.crop?.cgRect) else {
             print("  ✗ could not reopen the cropped project")
             return false
         }
