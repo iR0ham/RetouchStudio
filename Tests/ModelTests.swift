@@ -902,6 +902,325 @@ func testProjectVersionGuard() async {
           "selectedFace=\(reopened?.selectedFace.map(String.init) ?? "nil")")
 }
 
+// MARK: - R4.3 Project v3 baseline
+
+/// Freezes what the current encoder writes before the codec is extracted. The
+/// fixture covers all 16 stored fields; decoding it and re-encoding with the
+/// same settings must reproduce its bytes. Any difference is a format change.
+@MainActor
+func testProjectV3BaselineByteIdentity() {
+    print("\n[R4.3] the project v3 fixture re-encodes byte for byte")
+
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/ProjectV3/project-v3-full.retouch")
+    guard let original = try? Data(contentsOf: fixtureURL) else {
+        check(false, "the v3 fixture is readable", fixtureURL.path)
+        return
+    }
+    guard let project = try? JSONDecoder().decode(RetouchProject.self, from: original) else {
+        check(false, "the v3 fixture decodes")
+        return
+    }
+
+    check(project.version == 3, "the fixture is written at version 3")
+    check(!project.imagePath.isEmpty, "the fixture records the photo path")
+    check(project.imageBookmark?.isEmpty == false, "the fixture carries a bookmark")
+    check(project.adjustments != Adjustments(), "the fixture carries real adjustments")
+    check(project.exportFormat == "jpeg" && project.exportQuality == 0.87,
+          "the fixture carries the export format and quality")
+    check(project.exportLongEdge == 4096, "the fixture carries the long edge")
+    check(project.autoRetouchStrength == 65 && project.autoColorStrength == 80,
+          "the fixture carries both auto strengths")
+    check(project.crop != nil, "the fixture carries a crop")
+    check((project.healSpots?.count ?? 0) == 2, "the fixture carries healing stamps")
+    check((project.stickers?.count ?? 0) == 1, "the fixture carries a sticker")
+    check((project.aiEdits?.count ?? 0) == 1, "the fixture carries an AI edit")
+    check(project.analysis?.isEnabled == true, "the fixture carries analysis settings")
+    check(project.selectedFace == 2, "the fixture carries the chosen face")
+    check(project.orientation?.isIdentity == false, "the fixture carries the orientation")
+
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let encoded = try? encoder.encode(project) else {
+        check(false, "the fixture encodes")
+        return
+    }
+
+    if encoded != original {
+        let shared = min(encoded.count, original.count)
+        var offset = 0
+        while offset < shared && encoded[offset] == original[offset] { offset += 1 }
+        print("   byte difference at offset \(offset): encoded \(encoded.count) bytes,"
+              + " fixture \(original.count) bytes")
+        print("   encoded: \(hexSnippet(encoded, around: offset))")
+        print("   fixture: \(hexSnippet(original, around: offset))")
+    }
+    check(encoded == original, "decoding and re-encoding reproduces the fixture bytes",
+          "encoded \(encoded.count) bytes, fixture \(original.count) bytes")
+}
+
+private func hexSnippet(_ data: Data, around offset: Int) -> String {
+    let start = max(0, offset - 12)
+    let end = min(data.count, offset + 12)
+    guard start < end else { return "<empty>" }
+    return data[start..<end].map { String(format: "%02x", $0) }.joined(separator: " ")
+}
+
+// MARK: - R4.3 Project codec
+
+private struct StubSources: ProjectSourceAccess {
+    var paths: Set<String>
+
+    func fileExists(at url: URL) -> Bool { paths.contains(url.path) }
+}
+
+private struct StubBookmarks: ProjectBookmarkStore {
+    var made: [String: Data] = [:]
+    var resolved: [Data: URL] = [:]
+
+    func bookmark(for url: URL) -> Data? { made[url.path] }
+    func resolveBookmark(_ data: Data) -> URL? { resolved[data] }
+}
+
+private func projectV3Fixture() -> (url: URL, data: Data) {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/ProjectV3/project-v3-full.retouch")
+    return (url, (try? Data(contentsOf: url)) ?? Data())
+}
+
+private func makeCodecInput(imageURL: URL) -> ProjectInput {
+    ProjectInput(imageURL: imageURL,
+                 state: DocumentState(),
+                 exportFormat: "jpeg",
+                 exportQuality: 0.9,
+                 exportLongEdge: 0,
+                 autoRetouchStrength: 70,
+                 autoColorStrength: 0)
+}
+
+@MainActor
+func testProjectCodecFieldMapping() {
+    print("\n[R4.3] the codec maps every input field onto the project")
+
+    let imageURL = URL(fileURLWithPath: "/codec/photos/portrait.jpg")
+    let bookmark = Data([0xAA, 0xBB])
+    var state = DocumentState()
+    state.adjustments.exposure = 12
+    state.healSpots = [HealSpot(center: CGPoint(x: 0.4, y: 0.5), radius: 0.02)]
+    state.stickers = [Sticker(kind: .heart, center: CGPoint(x: 0.3, y: 0.6), size: 0.1)]
+    state.aiEdits = [AIEdit(preset: "retouch", prompt: "smooth the wall", seed: 7,
+                            patchFile: "patch.png", alphaFile: "alpha.png",
+                            box: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4),
+                            imagePixels: CGSize(width: 64, height: 64))]
+    state.analysis.isEnabled = true
+    state.crop = CGRect(x: 0.05, y: 0.1, width: 0.8, height: 0.7)
+    state.orientation = DocumentOrientation(quarterTurns: 1, flipped: true, angle: 2)
+    state.selectedFaceIndex = 3
+
+    let input = ProjectInput(imageURL: imageURL, state: state,
+                             exportFormat: "tiff", exportQuality: 0.75,
+                             exportLongEdge: 2048, autoRetouchStrength: 55,
+                             autoColorStrength: 45)
+    let project = ProjectCodec.makeProject(
+        input, bookmarks: StubBookmarks(made: [imageURL.path: bookmark]))
+
+    check(project.version == RetouchProject.currentVersion, "the codec writes the current version")
+    check(project.imagePath == imageURL.path, "the photo path is recorded")
+    check(project.imageBookmark == bookmark, "the bookmark comes from the store")
+    check(project.adjustments == state.adjustments, "adjustments are copied")
+    check(project.exportFormat == "tiff" && project.exportQuality == 0.75,
+          "export format and quality are copied")
+    check(project.exportLongEdge == 2048, "a real long edge is kept")
+    check(project.autoRetouchStrength == 55 && project.autoColorStrength == 45,
+          "both auto strengths are copied")
+    check(project.crop == state.crop, "the crop is copied")
+    check(project.healSpots == state.healSpots, "healing stamps are copied")
+    check(project.stickers == state.stickers, "stickers are copied")
+    check(project.aiEdits == state.aiEdits, "AI edits are copied")
+    check(project.analysis == state.analysis, "analysis settings are copied")
+    check(project.selectedFace == 3, "the chosen face is copied")
+    check(project.orientation == state.orientation, "the orientation is copied")
+}
+
+@MainActor
+func testProjectCodecNormalization() {
+    print("\n[R4.3] the codec normalizes empty values to nil")
+
+    let input = makeCodecInput(imageURL: URL(fileURLWithPath: "/codec/defaults.jpg"))
+    let project = ProjectCodec.makeProject(input, bookmarks: StubBookmarks())
+
+    check(project.imageBookmark == nil, "no bookmark stays nil")
+    check(project.exportLongEdge == nil, "a zero long edge becomes nil")
+    check(project.crop == nil, "no crop stays nil")
+    check(project.healSpots == nil, "no healing stamps become nil")
+    check(project.stickers == nil, "no stickers become nil")
+    check(project.aiEdits == nil, "no AI edits become nil")
+    check(project.analysis == nil, "default analysis becomes nil")
+    check(project.selectedFace == nil, "no chosen face stays nil")
+    check(project.orientation == nil, "identity orientation becomes nil")
+}
+
+@MainActor
+func testProjectCodecLegacyDecode() {
+    print("\n[R4.3] the codec keeps older projects readable")
+
+    guard let adjustments = try? JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(Adjustments())) else {
+        check(false, "adjustments fixture")
+        return
+    }
+    let legacy: [String: Any] = [
+        "imagePath": "/codec/legacy.jpg",
+        "adjustments": adjustments,
+        "exportFormat": "png",
+        "exportQuality": 1.0,
+        "autoRetouchStrength": 70.0,
+        "unknownFutureKey": ["kept": "out of the way"]
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: legacy),
+          let project = try? ProjectCodec.decode(data) else {
+        check(false, "a legacy project decodes")
+        return
+    }
+
+    check(project.version == RetouchProject.currentVersion,
+          "a missing version decodes as the current one")
+    check(project.imageBookmark == nil && project.exportLongEdge == nil,
+          "fields added after v1 decode as nil")
+    check(project.crop == nil && project.orientation == nil
+            && project.healSpots == nil && project.stickers == nil
+            && project.aiEdits == nil && project.analysis == nil,
+          "every later optional decodes as nil")
+    check(project.autoColorStrength == nil, "the auto color strength predates as nil")
+    check(project.selectedFace == nil, "the chosen face predates as nil")
+}
+
+@MainActor
+func testProjectCodecVersionGuard() {
+    print("\n[R4.3] the codec refuses a newer project")
+
+    let input = makeCodecInput(imageURL: URL(fileURLWithPath: "/codec/version.jpg"))
+    let project = ProjectCodec.makeProject(input, bookmarks: StubBookmarks())
+    guard let encoded = try? ProjectCodec.encode(project),
+          var object = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] else {
+        check(false, "version fixture")
+        return
+    }
+    object["version"] = RetouchProject.currentVersion + 1
+    guard let newer = try? JSONSerialization.data(withJSONObject: object) else {
+        check(false, "newer fixture")
+        return
+    }
+
+    do {
+        _ = try ProjectCodec.decode(newer)
+        check(false, "a newer project is refused")
+    } catch ProjectCodecError.tooNew(let version) {
+        check(version == RetouchProject.currentVersion + 1,
+              "the refusal carries the file version", "v\(version)")
+    } catch {
+        check(false, "the refusal is a version error", "\(error)")
+    }
+
+    check((try? ProjectCodec.decode(encoded)) != nil, "the current version still decodes")
+
+    object["version"] = 1
+    if let old = try? JSONSerialization.data(withJSONObject: object) {
+        check((try? ProjectCodec.decode(old)) != nil, "an old version still decodes")
+    }
+}
+
+@MainActor
+func testProjectCodecReproducesBaseline() {
+    print("\n[R4.3] the codec reproduces the v3 baseline bytes")
+
+    let fixture = projectV3Fixture()
+    guard let project = try? ProjectCodec.decode(fixture.data) else {
+        check(false, "the codec decodes the baseline fixture")
+        return
+    }
+    guard let encoded = try? ProjectCodec.encode(project) else {
+        check(false, "the codec encodes the baseline project")
+        return
+    }
+    check(encoded == fixture.data, "codec bytes match the fixture",
+          "encoded \(encoded.count) bytes, fixture \(fixture.data.count) bytes")
+}
+
+@MainActor
+func testProjectSourceResolverOrder() {
+    print("\n[R4.3] the resolver trusts the bookmark first")
+
+    let recorded = URL(fileURLWithPath: "/codec/original/photo.jpg")
+    let bookmarked = URL(fileURLWithPath: "/codec/moved/photo.jpg")
+    let sibling = URL(fileURLWithPath: "/codec/folder/photo.jpg")
+    let projectFile = URL(fileURLWithPath: "/codec/folder/photo.retouch")
+    let bookmark = Data([0x0A])
+
+    var project = RetouchProject(imagePath: recorded.path, imageBookmark: bookmark,
+                                 adjustments: .zero, exportFormat: "jpeg",
+                                 exportQuality: 0.9, autoRetouchStrength: 70)
+    let bookmarks = StubBookmarks(resolved: [bookmark: bookmarked])
+
+    var resolver = ProjectSourceResolver(
+        sources: StubSources(paths: [bookmarked.path, recorded.path]), bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == bookmarked.path,
+          "the bookmark wins when both files exist")
+
+    resolver = ProjectSourceResolver(sources: StubSources(paths: [recorded.path]),
+                                     bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == recorded.path,
+          "a missing bookmark target falls back to the absolute path")
+
+    project.imageBookmark = Data([0x0B])
+    resolver = ProjectSourceResolver(sources: StubSources(paths: [recorded.path]),
+                                     bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == recorded.path,
+          "an unresolvable bookmark falls back to the absolute path")
+
+    project.imageBookmark = nil
+    resolver = ProjectSourceResolver(sources: StubSources(paths: [sibling.path]),
+                                     bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == sibling.path,
+          "a moved folder falls back to the sibling next to the project")
+
+    resolver = ProjectSourceResolver(sources: StubSources(paths: []), bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile) == nil,
+          "nothing on disk means the owner has to locate the photo")
+}
+
+@MainActor
+func testProjectCodecRelinkRewrite() {
+    print("\n[R4.3] a relinked project records the new photo")
+
+    let oldURL = URL(fileURLWithPath: "/codec/a/photo.jpg")
+    let newURL = URL(fileURLWithPath: "/codec/b/photo.jpg")
+    let oldBookmark = Data([0x01])
+    let newBookmark = Data([0x02])
+    let bookmarks = StubBookmarks(made: [oldURL.path: oldBookmark,
+                                         newURL.path: newBookmark])
+
+    var input = makeCodecInput(imageURL: oldURL)
+    let before = ProjectCodec.makeProject(input, bookmarks: bookmarks)
+    input.imageURL = newURL
+    let after = ProjectCodec.makeProject(input, bookmarks: bookmarks)
+
+    check(before.imagePath == oldURL.path && before.imageBookmark == oldBookmark,
+          "the first project records the old location")
+    check(after.imagePath == newURL.path && after.imageBookmark == newBookmark,
+          "the rewritten project records the new location")
+
+    let reopened = (try? ProjectCodec.encode(after))
+        .flatMap { try? ProjectCodec.decode($0) }
+    check(reopened?.imagePath == newURL.path && reopened?.imageBookmark == newBookmark,
+          "the rewrite survives a round trip")
+
+    let first = try? ProjectCodec.encode(after)
+    let second = try? ProjectCodec.encode(after)
+    check(first != nil && first == second, "encoding the same project is deterministic")
+}
+
 // MARK: - P1-5 / M-13 / M-4
 
 @MainActor
@@ -4730,6 +5049,14 @@ func runAll() async {
     await testBatchKeepsCropAfterQuarterTurn()
     await testProjectRelink()
     await testProjectVersionGuard()
+    testProjectV3BaselineByteIdentity()
+    testProjectCodecFieldMapping()
+    testProjectCodecNormalization()
+    testProjectCodecLegacyDecode()
+    testProjectCodecVersionGuard()
+    testProjectCodecReproducesBaseline()
+    testProjectSourceResolverOrder()
+    testProjectCodecRelinkRewrite()
     await testOperationCoordination()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()

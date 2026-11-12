@@ -3117,29 +3117,20 @@ final class EditorModel: ObservableObject {
     /// and by the crash-recovery copy, so the two can never drift apart.
     private func makeProject() -> RetouchProject? {
         guard let imageURL else { return nil }
-        return RetouchProject(imagePath: imageURL.path,
-                              imageBookmark: bookmark(for: imageURL),
-                              adjustments: adjustments,
-                              exportFormat: exportFormat.rawValue,
-                              exportQuality: exportQuality,
-                              exportLongEdge: exportLongEdge == 0 ? nil : exportLongEdge,
-                              autoRetouchStrength: autoRetouchStrength,
-                              autoColorStrength: autoColorStrength,
-                              crop: appliedCrop,
-                              healSpots: healSpots.isEmpty ? nil : healSpots,
-                              stickers: stickers.isEmpty ? nil : stickers,
-                              aiEdits: aiEdits.isEmpty ? nil : aiEdits,
-                              analysis: analysis == AnalysisSettings() ? nil : analysis,
-                              selectedFace: selectedFaceIndex,
-                              orientation: documentOrientation.isIdentity ? nil : documentOrientation)
+        return ProjectCodec.makeProject(ProjectInput(imageURL: imageURL,
+                                                     state: currentState,
+                                                     exportFormat: exportFormat.rawValue,
+                                                     exportQuality: exportQuality,
+                                                     exportLongEdge: exportLongEdge,
+                                                     autoRetouchStrength: autoRetouchStrength,
+                                                     autoColorStrength: autoColorStrength),
+                                        bookmarks: URLBookmarkStore())
     }
 
     private func writeProject(to url: URL) {
         guard let project = makeProject() else { return }
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(project).write(to: url, options: .atomic)
+            try ProjectCodec.encode(project).write(to: url, options: .atomic)
             projectURL = url
             recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
@@ -3172,11 +3163,7 @@ final class EditorModel: ObservableObject {
         offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
         do {
-            let project = try JSONDecoder().decode(RetouchProject.self, from: Data(contentsOf: url))
-            guard project.version <= RetouchProject.currentVersion else {
-                statusToken = .projectTooNew(project.version)
-                return
-            }
+            let project = try ProjectCodec.decode(Data(contentsOf: url))
             var source = resolveProjectImage(project, projectURL: url)
             if source == nil { source = locatePhoto(for: project) }
             guard let source else {
@@ -3188,6 +3175,8 @@ final class EditorModel: ObservableObject {
             guard prepareToReplaceDocument() else { return }
             load(url: source, restoring: project, projectURL: url,
                  relinkURL: relocated ? url : nil)
+        } catch ProjectCodecError.tooNew(let version) {
+            statusToken = .projectTooNew(version)
         } catch {
             statusToken = .projectOpenFailed
         }
@@ -3198,30 +3187,13 @@ final class EditorModel: ObservableObject {
     /// a file sitting next to the project covers a moved folder. `nil` means
     /// the owner has to point at it.
     func resolveProjectImage(_ project: RetouchProject, projectURL: URL?) -> URL? {
-        let manager = FileManager.default
-        if let data = project.imageBookmark,
-           let url = resolveBookmark(data),
-           manager.fileExists(atPath: url.path) {
-            return url
-        }
-        let absolute = URL(fileURLWithPath: project.imagePath)
-        if manager.fileExists(atPath: absolute.path) { return absolute }
-        if let projectURL {
-            let sibling = projectURL.deletingLastPathComponent()
-                .appendingPathComponent((project.imagePath as NSString).lastPathComponent)
-            if manager.fileExists(atPath: sibling.path) { return sibling }
-        }
-        return nil
+        ProjectSourceResolver(sources: FileProjectSourceAccess(),
+                              bookmarks: URLBookmarkStore())
+            .resolve(project, projectURL: projectURL)
     }
 
     private func bookmark(for url: URL) -> Data? {
-        try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-    }
-
-    private func resolveBookmark(_ data: Data) -> URL? {
-        var stale = false
-        return try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil,
-                        bookmarkDataIsStale: &stale)
+        URLBookmarkStore().bookmark(for: url)
     }
 
     private func locatePhoto(for project: RetouchProject) -> URL? {
@@ -3241,9 +3213,7 @@ final class EditorModel: ObservableObject {
     private func rewriteProject(at url: URL) {
         guard let project = makeProject() else { return }
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(project).write(to: url, options: .atomic)
+            try ProjectCodec.encode(project).write(to: url, options: .atomic)
         } catch {
             // The photo still opens; only the next launch will ask again.
         }
