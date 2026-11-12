@@ -67,6 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // A debounced autosave may still be sleeping when the app is torn down
+        // by the system. Write it now so the last edit is durable, then stop the
+        // helper. A discarded document is already clean, so this writes nothing.
+        model?.flushAutosave()
         AIWorker.terminate()
     }
 }

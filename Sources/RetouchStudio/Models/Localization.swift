@@ -311,14 +311,15 @@ class L10n {
     func batchProgress(_ index: Int, _ total: Int) -> String {
         "Exporting \(Digits.num(index)) of \(Digits.num(total))…"
     }
-    func batchFinished(_ saved: Int, _ total: Int, cropsSkipped: Int) -> String {
+    func batchFinished(_ saved: Int, _ total: Int, cropsSkipped: Int, failed: Int) -> String {
         let savedText = saved == total
             ? "\(Digits.num(saved)) photos saved"
             : "\(Digits.num(saved)) of \(Digits.num(total)) photos saved"
         let skippedText = cropsSkipped > 0
             ? " · \(Digits.num(cropsSkipped)) crops skipped (different shape)"
             : ""
-        return "Batch export finished: \(savedText)\(skippedText)."
+        let failedText = failed > 0 ? " · \(Digits.num(failed)) failed" : ""
+        return "Batch export finished: \(savedText)\(skippedText)\(failedText)."
     }
     var batchCancelled: String { "Batch export cancelled." }
     var batchSheetTitle: String { "Batch Export" }
@@ -864,8 +865,8 @@ class L10n {
         case .recoveryNeedsNewerBuild(let features): return recoveryNeedsNewerBuild(features)
         case .batchStarting: return batchStarting
         case .batchProgress(let index, let total): return batchProgress(index, total)
-        case .batchFinished(let saved, let total, let skipped):
-            return batchFinished(saved, total, cropsSkipped: skipped)
+        case .batchFinished(let saved, let total, let skipped, let failed):
+            return batchFinished(saved, total, cropsSkipped: skipped, failed: failed)
         case .batchCancelled: return batchCancelled
         }
     }

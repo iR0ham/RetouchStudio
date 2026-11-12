@@ -756,7 +756,10 @@ struct InspectorView: View {
         VStack(alignment: .leading, spacing: 12) {
             if model.faces.count > 1 {
                 GroupLabel(text: model.s.faceSelectionTitle)
-                HStack(spacing: 6) {
+                // Group photos can yield a dozen faces; a single row would
+                // squeeze every name to an ellipsis in the fixed-width panel.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 64, maximum: 110), spacing: 6)],
+                          spacing: 6) {
                     PresetChip(title: model.s.faceSelectionAuto,
                                isActive: model.selectedFaceIndex == nil) {
                         model.selectFace(nil)

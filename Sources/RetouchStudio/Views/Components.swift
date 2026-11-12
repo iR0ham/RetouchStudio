@@ -359,6 +359,8 @@ struct PresetChip: View {
     let isActive: Bool
     let action: () -> Void
 
+    @State private var hovering = false
+
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -368,12 +370,16 @@ struct PresetChip: View {
                 .frame(height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                        .fill(isActive ? Theme.accent : Theme.inset)
+                        .fill(isActive ? Theme.accent
+                                       : (hovering ? Theme.raised : Theme.inset))
                 )
                 .foregroundStyle(isActive ? Theme.accentInk : Theme.muted)
         }
         .buttonStyle(PressableButtonStyle(dip: 0.95))
+        .onHover { hovering = $0 }
         .animation(Motion.snappy, value: isActive)
+        .animation(Motion.snappy, value: hovering)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 
@@ -534,14 +540,16 @@ struct StatusChip: View {
     }
 }
 
-/// A short explanatory line under a control group.
+/// A short explanatory line under a control group. Muted rather than faint:
+/// these sentences carry the reason a control is off, and faint graphite on
+/// graphite falls below the contrast the rest of the shell keeps.
 struct SectionNote: View {
     let text: String
 
     var body: some View {
         Text(text)
             .font(Theme.Font.face(size: 10.5))
-            .foregroundStyle(Theme.faint)
+            .foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

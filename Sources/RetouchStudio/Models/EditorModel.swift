@@ -82,6 +82,9 @@ final class EditorModel: ObservableObject {
     @Published private(set) var batchCompleted = 0
     @Published private(set) var batchSavedCount = 0
     @Published private(set) var batchSkippedCrops = 0
+    /// Files that produced no photo. A batch report that only mentions saved
+    /// files reads as if the rest were merely skipped.
+    @Published private(set) var batchFailedCount = 0
     @Published private(set) var batchHasReport = false
 
     // State
@@ -725,6 +728,9 @@ final class EditorModel: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
     private var exportJob: Task<ExportService.Outcome, Never>?
+    /// Bumped per export so tile reports that arrive after the job finished
+    /// cannot repaint "Saved" as "{n}/{m} upscaling" again.
+    private var exportGeneration = 0
     private var thumbTask: Task<Void, Never>?
     private var batchTask: Task<Void, Never>?
     /// The file the batch is writing right now. A detached task does not
@@ -826,8 +832,11 @@ final class EditorModel: ObservableObject {
         }
     }
 
-    /// A user-confirmed open replaces the document, so the autosave copy of the
-    /// old one may be discarded. Candidate copies are never touched here.
+    /// A user-confirmed open replaces the document, but the old autosave copy
+    /// stays until the new photo is actually on screen: a load that fails keeps
+    /// the current document, and that document's only durable copy must survive
+    /// with it. `load` clears the slot after a successful replacement. Candidate
+    /// copies are never touched here.
     ///
     /// Promotion runs before anything is removed: at launch the working slot may
     /// still hold the previous session's only copy. When it cannot be promoted
@@ -837,8 +846,6 @@ final class EditorModel: ObservableObject {
     private func prepareToReplaceDocument() -> Bool {
         guard ensureRecoveryPrepared() else { return false }
         invalidatePendingAutosave()
-        _ = RecoveryStore.removeWorking()
-        documentRecovered = false
         return true
     }
 
@@ -862,13 +869,15 @@ final class EditorModel: ObservableObject {
     /// Entry point for drag-and-drop and for Finder / Open With.
     func requestLoad(url: URL) {
         guard !refuseIfBlocking() else { return }
-        // Choosing a photo answers the launch question, but only after the
+        // Choosing a photo answers the launch question, but only once the
         // previous session's working copy has been lifted into a candidate.
         // Otherwise the incoming document's autosave would overwrite the only
         // recoverable copy before the launch pass ever ran.
         guard ensureRecoveryPrepared() else { return }
-        offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
+        // A cancelled prompt is not an answer: the launch pass still has to
+        // offer the crash copies this session.
+        offeredRecovery = true
         guard prepareToReplaceDocument() else { return }
         load(url: url)
     }
@@ -895,6 +904,10 @@ final class EditorModel: ObservableObject {
         let save = alert.addButton(withTitle: s.saveBeforeClosing)
         save.keyEquivalent = "s"
         save.keyEquivalentModifierMask = .command
+        // Save refuses to run while an export, batch or analysis owns the
+        // pipeline, so the button must not promise a save that would be
+        // silently dropped. Cancel stays available and keeps the work.
+        save.isEnabled = !isOperationBlocking
         let discard = alert.addButton(withTitle: s.discardChanges)
         discard.hasDestructiveAction = true
         // The first button inherits Return as its key equivalent; clear it so
@@ -975,14 +988,21 @@ final class EditorModel: ObservableObject {
             guard let self, self.generation == generation else { return }
             guard let result else {
                 // The previous document is still on screen: do not let a failed
-                // open rename it or leave a project rewrite queued for it.
+                // open rename it or leave a project rewrite queued for it. Its
+                // autosave task was cancelled for the attempt, so the surviving
+                // document re-queues one rather than living only in memory.
                 self.pendingRelink = nil
                 self.end(token)
                 self.statusToken = .couldNotRead
+                self.scheduleAutosave()
                 return
             }
             self.apply(result, restoring: project, projectURL: projectURL,
                        recoveryRestore: recoveryRestore, projectFile: projectFile)
+            // The replacement is real, so the replaced document's autosave copy
+            // is no longer needed. A restored document owns the slot already —
+            // `finishRestore` just wrote it — so only a plain load clears it.
+            if recoveryRestore == nil { _ = RecoveryStore.removeWorking() }
             self.end(token)
             if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
         }
@@ -1636,7 +1656,15 @@ final class EditorModel: ObservableObject {
             self.aiTask = nil
             self.aiJobID = nil
             self.isRunningQuickEdit = false
+            // A cancel that crosses the finish line still wins: the owner asked
+            // for no edit, and one landing anyway would be an edit they did not
+            // approve. Its store files go with it.
+            let cancelled = self.quickEditCancelRequested
             switch outcome {
+            case .success(let edit) where cancelled:
+                AIEditStore.remove(edit)
+                self.quickEditStage = .idle
+                self.statusToken = .none
             case .success(let edit):
                 self.quickEditStage = .finished(seconds: edit.seconds)
                 self.quickEditPoint = nil
@@ -1646,7 +1674,7 @@ final class EditorModel: ObservableObject {
                 // The card carries the reason, so the status line must not
                 // keep claiming the helper is still generating.
                 self.statusToken = .none
-                if (error as? AIWorkerFailure)?.code == -32014 {
+                if cancelled || (error as? AIWorkerFailure)?.code == -32014 {
                     self.quickEditStage = .idle
                 } else {
                     self.quickEditStage = .failed(self.localizedAIFailure(error))
@@ -1655,7 +1683,7 @@ final class EditorModel: ObservableObject {
             self.end(token)
             // The edit landed while `.ai` still owned the pipeline, so the
             // preview requested by `aiEdits` was refused. Paint it now.
-            if case .success = outcome { self.schedulePreview() }
+            if case .success = outcome, !cancelled { self.schedulePreview() }
         }
     }
 
@@ -3031,12 +3059,18 @@ final class EditorModel: ObservableObject {
                                   metadata: sourceMetadata)
 
         isExporting = true
+        exportGeneration += 1
+        let exportID = exportGeneration
         statusToken = .renderingExport
 
         // A 4x pass can run for minutes, so the helper's tile count becomes the
         // status line instead of a frozen "rendering" message.
         let progressSink: @Sendable (Int, Int) -> Void = { [weak self] done, total in
-            Task { @MainActor in self?.statusToken = .upscaling(done, total) }
+            Task { @MainActor in
+                guard let self, self.isExporting,
+                      self.exportGeneration == exportID else { return }
+                self.statusToken = .upscaling(done, total)
+            }
         }
         let job = Task.detached(priority: .userInitiated) {
             ExportService.run(snapshot, source: source, to: url,
@@ -3146,8 +3180,8 @@ final class EditorModel: ObservableObject {
     func openProject(at url: URL) {
         guard !refuseIfBlocking() else { return }
         guard ensureRecoveryPrepared() else { return }
-        offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
+        offeredRecovery = true
         do {
             let file = try ProjectCodec.read(Data(contentsOf: url))
             let project = file.project
@@ -3238,6 +3272,7 @@ final class EditorModel: ObservableObject {
         batchCompleted = 0
         batchSavedCount = 0
         batchSkippedCrops = 0
+        batchFailedCount = 0
         batchHasReport = false
         showBatchSheet = true
     }
@@ -3290,12 +3325,14 @@ final class EditorModel: ObservableObject {
         batchCompleted = 0
         batchSavedCount = 0
         batchSkippedCrops = 0
+        batchFailedCount = 0
         batchHasReport = false
         statusToken = .batchStarting
 
         batchTask = Task { [weak self] in
             var saved = 0
             var skipped = 0
+            var failed = 0
             var completed = 0
             var cancelled = false
             for (index, url) in urls.enumerated() {
@@ -3303,7 +3340,9 @@ final class EditorModel: ObservableObject {
                     cancelled = true
                     break
                 }
-                self?.statusToken = .batchProgress(index + 1, urls.count)
+                if let self, self.batchGeneration == batch {
+                    self.statusToken = .batchProgress(index + 1, urls.count)
+                }
 
                 let fileTask = Task.detached(priority: .userInitiated) { () -> BatchOutcome in
                     Self.exportOne(url, to: folder, planner: planner,
@@ -3324,7 +3363,7 @@ final class EditorModel: ObservableObject {
                 case .cancelled:
                     cancelled = true
                 case .failed:
-                    break
+                    failed += 1
                 case .exported(let skippedCrop):
                     saved += 1
                     if skippedCrop { skipped += 1 }
@@ -3336,6 +3375,7 @@ final class EditorModel: ObservableObject {
                     self.batchCompleted = completed
                     self.batchSavedCount = saved
                     self.batchSkippedCrops = skipped
+                    self.batchFailedCount = failed
                 }
             }
 
@@ -3350,7 +3390,7 @@ final class EditorModel: ObservableObject {
                 self.statusToken = .batchCancelled
             } else {
                 self.statusToken = .batchFinished(saved: saved, total: urls.count,
-                                                  cropsSkipped: skipped)
+                                                  cropsSkipped: skipped, failed: failed)
             }
         }
     }

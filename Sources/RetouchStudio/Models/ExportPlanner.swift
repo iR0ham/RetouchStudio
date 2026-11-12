@@ -40,9 +40,14 @@ struct ExportPlanner {
 
     var upscaleEstimate: Int { ExportUpscale.estimatedSeconds(for: workingPixelSize) }
 
+    var effectiveFormat: ExportFormat { effectiveFormat(includeAnalysis: true) }
+
     /// An overlay-only export is lines on transparency, so it is always PNG.
-    var effectiveFormat: ExportFormat {
-        analysis.isEnabled && analysis.exportMode == .overlayOnly && faceCount > 0
+    /// A batch that leaves the callouts out is not an overlay export at all:
+    /// forcing PNG there wrote a transparent-format file for a job that only
+    /// asked for the photo.
+    func effectiveFormat(includeAnalysis: Bool) -> ExportFormat {
+        includeAnalysis && analysis.isEnabled && analysis.exportMode == .overlayOnly && faceCount > 0
             ? .png : format
     }
 
@@ -93,7 +98,7 @@ struct ExportPlanner {
                        crop: crop,
                        orientation: orientation,
                        selectedFaceIndex: selectedFaceIndex,
-                       format: effectiveFormat,
+                       format: effectiveFormat(includeAnalysis: includeAnalysis),
                        quality: quality,
                        longEdge: longEdge > 0 ? CGFloat(longEdge) : nil,
                        stripsPrivacyMetadata: stripsMetadata,

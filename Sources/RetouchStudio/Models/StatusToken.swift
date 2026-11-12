@@ -57,6 +57,6 @@ enum StatusToken: Equatable {
     case recoveryNeedsNewerBuild([String])
     case batchStarting
     case batchProgress(Int, Int)
-    case batchFinished(saved: Int, total: Int, cropsSkipped: Int)
+    case batchFinished(saved: Int, total: Int, cropsSkipped: Int, failed: Int)
     case batchCancelled
 }
