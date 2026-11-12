@@ -66,6 +66,40 @@ struct ProjectWriteContext: Equatable {
                                         unknownFields: [:], requiredFeatures: [])
 
     var isV4: Bool { version >= ProjectV4.currentVersion }
+
+    /// True when the file carries data a plain v3 rewrite would drop. A context
+    /// that carries nothing is not stored in a recovery snapshot at all, which
+    /// keeps a v3 snapshot byte-identical to what earlier builds wrote.
+    var carriesFileMetadata: Bool {
+        isV4 || !unknownFields.isEmpty || !requiredFeatures.isEmpty
+    }
+}
+
+/// Recovery snapshots keep the open document's write context next to the v3
+/// payload, so a crash-recovered v4 document saves as v4 again. Decoding is
+/// tolerant: a context written by an earlier build, or a partial one, falls back
+/// to the v3 defaults instead of failing the whole snapshot.
+extension ProjectWriteContext: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case version, unknownFields, requiredFeatures
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version)
+            ?? RetouchProject.currentVersion
+        unknownFields = try container.decodeIfPresent([String: ProjectJSONValue].self,
+                                                      forKey: .unknownFields) ?? [:]
+        requiredFeatures = try container.decodeIfPresent([String].self,
+                                                         forKey: .requiredFeatures) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(unknownFields, forKey: .unknownFields)
+        try container.encode(requiredFeatures, forKey: .requiredFeatures)
+    }
 }
 
 /// A project read from disk: the v3 model every call site already uses, plus

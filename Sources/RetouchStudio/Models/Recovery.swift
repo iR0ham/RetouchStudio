@@ -39,21 +39,32 @@ struct RecoverySnapshot: Codable {
     /// Nil for legacy snapshots and for a snapshot whose photo was already
     /// missing when it was written.
     var source: RecoverySourceIdentity?
+    /// How the open document's file was written: its version, unknown top-level
+    /// keys and required features. Nil for a v3 document and for every legacy
+    /// snapshot, so an unchanged v3 snapshot keeps its exact bytes and a bare
+    /// project still decodes.
+    var fileContext: ProjectWriteContext? = nil
 
     init(project: RetouchProject, savedAt: Date = Date(),
          source: RecoverySourceIdentity? = nil,
+         fileContext: ProjectWriteContext? = nil,
          version: Int = RecoverySnapshot.currentVersion) {
         self.version = version
         self.savedAt = savedAt
         self.project = project
         self.source = source
+        self.fileContext = fileContext
     }
 
     /// Records the identity of the photo the project points at, resolving the
-    /// bookmark first so a moved photo keeps its own identity.
-    static func capture(_ project: RetouchProject, savedAt: Date = Date()) -> RecoverySnapshot {
+    /// bookmark first so a moved photo keeps its own identity. A context that
+    /// carries no file metadata is not stored, so the snapshot stays the same
+    /// shape and bytes a v3 build writes.
+    static func capture(_ project: RetouchProject, savedAt: Date = Date(),
+                        context: ProjectWriteContext = .v3) -> RecoverySnapshot {
         let identity = RecoveryStore.sourceURL(for: project).flatMap(RecoverySourceIdentity.of)
-        return RecoverySnapshot(project: project, savedAt: savedAt, source: identity)
+        return RecoverySnapshot(project: project, savedAt: savedAt, source: identity,
+                                fileContext: context.carriesFileMetadata ? context : nil)
     }
 }
 

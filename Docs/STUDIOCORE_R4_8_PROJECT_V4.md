@@ -133,3 +133,31 @@ clean.
 - No Windows or Linux build or test was run. StudioCore itself is
   Foundation-only and the v4 encoding uses Foundation JSON, but that is a
   design property, not a validated platform claim.
+
+## 9. Hardening addendum (2026-11-12)
+
+This addendum supersedes the recovery statements in Sections 6 and 8.
+
+- Recovery snapshots now optionally store `fileContext`, a `ProjectWriteContext`
+  describing the open document's file: its version, unknown top-level keys and
+  required features. Autosave and the rest of the restore path pass it through,
+  and a restore opens the recovered document with that context, so a crash-
+  recovered v4 document saves as v4 again and keeps its `requiredFeatures` and
+  unknown top-level keys.
+- The stored payload is still the v3 `RetouchProject`. Only the file-level facts
+  travel beside it; `ProjectV4` JSON is never written into `project`.
+- A context that carries no file metadata is not stored at all
+  (`ProjectWriteContext.carriesFileMetadata`), so a v3 snapshot is
+  byte-identical to what earlier builds wrote and a legacy version 0 bare
+  project still decodes.
+- A recovery copy whose `fileContext` reports a newer version, or a required
+  feature this build does not support, is refused: no prompt is shown, nothing
+  is restored, and the candidate stays on disk byte-identical for a build that
+  can read it. It is never deleted, quarantined or promoted.
+- Nested unknown fields remain a documented limitation. The writer rule for
+  future changes is: nested additions require a version or `requiredFeatures`
+  bump. A build that adds a nested key without one cannot count on it
+  surviving a round trip through an older build.
+- This is preservation of the file facts the document was opened with, not a
+  full forward-compatibility claim. A newer build's semantics, nested data and
+  unknown enum values are still outside this build's contract.

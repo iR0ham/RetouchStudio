@@ -2590,7 +2590,7 @@ final class EditorModel: ObservableObject {
             }
             return
         }
-        let snapshot = RecoverySnapshot.capture(project)
+        let snapshot = RecoverySnapshot.capture(project, context: projectWriteContext)
         let epoch = RecoveryStore.epoch
         let delay = autosaveDebounceNanoseconds
         autosaveTask = Task { [weak self] in
@@ -2635,7 +2635,7 @@ final class EditorModel: ObservableObject {
         autosaveTask = nil
         guard settings.recoveryEnabled, !isLoadingState,
               hasImage, hasUnsavedChanges, let project = makeProject() else { return }
-        persistAutosave(RecoverySnapshot.capture(project))
+        persistAutosave(RecoverySnapshot.capture(project, context: projectWriteContext))
     }
 
     // MARK: - Recovery
@@ -2711,6 +2711,19 @@ final class EditorModel: ObservableObject {
     }
 
     private func offerRecoveryCandidate(_ candidate: RecoveryStore.Candidate) -> RecoveryPassStep {
+        // A copy written by a newer build is never restored as v3 and never
+        // loses a capability: it stays on disk, untouched, for that build.
+        if let refusal = RecoveryPolicy.refusal(for: candidate.snapshot) {
+            handledRecovery.insert(candidate.url)
+            switch refusal {
+            case .tooNew(let version):
+                statusToken = .projectTooNew(version)
+            case .unsupportedFeatures(let features):
+                statusToken = .recoveryNeedsNewerBuild(features)
+            }
+            return .next
+        }
+
         var project = candidate.snapshot.project
         var state = RecoveryStore.sourceState(for: candidate.snapshot)
 
@@ -2776,7 +2789,8 @@ final class EditorModel: ObservableObject {
         if hasImage {
             if hasUnsavedChanges {
                 guard let live = makeProject(),
-                      let preserved = RecoveryStore.saveCandidate(RecoverySnapshot.capture(live))
+                      let preserved = RecoveryStore.saveCandidate(
+                          RecoverySnapshot.capture(live, context: projectWriteContext))
                 else {
                     statusToken = .recoveryStorageFailed
                     return .stop
@@ -2796,7 +2810,9 @@ final class EditorModel: ObservableObject {
         }
         handledRecovery.insert(candidate.url)
         load(url: source, restoring: project,
-             recoveryRestore: RecoveryRestore(candidateURL: candidate.url))
+             recoveryRestore: RecoveryRestore(candidateURL: candidate.url),
+             projectFile: ProjectFile(project: project,
+                                      context: candidate.snapshot.fileContext ?? .v3))
         return .stop
     }
 
@@ -2805,7 +2821,8 @@ final class EditorModel: ObservableObject {
     /// crash at every step.
     private func finishRestore(_ restore: RecoveryRestore) {
         guard let project = makeProject(),
-              RecoveryStore.writeWorking(RecoverySnapshot.capture(project)) else {
+              RecoveryStore.writeWorking(
+                  RecoverySnapshot.capture(project, context: projectWriteContext)) else {
             // The candidate is still the only durable copy; keep it and stop.
             statusToken = .recoveryStorageFailed
             return

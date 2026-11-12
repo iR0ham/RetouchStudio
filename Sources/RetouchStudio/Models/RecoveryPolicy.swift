@@ -16,6 +16,13 @@ enum RecoverySourceState: Equatable {
 /// are testable without a store and the store cannot quietly change them.
 enum RecoveryPolicy {
 
+    /// Why a candidate cannot be restored by this build. The copy itself is
+    /// never touched: a newer build may still understand it.
+    enum RecoveryRefusal: Equatable {
+        case tooNew(Int)
+        case unsupportedFeatures([String])
+    }
+
     /// Invalidates work captured under an earlier generation.
     struct AutosaveEpoch: Equatable {
         private(set) var value = 0
@@ -59,6 +66,19 @@ enum RecoveryPolicy {
         guard let project = try? decoder.decode(RetouchProject.self, from: data) else { return nil }
         return RecoverySnapshot(project: project, savedAt: modified ?? Date(),
                                 source: nil, version: 0)
+    }
+
+    /// A recovery copy written by a newer build must never be restored as v3
+    /// or lose a capability this build cannot honor. Such a candidate stays on
+    /// disk for the build that can read it.
+    static func refusal(for snapshot: RecoverySnapshot) -> RecoveryRefusal? {
+        guard let context = snapshot.fileContext else { return nil }
+        guard context.version <= ProjectCodec.currentVersion else {
+            return .tooNew(context.version)
+        }
+        let unsupported = context.requiredFeatures
+            .filter { !ProjectV4.supportedFeatures.contains($0) }.sorted()
+        return unsupported.isEmpty ? nil : .unsupportedFeatures(unsupported)
     }
 
     /// A legacy copy never recorded an identity, so it is offered just like the

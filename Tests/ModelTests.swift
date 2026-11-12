@@ -1413,6 +1413,11 @@ func testProjectV4FixtureCrossArchitecture() {
           "the same bytes come back on every architecture")
     check((try? ProjectCodec.encode(file.project)) == projectV3Fixture().data,
           "the fixture projects to the v3 baseline bytes")
+    let projection = projectJSON((try? ProjectCodec.encode(file.project)) ?? Data())
+    check(projection != nil
+            && projection?["requiredFeatures"] == nil
+            && projection?["futureFlag"] == nil,
+          "the projection does not claim v4-only data")
 }
 
 @MainActor
@@ -1494,6 +1499,46 @@ func testProjectV4Capabilities() {
     } catch {
         check(false, "the refusal is a capability error", "\(error)")
     }
+}
+
+/// Unknown top-level keys are preserved whole, but an unknown key nested inside
+/// a known object is not: that object is decoded into its typed model and
+/// re-encoded. This test pins the limitation so a later change to it has to be
+/// deliberate.
+@MainActor
+func testProjectV4NestedUnknownFieldsAreDropped() {
+    print("\n[R4.8] nested unknown fields stay a documented limitation")
+
+    let fixture = projectV4Fixture()
+    guard var object = projectJSON(fixture.data),
+          case .object(var adjustments)? = object["adjustments"] else {
+        check(false, "the v4 fixture is JSON with an adjustments object")
+        return
+    }
+    adjustments["futureNested"] = .string("dropped")
+    object["adjustments"] = .object(adjustments)
+    guard let nested = projectJSONData(object),
+          let file = try? ProjectCodec.read(nested) else {
+        check(false, "a v4 file with a nested unknown key reads")
+        return
+    }
+    check(file.context.unknownFields["futureFlag"] == .string("kept"),
+          "the top-level unknown key is still captured")
+    check(file.context.unknownFields["adjustments"] == nil,
+          "a known container is not treated as an unknown key")
+    guard let saved = try? ProjectCodec.encodeV4(
+            file.project,
+            unknownFields: file.context.unknownFields,
+            requiredFeatures: file.context.requiredFeatures),
+          let savedObject = projectJSON(saved),
+          case .object(let savedAdjustments)? = savedObject["adjustments"] else {
+        check(false, "the nested fixture saves")
+        return
+    }
+    check(savedObject["futureFlag"] == .string("kept"),
+          "the top-level unknown key survives the save")
+    check(savedAdjustments["futureNested"] == nil,
+          "the nested unknown key is dropped, as documented")
 }
 
 @MainActor
@@ -3162,10 +3207,16 @@ func stageRecoveryCandidate(for url: URL, exposure: Double = 0, contrast: Double
                             crop: CGRect? = nil,
                             orientation: DocumentOrientation? = nil,
                             healSpots: [HealSpot]? = nil,
-                            savedAt: Date) -> URL? {
+                            savedAt: Date,
+                            fileContext: ProjectWriteContext? = nil) -> URL? {
     let project = recoveryProject(for: url, exposure: exposure, contrast: contrast,
                                   crop: crop, orientation: orientation, healSpots: healSpots)
-    return RecoveryStore.saveCandidate(RecoverySnapshot.capture(project, savedAt: savedAt))
+    // `capture` resolves the photo through a fresh URL. Reading `url` directly
+    // would prime its cached resource values, so a test that later rewrites the
+    // photo would read the identity from before the rewrite.
+    return RecoveryStore.saveCandidate(
+        RecoverySnapshot.capture(project, savedAt: savedAt,
+                                 context: fileContext ?? .v3))
 }
 
 @MainActor
@@ -4320,6 +4371,237 @@ func testReplacementInvalidatesOldDocumentAutosave() async {
           "the new document's autosave describes the new document")
     check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.82,
           "the new document's legitimate autosave still lands")
+}
+
+@MainActor
+func testRecoveryV3RoundTripPreservesDocument() async {
+    print("\n[R4H-1] a v3 recovery copy restores the document and stays v3")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let crop = CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8)
+    let orientation = DocumentOrientation(quarterTurns: 1)
+    let spots = [HealSpot(center: CGPoint(x: 0.3, y: 0.4), radius: 0.02)]
+    guard let source = recoveryFixture("r4h-v3.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(
+              for: source, exposure: 0.27, contrast: 4,
+              crop: crop, orientation: orientation, healSpots: spots,
+              savedAt: Date().addingTimeInterval(-30)) else {
+        check(false, "v3 recovery fixture written")
+        return
+    }
+
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in .restore }
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the v3 candidate loads")
+    check(model.adjustments.exposure == 0.27 && model.adjustments.contrast == 4,
+          "the stored adjustments are on screen")
+    check(model.appliedCrop == crop, "the stored crop is applied",
+          "\(String(describing: model.appliedCrop))")
+    check(model.documentOrientation == orientation, "the stored orientation is applied")
+    check(model.healSpots == spots, "the stored healing stamp is applied")
+
+    check(await waitUntil(10) { RecoveryStore.readWorking() != nil },
+          "the restored document reaches the working slot")
+    guard let working = RecoveryStore.readWorking() else {
+        check(false, "the restored working copy is readable")
+        return
+    }
+    check(working.project.adjustments.exposure == 0.27
+            && working.project.adjustments.contrast == 4,
+          "the working copy carries the restored edits")
+    check(working.project.crop == crop, "the working copy keeps the crop")
+    check(working.project.version == 3, "the working copy is a v3 projection")
+    check(working.fileContext == nil, "a v3 document stores no file context")
+    check(await waitUntil(10) { !FileManager.default.fileExists(atPath: candidate.path) },
+          "the candidate is resolved after the verified write")
+}
+
+@MainActor
+func testRecoveryV4AutosavePreservesMetadata() async {
+    print("\n[R4H-2] autosaving a v4 document keeps its file metadata")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let folder = workDir.appendingPathComponent("v4-recovery-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let photo = folder.appendingPathComponent("portrait.png")
+    guard let image = makeImage(width: 240, height: 300), writePNG(image, to: photo) else {
+        check(false, "v4 recovery photo written")
+        return
+    }
+
+    var project = fullV4Project()
+    project.imagePath = photo.path
+    project.imageBookmark = nil
+    guard var object = projectJSON(
+            (try? ProjectCodec.encodeV4(project,
+                                        requiredFeatures: ["portable_geometry"])) ?? Data())
+    else {
+        check(false, "the v4 recovery file is JSON")
+        return
+    }
+    object["futureFlag"] = .string("kept")
+    let v4URL = folder.appendingPathComponent("future.retouch")
+    guard let v4Data = projectJSONData(object),
+          (try? v4Data.write(to: v4URL, options: .atomic)) != nil else {
+        check(false, "the v4 recovery file is written")
+        return
+    }
+
+    let model = EditorModel()
+    model.openProject(at: v4URL)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the v4 project opens")
+    model.adjustments.exposure = 33
+    model.flushAutosave()
+
+    guard let working = RecoveryStore.readWorking() else {
+        check(false, "the v4 document autosaves")
+        return
+    }
+    check(working.fileContext?.version == 4, "the autosave remembers v4",
+          "\(String(describing: working.fileContext?.version))")
+    check(working.fileContext?.requiredFeatures == ["portable_geometry"],
+          "the autosave keeps the required feature")
+    check(working.fileContext?.unknownFields["futureFlag"] == .string("kept"),
+          "the autosave keeps the unknown field")
+    check(working.project.version == 3, "the payload stays the v3 projection")
+    check(working.project.crop == project.crop, "the payload keeps the document crop")
+    check(working.project.orientation == project.orientation
+            && working.project.healSpots == project.healSpots,
+          "the payload keeps the portable geometry values")
+
+    // The same flow on a v3 document records no context at all.
+    var v3Project = project
+    v3Project.imageBookmark = nil
+    guard let v3Data = try? ProjectCodec.encode(v3Project) else {
+        check(false, "the v3 control encodes")
+        return
+    }
+    let v3URL = folder.appendingPathComponent("today.retouch")
+    check((try? v3Data.write(to: v3URL, options: .atomic)) != nil,
+          "the v3 control file is written")
+    let v3Model = EditorModel()
+    v3Model.openProject(at: v3URL)
+    check(await waitUntil(60) { v3Model.hasImage && !v3Model.isBusy },
+          "the v3 control opens")
+    v3Model.adjustments.contrast = 17
+    v3Model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.adjustments.contrast == 17,
+          "the v3 control autosaves")
+    check(RecoveryStore.readWorking()?.fileContext == nil,
+          "a v3 document's autosave stores no file context")
+}
+
+@MainActor
+func testRecoveryV4RestorePreservesMetadata() async {
+    print("\n[R4H-3] a restored v4 document saves as v4 again")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let photo = recoveryFixture("r4h-v4-restore.png", width: 320, height: 400) else {
+        check(false, "v4 restore fixture written")
+        return
+    }
+    let project = recoveryProject(for: photo, exposure: 0.42,
+                                  crop: CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8))
+    let context = ProjectWriteContext(version: 4,
+                                      unknownFields: ["futureFlag": .string("kept")],
+                                      requiredFeatures: ["portable_geometry"])
+    let staged = RecoverySnapshot(project: project,
+                                  savedAt: Date().addingTimeInterval(-30),
+                                  source: RecoverySourceIdentity.of(photo),
+                                  fileContext: context)
+    check(RecoveryStore.writeWorking(staged), "the v4 crash copy is staged")
+    RecoveryStore.invalidatePendingAutosaves()
+
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .restore }
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the v4 copy restores")
+    check(prompts == 1, "the restore is chosen once", "\(prompts)")
+    check(model.adjustments.exposure == 0.42, "the stored edit is on screen")
+    check(await waitUntil(10) { RecoveryStore.readWorking() != nil },
+          "the restored document is durable")
+
+    guard let restored = RecoveryStore.readWorking() else {
+        check(false, "the restored working copy is readable")
+        return
+    }
+    check(restored.fileContext?.version == 4, "the restored copy stays v4")
+    check(restored.fileContext?.requiredFeatures == ["portable_geometry"],
+          "the restored copy keeps the required feature")
+    check(restored.fileContext?.unknownFields["futureFlag"] == .string("kept"),
+          "the restored copy keeps the unknown field")
+    check(restored.project.crop == project.crop, "the restored copy keeps the crop")
+
+    model.adjustments.contrast = 9
+    model.flushAutosave()
+    guard let edited = RecoveryStore.readWorking() else {
+        check(false, "the edited v4 document autosaves")
+        return
+    }
+    check(edited.fileContext?.version == 4, "editing does not downgrade the copy")
+    check(edited.fileContext?.unknownFields["futureFlag"] == .string("kept"),
+          "the unknown field survives the next autosave")
+    check(edited.project.adjustments.contrast == 9, "the edit reaches the working copy")
+    check(recoveryCandidates().isEmpty, "the restored candidate is gone")
+}
+
+@MainActor
+func testRecoveryRefusesUnsupportedRequiredFeatures() async {
+    print("\n[R4H-4] a copy needing a newer build is refused and kept")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let source = recoveryFixture("r4h-refused.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(
+              for: source, exposure: 0.33,
+              savedAt: Date().addingTimeInterval(-30),
+              fileContext: ProjectWriteContext(version: 4, unknownFields: [:],
+                                               requiredFeatures: ["future_geometry"])),
+          let before = recoveryBytes(candidate) else {
+        check(false, "refused-candidate fixture written")
+        return
+    }
+
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .restore }
+    model.offerRecoveryIfNeeded()
+    check(prompts == 0, "the unsupported copy never prompts")
+    check(!model.hasImage, "nothing is restored")
+    check(model.statusToken == .recoveryNeedsNewerBuild(["future_geometry"]),
+          "the refusal names the missing capability", "\(model.statusToken)")
+    check(FileManager.default.fileExists(atPath: candidate.path),
+          "the refused copy stays on disk")
+    check(recoveryBytes(candidate) == before, "the refused copy is byte-identical")
+    check(RecoveryStore.readWorking() == nil, "no working copy was fabricated")
 }
 
 @MainActor
@@ -5846,6 +6128,7 @@ func runAll() async {
     testProjectV4FixtureCrossArchitecture()
     testProjectUnknownFieldsSurvive()
     testProjectV4Capabilities()
+    testProjectV4NestedUnknownFieldsAreDropped()
     await testProjectV4EditorRoundTrip()
     testDocumentRestorationFromProject()
     testDocumentRestorationDefaultsAndPhoto()
@@ -5889,6 +6172,10 @@ func runAll() async {
     await testQueuedExternalOpensKeepOneCandidate()
     await testDiscardInvalidatesInFlightAutosave()
     await testReplacementInvalidatesOldDocumentAutosave()
+    await testRecoveryV3RoundTripPreservesDocument()
+    await testRecoveryV4AutosavePreservesMetadata()
+    await testRecoveryV4RestorePreservesMetadata()
+    await testRecoveryRefusesUnsupportedRequiredFeatures()
     await testFailedLoadPreservesDocument()
     await testExportProtectsSource()
     await testBatchDoesNotOverwriteSource()

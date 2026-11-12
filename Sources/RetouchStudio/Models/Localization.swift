@@ -296,6 +296,12 @@ class L10n {
     var recoveryCandidateNotRemoved: String {
         "The recovered photo is saved, but its old recovery copy could not be removed."
     }
+    func recoveryNeedsNewerBuild(_ features: [String]) -> String {
+        let list = features.joined(separator: ", ")
+        return list.isEmpty
+            ? "A recovery copy needs a newer version of the app."
+            : "A recovery copy needs a newer version of the app (\(list))."
+    }
 
     // Batch
     var batchExportMenu: String { "Batch Export…" }
@@ -855,6 +861,7 @@ class L10n {
         case .recoveryStorageFailed: return recoveryStorageFailed
         case .recoveryQuarantined(let count): return recoveryQuarantined(count)
         case .recoveryCandidateNotRemoved: return recoveryCandidateNotRemoved
+        case .recoveryNeedsNewerBuild(let features): return recoveryNeedsNewerBuild(features)
         case .batchStarting: return batchStarting
         case .batchProgress(let index, let total): return batchProgress(index, total)
         case .batchFinished(let saved, let total, let skipped):
