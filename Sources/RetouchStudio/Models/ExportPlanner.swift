@@ -13,7 +13,7 @@ struct ExportPlanner {
     var stickers: [Sticker]
     var aiEdits: [AIEdit]
     var analysis: AnalysisSettings
-    var crop: CGRect?
+    var crop: StudioRect?
     var orientation: DocumentOrientation
     var selectedFaceIndex: Int?
     var imageName: String
@@ -30,62 +30,36 @@ struct ExportPlanner {
     /// The upscaler only runs when the owner asked for a larger long edge than
     /// the photo already has, and the helper accepts that output size.
     var upscaleAvailable: Bool {
-        let size = workingPixelSize
-        guard longEdge > 0, size.width > 0, size.height > 0 else { return false }
-        let longest = max(size.width, size.height)
-        return longest < CGFloat(longEdge) && ExportUpscale.canHandle(size)
+        RenderPolicy.upscaleAvailable(source: StudioSize(workingPixelSize),
+                                      longEdge: Double(longEdge))
     }
 
     var usesUpscale: Bool { aiUpscale && upscaleAvailable }
 
-    var upscaleEstimate: Int { ExportUpscale.estimatedSeconds(for: workingPixelSize) }
+    var upscaleEstimate: Int {
+        RenderPolicy.upscaleEstimate(source: StudioSize(workingPixelSize))
+    }
 
     var effectiveFormat: ExportFormat { effectiveFormat(includeAnalysis: true) }
 
     /// An overlay-only export is lines on transparency, so it is always PNG.
-    /// A batch that leaves the callouts out is not an overlay export at all:
-    /// forcing PNG there wrote a transparent-format file for a job that only
-    /// asked for the photo.
     func effectiveFormat(includeAnalysis: Bool) -> ExportFormat {
-        includeAnalysis && analysis.isEnabled && analysis.exportMode == .overlayOnly && faceCount > 0
-            ? .png : format
+        RenderPolicy.effectiveFormat(chosen: format, analysis: analysis,
+                                     includeAnalysis: includeAnalysis,
+                                     faceCount: faceCount)
     }
 
     /// Pixel size the export will actually write. Downscaling never enlarges a
     /// photo; a larger long edge is only reached through the upscaler.
     var pixelSize: CGSize {
-        let size = workingPixelSize
-        guard longEdge > 0, size.width > 0, size.height > 0 else { return size }
-        let longest = max(size.width, size.height)
-        if longest >= CGFloat(longEdge) {
-            let scale = CGFloat(longEdge) / longest
-            return CGSize(width: (size.width * scale).rounded(),
-                          height: (size.height * scale).rounded())
-        }
-        guard usesUpscale else { return size }
-        let edge = ExportUpscale.outputLongEdge(sourceLong: longest,
-                                                requested: CGFloat(longEdge))
-        let scale = edge / longest
-        return CGSize(width: (size.width * scale).rounded(),
-                      height: (size.height * scale).rounded())
+        RenderPolicy.outputPixelSize(source: StudioSize(workingPixelSize),
+                                     longEdge: Double(longEdge),
+                                     upscales: usesUpscale).cgSize
     }
 
     func suggestedFileName() -> String {
-        let base = (imageName as NSString).deletingPathExtension
-        let name = base.isEmpty ? "retouched" : "\(base)-retouched"
-        // A file name that says "analysis" promises callouts the export cannot
-        // draw when Vision found no face.
-        guard analysis.isEnabled, faceCount > 0 else {
-            return "\(name).\(format.fileExtension)"
-        }
-        switch analysis.exportMode {
-        case .onPhoto:
-            return "\(name)-analysis.\(format.fileExtension)"
-        case .poster:
-            return "\(name)-analysis-poster.\(format.fileExtension)"
-        case .overlayOnly:
-            return "\(name)-analysis-lines.png"
-        }
+        RenderPolicy.suggestedFileName(imageName: imageName, format: format,
+                                       analysis: analysis, faceCount: faceCount)
     }
 
     func snapshot(includeStamps: Bool = true,
@@ -100,7 +74,7 @@ struct ExportPlanner {
                        selectedFaceIndex: selectedFaceIndex,
                        format: effectiveFormat(includeAnalysis: includeAnalysis),
                        quality: quality,
-                       longEdge: longEdge > 0 ? CGFloat(longEdge) : nil,
+                       longEdge: longEdge > 0 ? Double(longEdge) : nil,
                        stripsPrivacyMetadata: stripsMetadata,
                        includeStamps: includeStamps,
                        includeAnalysis: includeAnalysis,

@@ -5,46 +5,10 @@ import Foundation
 import ImageIO
 import StudioCore
 
-/// Everything an export takes from the document instead of from the pixels it
-/// lands on. The single-photo export and the batch export both build one of
-/// these and hand it to `ExportService`, so the two entry points cannot drift.
-struct ExportSnapshot: Equatable {
-    var adjustments = Adjustments()
-    var healSpots: [HealSpot] = []
-    var stickers: [Sticker] = []
-    /// AI patches already stored on disk. They are document edits, not stamps:
-    /// they always describe this photo, so a batch clears them for other files.
-    var aiEdits: [AIEdit] = []
-    var analysis = AnalysisSettings()
-    /// Crop in normalized photo coordinates with a top-left origin.
-    var crop: CGRect?
-    /// Turn baked into the document's pixels. Batch uses it for this photo's
-    /// own file only; other files open in their own orientation.
-    var orientation = DocumentOrientation.identity
-    /// Index into the photo's sorted faces, or nil for the automatic choice.
-    /// Feature sizes and the callouts follow it, so an export matches what the
-    /// editor showed.
-    var selectedFaceIndex: Int?
-    var format: ExportFormat = .jpeg
-    var quality: Double = 0.92
-    var longEdge: CGFloat?
-    /// Keep only non-identifying technical metadata (orientation and
-    /// resolution). The setting is on by default, and every file in a batch
-    /// shares this one answer.
-    var stripsPrivacyMetadata = true
-    /// Manual repairs and placed art. Off for batch work unless asked for:
-    /// stamps describe one face's blemishes, not another photo's.
-    var includeStamps = true
-    /// The analysis callouts. Off for batch work unless asked for.
-    var includeAnalysis = true
-    /// Run the rendered photo through the local 4x upscaler before writing.
-    /// Only meaningful when the requested size is larger than the photo; the
-    /// UI hides the switch otherwise.
-    var aiUpscale = false
-    /// Drawn last, over both the photo and its callouts, so a signature sits on
-    /// top of everything the file carries.
-    var watermark = WatermarkSettings.disabled
-}
+/// The portable request every export path builds. The name stays because the
+/// editor, the corpus harness and the self-check all speak of a snapshot; the
+/// value itself is now the shared contract in StudioCore.
+typealias ExportSnapshot = RenderRequest
 
 /// One image's pixels and measurements, as `ImageProcessor.load` reports them.
 struct ExportSource {
@@ -66,95 +30,24 @@ struct RenderedExport {
     var carriesSourceMetadata: Bool
 }
 
-/// What the local upscaler can promise, decided before a job is queued.
-///
-/// Swin2SR is a fixed 4x model and the helper refuses to build an output above
-/// 40 megapixels (`UPSCALE_MAX_OUTPUT`), which bounds a full 4x pass to a
-/// 2.5 MP source on this machine. Mirroring both numbers here means the sheet
-/// can say no in the same terms the helper would use.
-enum ExportUpscale {
-    static let factor: CGFloat = 4
-    static let maxOutputPixels = 40_000_000
-
-    /// The intermediate copy and the written file both use sRGB. The helper
-    /// works on untagged 8-bit pixels, so handing it wide-gamut values and
-    /// then tagging the result the same way would shift every colour.
-    static let workingColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-
-    static func canHandle(_ size: CGSize) -> Bool {
-        guard size.width >= 1, size.height >= 1 else { return false }
-        let width = Int((size.width * factor).rounded())
-        let height = Int((size.height * factor).rounded())
-        return width * height <= maxOutputPixels
-    }
-
-    /// The long edge actually written: 4x the photo, but never past the edge
-    /// the owner picked.
-    static func outputLongEdge(sourceLong: CGFloat, requested: CGFloat?) -> CGFloat {
-        let quadrupled = sourceLong * factor
-        guard let requested, requested > 0 else { return quadrupled }
-        return min(quadrupled, requested)
-    }
-
-    /// Measured on this Mac (M3, 16 GB, MPS) with the default 256 px tiles:
-    /// 28 tiles, 150 s for a 900x1600 photo, whose 4x output is 23 MP. That is
-    /// about 6.5 s per megapixel of output. This only feeds the sheet's
-    /// estimate; the helper's own tile report is the measured truth while a
-    /// job runs.
-    static let secondsPerOutputMegapixel = 6.5
-
-    static func estimatedSeconds(for size: CGSize) -> Int {
-        let megapixels = (size.width * factor) * (size.height * factor) / 1_000_000
-        return Int((megapixels * secondsPerOutputMegapixel).rounded())
+extension ExportSource {
+    /// What the shared policy may read about the decoded photo. The pixels
+    /// themselves stay in this module.
+    var renderDescription: RenderSourceDescription {
+        RenderSourceDescription(pixelSize: StudioSize(image.extent.size),
+                                photoAspect: Double(photoAspect),
+                                faceCount: faces.count,
+                                colorProfileName: colorSpace?.name as String?)
     }
 }
 
 enum ExportService {
-
-    /// How a one-photo export ended. `cancelled` is distinct from `failed`
-    /// because nothing was written and the owner asked for it. `refusedSource`
-    /// means the chosen destination is the opened photo itself, or an alias of
-    /// it, so nothing was rendered or written.
-    enum Outcome {
-        case saved, cancelled, failed, refusedSource
-    }
 
     /// The result of the final write, before the UI turns it into a sentence.
     enum WriteResult: Equatable {
         case written
         case failed
         case refusedOriginal
-    }
-
-    /// Renders and writes in one cancellable step. Cancellation is checked
-    /// before the expensive render and again before the file is committed, so
-    /// a cancelled export leaves no photo behind even though Core Image itself
-    /// does not stop early.
-    static func run(_ snapshot: ExportSnapshot, source: ExportSource, to url: URL,
-                    protecting protectedURL: URL? = nil,
-                    progress: ((Int, Int) -> Void)? = nil) -> Outcome {
-        if Task.isCancelled { return .cancelled }
-        let rendered: RenderedExport?
-        do {
-            rendered = try renderFinal(snapshot, source: source, progress: progress)
-        } catch {
-            // A cancelled upscale is the owner's doing, not a failure.
-            return Task.isCancelled || (error as? AIWorkerFailure)?.code == -32014
-                ? .cancelled : .failed
-        }
-        guard let rendered else { return .failed }
-        if Task.isCancelled { return .cancelled }
-        // The upscaler hands back sRGB pixels, so an upscaled file is written
-        // with the profile those pixels were produced in.
-        let colorSpace = snapshot.aiUpscale ? ExportUpscale.workingColorSpace : source.colorSpace
-        let wrote = writeResult(rendered, snapshot: snapshot, to: url,
-                                colorSpace: colorSpace, metadata: source.metadata,
-                                protecting: protectedURL)
-        switch wrote {
-        case .written: return .saved
-        case .failed: return .failed
-        case .refusedOriginal: return .refusedSource
-        }
     }
 
     /// Aspect ratio of the file as the pipeline will decode it, orientation
@@ -171,21 +64,22 @@ enum ExportService {
         return orientation >= 5 ? height / width : width / height
     }
 
-    /// The document's crop only describes a file of the same shape. A square
-    /// photo under a 4:3 crop has no matching region: cropping it would cut
-    /// away a corner of a different picture, so it exports whole instead.
+    /// The document's crop only describes a file of the same shape.
     static func cropApplies(_ crop: CGRect?, documentAspect: CGFloat, fileAspect: CGFloat) -> Bool {
-        guard crop != nil, documentAspect > 0, fileAspect > 0 else { return false }
-        return abs(log(fileAspect / documentAspect)) < 0.01
+        BatchRenderPolicy.cropApplies(crop.map(StudioRect.init),
+                                      documentAspect: Double(documentAspect),
+                                      fileAspect: Double(fileAspect))
     }
 
     /// The one rendering path. Both entry points call this and then `write`.
     /// `applyAnalysis` is false for the first half of an upscaled export: the
     /// callouts belong on the enlarged photo, not inside the model's input.
     static func render(_ snapshot: ExportSnapshot, source: ExportSource,
-                       applyAnalysis: Bool = true) -> RenderedExport? {
+                       applyAnalysis: Bool = true,
+                       plan: RenderPlan? = nil) -> RenderedExport? {
         let processor = ImageProcessor.shared
-        let crop = snapshot.crop
+        let crop = snapshot.crop?.cgRect
+        let plan = plan ?? RenderPolicy.plan(snapshot, source: source.renderDescription)
 
         var masks = source.masks
         // The retained preview set describes a scaled-down frame: stretching it
@@ -225,8 +119,7 @@ enum ExportService {
                                          ai: AICompositor.layers(snapshot.aiEdits, crop: crop),
                                          focus: focus)
 
-        guard applyAnalysis, snapshot.includeAnalysis, snapshot.analysis.isEnabled,
-              !source.faces.isEmpty else {
+        guard applyAnalysis, plan.appliesAnalysis else {
             return RenderedExport(image: rendered, carriesSourceMetadata: true)
         }
         return analysisApplied(snapshot, image: rendered, faces: source.faces, focus: focus)
@@ -238,23 +131,26 @@ enum ExportService {
     /// model instead of staying crisp.
     static func renderFinal(_ snapshot: ExportSnapshot,
                             source: ExportSource,
+                            plan: RenderPlan? = nil,
                             progress: ((Int, Int) -> Void)? = nil) throws -> RenderedExport? {
+        let plan = plan ?? RenderPolicy.plan(snapshot, source: source.renderDescription)
         let rendered: RenderedExport?
-        if snapshot.aiUpscale {
-            guard let base = render(snapshot, source: source, applyAnalysis: false) else {
+        if plan.upscales {
+            guard let base = render(snapshot, source: source, applyAnalysis: false,
+                                    plan: plan) else {
                 return nil
             }
             let enlarged = try upscale(base.image, progress: progress)
-            if snapshot.includeAnalysis, snapshot.analysis.isEnabled, !source.faces.isEmpty {
+            if plan.appliesAnalysis {
                 rendered = analysisApplied(snapshot, image: enlarged, faces: source.faces,
                                            focus: focusFace(snapshot, faces: source.faces))
             } else {
                 rendered = RenderedExport(image: enlarged, carriesSourceMetadata: true)
             }
         } else {
-            rendered = render(snapshot, source: source)
+            rendered = render(snapshot, source: source, plan: plan)
         }
-        guard let rendered, snapshot.watermark.isActive,
+        guard let rendered, plan.appliesWatermark,
               rendered.carriesSourceMetadata else { return rendered }
         // A lines-only export is art on transparency; a signature would land in
         // the layout tool, not on a photo, so it is left off.
@@ -302,7 +198,7 @@ enum ExportService {
     /// folders. Cancelling the surrounding task cancels the job as well.
     private static func upscale(_ image: CIImage,
                                 progress: ((Int, Int) -> Void)?) throws -> CIImage {
-        guard ExportUpscale.canHandle(image.extent.size) else {
+        guard RenderUpscale.canHandle(StudioSize(image.extent.size)) else {
             throw AIWorkerFailure(code: -32602, message: L10n.current.exportUpscaleTooLarge)
         }
         try AIWorker.ensureRunning()
@@ -373,7 +269,7 @@ enum ExportService {
                                     colorSpace: colorSpace,
                                     metadata: rendered.carriesSourceMetadata ? metadata : [:],
                                     stripPrivacyMetadata: snapshot.stripsPrivacyMetadata,
-                                    maxDimension: snapshot.longEdge)
+                                    maxDimension: snapshot.longEdge.map { CGFloat($0) })
         guard wrote else {
             try? FileManager.default.removeItem(at: temporary)
             return .failed

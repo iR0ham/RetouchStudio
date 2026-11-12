@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// Preferences that outlive one photo. Everything here is a *default* or a
 /// view preference; per-photo work still lives in the project file.

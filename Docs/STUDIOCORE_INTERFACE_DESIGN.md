@@ -422,7 +422,9 @@ BatchItem {
 }
 ```
 
-Per-file policy is a pure function, matching the current `BatchExportPolicy` (`Sources/RetouchStudio/Core/BatchExportPolicy.swift:11`):
+Per-file policy is a pure function, implemented as
+`BatchRenderPolicy.request(_:fileURL:documentURL:documentAspect:fileAspect:)`
+in `Sources/StudioCore/BatchRenderPolicy.swift` (M8):
 
 - The item's own file keeps the document's crop.
 - Another file keeps its crop only when orientation is identity and the aspect matches; otherwise the crop is removed.
@@ -474,6 +476,55 @@ Policy rules, grounded in the current store:
 - Unreadable candidates are quarantined, never deleted.
 - A recovery epoch invalidates stale writes after discard or document replacement.
 - Durability is reported by the file store; a store that cannot `fsync` must not be described as crash-safe.
+
+### 3.11 Render port (implemented in M8)
+
+**VERIFIED — `Sources/StudioCore/RenderContract.swift`, `RenderPolicy.swift`,
+`BatchRenderPolicy.swift`; used by `Sources/RetouchStudio/Core/MacDocumentRenderer.swift`.**
+
+The 3.7/3.8 schemas describe a future multi-language boundary. M8 implements
+the Swift-level subset that both macOS entry points now use:
+
+```text
+ExportFormat     jpeg | png | tiff | heic       extension, type name, depth, alpha
+RenderRequest    adjustments, healSpots, stickers, aiEdits, analysis, crop,
+                 orientation, selectedFaceIndex, format, quality, longEdge,
+                 stripsPrivacyMetadata, includeStamps, includeAnalysis,
+                 aiUpscale, watermark
+RenderSourceDescription   pixelSize, photoAspect, faceCount, profileName
+RenderPlan       format, pixelSize, upscales, appliesAnalysis, appliesWatermark,
+                 flattensAlpha, bitsPerChannel, colorSpace, carriesSourceMetadata
+RenderProgress   stage(preparing|rendering|upscaling|writing), completed, total
+RenderError      cancelled | sourceIsDestination | imageTooLarge |
+                 upscaleFailed | renderFailed | writeFailed
+RenderResult     destination, pixelSize, format, colorSpace, profileName,
+                 carriedSourceMetadata
+
+DocumentRenderPipeline<Source, Output>
+  render(request, source, progress) -> Output
+  write(output, request, source, to:, protecting:) -> RenderResult
+  renderAndWrite(...)  // provided
+```
+
+Rules proven by the core suite:
+
+- A request with analysis overlays and a detected face forces PNG and
+  transparent output; without a face the chosen format stays.
+- The 4x pass is offered only inside the 40 MP output ceiling, caps at the
+  requested long edge, and writes sRGB because the upscaler returns untagged
+  pixels; a downscale never enables it.
+- `-analysis` / `-analysis-poster` naming follows the same predicate as the
+  plan, so a name never promises analysis the file cannot carry.
+- A batch keeps the document's crop only for the document itself or a
+  same-aspect upright file; otherwise it clears crop, AI edits, orientation,
+  face selection and analysis anchors.
+- Unique output names gain a counter without overwriting an earlier file.
+- The port receives the same request and source through `renderAndWrite`, and
+  the write step sees the rendered output; a recording conformer checks it.
+
+`ExportSource` (CIImage, masks, faces, CGColorSpace, ImageIO metadata) and
+`RenderedExport` stay in the app target. Core Image, CoreGraphics, `UTType`,
+`CGImage` and Vision types never appear in the shared API.
 
 ---
 

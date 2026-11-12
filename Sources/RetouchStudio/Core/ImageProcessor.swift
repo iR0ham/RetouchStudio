@@ -4,43 +4,6 @@ import CoreImage
 import Foundation
 import ImageIO
 import StudioCore
-import UniformTypeIdentifiers
-
-enum ExportFormat: String, CaseIterable, Identifiable {
-    case jpeg, png, tiff, heic
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .jpeg: return "JPEG"
-        case .png: return "PNG"
-        case .tiff: return "TIFF"
-        case .heic: return "HEIC"
-        }
-    }
-
-    var fileExtension: String {
-        switch self {
-        case .jpeg: return "jpg"
-        case .png: return "png"
-        case .tiff: return "tif"
-        case .heic: return "heic"
-        }
-    }
-
-    var utType: UTType {
-        switch self {
-        case .jpeg: return .jpeg
-        case .png: return .png
-        case .tiff: return .tiff
-        case .heic: return .heic
-        }
-    }
-
-    /// Formats that carry a compression slider.
-    var supportsQuality: Bool { self == .jpeg || self == .heic }
-}
 
 /// Every mask the pipeline needs, for one image size. Each mask is
 /// white-on-transparent and overlays the image extent exactly, so it can be fed
@@ -1147,7 +1110,7 @@ final class ImageProcessor {
                metadata: [CFString: Any] = [:],
                stripPrivacyMetadata: Bool = true,
                maxDimension: CGFloat? = nil) -> Bool {
-        let ciFormat: CIFormat = format.supportsQuality ? .RGBA8 : .RGBA16
+        let ciFormat: CIFormat = format.bitsPerChannel > 8 ? .RGBA16 : .RGBA8
         var output = image
         if let maxDimension, maxDimension > 0 {
             let longest = max(image.extent.width, image.extent.height)
@@ -1160,7 +1123,7 @@ final class ImageProcessor {
         // real backdrop instead of the black pixels an ignored alpha would
         // leave behind.
         var flattened = output
-        if format == .jpeg || format == .heic {
+        if format.flattensAlpha {
             let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1))
                 .cropped(to: output.extent)
             flattened = output.composited(over: white)
@@ -1169,7 +1132,7 @@ final class ImageProcessor {
             return false
         }
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL,
-                                                              format.utType.identifier as CFString,
+                                                              format.uniformTypeIdentifier as CFString,
                                                               1,
                                                               nil) else { return false }
         var properties = metadata

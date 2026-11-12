@@ -793,6 +793,256 @@ memory.writeFailure = nil
 check(memory.files[projectURL] == v4Bytes,
       "a refused write leaves the previous project untouched")
 
+// MARK: - Renderer contract and policy
+
+print("\n[M8] the renderer contract is portable and its policy is exact")
+
+check(ExportFormat.jpeg.fileExtension == "jpg"
+        && ExportFormat.tiff.fileExtension == "tif"
+        && ExportFormat.heic.uniformTypeIdentifier == "public.heic",
+      "formats carry their extension and portable type name")
+check(ExportFormat.jpeg.supportsQuality && ExportFormat.heic.supportsQuality
+        && !ExportFormat.png.supportsQuality && !ExportFormat.tiff.supportsQuality,
+      "only JPEG and HEIC take a quality value")
+check(ExportFormat.png.bitsPerChannel == 16 && ExportFormat.tiff.bitsPerChannel == 16
+        && ExportFormat.jpeg.bitsPerChannel == 8 && ExportFormat.heic.bitsPerChannel == 8,
+      "PNG/TIFF stay 16-bit and JPEG/HEIC stay 8-bit")
+check(ExportFormat.jpeg.flattensAlpha && ExportFormat.heic.flattensAlpha
+        && !ExportFormat.png.flattensAlpha && !ExportFormat.tiff.flattensAlpha,
+      "only the opaque containers flatten transparency")
+
+var blankWatermark = WatermarkSettings()
+check(!blankWatermark.isActive, "an empty watermark is inactive")
+blankWatermark.enabled = true
+check(!blankWatermark.isActive, "an enabled but blank watermark is still inactive")
+blankWatermark.text = "  Studio  "
+check(blankWatermark.isActive, "a non-blank signature is active")
+let decodedWatermark = try! JSONDecoder().decode(WatermarkSettings.self,
+                                                 from: Data("{}".utf8))
+check(decodedWatermark == WatermarkSettings(),
+      "older preference payloads decode to the same defaults")
+
+let emptyAnalysis = AnalysisSettings()
+let overlayAnalysis = AnalysisSettings()
+var overlay = overlayAnalysis
+overlay.isEnabled = true
+overlay.exportMode = .overlayOnly
+
+let baseSource = RenderSourceDescription(pixelSize: StudioSize(width: 800, height: 600),
+                                         photoAspect: 4.0 / 3.0, faceCount: 2)
+let baseRequest = RenderRequest()
+let basePlan = RenderPolicy.plan(baseRequest, source: baseSource)
+check(basePlan.format == .jpeg && basePlan.pixelSize == StudioSize(width: 800, height: 600)
+        && !basePlan.upscales && !basePlan.appliesAnalysis && !basePlan.appliesWatermark,
+      "a plain export keeps the photo size and draws nothing extra")
+check(basePlan.flattensAlpha && basePlan.bitsPerChannel == 8
+        && basePlan.colorSpace == .source && basePlan.carriesSourceMetadata,
+      "a plain JPEG keeps the source profile and 8-bit opaque output")
+
+var linesRequest = baseRequest
+linesRequest.analysis = overlay
+linesRequest.watermark = WatermarkSettings(enabled: true, text: "Studio")
+let linesPlan = RenderPolicy.plan(linesRequest, source: baseSource)
+check(linesPlan.format == .png && !linesPlan.flattensAlpha && linesPlan.bitsPerChannel == 16,
+      "an overlay-only export is transparent 16-bit PNG")
+check(linesPlan.appliesAnalysis && !linesPlan.appliesWatermark
+        && !linesPlan.carriesSourceMetadata,
+      "lines carry callouts, no signature and no source EXIF")
+
+let noFaceSource = RenderSourceDescription(pixelSize: StudioSize(width: 800, height: 600),
+                                           photoAspect: 4.0 / 3.0, faceCount: 0)
+let noFacePlan = RenderPolicy.plan(linesRequest, source: noFaceSource)
+check(noFacePlan.format == .jpeg && !noFacePlan.appliesAnalysis
+        && noFacePlan.appliesWatermark && noFacePlan.carriesSourceMetadata,
+      "without a face the photo keeps its format and can still take a signature")
+
+var upscaleRequest = baseRequest
+upscaleRequest.longEdge = 1600
+upscaleRequest.aiUpscale = true
+let upscalePlan = RenderPolicy.plan(upscaleRequest, source: baseSource)
+check(upscalePlan.upscales && upscalePlan.pixelSize == StudioSize(width: 1600, height: 1200),
+      "a requested edge caps the 4x pass")
+check(upscalePlan.colorSpace == .sRGB,
+      "upscaled pixels are written with the upscaler's working profile")
+check(RenderPolicy.plan(upscaleRequest, source: baseSource).bitsPerChannel == 8,
+      "the output contract reports the encoded depth")
+
+var past4x = upscaleRequest
+past4x.longEdge = 5000
+check(RenderPolicy.plan(past4x, source: baseSource).pixelSize
+        == StudioSize(width: 3200, height: 2400),
+      "past 4x the output stops at the model's factor")
+
+var downscaleRequest = baseRequest
+downscaleRequest.longEdge = 400
+check(RenderPolicy.plan(downscaleRequest, source: baseSource).pixelSize
+        == StudioSize(width: 400, height: 300),
+      "a smaller edge downscales without the upscaler")
+
+check(RenderPolicy.effectiveFormat(chosen: .jpeg, analysis: overlay,
+                                   includeAnalysis: true, faceCount: 1) == .png,
+      "overlay-only forces PNG when a face exists")
+check(RenderPolicy.effectiveFormat(chosen: .jpeg, analysis: overlay,
+                                   includeAnalysis: false, faceCount: 1) == .jpeg,
+      "a batch that draws no callouts keeps the chosen format")
+check(RenderPolicy.effectiveFormat(chosen: .jpeg, analysis: overlay,
+                                   includeAnalysis: true, faceCount: 0) == .jpeg,
+      "without a face the chosen format stays")
+
+check(RenderPolicy.suggestedFileName(imageName: "portrait.jpg", format: .jpeg,
+                                     analysis: AnalysisSettings(), faceCount: 2)
+        == "portrait-retouched.jpg", "a plain export keeps the extension")
+check(RenderPolicy.suggestedFileName(imageName: "", format: .png,
+                                     analysis: AnalysisSettings(), faceCount: 2)
+        == "retouched.png", "an unnamed photo gets a fallback name")
+check(RenderPolicy.suggestedFileName(imageName: "portrait.jpg", format: .jpeg,
+                                     analysis: overlay, faceCount: 2)
+        == "portrait-retouched-analysis-lines.png",
+      "overlay-only names its PNG even when JPEG was chosen")
+check(RenderPolicy.suggestedFileName(imageName: "portrait.jpg", format: .jpeg,
+                                     analysis: overlay, faceCount: 0)
+        == "portrait-retouched.jpg",
+      "a name must not promise analysis the file cannot carry")
+
+check(RenderPolicy.upscaleAvailable(source: StudioSize(width: 800, height: 600),
+                                    longEdge: 1600),
+      "the 4x pass is offered for a small photo")
+check(!RenderPolicy.upscaleAvailable(source: StudioSize(width: 800, height: 600),
+                                     longEdge: 400),
+      "a downscale never offers the upscaler")
+check(!RenderPolicy.upscaleAvailable(source: StudioSize(width: 4000, height: 3000),
+                                     longEdge: 5000),
+      "a photo past the output ceiling cannot upscale")
+
+var fitted = upscaleRequest
+fitted = RenderPolicy.fittingUpscale(fitted, to: StudioSize(width: 2000, height: 1500))
+check(!fitted.aiUpscale, "a file that already reaches the edge skips the pass")
+var unrequested = baseRequest
+unrequested.aiUpscale = false
+check(!RenderPolicy.fittingUpscale(unrequested,
+                                   to: StudioSize(width: 400, height: 300)).aiUpscale,
+      "an unrequested upscale stays off")
+
+var batchBase = baseRequest
+batchBase.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+batchBase.orientation = DocumentOrientation(quarterTurns: 1)
+batchBase.selectedFaceIndex = 1
+batchBase.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 1,
+                            patchFile: "patch.png", alphaFile: "alpha.png",
+                            box: StudioRect(x: 0, y: 0, width: 1, height: 1),
+                            imagePixels: StudioSize(width: 10, height: 10))]
+batchBase.analysis = overlay
+batchBase.analysis.setEndpoint(StudioPoint(x: 0.2, y: 0.3), for: .forehead)
+batchBase.analysis.setAnchor(StudioPoint(x: 0.4, y: 0.5), for: .forehead)
+
+let documentURL = URL(fileURLWithPath: "/batch/document.jpg")
+let own = BatchRenderPolicy.request(batchBase, fileURL: documentURL,
+                                    documentURL: documentURL,
+                                    documentAspect: 1.5, fileAspect: 1.5)
+check(own == batchBase, "the open document keeps its exact request")
+
+let other = BatchRenderPolicy.request(batchBase,
+                                      fileURL: URL(fileURLWithPath: "/batch/other.jpg"),
+                                      documentURL: documentURL,
+                                      documentAspect: 1.5, fileAspect: 1.5)
+check(other.crop == nil && other.aiEdits.isEmpty && other.orientation.isIdentity
+        && other.selectedFaceIndex == nil,
+      "a turned document's frame never leaks to another photo")
+check(other.analysis.endpoints.isEmpty && other.analysis.anchors.isEmpty,
+      "dragged callout ends stay with their photo")
+check(other.adjustments == batchBase.adjustments && other.format == batchBase.format
+        && other.watermark == batchBase.watermark,
+      "the shared look, format and signature travel")
+
+var upright = batchBase
+upright.orientation = .identity
+let sameShape = BatchRenderPolicy.request(upright,
+                                          fileURL: URL(fileURLWithPath: "/batch/other.jpg"),
+                                          documentURL: documentURL,
+                                          documentAspect: 1.5, fileAspect: 1.5)
+check(sameShape.crop == upright.crop,
+      "an unturned document's crop travels to a same-shape file")
+let differentShape = BatchRenderPolicy.request(upright,
+                                               fileURL: URL(fileURLWithPath: "/batch/wide.jpg"),
+                                               documentURL: documentURL,
+                                               documentAspect: 1.5, fileAspect: 2.0)
+check(differentShape.crop == nil, "a different-shape file exports whole")
+check(BatchRenderPolicy.cropApplies(StudioRect(x: 0, y: 0, width: 1, height: 1),
+                                    documentAspect: 1.5, fileAspect: 1.5),
+      "the same aspect keeps the crop")
+check(!BatchRenderPolicy.cropApplies(StudioRect(x: 0, y: 0, width: 1, height: 1),
+                                     documentAspect: 1.5, fileAspect: 1.0),
+      "a different aspect refuses the crop")
+check(!BatchRenderPolicy.cropApplies(nil, documentAspect: 1.5, fileAspect: 1.5),
+      "no crop means nothing to apply")
+
+let folderURL = URL(fileURLWithPath: "/batch/out")
+let inputURL = URL(fileURLWithPath: "/batch/photo.jpg")
+var taken: Set<String> = ["/batch/out/photo-retouched.png"]
+let unique = BatchRenderPolicy.uniqueOutputURL(for: inputURL, in: folderURL,
+                                               format: .png) { taken.contains($0.path) }
+check(unique.lastPathComponent == "photo-retouched-2.png",
+      "a taken batch name gains a counter", unique.lastPathComponent)
+taken.insert("/batch/out/photo-retouched-2.png")
+let third = BatchRenderPolicy.uniqueOutputURL(for: inputURL, in: folderURL,
+                                              format: .tiff) { _ in false }
+check(third.lastPathComponent == "photo-retouched.tif",
+      "a fresh format starts at the plain name")
+
+let progress = RenderProgress(stage: .upscaling, completed: 3, total: 12)
+check(progress.fraction == 0.25, "completed tiles expose a real fraction")
+check(RenderProgress(stage: .rendering).fraction == nil,
+      "an uncountable stage has no fake percentage")
+check(RenderProgress(stage: .upscaling, completed: 20, total: 12).fraction == 1,
+      "a fraction never passes the end")
+
+final class RecordingRenderer: DocumentRenderPipeline {
+    typealias Source = String
+    typealias Output = String
+
+    var renderedRequest: RenderRequest?
+    var renderedSource: String?
+    var writtenRequest: RenderRequest?
+    var writtenSource: String?
+    var writtenOutput: String?
+    var reported: [RenderProgress] = []
+
+    func render(_ request: RenderRequest, source: String,
+                progress: ((RenderProgress) -> Void)?) throws -> String {
+        renderedRequest = request
+        renderedSource = source
+        progress?(RenderProgress(stage: .rendering))
+        return "pixels"
+    }
+
+    func write(_ output: String, request: RenderRequest, source: String,
+               to destination: URL, protecting protectedURL: URL?) throws -> RenderResult {
+        writtenRequest = request
+        writtenSource = source
+        writtenOutput = output
+        return RenderResult(destination: destination,
+                            pixelSize: StudioSize(width: 10, height: 10),
+                            format: request.format,
+                            colorSpace: .source,
+                            colorProfileName: "Test RGB",
+                            carriedSourceMetadata: true)
+    }
+}
+
+let recorder = RecordingRenderer()
+let testDestination = URL(fileURLWithPath: "/renderer/lines.png")
+let testResult = try! recorder.renderAndWrite(linesRequest, source: "decoded",
+                                              to: testDestination)
+check(recorder.renderedRequest == linesRequest && recorder.renderedSource == "decoded",
+      "the port receives the request and the host's source")
+check(recorder.writtenRequest == linesRequest && recorder.writtenSource == "decoded"
+        && recorder.writtenOutput == "pixels",
+      "the write step receives the same request and the rendered output")
+check(testResult.destination == testDestination
+        && testResult.format == linesRequest.format
+        && testResult.colorProfileName == "Test RGB",
+      "the port returns the written result")
+
 print("")
 print(failures.isEmpty
       ? "StudioCore: \(checks) checks passed"

@@ -209,6 +209,58 @@ host APIs stayed behind.
 No file-system, bookmark or `UTType` type appears in a portable public API.
 The only Foundation types crossing the seam are `Data` and `URL`.
 
+### 5.3 M8 — the renderer boundary
+
+M8 separates what an export *decides* from what an export *draws*. The policy
+moved into StudioCore; the Core Image engine did not move and was not copied.
+There is still exactly one pixel pipeline.
+
+**Moved into `Sources/StudioCore`**
+
+| File | Contents |
+|---|---|
+| `RenderContract.swift` | `ExportFormat` (extension, portable type name, alpha/bit depth), `WatermarkSettings` with a tolerant decoder, `RenderColorSpace`, `RenderSourceDescription`, `RenderRequest`, `RenderPlan`, `RenderStage`/`RenderProgress`, `RenderError`, `RenderResult`, and the `DocumentRenderPipeline` port with a `renderAndWrite` default. |
+| `RenderPolicy.swift` | `RenderUpscale` (4x, 40 MP ceiling, time estimate) and `RenderPolicy`: effective format, output pixel size, suggested file name, the full plan, and `fittingUpscale`. |
+| `BatchRenderPolicy.swift` | Crop applicability, the per-file request transform, and unique output names. |
+
+`RenderRequest` is the flattened request the old app-side `ExportSnapshot`
+carried. `ExportService` now declares `typealias ExportSnapshot = RenderRequest`
+so the two entry points share one model instead of two identical structs.
+
+**Kept on macOS (`Sources/RetouchStudio/Core`)**
+
+- `MacDocumentRenderer` is the only conformer of `DocumentRenderPipeline`. Its
+  `Source` is `ExportSource` (CIImage, masks, faces, photo aspect, colour space,
+  ImageIO metadata) and its `Output` is `RenderedExport`; neither type enters
+  StudioCore.
+- It maps `RenderRequest` back onto the existing `ExportService.renderFinal`
+  and `writeResult`; the engine, colour management, watermark drawing, upscale
+  hand-off and metadata allowlist are untouched.
+- Progress events come from the upscaler's tile callbacks and are mapped onto
+  `RenderProgress`; `Task.isCancelled` is checked before rendering and before
+  writing. Structured failures map onto `RenderError` (including the worker's
+  cancellation, oversized-image and upscale-failure codes).
+- `UTType` and `CGColorSpace` are created in the adapter, from the portable
+  format and colour-space decisions.
+
+**What the boundary buys**
+
+- The app no longer owns export policy: format forcing for analysis overlays,
+  output dimensions, upscale gating, the `-analysis` naming rules, per-file
+  batch decisions and unique names all come from StudioCore.
+- Both the single export and the batch export call `MacDocumentRenderer`
+  through `DocumentRenderPipeline`, so a second host can implement the port
+  without forking the decision logic.
+- The render port is exercised by a recording conformer in the core suite;
+  the boundary gate proves the core still imports only Foundation.
+
+**What did not change**
+
+No pixel, colour, gamma, alpha, bit-depth, orientation or metadata code moved
+or was rewritten. `ImageProcessor.write` now reads the bit depth and portable
+type name from `ExportFormat` instead of its own enum. The golden corpus and
+its baselines must therefore be unchanged; section 9 records the result.
+
 ## 6. What remains macOS-specific
 
 These are deliberate boundaries, not unfinished moves:
@@ -217,7 +269,8 @@ These are deliberate boundaries, not unfinished moves:
 |---|---|---|
 | CoreGraphics adapters | The document value moved to StudioCore in M6; only the `CGPoint`/`CGRect` adapters and the renderers that consume them stay on macOS. | `Sources/StudioCore/DocumentValue.swift`, `Sources/StudioCore/StudioGeometry.swift` |
 | Project bytes, bookmarks, panels | The model and codec moved to StudioCore in M7. `Data` I/O, `URL` bookmarks, `UTType`, open/save panels and photo relocation stay in the host; `URLBookmarkStore`, `FileProjectByteStore` and `FileProjectSourceAccess` implement the shared ports. | `Sources/RetouchStudio/Models/ProjectAdapters.swift`, `Sources/StudioCore/ProjectIO.swift`, `Docs/STUDIOCORE_R4_8_PROJECT_V4.md` |
-| `ExportPlanner`, `BatchPlanner` | Use `CGRect`/`CGSize` and `UTType`-adjacent policy. | `Sources/RetouchStudio/Models/ExportPlanner.swift`, `BatchPlanner.swift` |
+| `ExportPlanner`, `BatchPlanner` | The decisions moved to StudioCore in M8; both are now thin adapters that hand `CGRect` input to `RenderPolicy`/`BatchRenderPolicy` and convert `StudioRect`/`StudioSize` back for the UI. | `Sources/RetouchStudio/Models/ExportPlanner.swift`, `BatchPlanner.swift`, `Sources/StudioCore/RenderPolicy.swift`, `BatchRenderPolicy.swift` |
+| Renderer implementation | The contract and policy moved in M8; the pixels, colour management and encoding stay on macOS. `MacDocumentRenderer` is the only `DocumentRenderPipeline` conformer and wraps the existing `ExportService`, so there is no second engine. | `Sources/RetouchStudio/Core/MacDocumentRenderer.swift`, `ExportService.swift`, `ImageProcessor.swift` |
 | `RecoveryStore` | Directory layout, renames, durability and quarantine execution. | `Sources/RetouchStudio/Models/Recovery.swift` |
 | Image engines | Core Image, Vision, ImageIO, CoreText, AppKit. | imports in `Sources/RetouchStudio/Core` |
 | AI runtime | POSIX/Darwin transport and process identity. | `WorkerClient.swift:171-260`, `ProcessIdentity.swift:32-36` |
@@ -230,12 +283,16 @@ These are deliberate boundaries, not unfinished moves:
   Image work, `FaceAnalyzer`/`SmartAnalyzer` are Vision work, metadata is
   ImageIO, and the watermark is CoreText.
 - M5 changed no image, color, gamma, alpha, bit-depth, orientation or
-  metadata code. The moved units do not read or write pixels.
-- Because no renderer code changed, the golden corpus must be unchanged.
-  The read-only gate confirms it (section 9).
+  metadata code. M6–M8 moved values, project bytes and export decisions; none
+  of them rewrote a pixel operation. `ImageProcessor.write` keeps the same
+  encoding code and now reads its depth/type name from the shared
+  `ExportFormat`.
+- Because no pixel code changed, the golden corpus must be unchanged. The
+  read-only gate confirms it (section 9).
 - A future portable renderer is still unproven: Core Image's color
-  management has no verified non-Apple equivalent in this repository. That
-  is a future research item, not a claim of this milestone.
+  management has no verified non-Apple equivalent in this repository. M8
+  gives that future renderer a contract and a policy to implement; it does not
+  provide a second implementation or a Linux/Windows result.
 
 ## 8. AI portability findings
 
@@ -257,13 +314,13 @@ All runs on the same Mac (Apple silicon), macOS 27.2, Command Line Tools
 
 | Gate | Arch | Result |
 |---|---|---|
-| `Tests/run-studiocore.sh` (boundary scan, independent build, core suite) | arm64 | PASS — `StudioCore: 201 checks passed` (13 added in M7), binary links only Foundation/StudioCore |
+| `Tests/run-studiocore.sh` (boundary scan, independent build, core suite) | arm64 | PASS — `StudioCore: 248 checks passed` (47 added in M8), binary links only Foundation/StudioCore |
 | `Tests/Conformance/run-conformance.sh` (read-only corpus gate) | architecture-neutral (Python) | PASS — 21 fixtures, 78 cases, 21 references, 11 exports, SHA-256 verified; no baseline regenerated |
-| `RETOUCH_ARCH=arm64 Tests/run.sh` | arm64 | PASS — `StudioCore: 201 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
-| `RETOUCH_ARCH=x86_64 Tests/run.sh` | x86_64 under Rosetta (supplementary, not native Intel) | PASS — `StudioCore: 201 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
-| `Tests/run-corpus.sh` (golden image corpus) | arm64 | PASS — 376 checks, 0 failures, verified against `baselines.json` twice; the four exported files the harness rewrote were restored, not accepted as new baselines |
-| `RETOUCH_ARCH=arm64 ./build.sh release` and `./build/bin/RetouchStudio --selftest` | arm64 | PASS — the app builds with `SelfCheck.swift` included and the headless self-test prints `SELFTEST: PASS` |
-| `Tests/run-studiocore-linux.sh` | macOS smoke test only | PASS — 201 checks, toolchain target `arm64-apple-macosx27.2.0`; this is **not** a Linux run (section 13) |
+| `RETOUCH_ARCH=arm64 Tests/run.sh` | arm64 | PASS — `StudioCore: 248 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
+| `RETOUCH_ARCH=x86_64 Tests/run.sh` | x86_64 under Rosetta (supplementary, not native Intel) | PASS — `StudioCore: 248 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
+| `Tests/run-corpus.sh` (golden image corpus) | arm64 | PASS — 376 checks, 0 failures, verified against `baselines.json`; the four exported files the harness rewrote were restored, not accepted as new baselines (`baselines.json` SHA-256 unchanged before and after) |
+| `RETOUCH_ARCH=arm64 ./build.sh release` and `./build/bin/RetouchStudio --selftest` | arm64 | PASS — `BUILD_EXIT=0` and the headless self-test prints `SELFTEST: PASS` |
+| `Tests/run-studiocore-linux.sh` | macOS smoke test only | PASS — 248 checks; this is **not** a Linux run (section 13) |
 
 The M7 core checks add: the v3 fixture decodes to portable geometry and
 re-encodes byte for byte, the store writes exactly the codec's v3 bytes, a v3
@@ -272,9 +329,18 @@ field and required feature, saving a read v4 document reproduces its bytes,
 and read/write failures map onto `ProjectIOError` without touching the
 previous file.
 
+The M8 core checks add 47 assertions: format properties; tolerant watermark
+decoding; plan rules for plain, overlay-only, no-face and upscaled exports;
+upscale availability and edge capping; suggested names; batch request
+transforms; unique names; progress fractions; and a recording conformer that
+proves `renderAndWrite` hands the same request and source to both steps.
+The full app suites also cover the real macOS adapter: the corpus export and
+metadata checks still pass unchanged, and the batch write-failure test still
+proves a failed write is not counted as saved.
+
 The Linux runner (`Tests/run-studiocore-linux.sh`) compiles and runs the same
-201 checks without an SDK probe; it was exercised on the macOS host and now
-prints the toolchain target triple, but no Linux runner has executed it, so no
+248 checks without an SDK probe; it was exercised on the macOS host and prints
+the toolchain target triple, but no Linux runner has executed it, so no
 Linux result is claimed here (section 13).
 
 ### 9.1 Rosetta result
@@ -292,8 +358,8 @@ non-Apple build.
 
 ## 10. Build results
 
-`RETOUCH_ARCH=arm64 ./build.sh release` on the same host, re-run after M6:
-PASS.
+`RETOUCH_ARCH=arm64 ./build.sh release` on the same host, re-run after M8:
+PASS (`BUILD_EXIT=0`).
 
 - SDK auto-probed by the script; target `arm64-apple-macosx14.0`.
 - StudioCore built as a static library, app bundle assembled, and the shipped
@@ -321,6 +387,13 @@ PASS.
   `EditorModel`, `Recovery`, `RecoveryPolicy`, `DocumentRestoration` and
   `SelfCheck` call-site changes; the M7 core tests; the Linux runner target
   check; and this document.
+- M8 commit(s): `Sources/StudioCore/RenderContract.swift`, `RenderPolicy.swift`
+  and `BatchRenderPolicy.swift`; `Sources/RetouchStudio/Core/MacDocumentRenderer.swift`;
+  the `ExportService`, `ImageProcessor`, `ExportPlanner`, `BatchPlanner`,
+  `EditorModel`, `AIWorker`, `Watermark`, `SettingsView`, `SelfCheck` and test
+  call-site changes; deletion of the app-side `BatchExportPolicy.swift` and the
+  duplicate `ExportUpscale`/`ExportFormat`/`WatermarkSettings` declarations;
+  the M8 core tests; and this document.
 - No rebase, no amend, no force push, no reset.
 
 ## 12. Pull request
@@ -345,7 +418,9 @@ milestone.
   explicitly; the app adds a convenience `init()` constrained to
   `DocumentState`. A future platform must supply its own initial state.
 - **Ports are only three.** Project bytes, file existence and bookmarks are
-  separated; HTTP, image decoding and process supervision are not.
+  separated; HTTP, image decoding and process supervision are not. M8 adds a
+  renderer port for decisions, but its `Source`/`Output` are host pixel types,
+  so it is not yet a cross-process image ABI.
 - **v3 remains CoreGraphics-shaped on the wire.** The in-memory values are
   portable since M6, but `RetouchProject` still converts through the frozen
   `WirePoint`/`WireRect`/`*Wire` records to keep old file bytes. Every future
@@ -382,8 +457,10 @@ milestone.
    bookmark and content-type adapters stay on the host. The next step is
    running the Linux file round-trip on a real Linux runner; the runner exists
    but has not executed there.
-4. Define a renderer interface and prove it with the existing canonical
-   fixtures before choosing a backend; do not assume Core Image parity.
+4. ~~Define a renderer interface and prove it with the existing canonical
+   fixtures.~~ Contract and policy done in M8 (section 5.3); the macOS adapter
+   proves the port end to end. The next step is a non-Apple implementation
+   validated on a real runner, not parity assumed from Core Image.
 5. Port the AI transport seam (newline framing and peer identity) behind a
    protocol, keeping the macOS implementation.
 6. Only after 1–5: a Windows/Linux shell prototype against the shared core.

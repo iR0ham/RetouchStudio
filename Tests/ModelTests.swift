@@ -419,7 +419,7 @@ func testBatchExportPolicy() {
                            box: CGRect(x: 0, y: 0, width: 1, height: 1),
                            imagePixels: CGSize(width: 10, height: 10))]
     base.analysis = analysis
-    base.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    base.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
     base.orientation = DocumentOrientation(quarterTurns: 1)
     base.selectedFaceIndex = 1
     base.format = .png
@@ -431,7 +431,7 @@ func testBatchExportPolicy() {
     base.aiUpscale = true
     base.watermark = WatermarkSettings(enabled: true, text: "Studio")
 
-    let document = BatchExportPolicy.snapshot(
+    let document = BatchRenderPolicy.request(
         base, fileURL: documentURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(document.selectedFaceIndex == 1
@@ -441,7 +441,7 @@ func testBatchExportPolicy() {
             && !document.aiEdits.isEmpty,
           "the open document keeps its own selection, pins and crop")
 
-    let sameAspect = BatchExportPolicy.snapshot(
+    let sameAspect = BatchRenderPolicy.request(
         base, fileURL: otherURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(sameAspect.selectedFaceIndex == nil && sameAspect.analysis.endpoints.isEmpty
@@ -453,7 +453,7 @@ func testBatchExportPolicy() {
 
     var unrotatedBase = base
     unrotatedBase.orientation = .identity
-    let unrotatedSameAspect = BatchExportPolicy.snapshot(
+    let unrotatedSameAspect = BatchRenderPolicy.request(
         unrotatedBase, fileURL: otherURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(unrotatedSameAspect.crop == unrotatedBase.crop,
@@ -469,7 +469,7 @@ func testBatchExportPolicy() {
             && sameAspect.analysis.regions == base.analysis.regions,
           "the analysis style stays shared, only the pins are cleared")
 
-    let differentAspect = BatchExportPolicy.snapshot(
+    let differentAspect = BatchRenderPolicy.request(
         base, fileURL: differentURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 1.0)
     check(differentAspect.crop == nil, "a different-shape file exports whole")
@@ -480,10 +480,10 @@ func testBatchExportPolicy() {
     // The renderer guards an out-of-range index; the policy must not leak it.
     var invalid = base
     invalid.selectedFaceIndex = 99
-    let invalidDocument = BatchExportPolicy.snapshot(
+    let invalidDocument = BatchRenderPolicy.request(
         invalid, fileURL: documentURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
-    let invalidOther = BatchExportPolicy.snapshot(
+    let invalidOther = BatchRenderPolicy.request(
         invalid, fileURL: otherURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(invalidDocument.selectedFaceIndex == 99 && invalidOther.selectedFaceIndex == nil,
@@ -1817,7 +1817,7 @@ func testExportPlannerSnapshot() {
     var analysis = AnalysisSettings()
     analysis.isEnabled = true
     planner.analysis = analysis
-    planner.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    planner.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
     planner.orientation = DocumentOrientation(quarterTurns: 1)
     planner.selectedFaceIndex = 1
     planner.format = .tiff
@@ -1879,7 +1879,7 @@ func testBatchPlannerFilePolicy() {
     analysis.setAnchor(CGPoint(x: 0.5, y: 0.5), for: .lips)
     var base = ExportSnapshot()
     base.adjustments.exposure = 5
-    base.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    base.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
     base.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 3,
                            patchFile: "patch.png", alphaFile: "alpha.png",
                            box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
@@ -2737,21 +2737,21 @@ func testExportUpscalePolicy() async {
     // Swin2SR is fixed at 4x and the helper refuses more than 40 MP out, so a
     // full pass is only offered up to 2.5 MP in. Both numbers live here so the
     // sheet can refuse in the same terms before a job is queued.
-    check(ExportUpscale.factor == 4, "the pass is four times the pixels per axis")
-    check(ExportUpscale.canHandle(CGSize(width: 1500, height: 1500)),
+    check(RenderUpscale.factor == 4, "the pass is four times the pixels per axis")
+    check(RenderUpscale.canHandle(StudioSize(width: 1500, height: 1500)),
           "2.25 MP fits the 4x ceiling", "\(6000 * 6000) px out")
-    check(!ExportUpscale.canHandle(CGSize(width: 1600, height: 1600)),
+    check(!RenderUpscale.canHandle(StudioSize(width: 1600, height: 1600)),
           "the first size past 2.5 MP is refused", "\(6400 * 6400) px out")
-    check(ExportUpscale.canHandle(CGSize(width: 400, height: 300)),
+    check(RenderUpscale.canHandle(StudioSize(width: 400, height: 300)),
           "a small photo is accepted")
-    check(!ExportUpscale.canHandle(CGSize(width: 0, height: 300)),
+    check(!RenderUpscale.canHandle(StudioSize(width: 0, height: 300)),
           "an empty size is refused")
 
-    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: 4096) == 4000,
+    check(RenderUpscale.outputLongEdge(sourceLong: 1000, requested: 4096) == 4000,
           "4x wins when the request is above it", "1000 -> 4000")
-    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: 2048) == 2048,
+    check(RenderUpscale.outputLongEdge(sourceLong: 1000, requested: 2048) == 2048,
           "the requested edge wins below 4x", "1000 -> 2048")
-    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: nil) == 4000,
+    check(RenderUpscale.outputLongEdge(sourceLong: 1000, requested: nil) == 4000,
           "no request means the full 4x")
 }
 
@@ -5993,7 +5993,7 @@ func testDocumentStateExportSnapshot() async {
     check(snapshot.stickers == model.stickers, "stickers travel")
     check(snapshot.aiEdits == model.aiEdits, "AI edits travel")
     check(snapshot.analysis == model.analysis, "analysis settings travel")
-    check(snapshot.crop == model.appliedCrop, "the crop travels")
+    check(snapshot.crop == model.appliedCrop.map(StudioRect.init), "the crop travels")
     check(snapshot.orientation == model.documentOrientation, "the orientation travels")
     check(snapshot.selectedFaceIndex == model.selectedFaceIndex, "the face selection travels")
     check(snapshot.quality == 0.66 && snapshot.longEdge == 2400

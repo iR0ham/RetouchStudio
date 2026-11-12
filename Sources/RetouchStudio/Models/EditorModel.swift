@@ -733,7 +733,7 @@ final class EditorModel: ObservableObject {
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
-    private var exportJob: Task<ExportService.Outcome, Never>?
+    private var exportJob: Task<RenderError?, Never>?
     /// Bumped per export so tile reports that arrive after the job finished
     /// cannot repaint "Saved" as "{n}/{m} upscaling" again.
     private var exportGeneration = 0
@@ -2963,7 +2963,7 @@ final class EditorModel: ObservableObject {
                       stickers: stickers,
                       aiEdits: aiEdits,
                       analysis: analysis,
-                      crop: appliedCrop,
+                      crop: appliedCrop.map(StudioRect.init),
                       orientation: documentOrientation,
                       selectedFaceIndex: selectedFaceIndex,
                       imageName: imageName,
@@ -3079,10 +3079,22 @@ final class EditorModel: ObservableObject {
                 self.statusToken = .upscaling(done, total)
             }
         }
-        let job = Task.detached(priority: .userInitiated) {
-            ExportService.run(snapshot, source: source, to: url,
-                              protecting: protectedURL,
-                              progress: progressSink)
+        let job = Task.detached(priority: .userInitiated) { () -> RenderError? in
+            let renderer = MacDocumentRenderer()
+            let report: (RenderProgress) -> Void = { event in
+                guard event.stage == .upscaling else { return }
+                progressSink(event.completed, event.total)
+            }
+            do {
+                _ = try renderer.renderAndWrite(snapshot, source: source, to: url,
+                                                protecting: protectedURL,
+                                                progress: report)
+                return nil
+            } catch let error as RenderError {
+                return error
+            } catch {
+                return .renderFailed
+            }
         }
         exportJob = job
         exportTask = Task { [weak self] in
@@ -3095,17 +3107,17 @@ final class EditorModel: ObservableObject {
             // failed or was cancelled.
             self.end(token)
             switch outcome {
-            case .saved:
+            case nil:
                 self.showExportSheet = false
                 self.statusToken = .saved(url.lastPathComponent)
                 // An exported copy is not a saved project: the edits still
                 // live only in this window, so the clean baseline must not move.
-            case .cancelled:
+            case .cancelled?:
                 self.statusToken = .exportCancelled
-            case .failed:
-                self.statusToken = .exportFailed
-            case .refusedSource:
+            case .sourceIsDestination?:
                 self.statusToken = .exportRefusedOriginal
+            default:
+                self.statusToken = .exportFailed
             }
         }
     }
@@ -3418,7 +3430,7 @@ final class EditorModel: ObservableObject {
 
         guard let result = processor.load(from: url,
                                           previewMaxDimension: previewMaxDimension,
-                                          crop: fileSnapshot.crop,
+                                          crop: fileSnapshot.crop?.cgRect,
                                           orientation: fileSnapshot.orientation) else {
             return .failed
         }
@@ -3431,7 +3443,13 @@ final class EditorModel: ObservableObject {
                                   colorSpace: result.colorSpace,
                                   metadata: result.metadata)
         fileSnapshot = planner.fitUpscale(fileSnapshot, to: result.pixelSize)
-        guard let rendered = try? ExportService.renderFinal(fileSnapshot, source: source) else {
+        let renderer = MacDocumentRenderer()
+        let rendered: RenderedExport
+        do {
+            rendered = try renderer.render(fileSnapshot, source: source, progress: nil)
+        } catch RenderError.cancelled {
+            return .cancelled
+        } catch {
             return .failed
         }
         if Task.isCancelled { return .cancelled }
@@ -3441,15 +3459,21 @@ final class EditorModel: ObservableObject {
         // The hook and the write are the last two steps, so a cancellation that
         // lands here leaves no file at all rather than a truncated one.
         if Task.isCancelled { return .cancelled }
-        let saved = writeResult?(out) ?? ExportService.write(
-            rendered, snapshot: fileSnapshot, to: out,
-            colorSpace: fileSnapshot.aiUpscale
-                ? ExportUpscale.workingColorSpace
-                : result.colorSpace,
-            metadata: result.metadata,
-            protecting: url)
-        // A file that produced no export is a failure, not a skipped crop.
-        guard saved else { return .failed }
+        // The test hook answers only the files it names; `nil` still reaches the
+        // real writer.
+        if let forced = writeResult?(out) {
+            // A file that produced no export is a failure, not a skipped crop.
+            guard forced else { return .failed }
+            return .exported(skippedCrop: skippedCrop)
+        }
+        do {
+            _ = try renderer.write(rendered, request: fileSnapshot,
+                                   source: source, to: out, protecting: url)
+        } catch RenderError.cancelled {
+            return .cancelled
+        } catch {
+            return .failed
+        }
         return .exported(skippedCrop: skippedCrop)
     }
 
