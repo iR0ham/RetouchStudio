@@ -300,6 +300,12 @@ final class PersianL10n: L10n {
     override var recoveryCandidateNotRemoved: String {
         "عکس بازیابی‌شده ذخیره شد، اما نسخهٔ بازیابی قدیمی‌اش حذف نشد."
     }
+    override func recoveryNeedsNewerBuild(_ features: [String]) -> String {
+        let list = features.joined(separator: "، ")
+        return list.isEmpty
+            ? "یک نسخهٔ بازیابی‌شده به نسخهٔ جدیدتری از برنامه نیاز دارد."
+            : "یک نسخهٔ بازیابی‌شده به نسخهٔ جدیدتری از برنامه نیاز دارد (\(list))."
+    }
 
     // MARK: - Batch
 

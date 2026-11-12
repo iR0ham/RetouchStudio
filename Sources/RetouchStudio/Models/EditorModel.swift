@@ -105,6 +105,9 @@ final class EditorModel: ObservableObject {
     @Published private(set) var faceCount = 0
     /// Where this edit was last saved as a project, if anywhere.
     @Published private(set) var projectURL: URL?
+    /// The version and unknown keys of the file this document came from. A new
+    /// photo starts at v3; a v4 project stays v4 across its saves.
+    private var projectWriteContext = ProjectWriteContext.v3
     /// Looks the owner saved from their own sliders, in the order they made them.
     @Published private(set) var userPresets: [UserPreset] = UserPresetStore.load()
     /// One small render per preset, made from the photo that is open.
@@ -936,7 +939,8 @@ final class EditorModel: ObservableObject {
 
     func load(url: URL, restoring project: RetouchProject? = nil,
               projectURL: URL? = nil, relinkURL: URL? = nil,
-              recoveryRestore: RecoveryRestore? = nil) {
+              recoveryRestore: RecoveryRestore? = nil,
+              projectFile: ProjectFile? = nil) {
         // A newer load wins over an older one, but no load may cut in front of
         // an export, a batch or a Smart analysis.
         guard let token = begin(.load) else {
@@ -978,7 +982,7 @@ final class EditorModel: ObservableObject {
                 return
             }
             self.apply(result, restoring: project, projectURL: projectURL,
-                       recoveryRestore: recoveryRestore)
+                       recoveryRestore: recoveryRestore, projectFile: projectFile)
             self.end(token)
             if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
         }
@@ -1032,35 +1036,35 @@ final class EditorModel: ObservableObject {
     private func apply(_ result: LoadResult,
                        restoring project: RetouchProject? = nil,
                        projectURL: URL? = nil,
-                       recoveryRestore: RecoveryRestore? = nil) {
+                       recoveryRestore: RecoveryRestore? = nil,
+                       projectFile: ProjectFile? = nil) {
         // Loading is not an edit. Every assignment below, including the ones
         // whose observers would schedule an autosave, stays out of the
         // recovery store until the restored document is complete.
         isLoadingState = true
         install(result)
-        self.projectURL = projectURL
+        let restoration = project.map { DocumentRestoration.project($0, url: projectURL) }
+            ?? DocumentRestoration.photo()
+        self.projectURL = restoration.projectURL
+        // A photo, a recovery copy or a v3 project saves as v3. Only the file
+        // the document actually came from can keep it on v4.
+        projectWriteContext = projectFile?.context ?? .v3
 
-        if let project {
-            exportFormat = ExportFormat(rawValue: project.exportFormat) ?? .jpeg
-            exportQuality = project.exportQuality
-            exportLongEdge = project.exportLongEdge ?? 0
-            autoRetouchStrength = project.autoRetouchStrength
-            autoColorStrength = project.autoColorStrength ?? 100
-            adjustments = project.adjustments
-            appliedCrop = project.crop
-            documentOrientation = project.orientation ?? .identity
-        } else {
-            adjustments = .zero
-            appliedCrop = nil
-            documentOrientation = .identity
-        }
+        if let format = restoration.exportFormat { exportFormat = format }
+        if let quality = restoration.exportQuality { exportQuality = quality }
+        if let longEdge = restoration.exportLongEdge { exportLongEdge = longEdge }
+        if let retouch = restoration.autoRetouchStrength { autoRetouchStrength = retouch }
+        if let color = restoration.autoColorStrength { autoColorStrength = color }
+        adjustments = restoration.state.adjustments
+        appliedCrop = restoration.state.crop
+        documentOrientation = restoration.state.orientation
         // The stamps arrive with the project, so they are installed without the
         // change handling a user stamp needs.
-        healSpots = project?.healSpots ?? []
-        stickers = project?.stickers ?? []
-        aiEdits = project?.aiEdits ?? []
-        analysis = project?.analysis ?? AnalysisSettings()
-        applyFaceSelection(project?.selectedFace)
+        healSpots = restoration.state.healSpots
+        stickers = restoration.state.stickers
+        aiEdits = restoration.state.aiEdits
+        analysis = restoration.state.analysis
+        applyFaceSelection(restoration.state.selectedFaceIndex)
         selectedSticker = nil
         rebuildSpotMasks()
         refreshAnalysisOverlay()
@@ -1084,12 +1088,12 @@ final class EditorModel: ObservableObject {
         smartReport = nil
         isAnalyzingSmart = false
         showSmartSheet = false
-        if let projectURL {
+        if let projectURL = restoration.projectURL {
             recents.add(projectURL, isProject: true)
         } else {
             recents.add(result.url, isProject: false)
         }
-        if project != nil {
+        if restoration.isProject {
             statusToken = .projectOpened
         } else if result.faces.isEmpty {
             statusToken = .noFaceColorOnly
@@ -1106,7 +1110,7 @@ final class EditorModel: ObservableObject {
         if let relinkURL = pendingRelink {
             pendingRelink = nil
             rewriteProject(at: relinkURL)
-            if project != nil { statusToken = .projectRelinked }
+            if restoration.isProject { statusToken = .projectRelinked }
         }
         if let recoveryRestore {
             finishRestore(recoveryRestore)
@@ -2586,7 +2590,7 @@ final class EditorModel: ObservableObject {
             }
             return
         }
-        let snapshot = RecoverySnapshot.capture(project)
+        let snapshot = RecoverySnapshot.capture(project, context: projectWriteContext)
         let epoch = RecoveryStore.epoch
         let delay = autosaveDebounceNanoseconds
         autosaveTask = Task { [weak self] in
@@ -2631,7 +2635,7 @@ final class EditorModel: ObservableObject {
         autosaveTask = nil
         guard settings.recoveryEnabled, !isLoadingState,
               hasImage, hasUnsavedChanges, let project = makeProject() else { return }
-        persistAutosave(RecoverySnapshot.capture(project))
+        persistAutosave(RecoverySnapshot.capture(project, context: projectWriteContext))
     }
 
     // MARK: - Recovery
@@ -2707,6 +2711,19 @@ final class EditorModel: ObservableObject {
     }
 
     private func offerRecoveryCandidate(_ candidate: RecoveryStore.Candidate) -> RecoveryPassStep {
+        // A copy written by a newer build is never restored as v3 and never
+        // loses a capability: it stays on disk, untouched, for that build.
+        if let refusal = RecoveryPolicy.refusal(for: candidate.snapshot) {
+            handledRecovery.insert(candidate.url)
+            switch refusal {
+            case .tooNew(let version):
+                statusToken = .projectTooNew(version)
+            case .unsupportedFeatures(let features):
+                statusToken = .recoveryNeedsNewerBuild(features)
+            }
+            return .next
+        }
+
         var project = candidate.snapshot.project
         var state = RecoveryStore.sourceState(for: candidate.snapshot)
 
@@ -2772,7 +2789,8 @@ final class EditorModel: ObservableObject {
         if hasImage {
             if hasUnsavedChanges {
                 guard let live = makeProject(),
-                      let preserved = RecoveryStore.saveCandidate(RecoverySnapshot.capture(live))
+                      let preserved = RecoveryStore.saveCandidate(
+                          RecoverySnapshot.capture(live, context: projectWriteContext))
                 else {
                     statusToken = .recoveryStorageFailed
                     return .stop
@@ -2792,7 +2810,9 @@ final class EditorModel: ObservableObject {
         }
         handledRecovery.insert(candidate.url)
         load(url: source, restoring: project,
-             recoveryRestore: RecoveryRestore(candidateURL: candidate.url))
+             recoveryRestore: RecoveryRestore(candidateURL: candidate.url),
+             projectFile: ProjectFile(project: project,
+                                      context: candidate.snapshot.fileContext ?? .v3))
         return .stop
     }
 
@@ -2801,7 +2821,8 @@ final class EditorModel: ObservableObject {
     /// crash at every step.
     private func finishRestore(_ restore: RecoveryRestore) {
         guard let project = makeProject(),
-              RecoveryStore.writeWorking(RecoverySnapshot.capture(project)) else {
+              RecoveryStore.writeWorking(
+                  RecoverySnapshot.capture(project, context: projectWriteContext)) else {
             // The candidate is still the only durable copy; keep it and stop.
             statusToken = .recoveryStorageFailed
             return
@@ -2901,41 +2922,38 @@ final class EditorModel: ObservableObject {
     /// Whether the export can reach a larger size at all. The upscaler is a
     /// fixed 4x pass with a 40 MP output ceiling, so both the request being an
     /// enlargement and the photo fitting that ceiling decide this.
-    var exportUpscaleAvailable: Bool {
-        let size = workingPixelSize
-        guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return false }
-        let longest = max(size.width, size.height)
-        return longest < CGFloat(exportLongEdge) && ExportUpscale.canHandle(size)
+    private var exportPlanner: ExportPlanner {
+        ExportPlanner(adjustments: adjustments,
+                      healSpots: healSpots,
+                      stickers: stickers,
+                      aiEdits: aiEdits,
+                      analysis: analysis,
+                      crop: appliedCrop,
+                      orientation: documentOrientation,
+                      selectedFaceIndex: selectedFaceIndex,
+                      imageName: imageName,
+                      faceCount: faces.count,
+                      workingPixelSize: workingPixelSize,
+                      format: exportFormat,
+                      quality: exportQuality,
+                      longEdge: exportLongEdge,
+                      aiUpscale: exportAIUpscale,
+                      stripsMetadata: stripLocationMetadata,
+                      watermark: watermark)
     }
+
+    var exportUpscaleAvailable: Bool { exportPlanner.upscaleAvailable }
 
     /// The upscaling that will actually run, if any. Both the snapshot and the
     /// size text read this, so the sheet cannot advertise something the export
     /// will not do.
-    var usesExportUpscale: Bool { exportAIUpscale && exportUpscaleAvailable }
+    var usesExportUpscale: Bool { exportPlanner.usesUpscale }
 
     /// Rough wall time for the pass, from the rate measured on this machine.
-    var exportUpscaleEstimate: Int {
-        ExportUpscale.estimatedSeconds(for: workingPixelSize)
-    }
+    var exportUpscaleEstimate: Int { exportPlanner.upscaleEstimate }
 
-    /// Pixel size the export will actually write. Downscaling never enlarges a
-    /// photo; a larger long edge is only reached through the upscaler.
-    var exportPixelSize: CGSize {
-        let size = workingPixelSize
-        guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return size }
-        let longest = max(size.width, size.height)
-        if longest >= CGFloat(exportLongEdge) {
-            let scale = CGFloat(exportLongEdge) / longest
-            return CGSize(width: (size.width * scale).rounded(),
-                          height: (size.height * scale).rounded())
-        }
-        guard usesExportUpscale else { return size }
-        let edge = ExportUpscale.outputLongEdge(sourceLong: longest,
-                                                requested: CGFloat(exportLongEdge))
-        let scale = edge / longest
-        return CGSize(width: (size.width * scale).rounded(),
-                      height: (size.height * scale).rounded())
-    }
+    /// Pixel size the export will actually write.
+    var exportPixelSize: CGSize { exportPlanner.pixelSize }
 
     var exportPixelText: String {
         let size = exportPixelSize
@@ -2963,29 +2981,10 @@ final class EditorModel: ObservableObject {
         showExportSheet = true
     }
 
-    func suggestedFileName() -> String {
-        let base = (imageName as NSString).deletingPathExtension
-        let name = base.isEmpty ? "retouched" : "\(base)-retouched"
-        // A file name that says "analysis" promises callouts the export cannot
-        // draw when Vision found no face.
-        guard analysis.isEnabled, !faces.isEmpty else {
-            return "\(name).\(exportFormat.fileExtension)"
-        }
-        switch analysis.exportMode {
-        case .onPhoto:
-            return "\(name)-analysis.\(exportFormat.fileExtension)"
-        case .poster:
-            return "\(name)-analysis-poster.\(exportFormat.fileExtension)"
-        case .overlayOnly:
-            return "\(name)-analysis-lines.png"
-        }
-    }
+    func suggestedFileName() -> String { exportPlanner.suggestedFileName() }
 
     /// PNG because an overlay-only export is lines on transparency.
-    private var effectiveExportFormat: ExportFormat {
-        analysis.isEnabled && analysis.exportMode == .overlayOnly && !faces.isEmpty
-            ? .png : exportFormat
-    }
+    private var effectiveExportFormat: ExportFormat { exportPlanner.effectiveFormat }
 
     func saveExport() {
         let panel = NSSavePanel()
@@ -3002,22 +3001,8 @@ final class EditorModel: ObservableObject {
     func makeExportSnapshot(includeStamps: Bool = true,
                             includeAnalysis: Bool = true) -> ExportSnapshot? {
         guard hasImage else { return nil }
-        return ExportSnapshot(adjustments: adjustments,
-                              healSpots: healSpots,
-                              stickers: stickers,
-                              aiEdits: aiEdits,
-                              analysis: analysis,
-                              crop: appliedCrop,
-                              orientation: documentOrientation,
-                              selectedFaceIndex: selectedFaceIndex,
-                              format: effectiveExportFormat,
-                              quality: exportQuality,
-                              longEdge: exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil,
-                              stripsPrivacyMetadata: stripLocationMetadata,
-                              includeStamps: includeStamps,
-                              includeAnalysis: includeAnalysis,
-                              aiUpscale: usesExportUpscale,
-                              watermark: watermark)
+        return exportPlanner.snapshot(includeStamps: includeStamps,
+                                      includeAnalysis: includeAnalysis)
     }
 
     func export(to url: URL) {
@@ -3117,29 +3102,21 @@ final class EditorModel: ObservableObject {
     /// and by the crash-recovery copy, so the two can never drift apart.
     private func makeProject() -> RetouchProject? {
         guard let imageURL else { return nil }
-        return RetouchProject(imagePath: imageURL.path,
-                              imageBookmark: bookmark(for: imageURL),
-                              adjustments: adjustments,
-                              exportFormat: exportFormat.rawValue,
-                              exportQuality: exportQuality,
-                              exportLongEdge: exportLongEdge == 0 ? nil : exportLongEdge,
-                              autoRetouchStrength: autoRetouchStrength,
-                              autoColorStrength: autoColorStrength,
-                              crop: appliedCrop,
-                              healSpots: healSpots.isEmpty ? nil : healSpots,
-                              stickers: stickers.isEmpty ? nil : stickers,
-                              aiEdits: aiEdits.isEmpty ? nil : aiEdits,
-                              analysis: analysis == AnalysisSettings() ? nil : analysis,
-                              selectedFace: selectedFaceIndex,
-                              orientation: documentOrientation.isIdentity ? nil : documentOrientation)
+        return ProjectCodec.makeProject(ProjectInput(imageURL: imageURL,
+                                                     state: currentState,
+                                                     exportFormat: exportFormat.rawValue,
+                                                     exportQuality: exportQuality,
+                                                     exportLongEdge: exportLongEdge,
+                                                     autoRetouchStrength: autoRetouchStrength,
+                                                     autoColorStrength: autoColorStrength),
+                                        bookmarks: URLBookmarkStore())
     }
 
     private func writeProject(to url: URL) {
         guard let project = makeProject() else { return }
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(project).write(to: url, options: .atomic)
+            try ProjectCodec.encode(project, context: projectWriteContext)
+                .write(to: url, options: .atomic)
             projectURL = url
             recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
@@ -3172,11 +3149,8 @@ final class EditorModel: ObservableObject {
         offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
         do {
-            let project = try JSONDecoder().decode(RetouchProject.self, from: Data(contentsOf: url))
-            guard project.version <= RetouchProject.currentVersion else {
-                statusToken = .projectTooNew(project.version)
-                return
-            }
+            let file = try ProjectCodec.read(Data(contentsOf: url))
+            let project = file.project
             var source = resolveProjectImage(project, projectURL: url)
             if source == nil { source = locatePhoto(for: project) }
             guard let source else {
@@ -3187,7 +3161,13 @@ final class EditorModel: ObservableObject {
             let relocated = source.standardizedFileURL != recorded
             guard prepareToReplaceDocument() else { return }
             load(url: source, restoring: project, projectURL: url,
-                 relinkURL: relocated ? url : nil)
+                 relinkURL: relocated ? url : nil, projectFile: file)
+        } catch ProjectCodecError.tooNew(let version) {
+            statusToken = .projectTooNew(version)
+        } catch ProjectCodecError.unsupportedFeatures {
+            // A required capability this build does not have: opening it would
+            // silently change the document, so it is refused like a newer file.
+            statusToken = .projectOpenFailed
         } catch {
             statusToken = .projectOpenFailed
         }
@@ -3198,30 +3178,13 @@ final class EditorModel: ObservableObject {
     /// a file sitting next to the project covers a moved folder. `nil` means
     /// the owner has to point at it.
     func resolveProjectImage(_ project: RetouchProject, projectURL: URL?) -> URL? {
-        let manager = FileManager.default
-        if let data = project.imageBookmark,
-           let url = resolveBookmark(data),
-           manager.fileExists(atPath: url.path) {
-            return url
-        }
-        let absolute = URL(fileURLWithPath: project.imagePath)
-        if manager.fileExists(atPath: absolute.path) { return absolute }
-        if let projectURL {
-            let sibling = projectURL.deletingLastPathComponent()
-                .appendingPathComponent((project.imagePath as NSString).lastPathComponent)
-            if manager.fileExists(atPath: sibling.path) { return sibling }
-        }
-        return nil
+        ProjectSourceResolver(sources: FileProjectSourceAccess(),
+                              bookmarks: URLBookmarkStore())
+            .resolve(project, projectURL: projectURL)
     }
 
     private func bookmark(for url: URL) -> Data? {
-        try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-    }
-
-    private func resolveBookmark(_ data: Data) -> URL? {
-        var stale = false
-        return try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil,
-                        bookmarkDataIsStale: &stale)
+        URLBookmarkStore().bookmark(for: url)
     }
 
     private func locatePhoto(for project: RetouchProject) -> URL? {
@@ -3241,9 +3204,8 @@ final class EditorModel: ObservableObject {
     private func rewriteProject(at url: URL) {
         guard let project = makeProject() else { return }
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(project).write(to: url, options: .atomic)
+            try ProjectCodec.encode(project, context: projectWriteContext)
+                .write(to: url, options: .atomic)
         } catch {
             // The photo still opens; only the next launch will ask again.
         }
@@ -3315,8 +3277,9 @@ final class EditorModel: ObservableObject {
         batchFileTask?.cancel()
         batchFileTask = nil
 
-        let documentAspect = sourceAspect
-        let documentURL = imageURL?.resolvingSymlinksInPath()
+        let planner = BatchPlanner(base: snapshot,
+                                   documentURL: imageURL?.resolvingSymlinksInPath(),
+                                   documentAspect: sourceAspect)
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
         let willWrite = batchFileWillWriteHook
@@ -3343,9 +3306,7 @@ final class EditorModel: ObservableObject {
                 self?.statusToken = .batchProgress(index + 1, urls.count)
 
                 let fileTask = Task.detached(priority: .userInitiated) { () -> BatchOutcome in
-                    Self.exportOne(url, to: folder, snapshot: snapshot,
-                                   documentAspect: documentAspect,
-                                   documentURL: documentURL,
+                    Self.exportOne(url, to: folder, planner: planner,
                                    processor: processor,
                                    previewMaxDimension: previewMaxDimension,
                                    willWrite: willWrite,
@@ -3399,9 +3360,7 @@ final class EditorModel: ObservableObject {
     /// its own aspect. The document's crop is used only when the shape matches.
     private nonisolated static func exportOne(_ url: URL,
                                               to folder: URL,
-                                              snapshot: ExportSnapshot,
-                                              documentAspect: CGFloat,
-                                              documentURL: URL?,
+                                              planner: BatchPlanner,
                                               processor: ImageProcessor,
                                               previewMaxDimension: CGFloat,
                                               willWrite: (@Sendable (URL) -> Void)?,
@@ -3410,10 +3369,9 @@ final class EditorModel: ObservableObject {
         // photo, not after it has already paid for both.
         if Task.isCancelled { return .cancelled }
         let fileAspect = ExportService.pixelAspect(of: url) ?? 0
-        var fileSnapshot = BatchExportPolicy.snapshot(
-            snapshot, fileURL: url, documentURL: documentURL,
-            documentAspect: documentAspect, fileAspect: fileAspect)
-        let skippedCrop = snapshot.crop != nil && fileSnapshot.crop == nil
+        let plan = planner.plan(for: url, fileAspect: fileAspect)
+        var fileSnapshot = plan.snapshot
+        let skippedCrop = plan.skippedCrop
 
         guard let result = processor.load(from: url,
                                           previewMaxDimension: previewMaxDimension,
@@ -3429,21 +3387,13 @@ final class EditorModel: ObservableObject {
                                   photoAspect: fileAspect,
                                   colorSpace: result.colorSpace,
                                   metadata: result.metadata)
-        // Upscaling was decided for the document. A file that already reaches
-        // the requested size does not need it, and one past the 4x ceiling is
-        // written at its own size rather than failing the whole batch.
-        if fileSnapshot.aiUpscale {
-            let longest = max(result.pixelSize.width, result.pixelSize.height)
-            if longest >= (fileSnapshot.longEdge ?? 0)
-                || !ExportUpscale.canHandle(result.pixelSize) {
-                fileSnapshot.aiUpscale = false
-            }
-        }
+        fileSnapshot = planner.fitUpscale(fileSnapshot, to: result.pixelSize)
         guard let rendered = try? ExportService.renderFinal(fileSnapshot, source: source) else {
             return .failed
         }
         if Task.isCancelled { return .cancelled }
-        let out = uniqueOutputURL(for: url, in: folder, format: fileSnapshot.format)
+        let out = BatchPlanner.uniqueOutputURL(for: url, in: folder,
+                                               format: fileSnapshot.format)
         willWrite?(out)
         // The hook and the write are the last two steps, so a cancellation that
         // lands here leaves no file at all rather than a truncated one.
@@ -3460,18 +3410,6 @@ final class EditorModel: ObservableObject {
         return .exported(skippedCrop: skippedCrop)
     }
 
-    private nonisolated static func uniqueOutputURL(for url: URL,
-                                                    in folder: URL,
-                                                    format: ExportFormat) -> URL {
-        let base = url.deletingPathExtension().lastPathComponent
-        var out = folder.appendingPathComponent("\(base)-retouched.\(format.fileExtension)")
-        var counter = 2
-        while FileManager.default.fileExists(atPath: out.path) {
-            out = folder.appendingPathComponent("\(base)-retouched-\(counter).\(format.fileExtension)")
-            counter += 1
-        }
-        return out
-    }
 }
 
 private enum BatchOutcome {

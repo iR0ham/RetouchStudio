@@ -861,13 +861,13 @@ func testProjectVersionGuard() async {
                                 exportFormat: "jpeg",
                                 exportQuality: 0.9,
                                 autoRetouchStrength: 70)
-    future.version = RetouchProject.currentVersion + 1
-    check(writeProject(future, to: projectURL), "a version-2 project is written")
+    future.version = ProjectCodec.currentVersion + 1
+    check(writeProject(future, to: projectURL), "a newer-format project is written")
 
     let model = EditorModel()
     model.openProject(at: projectURL)
     // The guard runs synchronously before the load, so no sleep is needed.
-    check(model.statusToken == .projectTooNew(RetouchProject.currentVersion + 1),
+    check(model.statusToken == .projectTooNew(ProjectCodec.currentVersion + 1),
           "the version guard explains why it was refused", "\(model.statusToken)")
     check(!model.hasImage, "nothing was loaded from the newer project")
 
@@ -900,6 +900,1057 @@ func testProjectVersionGuard() async {
         .flatMap { try? JSONDecoder().decode(RetouchProject.self, from: $0) }
     check(reopened?.selectedFace == 1, "the chosen face survives save and reopen",
           "selectedFace=\(reopened?.selectedFace.map(String.init) ?? "nil")")
+}
+
+// MARK: - R4.3 Project v3 baseline
+
+/// Freezes what the current encoder writes before the codec is extracted. The
+/// fixture covers all 16 stored fields; decoding it and re-encoding with the
+/// same settings must reproduce its bytes. Any difference is a format change.
+@MainActor
+func testProjectV3BaselineByteIdentity() {
+    print("\n[R4.3] the project v3 fixture re-encodes byte for byte")
+
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/ProjectV3/project-v3-full.retouch")
+    guard let original = try? Data(contentsOf: fixtureURL) else {
+        check(false, "the v3 fixture is readable", fixtureURL.path)
+        return
+    }
+    guard let project = try? JSONDecoder().decode(RetouchProject.self, from: original) else {
+        check(false, "the v3 fixture decodes")
+        return
+    }
+
+    check(project.version == 3, "the fixture is written at version 3")
+    check(!project.imagePath.isEmpty, "the fixture records the photo path")
+    check(project.imageBookmark?.isEmpty == false, "the fixture carries a bookmark")
+    check(project.adjustments != Adjustments(), "the fixture carries real adjustments")
+    check(project.exportFormat == "jpeg" && project.exportQuality == 0.87,
+          "the fixture carries the export format and quality")
+    check(project.exportLongEdge == 4096, "the fixture carries the long edge")
+    check(project.autoRetouchStrength == 65 && project.autoColorStrength == 80,
+          "the fixture carries both auto strengths")
+    check(project.crop != nil, "the fixture carries a crop")
+    check((project.healSpots?.count ?? 0) == 2, "the fixture carries healing stamps")
+    check((project.stickers?.count ?? 0) == 1, "the fixture carries a sticker")
+    check((project.aiEdits?.count ?? 0) == 1, "the fixture carries an AI edit")
+    check(project.analysis?.isEnabled == true, "the fixture carries analysis settings")
+    check(project.selectedFace == 2, "the fixture carries the chosen face")
+    check(project.orientation?.isIdentity == false, "the fixture carries the orientation")
+
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let encoded = try? encoder.encode(project) else {
+        check(false, "the fixture encodes")
+        return
+    }
+
+    if encoded != original {
+        let shared = min(encoded.count, original.count)
+        var offset = 0
+        while offset < shared && encoded[offset] == original[offset] { offset += 1 }
+        print("   byte difference at offset \(offset): encoded \(encoded.count) bytes,"
+              + " fixture \(original.count) bytes")
+        print("   encoded: \(hexSnippet(encoded, around: offset))")
+        print("   fixture: \(hexSnippet(original, around: offset))")
+    }
+    check(encoded == original, "decoding and re-encoding reproduces the fixture bytes",
+          "encoded \(encoded.count) bytes, fixture \(original.count) bytes")
+}
+
+private func hexSnippet(_ data: Data, around offset: Int) -> String {
+    let start = max(0, offset - 12)
+    let end = min(data.count, offset + 12)
+    guard start < end else { return "<empty>" }
+    return data[start..<end].map { String(format: "%02x", $0) }.joined(separator: " ")
+}
+
+// MARK: - R4.3 Project codec
+
+private struct StubSources: ProjectSourceAccess {
+    var paths: Set<String>
+
+    func fileExists(at url: URL) -> Bool { paths.contains(url.path) }
+}
+
+private struct StubBookmarks: ProjectBookmarkStore {
+    var made: [String: Data] = [:]
+    var resolved: [Data: URL] = [:]
+
+    func bookmark(for url: URL) -> Data? { made[url.path] }
+    func resolveBookmark(_ data: Data) -> URL? { resolved[data] }
+}
+
+private func projectV3Fixture() -> (url: URL, data: Data) {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/ProjectV3/project-v3-full.retouch")
+    return (url, (try? Data(contentsOf: url)) ?? Data())
+}
+
+private func projectV4Fixture() -> (url: URL, data: Data) {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/ProjectV4/project-v4-full.retouch")
+    return (url, (try? Data(contentsOf: url)) ?? Data())
+}
+
+private func makeCodecInput(imageURL: URL) -> ProjectInput {
+    ProjectInput(imageURL: imageURL,
+                 state: DocumentState(),
+                 exportFormat: "jpeg",
+                 exportQuality: 0.9,
+                 exportLongEdge: 0,
+                 autoRetouchStrength: 70,
+                 autoColorStrength: 0)
+}
+
+@MainActor
+func testProjectCodecFieldMapping() {
+    print("\n[R4.3] the codec maps every input field onto the project")
+
+    let imageURL = URL(fileURLWithPath: "/codec/photos/portrait.jpg")
+    let bookmark = Data([0xAA, 0xBB])
+    var state = DocumentState()
+    state.adjustments.exposure = 12
+    state.healSpots = [HealSpot(center: CGPoint(x: 0.4, y: 0.5), radius: 0.02)]
+    state.stickers = [Sticker(kind: .heart, center: CGPoint(x: 0.3, y: 0.6), size: 0.1)]
+    state.aiEdits = [AIEdit(preset: "retouch", prompt: "smooth the wall", seed: 7,
+                            patchFile: "patch.png", alphaFile: "alpha.png",
+                            box: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4),
+                            imagePixels: CGSize(width: 64, height: 64))]
+    state.analysis.isEnabled = true
+    state.crop = CGRect(x: 0.05, y: 0.1, width: 0.8, height: 0.7)
+    state.orientation = DocumentOrientation(quarterTurns: 1, flipped: true, angle: 2)
+    state.selectedFaceIndex = 3
+
+    let input = ProjectInput(imageURL: imageURL, state: state,
+                             exportFormat: "tiff", exportQuality: 0.75,
+                             exportLongEdge: 2048, autoRetouchStrength: 55,
+                             autoColorStrength: 45)
+    let project = ProjectCodec.makeProject(
+        input, bookmarks: StubBookmarks(made: [imageURL.path: bookmark]))
+
+    check(project.version == RetouchProject.currentVersion, "the codec writes the current version")
+    check(project.imagePath == imageURL.path, "the photo path is recorded")
+    check(project.imageBookmark == bookmark, "the bookmark comes from the store")
+    check(project.adjustments == state.adjustments, "adjustments are copied")
+    check(project.exportFormat == "tiff" && project.exportQuality == 0.75,
+          "export format and quality are copied")
+    check(project.exportLongEdge == 2048, "a real long edge is kept")
+    check(project.autoRetouchStrength == 55 && project.autoColorStrength == 45,
+          "both auto strengths are copied")
+    check(project.crop == state.crop, "the crop is copied")
+    check(project.healSpots == state.healSpots, "healing stamps are copied")
+    check(project.stickers == state.stickers, "stickers are copied")
+    check(project.aiEdits == state.aiEdits, "AI edits are copied")
+    check(project.analysis == state.analysis, "analysis settings are copied")
+    check(project.selectedFace == 3, "the chosen face is copied")
+    check(project.orientation == state.orientation, "the orientation is copied")
+}
+
+@MainActor
+func testProjectCodecNormalization() {
+    print("\n[R4.3] the codec normalizes empty values to nil")
+
+    let input = makeCodecInput(imageURL: URL(fileURLWithPath: "/codec/defaults.jpg"))
+    let project = ProjectCodec.makeProject(input, bookmarks: StubBookmarks())
+
+    check(project.imageBookmark == nil, "no bookmark stays nil")
+    check(project.exportLongEdge == nil, "a zero long edge becomes nil")
+    check(project.crop == nil, "no crop stays nil")
+    check(project.healSpots == nil, "no healing stamps become nil")
+    check(project.stickers == nil, "no stickers become nil")
+    check(project.aiEdits == nil, "no AI edits become nil")
+    check(project.analysis == nil, "default analysis becomes nil")
+    check(project.selectedFace == nil, "no chosen face stays nil")
+    check(project.orientation == nil, "identity orientation becomes nil")
+}
+
+@MainActor
+func testProjectCodecLegacyDecode() {
+    print("\n[R4.3] the codec keeps older projects readable")
+
+    guard let adjustments = try? JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(Adjustments())) else {
+        check(false, "adjustments fixture")
+        return
+    }
+    let legacy: [String: Any] = [
+        "imagePath": "/codec/legacy.jpg",
+        "adjustments": adjustments,
+        "exportFormat": "png",
+        "exportQuality": 1.0,
+        "autoRetouchStrength": 70.0,
+        "unknownFutureKey": ["kept": "out of the way"]
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: legacy),
+          let project = try? ProjectCodec.decode(data) else {
+        check(false, "a legacy project decodes")
+        return
+    }
+
+    check(project.version == RetouchProject.currentVersion,
+          "a missing version decodes as the current one")
+    check(project.imageBookmark == nil && project.exportLongEdge == nil,
+          "fields added after v1 decode as nil")
+    check(project.crop == nil && project.orientation == nil
+            && project.healSpots == nil && project.stickers == nil
+            && project.aiEdits == nil && project.analysis == nil,
+          "every later optional decodes as nil")
+    check(project.autoColorStrength == nil, "the auto color strength predates as nil")
+    check(project.selectedFace == nil, "the chosen face predates as nil")
+}
+
+@MainActor
+func testProjectCodecVersionGuard() {
+    print("\n[R4.3] the codec refuses a newer project")
+
+    let input = makeCodecInput(imageURL: URL(fileURLWithPath: "/codec/version.jpg"))
+    let project = ProjectCodec.makeProject(input, bookmarks: StubBookmarks())
+    guard let encoded = try? ProjectCodec.encode(project),
+          var object = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] else {
+        check(false, "version fixture")
+        return
+    }
+    object["version"] = ProjectCodec.currentVersion + 1
+    guard let newer = try? JSONSerialization.data(withJSONObject: object) else {
+        check(false, "newer fixture")
+        return
+    }
+
+    do {
+        _ = try ProjectCodec.decode(newer)
+        check(false, "a newer project is refused")
+    } catch ProjectCodecError.tooNew(let version) {
+        check(version == ProjectCodec.currentVersion + 1,
+              "the refusal carries the file version", "v\(version)")
+    } catch {
+        check(false, "the refusal is a version error", "\(error)")
+    }
+
+    check((try? ProjectCodec.decode(encoded)) != nil, "the current version still decodes")
+
+    object["version"] = 1
+    if let old = try? JSONSerialization.data(withJSONObject: object) {
+        check((try? ProjectCodec.decode(old)) != nil, "an old version still decodes")
+    }
+}
+
+@MainActor
+func testProjectCodecReproducesBaseline() {
+    print("\n[R4.3] the codec reproduces the v3 baseline bytes")
+
+    let fixture = projectV3Fixture()
+    guard let project = try? ProjectCodec.decode(fixture.data) else {
+        check(false, "the codec decodes the baseline fixture")
+        return
+    }
+    guard let encoded = try? ProjectCodec.encode(project) else {
+        check(false, "the codec encodes the baseline project")
+        return
+    }
+    check(encoded == fixture.data, "codec bytes match the fixture",
+          "encoded \(encoded.count) bytes, fixture \(fixture.data.count) bytes")
+}
+
+@MainActor
+func testProjectSourceResolverOrder() {
+    print("\n[R4.3] the resolver trusts the bookmark first")
+
+    let recorded = URL(fileURLWithPath: "/codec/original/photo.jpg")
+    let bookmarked = URL(fileURLWithPath: "/codec/moved/photo.jpg")
+    let sibling = URL(fileURLWithPath: "/codec/folder/photo.jpg")
+    let projectFile = URL(fileURLWithPath: "/codec/folder/photo.retouch")
+    let bookmark = Data([0x0A])
+
+    var project = RetouchProject(imagePath: recorded.path, imageBookmark: bookmark,
+                                 adjustments: .zero, exportFormat: "jpeg",
+                                 exportQuality: 0.9, autoRetouchStrength: 70)
+    let bookmarks = StubBookmarks(resolved: [bookmark: bookmarked])
+
+    var resolver = ProjectSourceResolver(
+        sources: StubSources(paths: [bookmarked.path, recorded.path]), bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == bookmarked.path,
+          "the bookmark wins when both files exist")
+
+    resolver = ProjectSourceResolver(sources: StubSources(paths: [recorded.path]),
+                                     bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == recorded.path,
+          "a missing bookmark target falls back to the absolute path")
+
+    project.imageBookmark = Data([0x0B])
+    resolver = ProjectSourceResolver(sources: StubSources(paths: [recorded.path]),
+                                     bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == recorded.path,
+          "an unresolvable bookmark falls back to the absolute path")
+
+    project.imageBookmark = nil
+    resolver = ProjectSourceResolver(sources: StubSources(paths: [sibling.path]),
+                                     bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile)?.path == sibling.path,
+          "a moved folder falls back to the sibling next to the project")
+
+    resolver = ProjectSourceResolver(sources: StubSources(paths: []), bookmarks: bookmarks)
+    check(resolver.resolve(project, projectURL: projectFile) == nil,
+          "nothing on disk means the owner has to locate the photo")
+}
+
+@MainActor
+func testProjectCodecRelinkRewrite() {
+    print("\n[R4.3] a relinked project records the new photo")
+
+    let oldURL = URL(fileURLWithPath: "/codec/a/photo.jpg")
+    let newURL = URL(fileURLWithPath: "/codec/b/photo.jpg")
+    let oldBookmark = Data([0x01])
+    let newBookmark = Data([0x02])
+    let bookmarks = StubBookmarks(made: [oldURL.path: oldBookmark,
+                                         newURL.path: newBookmark])
+
+    var input = makeCodecInput(imageURL: oldURL)
+    let before = ProjectCodec.makeProject(input, bookmarks: bookmarks)
+    input.imageURL = newURL
+    let after = ProjectCodec.makeProject(input, bookmarks: bookmarks)
+
+    check(before.imagePath == oldURL.path && before.imageBookmark == oldBookmark,
+          "the first project records the old location")
+    check(after.imagePath == newURL.path && after.imageBookmark == newBookmark,
+          "the rewritten project records the new location")
+
+    let reopened = (try? ProjectCodec.encode(after))
+        .flatMap { try? ProjectCodec.decode($0) }
+    check(reopened?.imagePath == newURL.path && reopened?.imageBookmark == newBookmark,
+          "the rewrite survives a round trip")
+
+    let first = try? ProjectCodec.encode(after)
+    let second = try? ProjectCodec.encode(after)
+    check(first != nil && first == second, "encoding the same project is deterministic")
+}
+
+// MARK: - R4.8 Project v4 and geometry migration
+
+private func fullV4Project() -> RetouchProject {
+    var adjustments = Adjustments()
+    adjustments.exposure = 7
+    adjustments.smooth = 21
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    analysis.regions = [.forehead, .chin]
+    analysis.setEndpoint(CGPoint(x: 0.22, y: 0.31), for: .forehead)
+    analysis.setAnchor(CGPoint(x: 0.12, y: 0.13), for: .chin)
+    return RetouchProject(
+        imagePath: "/v4/photos/portrait.heic",
+        imageBookmark: Data([0x10, 0x20]),
+        adjustments: adjustments,
+        exportFormat: "heic", exportQuality: 0.83, exportLongEdge: 3000,
+        autoRetouchStrength: 66, autoColorStrength: 44,
+        crop: CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8),
+        healSpots: [HealSpot(center: CGPoint(x: 0.25, y: 0.35), radius: 0.015)],
+        stickers: [Sticker(kind: .sparkle, center: CGPoint(x: 0.6, y: 0.4),
+                           size: 0.12, rotation: 12, opacity: 0.8)],
+        aiEdits: [AIEdit(preset: "retouch", prompt: "clean the wall", seed: 42,
+                         patchFile: "patch.png", alphaFile: "alpha.png",
+                         box: CGRect(x: 0.2, y: 0.3, width: 0.4, height: 0.5),
+                         imagePixels: CGSize(width: 512, height: 768),
+                         patchOrientation: DocumentOrientation(quarterTurns: 1),
+                         createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                         seconds: 2.5, outsidePixelsIdentical: true)],
+        analysis: analysis,
+        selectedFace: 1,
+        orientation: DocumentOrientation(quarterTurns: 3, flipped: true, angle: 4.5))
+}
+
+private func projectJSON(_ data: Data) -> [String: ProjectJSONValue]? {
+    try? JSONDecoder().decode([String: ProjectJSONValue].self, from: data)
+}
+
+private func projectJSONData(_ object: [String: ProjectJSONValue]) -> Data? {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    return try? encoder.encode(object)
+}
+
+private func keyedPoint(_ value: ProjectJSONValue?) -> Bool {
+    guard case .object(let point)? = value else { return false }
+    return point["x"] != nil && point["y"] != nil
+}
+
+@MainActor
+func testProjectV4PortableGeometry() {
+    print("\n[R4.8] v4 writes geometry as named records and reads it back exactly")
+
+    let project = fullV4Project()
+    guard let data = try? ProjectCodec.encodeV4(project),
+          let object = projectJSON(data) else {
+        check(false, "the v4 fixture encodes")
+        return
+    }
+    check(object["version"] == .int(4), "the file records version 4")
+
+    guard case .object(let crop)? = object["crop"] else {
+        check(false, "the crop is an object")
+        return
+    }
+    check(crop["x"] != nil && crop["width"] != nil,
+          "the crop uses named x/y/width/height keys")
+    guard case .array(let spots)? = object["healSpots"],
+          case .object(let spot)? = spots.first,
+          keyedPoint(spot["center"]) else {
+        check(false, "the healing stamp center is a named point")
+        return
+    }
+    guard case .array(let stickers)? = object["stickers"],
+          case .object(let sticker)? = stickers.first,
+          keyedPoint(sticker["center"]) else {
+        check(false, "the sticker center is a named point")
+        return
+    }
+    guard case .array(let edits)? = object["aiEdits"],
+          case .object(let edit)? = edits.first,
+          case .object(let box)? = edit["box"],
+          case .object(let pixels)? = edit["imagePixels"] else {
+        check(false, "the AI edit box and pixel size are named records")
+        return
+    }
+    check(box["width"] != nil && pixels["width"] != nil,
+          "the AI edit uses named width/height records")
+    guard case .object(let analysis)? = object["analysis"],
+          case .object(let endpoints)? = analysis["endpoints"],
+          keyedPoint(endpoints["forehead"]),
+          case .object(let anchors)? = analysis["anchors"],
+          keyedPoint(anchors["chin"]) else {
+        check(false, "analysis pins are named points")
+        return
+    }
+    guard case .array(let regions)? = analysis["regions"] else {
+        check(false, "analysis regions are an array")
+        return
+    }
+    check(regions == [.string("chin"), .string("forehead")],
+          "analysis regions are sorted, so the bytes do not depend on set order")
+
+    guard let file = try? ProjectCodec.read(data) else {
+        check(false, "the v4 file reads")
+        return
+    }
+    check(file.context.version == 4 && file.context.isV4,
+          "the file is remembered as v4")
+    check(file.context.unknownFields.isEmpty, "a clean v4 file has no unknown fields")
+    // v3 writes analysis regions from a `Set`, whose iteration order depends on
+    // insertion history, so compare the values rather than the bytes.
+    let source = file.project
+    check(source.crop == project.crop
+          && source.orientation == project.orientation
+          && source.healSpots == project.healSpots
+          && source.stickers == project.stickers
+          && source.aiEdits == project.aiEdits
+          && source.analysis == project.analysis
+          && source.selectedFace == project.selectedFace,
+          "every geometry value survives the v4 round trip")
+}
+
+@MainActor
+func testProjectV3ToV4Migration() {
+    print("\n[R4.8] the v3 baseline migrates to v4 without losing a value")
+
+    let fixture = projectV3Fixture()
+    guard let v3File = try? ProjectCodec.read(fixture.data) else {
+        check(false, "the v3 baseline reads")
+        return
+    }
+    check(v3File.context.version == 3 && !v3File.context.isV4,
+          "a v3 file is remembered as v3")
+    check(v3File.context.unknownFields.isEmpty,
+          "the baseline has no unknown fields")
+
+    guard let v4Data = try? ProjectCodec.encodeV4(v3File.project),
+          let v4File = try? ProjectCodec.read(v4Data) else {
+        check(false, "the v3 baseline migrates to v4")
+        return
+    }
+    check(v4File.context.version == 4, "the migrated file is v4")
+    check((try? ProjectCodec.encode(v4File.project)) == fixture.data,
+          "v3 -> v4 -> v3 reproduces the baseline bytes")
+
+    // The v4 projection is still a normal v3 document for the 1.0 reader.
+    guard let v3Projection = try? ProjectCodec.encode(v4File.project),
+          let reopened = try? ProjectCodec.decode(v3Projection) else {
+        check(false, "the v3 projection opens with the v3 reader")
+        return
+    }
+    check(reopened.version == RetouchProject.currentVersion,
+          "the projection is a v3 project", "v\(reopened.version)")
+    check(reopened.crop == v3File.project.crop
+            && reopened.healSpots == v3File.project.healSpots
+            && reopened.aiEdits == v3File.project.aiEdits,
+          "the projection carries the same geometry")
+}
+
+@MainActor
+func testProjectV4FixtureCrossArchitecture() {
+    print("\n[R4.8] the committed v4 file reads and re-encodes byte for byte")
+
+    let fixture = projectV4Fixture()
+    check(!fixture.data.isEmpty, "the v4 fixture is present")
+    guard let file = try? ProjectCodec.read(fixture.data) else {
+        check(false, "the v4 fixture reads")
+        return
+    }
+    check(file.context.version == 4, "the fixture is a v4 file")
+    check(file.context.requiredFeatures == ["portable_geometry"],
+          "the fixture records the feature it needs")
+    check(file.context.unknownFields["futureFlag"] == .string("kept"),
+          "the fixture carries an unknown field")
+
+    guard let rewritten = try? ProjectCodec.encodeV4(
+        file.project,
+        unknownFields: file.context.unknownFields,
+        requiredFeatures: file.context.requiredFeatures) else {
+        check(false, "the fixture re-encodes")
+        return
+    }
+    check(rewritten == fixture.data,
+          "the same bytes come back on every architecture")
+    check((try? ProjectCodec.encode(file.project)) == projectV3Fixture().data,
+          "the fixture projects to the v3 baseline bytes")
+    let projection = projectJSON((try? ProjectCodec.encode(file.project)) ?? Data())
+    check(projection != nil
+            && projection?["requiredFeatures"] == nil
+            && projection?["futureFlag"] == nil,
+          "the projection does not claim v4-only data")
+}
+
+@MainActor
+func testProjectUnknownFieldsSurvive() {
+    print("\n[R4.8] unknown project data survives a save")
+
+    let project = fullV4Project()
+    guard let v4Data = try? ProjectCodec.encodeV4(project),
+          var object = projectJSON(v4Data) else {
+        check(false, "the v4 fixture encodes")
+        return
+    }
+    object["futureFlag"] = .bool(true)
+    object["futureShape"] = .object(["width": .double(1.5), "label": .string("frame")])
+    object["futureList"] = .array([.int(1), .string("two")])
+    guard let withUnknown = projectJSONData(object),
+          let file = try? ProjectCodec.read(withUnknown) else {
+        check(false, "a v4 file with unknown keys reads")
+        return
+    }
+    check(file.context.unknownFields["futureFlag"] == .bool(true)
+            && file.context.unknownFields["futureList"] == .array([.int(1), .string("two")]),
+          "unknown top-level keys are captured")
+    guard let saved = try? ProjectCodec.encode(file.project, context: file.context),
+          let savedObject = projectJSON(saved) else {
+        check(false, "the v4 document saves")
+        return
+    }
+    check(savedObject["futureFlag"] == .bool(true)
+            && savedObject["futureList"] == .array([.int(1), .string("two")])
+            && savedObject["futureShape"] == .object(["width": .double(1.5),
+                                                      "label": .string("frame")]),
+          "unknown keys survive a v4 save")
+    check(savedObject["version"] == .int(4), "the save stays v4")
+
+    // A v3 file with an unknown key keeps it too, without turning into v4.
+    let fixture = projectV3Fixture()
+    guard var legacy = projectJSON(fixture.data) else {
+        check(false, "the v3 baseline is JSON")
+        return
+    }
+    legacy["legacyExtra"] = .int(7)
+    guard let legacyData = projectJSONData(legacy),
+          let legacyFile = try? ProjectCodec.read(legacyData),
+          let legacySaved = try? ProjectCodec.encode(legacyFile.project,
+                                                     context: legacyFile.context),
+          let legacyObject = projectJSON(legacySaved) else {
+        check(false, "a v3 file with an unknown key saves")
+        return
+    }
+    check(legacyFile.context.version == 3, "an unknown key does not upgrade the file")
+    check(legacyObject["legacyExtra"] == .int(7),
+          "a v3 unknown key survives")
+    check(legacyObject["version"] == .int(3), "the v3 save stays v3")
+}
+
+@MainActor
+func testProjectV4Capabilities() {
+    print("\n[R4.8] v4 refuses a required capability this build does not have")
+
+    let project = fullV4Project()
+    let supported = (try? ProjectCodec.encodeV4(
+        project, requiredFeatures: ["portable_geometry"]))
+        .flatMap { try? ProjectCodec.read($0) }
+    check(supported?.context.version == 4,
+          "the portable geometry requirement is supported")
+
+    guard let unsupported = try? ProjectCodec.encodeV4(
+            project, requiredFeatures: ["future_geometry"]) else {
+        check(false, "the unsupported fixture encodes")
+        return
+    }
+    do {
+        _ = try ProjectCodec.read(unsupported)
+        check(false, "an unsupported requirement is refused")
+    } catch ProjectCodecError.unsupportedFeatures(let features) {
+        check(features == ["future_geometry"], "the refusal names the capability",
+              "\(features)")
+    } catch {
+        check(false, "the refusal is a capability error", "\(error)")
+    }
+}
+
+/// Unknown top-level keys are preserved whole, but an unknown key nested inside
+/// a known object is not: that object is decoded into its typed model and
+/// re-encoded. This test pins the limitation so a later change to it has to be
+/// deliberate.
+@MainActor
+func testProjectV4NestedUnknownFieldsAreDropped() {
+    print("\n[R4.8] nested unknown fields stay a documented limitation")
+
+    let fixture = projectV4Fixture()
+    guard var object = projectJSON(fixture.data),
+          case .object(var adjustments)? = object["adjustments"] else {
+        check(false, "the v4 fixture is JSON with an adjustments object")
+        return
+    }
+    adjustments["futureNested"] = .string("dropped")
+    object["adjustments"] = .object(adjustments)
+    guard let nested = projectJSONData(object),
+          let file = try? ProjectCodec.read(nested) else {
+        check(false, "a v4 file with a nested unknown key reads")
+        return
+    }
+    check(file.context.unknownFields["futureFlag"] == .string("kept"),
+          "the top-level unknown key is still captured")
+    check(file.context.unknownFields["adjustments"] == nil,
+          "a known container is not treated as an unknown key")
+    guard let saved = try? ProjectCodec.encodeV4(
+            file.project,
+            unknownFields: file.context.unknownFields,
+            requiredFeatures: file.context.requiredFeatures),
+          let savedObject = projectJSON(saved),
+          case .object(let savedAdjustments)? = savedObject["adjustments"] else {
+        check(false, "the nested fixture saves")
+        return
+    }
+    check(savedObject["futureFlag"] == .string("kept"),
+          "the top-level unknown key survives the save")
+    check(savedAdjustments["futureNested"] == nil,
+          "the nested unknown key is dropped, as documented")
+}
+
+@MainActor
+func testProjectV4EditorRoundTrip() async {
+    print("\n[R4.8] the editor keeps a v4 project v4 and a v3 project v3")
+
+    let folder = workDir.appendingPathComponent("v4-roundtrip-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let photo = folder.appendingPathComponent("portrait.png")
+    guard let image = makeImage(width: 240, height: 300), writePNG(image, to: photo) else {
+        check(false, "v4 round-trip fixture")
+        return
+    }
+
+    var project = fullV4Project()
+    project.imagePath = photo.path
+    project.imageBookmark = nil
+    guard var object = projectJSON((try? ProjectCodec.encodeV4(project)) ?? Data()) else {
+        check(false, "v4 round-trip file")
+        return
+    }
+    object["futureFlag"] = .string("kept")
+    let v4URL = folder.appendingPathComponent("future.retouch")
+    guard let v4Data = projectJSONData(object),
+          (try? v4Data.write(to: v4URL, options: .atomic)) != nil else {
+        check(false, "v4 round-trip file written")
+        return
+    }
+
+    let model = EditorModel()
+    model.openProject(at: v4URL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "the v4 project opens")
+    check(model.projectURL == v4URL, "the v4 project is the document")
+    model.adjustments.exposure = 33
+    model.saveProject()
+    guard let savedV4 = projectJSON((try? Data(contentsOf: v4URL)) ?? Data()) else {
+        check(false, "the saved v4 file is JSON")
+        return
+    }
+    check(savedV4["version"] == .int(4), "editing and saving keeps v4")
+    check(savedV4["futureFlag"] == .string("kept"), "the unknown field survives the save")
+    guard case .object(let crop)? = savedV4["crop"] else {
+        check(false, "the saved crop stays portable")
+        return
+    }
+    check(crop["width"] != nil, "the saved geometry stays keyed")
+    guard let stored = try? ProjectCodec.read(Data(contentsOf: v4URL)) else {
+        check(false, "the saved v4 file reads")
+        return
+    }
+    check(stored.project.adjustments.exposure == 33,
+          "the edit is in the v4 file", "\(stored.project.adjustments.exposure)")
+
+    // The same flow on v3 never upgrades the file behind the owner's back.
+    let v3URL = folder.appendingPathComponent("today.retouch")
+    var v3Project = project
+    v3Project.imageBookmark = nil
+    guard let v3Data = try? ProjectCodec.encode(v3Project) else {
+        check(false, "the v3 fixture encodes")
+        return
+    }
+    check((try? v3Data.write(to: v3URL, options: .atomic)) != nil, "the v3 file is written")
+    let second = EditorModel()
+    second.openProject(at: v3URL)
+    check(await waitUntil { second.hasImage && !second.isBusy }, "the v3 project opens")
+    second.adjustments.contrast = 17
+    second.saveProject()
+    guard let savedV3 = projectJSON((try? Data(contentsOf: v3URL)) ?? Data()) else {
+        check(false, "the saved v3 file is JSON")
+        return
+    }
+    check(savedV3["version"] == .int(3), "a v3 project stays v3 after a save")
+    guard case .array(let cropArray)? = savedV3["crop"],
+          cropArray.count == 2,
+          case .array(let topLeft) = cropArray[0],
+          case .array(let bottomRight) = cropArray[1] else {
+        check(false, "the v3 crop keeps its array encoding")
+        return
+    }
+    check(topLeft == [.double(0.1), .double(0.05)]
+          && bottomRight == [.double(0.7), .double(0.8)],
+          "the v3 geometry is unchanged")
+}
+
+// MARK: - R4.4 Document restoration
+
+@MainActor
+func testDocumentRestorationFromProject() {
+    print("\n[R4.4] a project restores the document fields")
+
+    let projectURL = URL(fileURLWithPath: "/codec/restore.retouch")
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    analysis.regions = [.lips]
+    var project = RetouchProject(
+        imagePath: "/codec/photo.jpg",
+        adjustments: .zero,
+        exportFormat: "tiff",
+        exportQuality: 0.75,
+        exportLongEdge: 2048,
+        autoRetouchStrength: 55,
+        autoColorStrength: 45,
+        crop: CGRect(x: 0.1, y: 0.2, width: 0.6, height: 0.5),
+        healSpots: [HealSpot(center: CGPoint(x: 0.3, y: 0.4), radius: 0.01)],
+        stickers: [Sticker(kind: .heart, center: CGPoint(x: 0.5, y: 0.5), size: 0.1)],
+        aiEdits: [AIEdit(preset: "cleanup", prompt: "wall", seed: 1,
+                         patchFile: "patch.png", alphaFile: "alpha.png",
+                         box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                         imagePixels: CGSize(width: 32, height: 32))],
+        analysis: analysis,
+        selectedFace: 2,
+        orientation: DocumentOrientation(quarterTurns: 2, angle: 1))
+    project.adjustments.exposure = 9
+
+    let restoration = DocumentRestoration.project(project, url: projectURL)
+    check(restoration.isProject && restoration.projectURL == projectURL,
+          "the restoration knows it came from a project")
+    check(restoration.exportFormat == .tiff && restoration.exportQuality == 0.75
+            && restoration.exportLongEdge == 2048,
+          "the export settings are restored")
+    check(restoration.autoRetouchStrength == 55 && restoration.autoColorStrength == 45,
+          "both auto strengths are restored")
+    check(restoration.state.adjustments == project.adjustments, "adjustments are restored")
+    check(restoration.state.healSpots == project.healSpots, "healing stamps are restored")
+    check(restoration.state.stickers == project.stickers, "stickers are restored")
+    check(restoration.state.aiEdits == project.aiEdits, "AI edits are restored")
+    check(restoration.state.analysis == project.analysis, "analysis is restored")
+    check(restoration.state.crop == project.crop, "the crop is restored")
+    check(restoration.state.orientation == project.orientation, "the orientation is restored")
+    check(restoration.state.selectedFaceIndex == 2, "the chosen face is restored")
+}
+
+@MainActor
+func testDocumentRestorationDefaultsAndPhoto() {
+    print("\n[R4.4] legacy projects and plain photos restore the right defaults")
+
+    let legacy = RetouchProject(imagePath: "/codec/legacy.jpg",
+                                adjustments: .zero,
+                                exportFormat: "not-a-format",
+                                exportQuality: 0.5,
+                                autoRetouchStrength: 70)
+    let restored = DocumentRestoration.project(legacy, url: nil)
+    check(restored.exportFormat == .jpeg, "an unknown export format falls back to jpeg")
+    check(restored.exportLongEdge == 0 && restored.autoColorStrength == 100,
+          "missing export preferences gain the v3 defaults")
+    check(restored.state == DocumentState(),
+          "a project without document fields restores an empty document")
+    check(restored.isProject && restored.projectURL == nil,
+          "a project without a URL is still a project")
+
+    var oriented = legacy
+    oriented.autoColorStrength = 30
+    let withColor = DocumentRestoration.project(oriented, url: nil)
+    check(withColor.autoColorStrength == 30 && withColor.exportLongEdge == 0,
+          "a recorded auto color strength is kept")
+
+    let photo = DocumentRestoration.photo()
+    check(photo.exportFormat == nil && photo.exportQuality == nil && photo.exportLongEdge == nil
+            && photo.autoRetouchStrength == nil && photo.autoColorStrength == nil,
+          "a plain photo keeps the owner's export settings")
+    check(photo.state == DocumentState() && !photo.isProject && photo.projectURL == nil,
+          "a plain photo starts from an empty document")
+}
+
+// MARK: - R4.5 Export planner
+
+private func makeExportPlanner() -> ExportPlanner {
+    ExportPlanner(adjustments: .zero, healSpots: [], stickers: [], aiEdits: [],
+                  analysis: AnalysisSettings(), crop: nil, orientation: .identity,
+                  selectedFaceIndex: nil, imageName: "portrait.jpg", faceCount: 2,
+                  workingPixelSize: CGSize(width: 800, height: 600),
+                  format: .jpeg, quality: 0.9, longEdge: 0, aiUpscale: false,
+                  stripsMetadata: true, watermark: .disabled)
+}
+
+@MainActor
+func testExportPlannerNaming() {
+    print("\n[R4.5] the planner names the file and picks the format")
+
+    var planner = makeExportPlanner()
+    check(planner.suggestedFileName() == "portrait-retouched.jpg",
+          "a plain export keeps the format extension", planner.suggestedFileName())
+    check(planner.effectiveFormat == .jpeg, "no analysis keeps the chosen format")
+
+    planner.imageName = ""
+    check(planner.suggestedFileName() == "retouched.jpg", "an unnamed photo gets a fallback name")
+    planner.imageName = "portrait"
+
+    var onPhoto = AnalysisSettings()
+    onPhoto.isEnabled = true
+    onPhoto.exportMode = .onPhoto
+    planner.analysis = onPhoto
+    check(planner.suggestedFileName() == "portrait-retouched-analysis.jpg",
+          "analysis on the photo adds its suffix", planner.suggestedFileName())
+    check(planner.effectiveFormat == .jpeg, "drawing on the photo keeps the chosen format")
+
+    planner.analysis.exportMode = .poster
+    check(planner.suggestedFileName() == "portrait-retouched-analysis-poster.jpg",
+          "poster analysis names its own suffix", planner.suggestedFileName())
+
+    planner.analysis.exportMode = .overlayOnly
+    check(planner.suggestedFileName() == "portrait-retouched-analysis-lines.png",
+          "overlay-only names a png", planner.suggestedFileName())
+    check(planner.effectiveFormat == .png, "overlay-only always exports png")
+
+    planner.faceCount = 0
+    check(planner.suggestedFileName() == "portrait-retouched.jpg",
+          "without a face the name must not promise analysis")
+    check(planner.effectiveFormat == .jpeg, "without a face the chosen format stays")
+}
+
+@MainActor
+func testExportPlannerPixelSize() {
+    print("\n[R4.5] the planner decides the exported pixel size")
+
+    var planner = makeExportPlanner()
+    check(planner.pixelSize == CGSize(width: 800, height: 600),
+          "zero long edge keeps the working size")
+    check(!planner.upscaleAvailable && !planner.usesUpscale,
+          "no requested edge means no upscale")
+
+    planner.longEdge = 400
+    check(planner.pixelSize == CGSize(width: 400, height: 300),
+          "a smaller long edge downscales")
+
+    planner.longEdge = 1600
+    check(planner.pixelSize == CGSize(width: 800, height: 600),
+          "a larger edge does nothing while upscale is off")
+    check(planner.upscaleAvailable && !planner.usesUpscale,
+          "the upscaler is available but not requested")
+
+    planner.aiUpscale = true
+    check(planner.usesUpscale, "requested upscale runs when available")
+    check(planner.pixelSize == CGSize(width: 1600, height: 1200),
+          "the requested edge caps the upscale")
+    check(planner.upscaleEstimate == 50, "the estimate follows the 4x output",
+          "\(planner.upscaleEstimate)")
+
+    planner.longEdge = 5000
+    check(planner.pixelSize == CGSize(width: 3200, height: 2400),
+          "beyond 4x the photo the upscaler stops at its factor")
+
+    planner.workingPixelSize = CGSize(width: 4000, height: 3000)
+    planner.longEdge = 5000
+    check(!planner.upscaleAvailable, "too many output pixels disables the upscaler")
+    check(planner.pixelSize == CGSize(width: 4000, height: 3000),
+          "an unavailable upscale leaves the photo at its size")
+}
+
+@MainActor
+func testExportPlannerSnapshot() {
+    print("\n[R4.5] the planner builds the export snapshot")
+
+    var planner = makeExportPlanner()
+    planner.adjustments.exposure = 8
+    planner.healSpots = [HealSpot(center: CGPoint(x: 0.2, y: 0.3), radius: 0.01)]
+    planner.stickers = [Sticker(kind: .star, center: CGPoint(x: 0.4, y: 0.5), size: 0.1)]
+    planner.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 2,
+                              patchFile: "patch.png", alphaFile: "alpha.png",
+                              box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                              imagePixels: CGSize(width: 16, height: 16))]
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    planner.analysis = analysis
+    planner.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    planner.orientation = DocumentOrientation(quarterTurns: 1)
+    planner.selectedFaceIndex = 1
+    planner.format = .tiff
+    planner.quality = 0.8
+    planner.longEdge = 2048
+    planner.stripsMetadata = false
+    planner.aiUpscale = true
+    var watermark = WatermarkSettings()
+    watermark.enabled = true
+    watermark.text = "Studio"
+    planner.watermark = watermark
+
+    let snapshot = planner.snapshot()
+    check(snapshot.adjustments == planner.adjustments
+            && snapshot.healSpots == planner.healSpots
+            && snapshot.stickers == planner.stickers
+            && snapshot.aiEdits == planner.aiEdits
+            && snapshot.analysis == planner.analysis,
+          "document content is copied")
+    check(snapshot.crop == planner.crop && snapshot.orientation == planner.orientation
+            && snapshot.selectedFaceIndex == 1,
+          "frame and face choice are copied")
+    check(snapshot.format == .tiff && snapshot.quality == 0.8 && snapshot.longEdge == 2048,
+          "format, quality and long edge are copied")
+    check(snapshot.stripsPrivacyMetadata == false, "the metadata policy is copied")
+    check(snapshot.includeStamps && snapshot.includeAnalysis,
+          "single-photo export includes stamps and analysis by default")
+    check(snapshot.aiUpscale, "the snapshot records the upscale")
+    check(snapshot.watermark == watermark, "the watermark is copied")
+
+    let batch = planner.snapshot(includeStamps: false, includeAnalysis: false)
+    check(!batch.includeStamps && !batch.includeAnalysis,
+          "batch can exclude stamps and analysis")
+
+    var noEdge = makeExportPlanner()
+    noEdge.format = .png
+    noEdge.longEdge = 0
+    check(noEdge.snapshot().longEdge == nil, "zero long edge exports at the photo size")
+
+    var overlay = makeExportPlanner()
+    var lines = AnalysisSettings()
+    lines.isEnabled = true
+    lines.exportMode = .overlayOnly
+    overlay.analysis = lines
+    let linesSnapshot = overlay.snapshot()
+    check(linesSnapshot.format == .png && !linesSnapshot.aiUpscale,
+          "an overlay-only snapshot is png and never upscaled when not requested")
+}
+
+// MARK: - R4.6 Batch planner
+
+@MainActor
+func testBatchPlannerFilePolicy() {
+    print("\n[R4.6] the batch planner shares only what fits the file")
+
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    analysis.setEndpoint(CGPoint(x: 0.4, y: 0.4), for: .lips)
+    analysis.setAnchor(CGPoint(x: 0.5, y: 0.5), for: .lips)
+    var base = ExportSnapshot()
+    base.adjustments.exposure = 5
+    base.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    base.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 3,
+                           patchFile: "patch.png", alphaFile: "alpha.png",
+                           box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                           imagePixels: CGSize(width: 16, height: 16))]
+    base.analysis = analysis
+    base.selectedFaceIndex = 1
+    base.format = .png
+
+    let documentURL = URL(fileURLWithPath: "/doc/photo.jpg").resolvingSymlinksInPath()
+    let planner = BatchPlanner(base: base, documentURL: documentURL, documentAspect: 1.5)
+
+    let own = planner.plan(for: documentURL, fileAspect: 2.0)
+    check(own.snapshot == base && !own.skippedCrop,
+          "the open document keeps its exact snapshot")
+
+    let sameShape = planner.plan(for: URL(fileURLWithPath: "/doc/other.jpg"), fileAspect: 1.5)
+    check(sameShape.snapshot.crop == base.crop && !sameShape.skippedCrop,
+          "a file with the same shape keeps the crop")
+    check(sameShape.snapshot.adjustments == base.adjustments
+            && sameShape.snapshot.format == .png,
+          "the shared look and format travel")
+    check(sameShape.snapshot.aiEdits.isEmpty, "AI patches never travel to another photo")
+    check(sameShape.snapshot.orientation == .identity, "another photo opens upright")
+    check(sameShape.snapshot.selectedFaceIndex == nil, "the face choice stays with its photo")
+    check(sameShape.snapshot.analysis.endpoints.isEmpty
+            && sameShape.snapshot.analysis.anchors.isEmpty,
+          "dragged callout ends stay with their photo")
+
+    let differentShape = planner.plan(for: URL(fileURLWithPath: "/doc/wide.jpg"), fileAspect: 2.0)
+    check(differentShape.snapshot.crop == nil && differentShape.skippedCrop,
+          "a different shape drops the crop and reports it")
+
+    var turned = base
+    turned.orientation = DocumentOrientation(quarterTurns: 1)
+    let turnedPlanner = BatchPlanner(base: turned, documentURL: documentURL, documentAspect: 1.5)
+    let turnedFile = turnedPlanner.plan(for: URL(fileURLWithPath: "/doc/other.jpg"),
+                                        fileAspect: 1.5)
+    check(turnedFile.snapshot.crop == nil && turnedFile.skippedCrop,
+          "a turned document's crop does not travel")
+}
+
+@MainActor
+func testBatchPlannerUpscaleAndNaming() {
+    print("\n[R4.6] the batch planner fits upscaling and names files uniquely")
+
+    var base = ExportSnapshot()
+    base.aiUpscale = true
+    base.longEdge = 2000
+    let planner = BatchPlanner(base: base, documentURL: nil, documentAspect: 1.5)
+
+    check(planner.fitUpscale(base, to: CGSize(width: 800, height: 600)).aiUpscale,
+          "a smaller file keeps the requested upscale")
+    check(!planner.fitUpscale(base, to: CGSize(width: 2000, height: 1500)).aiUpscale,
+          "a file that already reaches the edge does not upscale")
+    check(!planner.fitUpscale(base, to: CGSize(width: 4000, height: 3000)).aiUpscale,
+          "a file past the 4x ceiling is written at its own size")
+
+    var off = base
+    off.aiUpscale = false
+    check(!planner.fitUpscale(off, to: CGSize(width: 800, height: 600)).aiUpscale,
+          "an unrequested upscale stays off")
+
+    let folder = URL(fileURLWithPath: "/out")
+    let file = URL(fileURLWithPath: "/in/photo.jpg")
+    check(BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .png) {
+        _ in false
+    }.lastPathComponent == "photo-retouched.png", "the first name is plain")
+
+    var taken: Set<String> = ["/out/photo-retouched.png"]
+    let second = BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .png) {
+        taken.contains($0.path)
+    }
+    check(second.lastPathComponent == "photo-retouched-2.png",
+          "a taken name gains a counter", second.lastPathComponent)
+
+    taken.insert("/out/photo-retouched-2.png")
+    let third = BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .png) {
+        taken.contains($0.path)
+    }
+    check(third.lastPathComponent == "photo-retouched-3.png",
+          "the counter keeps moving", third.lastPathComponent)
+
+    check(BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .tiff) {
+        _ in false
+    }.lastPathComponent == "photo-retouched.tif", "the format extension is used")
 }
 
 // MARK: - P1-5 / M-13 / M-4
@@ -2030,6 +3081,103 @@ func testRecoveryChoiceMapping() {
           "the explicit Discard response is recognized")
 }
 
+@MainActor
+func testRecoveryPolicyDecisions() {
+    print("\n[R4.7] recovery decisions keep their rules without a store")
+
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    check(RecoveryPolicy.olderFirst(.init(savedAt: base, name: "b"),
+                                    .init(savedAt: base.addingTimeInterval(1), name: "a")),
+          "an earlier date is offered first")
+    check(RecoveryPolicy.olderFirst(.init(savedAt: base, name: "a"),
+                                    .init(savedAt: base, name: "b")),
+          "the name breaks a same-millisecond tie")
+    check(!RecoveryPolicy.olderFirst(.init(savedAt: base, name: "b"),
+                                     .init(savedAt: base, name: "a")),
+          "the tie-break is not reversed")
+    check(!RecoveryPolicy.olderFirst(.init(savedAt: base, name: "a"),
+                                     .init(savedAt: base, name: "a")),
+          "a candidate never sorts before itself")
+
+    check(RecoveryPolicy.isCandidateFileName("0000000000000-abc.retouch"),
+          "a candidate copy is recognized")
+    check(!RecoveryPolicy.isCandidateFileName(".hidden.retouch"),
+          "a dotfile left by the file system is not a candidate")
+    check(!RecoveryPolicy.isCandidateFileName("snapshot.json"),
+          "an unrelated file is not a candidate")
+    check(!RecoveryPolicy.isCandidateFileName(".retouch"),
+          "a leading-dot name has no candidate extension")
+
+    let photo = URL(fileURLWithPath: "/tmp/policy-photo.png")
+    let project = RetouchProject(imagePath: photo.path, adjustments: .zero,
+                                 exportFormat: "png", exportQuality: 0.8,
+                                 autoRetouchStrength: 60)
+    let identity = RecoverySourceIdentity(bytes: 10, modified: base)
+    let snapshot = RecoverySnapshot(project: project, savedAt: base,
+                                    source: identity, version: 1)
+    let encoder = JSONEncoder()
+    if let data = try? encoder.encode(snapshot),
+       let decoded = RecoveryPolicy.snapshot(from: data, modified: nil) {
+        check(decoded.version == 1 && decoded.savedAt == base && decoded.source == identity,
+              "a version 1 snapshot keeps its date and identity")
+    } else {
+        check(false, "a version 1 snapshot decodes")
+    }
+    if let data = try? encoder.encode(project),
+       let legacy = RecoveryPolicy.snapshot(from: data, modified: base) {
+        check(legacy.version == 0 && legacy.source == nil && legacy.savedAt == base,
+              "a bare project decodes as legacy version 0")
+    } else {
+        check(false, "a bare project decodes as a legacy snapshot")
+    }
+    check(RecoveryPolicy.snapshot(from: Data("not a snapshot".utf8), modified: nil) == nil,
+          "unreadable bytes are not a snapshot")
+
+    check(RecoveryPolicy.sourceState(url: nil, recorded: identity, version: 1,
+                                     current: nil) == .missing,
+          "no photo at all is missing")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: nil, version: 0,
+                                     current: nil) == .available(photo),
+          "a legacy copy is offered without an identity")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: nil, version: 1,
+                                     current: nil) == .changed(photo),
+          "a new copy with no identity is not proven to match")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: identity, version: 1,
+                                     current: identity) == .available(photo),
+          "the same size and date is the same photo")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: identity, version: 1,
+                                     current: .init(bytes: 11, modified: base)) == .changed(photo),
+          "a different identity is a changed photo")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: identity, version: 1,
+                                     current: nil) == .available(photo),
+          "an unreadable identity does not claim the photo changed")
+
+    check(RecoveryPolicy.monotonic(base, after: nil) == base,
+          "the first legacy copy keeps its date")
+    check(RecoveryPolicy.monotonic(base, after: base) == base.addingTimeInterval(0.001),
+          "an equal date is pushed past the previous copy")
+    let later = base.addingTimeInterval(2)
+    check(RecoveryPolicy.monotonic(later, after: base) == later,
+          "a later date is not changed")
+
+    let id = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+    check(RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "retouch", id: id)
+            == "snap-11111111-1111-1111-1111-111111111111.retouch",
+          "a quarantined copy keeps its name and extension")
+    check(RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "", id: id)
+            == "snap-11111111-1111-1111-1111-111111111111",
+          "a quarantined file without an extension keeps its base")
+    check(RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID())
+            != RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID()),
+          "two damaged copies cannot collide")
+
+    var gate = RecoveryPolicy.AutosaveEpoch()
+    check(gate.accepts(0), "a fresh epoch accepts its generation")
+    gate.invalidate()
+    check(!gate.accepts(0) && gate.accepts(1),
+          "invalidation rejects a task that captured the old generation")
+}
+
 func recoveryFixture(_ name: String, width: Int, height: Int) -> URL? {
     let url = workDir.appendingPathComponent(name)
     guard let image = makeImage(width: width, height: height),
@@ -2059,10 +3207,16 @@ func stageRecoveryCandidate(for url: URL, exposure: Double = 0, contrast: Double
                             crop: CGRect? = nil,
                             orientation: DocumentOrientation? = nil,
                             healSpots: [HealSpot]? = nil,
-                            savedAt: Date) -> URL? {
+                            savedAt: Date,
+                            fileContext: ProjectWriteContext? = nil) -> URL? {
     let project = recoveryProject(for: url, exposure: exposure, contrast: contrast,
                                   crop: crop, orientation: orientation, healSpots: healSpots)
-    return RecoveryStore.saveCandidate(RecoverySnapshot.capture(project, savedAt: savedAt))
+    // `capture` resolves the photo through a fresh URL. Reading `url` directly
+    // would prime its cached resource values, so a test that later rewrites the
+    // photo would read the identity from before the rewrite.
+    return RecoveryStore.saveCandidate(
+        RecoverySnapshot.capture(project, savedAt: savedAt,
+                                 context: fileContext ?? .v3))
 }
 
 @MainActor
@@ -3217,6 +4371,237 @@ func testReplacementInvalidatesOldDocumentAutosave() async {
           "the new document's autosave describes the new document")
     check(RecoveryStore.readWorking()?.project.adjustments.exposure == 0.82,
           "the new document's legitimate autosave still lands")
+}
+
+@MainActor
+func testRecoveryV3RoundTripPreservesDocument() async {
+    print("\n[R4H-1] a v3 recovery copy restores the document and stays v3")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let crop = CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8)
+    let orientation = DocumentOrientation(quarterTurns: 1)
+    let spots = [HealSpot(center: CGPoint(x: 0.3, y: 0.4), radius: 0.02)]
+    guard let source = recoveryFixture("r4h-v3.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(
+              for: source, exposure: 0.27, contrast: 4,
+              crop: crop, orientation: orientation, healSpots: spots,
+              savedAt: Date().addingTimeInterval(-30)) else {
+        check(false, "v3 recovery fixture written")
+        return
+    }
+
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in .restore }
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the v3 candidate loads")
+    check(model.adjustments.exposure == 0.27 && model.adjustments.contrast == 4,
+          "the stored adjustments are on screen")
+    check(model.appliedCrop == crop, "the stored crop is applied",
+          "\(String(describing: model.appliedCrop))")
+    check(model.documentOrientation == orientation, "the stored orientation is applied")
+    check(model.healSpots == spots, "the stored healing stamp is applied")
+
+    check(await waitUntil(10) { RecoveryStore.readWorking() != nil },
+          "the restored document reaches the working slot")
+    guard let working = RecoveryStore.readWorking() else {
+        check(false, "the restored working copy is readable")
+        return
+    }
+    check(working.project.adjustments.exposure == 0.27
+            && working.project.adjustments.contrast == 4,
+          "the working copy carries the restored edits")
+    check(working.project.crop == crop, "the working copy keeps the crop")
+    check(working.project.version == 3, "the working copy is a v3 projection")
+    check(working.fileContext == nil, "a v3 document stores no file context")
+    check(await waitUntil(10) { !FileManager.default.fileExists(atPath: candidate.path) },
+          "the candidate is resolved after the verified write")
+}
+
+@MainActor
+func testRecoveryV4AutosavePreservesMetadata() async {
+    print("\n[R4H-2] autosaving a v4 document keeps its file metadata")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    let folder = workDir.appendingPathComponent("v4-recovery-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let photo = folder.appendingPathComponent("portrait.png")
+    guard let image = makeImage(width: 240, height: 300), writePNG(image, to: photo) else {
+        check(false, "v4 recovery photo written")
+        return
+    }
+
+    var project = fullV4Project()
+    project.imagePath = photo.path
+    project.imageBookmark = nil
+    guard var object = projectJSON(
+            (try? ProjectCodec.encodeV4(project,
+                                        requiredFeatures: ["portable_geometry"])) ?? Data())
+    else {
+        check(false, "the v4 recovery file is JSON")
+        return
+    }
+    object["futureFlag"] = .string("kept")
+    let v4URL = folder.appendingPathComponent("future.retouch")
+    guard let v4Data = projectJSONData(object),
+          (try? v4Data.write(to: v4URL, options: .atomic)) != nil else {
+        check(false, "the v4 recovery file is written")
+        return
+    }
+
+    let model = EditorModel()
+    model.openProject(at: v4URL)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the v4 project opens")
+    model.adjustments.exposure = 33
+    model.flushAutosave()
+
+    guard let working = RecoveryStore.readWorking() else {
+        check(false, "the v4 document autosaves")
+        return
+    }
+    check(working.fileContext?.version == 4, "the autosave remembers v4",
+          "\(String(describing: working.fileContext?.version))")
+    check(working.fileContext?.requiredFeatures == ["portable_geometry"],
+          "the autosave keeps the required feature")
+    check(working.fileContext?.unknownFields["futureFlag"] == .string("kept"),
+          "the autosave keeps the unknown field")
+    check(working.project.version == 3, "the payload stays the v3 projection")
+    check(working.project.crop == project.crop, "the payload keeps the document crop")
+    check(working.project.orientation == project.orientation
+            && working.project.healSpots == project.healSpots,
+          "the payload keeps the portable geometry values")
+
+    // The same flow on a v3 document records no context at all.
+    var v3Project = project
+    v3Project.imageBookmark = nil
+    guard let v3Data = try? ProjectCodec.encode(v3Project) else {
+        check(false, "the v3 control encodes")
+        return
+    }
+    let v3URL = folder.appendingPathComponent("today.retouch")
+    check((try? v3Data.write(to: v3URL, options: .atomic)) != nil,
+          "the v3 control file is written")
+    let v3Model = EditorModel()
+    v3Model.openProject(at: v3URL)
+    check(await waitUntil(60) { v3Model.hasImage && !v3Model.isBusy },
+          "the v3 control opens")
+    v3Model.adjustments.contrast = 17
+    v3Model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.adjustments.contrast == 17,
+          "the v3 control autosaves")
+    check(RecoveryStore.readWorking()?.fileContext == nil,
+          "a v3 document's autosave stores no file context")
+}
+
+@MainActor
+func testRecoveryV4RestorePreservesMetadata() async {
+    print("\n[R4H-3] a restored v4 document saves as v4 again")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let photo = recoveryFixture("r4h-v4-restore.png", width: 320, height: 400) else {
+        check(false, "v4 restore fixture written")
+        return
+    }
+    let project = recoveryProject(for: photo, exposure: 0.42,
+                                  crop: CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8))
+    let context = ProjectWriteContext(version: 4,
+                                      unknownFields: ["futureFlag": .string("kept")],
+                                      requiredFeatures: ["portable_geometry"])
+    let staged = RecoverySnapshot(project: project,
+                                  savedAt: Date().addingTimeInterval(-30),
+                                  source: RecoverySourceIdentity.of(photo),
+                                  fileContext: context)
+    check(RecoveryStore.writeWorking(staged), "the v4 crash copy is staged")
+    RecoveryStore.invalidatePendingAutosaves()
+
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .restore }
+    model.offerRecoveryIfNeeded()
+    check(await waitUntil(60) { model.hasImage && !model.isBusy },
+          "the v4 copy restores")
+    check(prompts == 1, "the restore is chosen once", "\(prompts)")
+    check(model.adjustments.exposure == 0.42, "the stored edit is on screen")
+    check(await waitUntil(10) { RecoveryStore.readWorking() != nil },
+          "the restored document is durable")
+
+    guard let restored = RecoveryStore.readWorking() else {
+        check(false, "the restored working copy is readable")
+        return
+    }
+    check(restored.fileContext?.version == 4, "the restored copy stays v4")
+    check(restored.fileContext?.requiredFeatures == ["portable_geometry"],
+          "the restored copy keeps the required feature")
+    check(restored.fileContext?.unknownFields["futureFlag"] == .string("kept"),
+          "the restored copy keeps the unknown field")
+    check(restored.project.crop == project.crop, "the restored copy keeps the crop")
+
+    model.adjustments.contrast = 9
+    model.flushAutosave()
+    guard let edited = RecoveryStore.readWorking() else {
+        check(false, "the edited v4 document autosaves")
+        return
+    }
+    check(edited.fileContext?.version == 4, "editing does not downgrade the copy")
+    check(edited.fileContext?.unknownFields["futureFlag"] == .string("kept"),
+          "the unknown field survives the next autosave")
+    check(edited.project.adjustments.contrast == 9, "the edit reaches the working copy")
+    check(recoveryCandidates().isEmpty, "the restored candidate is gone")
+}
+
+@MainActor
+func testRecoveryRefusesUnsupportedRequiredFeatures() async {
+    print("\n[R4H-4] a copy needing a newer build is refused and kept")
+
+    await settleRecoveryWrites()
+
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let source = recoveryFixture("r4h-refused.png", width: 320, height: 400),
+          let candidate = stageRecoveryCandidate(
+              for: source, exposure: 0.33,
+              savedAt: Date().addingTimeInterval(-30),
+              fileContext: ProjectWriteContext(version: 4, unknownFields: [:],
+                                               requiredFeatures: ["future_geometry"])),
+          let before = recoveryBytes(candidate) else {
+        check(false, "refused-candidate fixture written")
+        return
+    }
+
+    var prompts = 0
+    let model = EditorModel()
+    model.recoveryChoiceHandler = { _, _ in prompts += 1; return .restore }
+    model.offerRecoveryIfNeeded()
+    check(prompts == 0, "the unsupported copy never prompts")
+    check(!model.hasImage, "nothing is restored")
+    check(model.statusToken == .recoveryNeedsNewerBuild(["future_geometry"]),
+          "the refusal names the missing capability", "\(model.statusToken)")
+    check(FileManager.default.fileExists(atPath: candidate.path),
+          "the refused copy stays on disk")
+    check(recoveryBytes(candidate) == before, "the refused copy is byte-identical")
+    check(RecoveryStore.readWorking() == nil, "no working copy was fabricated")
 }
 
 @MainActor
@@ -4730,6 +6115,28 @@ func runAll() async {
     await testBatchKeepsCropAfterQuarterTurn()
     await testProjectRelink()
     await testProjectVersionGuard()
+    testProjectV3BaselineByteIdentity()
+    testProjectCodecFieldMapping()
+    testProjectCodecNormalization()
+    testProjectCodecLegacyDecode()
+    testProjectCodecVersionGuard()
+    testProjectCodecReproducesBaseline()
+    testProjectSourceResolverOrder()
+    testProjectCodecRelinkRewrite()
+    testProjectV4PortableGeometry()
+    testProjectV3ToV4Migration()
+    testProjectV4FixtureCrossArchitecture()
+    testProjectUnknownFieldsSurvive()
+    testProjectV4Capabilities()
+    testProjectV4NestedUnknownFieldsAreDropped()
+    await testProjectV4EditorRoundTrip()
+    testDocumentRestorationFromProject()
+    testDocumentRestorationDefaultsAndPhoto()
+    testExportPlannerNaming()
+    testExportPlannerPixelSize()
+    testExportPlannerSnapshot()
+    testBatchPlannerFilePolicy()
+    testBatchPlannerUpscaleAndNaming()
     await testOperationCoordination()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()
@@ -4744,6 +6151,7 @@ func runAll() async {
     await testExportUpscalePolicy()
     await testAnalysisExportNeedsFace()
     testRecoveryChoiceMapping()
+    testRecoveryPolicyDecisions()
     await testRestoreLeavesSameImageCandidateIntact()
     await testCancelKeepsEveryCandidateWhileThirdDocumentEdits()
     await testMissingSourceCancelKeepsCandidate()
@@ -4764,6 +6172,10 @@ func runAll() async {
     await testQueuedExternalOpensKeepOneCandidate()
     await testDiscardInvalidatesInFlightAutosave()
     await testReplacementInvalidatesOldDocumentAutosave()
+    await testRecoveryV3RoundTripPreservesDocument()
+    await testRecoveryV4AutosavePreservesMetadata()
+    await testRecoveryV4RestorePreservesMetadata()
+    await testRecoveryRefusesUnsupportedRequiredFeatures()
     await testFailedLoadPreservesDocument()
     await testExportProtectsSource()
     await testBatchDoesNotOverwriteSource()

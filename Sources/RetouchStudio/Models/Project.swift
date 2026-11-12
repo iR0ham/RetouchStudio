@@ -65,6 +65,15 @@ struct RetouchProject: Codable {
              selectedFace, orientation
     }
 
+    /// Every top-level key this schema owns. Anything else in a file is an
+    /// unknown field and is carried through a save instead of discarded.
+    static let knownJSONKeys: Set<String> = [
+        "version", "imagePath", "imageBookmark", "adjustments", "exportFormat",
+        "exportQuality", "exportLongEdge", "autoRetouchStrength",
+        "autoColorStrength", "crop", "healSpots", "stickers", "aiEdits",
+        "analysis", "selectedFace", "orientation"
+    ]
+
     init(imagePath: String, imageBookmark: Data? = nil,
          adjustments: Adjustments, exportFormat: String,
          exportQuality: Double, exportLongEdge: Int? = nil,
