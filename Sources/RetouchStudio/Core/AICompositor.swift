@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreImage
 import Foundation
 import ImageIO
+import StudioCore
 
 /// One resolved AI edit, ready to composite: the pixels, the alpha that says
 /// where they may be used, and the rectangle they occupy in working
@@ -51,7 +52,7 @@ enum AICompositor {
             guard AIEditStore.isAvailable(edit),
                   let patch = image(AIEditStore.patchURL(edit)),
                   let alpha = image(AIEditStore.alphaURL(edit)) else { return nil }
-            let box = workingBox(edit.box, crop: crop)
+            let box = workingBox(edit.box.cgRect, crop: crop)
             guard box.width > 0, box.height > 0 else { return nil }
             return AILayer(box: box, patch: patch, alpha: alpha,
                            orientation: edit.patchOrientation ?? .identity)

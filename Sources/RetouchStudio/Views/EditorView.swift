@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import StudioCore
 
 struct EditorView: View {
     @ObservedObject var model: EditorModel

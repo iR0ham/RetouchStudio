@@ -569,6 +569,126 @@ check(coreSources.fileExists(at: photoURL), "a host answers path existence")
 check(coreBookmarks.resolveBookmark(coreBookmarks.bookmark(for: photoURL)!) == photoURL,
       "a host round-trips its own bookmark")
 
+print("Document value: portable stamps, stickers, edits and analysis")
+
+let stamp = HealSpot(center: StudioPoint(x: 0.42, y: 0.37), radius: 0.018)
+check(stamp.radius == 0.018 && stamp.center.x == 0.42,
+      "a healing stamp keeps its normalized value")
+
+let sticker = Sticker(kind: .heart, center: StudioPoint(x: 0.72, y: 0.28), size: 0.12)
+check(sticker.kind == .heart && sticker.size == 0.12 && sticker.opacity == 1,
+      "a sticker carries its shape, size and default opacity")
+check(sticker.rotation == 0 && sticker.color == Sticker.defaultColor,
+      "an unrotated sticker uses the default colour")
+check(Sticker.defaultSize == 0.14, "the default sticker size is 14% of the short side")
+
+let edit = AIEdit(preset: "removeObject", prompt: "remove the sign", seed: 7,
+                  patchFile: "patch.png", alphaFile: "alpha.png",
+                  box: StudioRect(x: 0.2, y: 0.25, width: 0.1, height: 0.03),
+                  imagePixels: StudioSize(width: 1024, height: 768),
+                  seconds: 4.25, outsidePixelsIdentical: true)
+check(edit.box.width == 0.1 && edit.imagePixels.width == 1024,
+      "an AI edit keeps its authorized box and job size")
+check(edit.patchOrientation == nil && edit.outsidePixelsIdentical,
+      "an edit starts unrotated and trusts the worker's outside report")
+
+var analysis = AnalysisSettings()
+check(!analysis.isEnabled && analysis.showsFaceOutline && analysis.glow,
+      "analysis starts off with the outline on")
+check(analysis.regions == [.forehead, .eyeArea, .texture, .pigmentation, .jawline],
+      "the default analysis chooses five regions")
+check(analysis.primaryCallouts == [.forehead, .eyeArea, .texture, .pigmentation, .jawline],
+      "callouts follow the catalogue order, not set order")
+analysis.setEndpoint(StudioPoint(x: 0.5, y: 0.2), for: .forehead)
+analysis.setAnchor(StudioPoint(x: 0.48, y: 0.26), for: .forehead)
+check(analysis.endpoint(for: .forehead) == StudioPoint(x: 0.5, y: 0.2)
+      && analysis.anchor(for: .forehead) == StudioPoint(x: 0.48, y: 0.26),
+      "dragged pins are stored per region")
+analysis.resetEndpoints()
+analysis.resetAnchors()
+check(analysis.endpoints.isEmpty && analysis.anchors.isEmpty,
+      "resetting pins clears both kinds")
+check(AnalysisRegion.forehead.defaultsToRight && !AnalysisRegion.jawline.defaultsToRight,
+      "leader sides keep their default directions")
+check(AnalysisTint.ink.isDark && !AnalysisTint.chalk.isDark,
+      "only the ink tint is marked dark")
+
+let emptySettings = try! JSONDecoder().decode(AnalysisSettings.self,
+                                             from: Data("{}".utf8))
+check(emptySettings == AnalysisSettings(),
+      "a project written before the analysis tool opens with the defaults")
+
+print("Document value: orientation is a portable value")
+
+let turned = DocumentOrientation(quarterTurns: 1, flipped: false, angle: 3.5)
+check(turned.outputSize(base: StudioSize(width: 400, height: 300))
+      == StudioSize(width: 300, height: 400),
+      "a quarter turn swaps the frame size")
+check(DocumentOrientation(quarterTurns: 2).outputSize(base: StudioSize(width: 400, height: 300))
+      == StudioSize(width: 400, height: 300),
+      "a half turn keeps the frame size")
+check(turned.rotationDegrees == 93.5, "rotation totals the quarter turns and the angle")
+check(DocumentOrientation.compose(DocumentOrientation(quarterTurns: 1), over: turned)
+      == DocumentOrientation(quarterTurns: 2, flipped: false, angle: 3.5),
+      "composing adds turns in the new frame and keeps the angle")
+check(DocumentOrientation.compose(DocumentOrientation(flipped: true), over: turned)
+      == DocumentOrientation(quarterTurns: turned.quarterTurns,
+                             flipped: true, angle: turned.angle),
+      "mirroring composes without changing the turn")
+check(DocumentOrientation(quarterTurns: 1).inverted
+      == DocumentOrientation(quarterTurns: 3, angle: 0),
+      "the inverse of a turn is the opposite quarter")
+check(DocumentOrientation(quarterTurns: 1, flipped: true).inverted
+      == DocumentOrientation(quarterTurns: 1, flipped: true),
+      "a mirrored turn is its own inverse")
+check(DocumentOrientation(quarterTurns: 3).rotatedClockwise().quarterTurns == 0,
+      "turning clockwise wraps past three")
+check(DocumentOrientation(quarterTurns: -1).quarterTurns == 3,
+      "negative turns normalize into 0...3")
+check(DocumentOrientation(angle: 10).straightened(to: 4).angle == 4,
+      "straighten sets the angle directly")
+let mirroredStraighten = DocumentOrientation(flipped: true, angle: 10).straightened(to: 4)
+check(mirroredStraighten.angle == 4 && mirroredStraighten.flipped,
+      "a mirrored frame reaches the straighten target and stays mirrored")
+let partialOrientation = try! JSONDecoder().decode(
+    DocumentOrientation.self, from: Data("{\"quarterTurns\":1}".utf8))
+check(partialOrientation == DocumentOrientation(quarterTurns: 1),
+      "a partial orientation decodes with the missing keys at their defaults")
+check(DocumentOrientation(quarterTurns: 4) == DocumentOrientation()
+      && !DocumentOrientation(angle: 0.5).isIdentity
+      && !DocumentOrientation(flipped: true).isIdentity
+      && DocumentOrientation().isIdentity,
+      "a full turn wraps to identity while a real turn, mirror or angle does not")
+
+print("Document value: portable JSON and shared history")
+
+let portable = DocumentState(
+    healSpots: [stamp],
+    stickers: [sticker],
+    aiEdits: [edit],
+    analysis: analysis,
+    crop: StudioRect(x: 0.1, y: 0.1, width: 0.5, height: 0.6),
+    orientation: turned,
+    selectedFaceIndex: 2)
+let encoded = prettySorted(portable)
+check(encoded.contains("\"center\" : {") && encoded.contains("\"x\" : 0.42"),
+      "portable points write named coordinates, not Core Graphics arrays")
+check(!encoded.contains("[["),
+      "no Core Graphics array shape appears in the portable form")
+let decoded = try! JSONDecoder().decode(DocumentState.self, from: Data(encoded.utf8))
+check(decoded == portable, "a document state round-trips through portable JSON")
+check(DocumentState() == DocumentState(adjustments: Adjustments()),
+      "a fresh state is the identity document")
+var documentHistory = DocumentHistory(DocumentState())
+documentHistory.commit(portable)
+check(documentHistory.undoStack.count == 1 && documentHistory.cleanState == DocumentState(),
+      "a document state is a history step in the shared history")
+check(documentHistory.undo(current: portable) == DocumentState()
+      && documentHistory.canRedo(current: DocumentState()),
+      "undo returns the previous document")
+check(documentHistory.redo(current: DocumentState()) == portable,
+      "redo returns the edited document")
+
 print("")
 print(failures.isEmpty
       ? "StudioCore: \(checks) checks passed"

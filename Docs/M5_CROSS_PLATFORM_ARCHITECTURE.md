@@ -1,9 +1,11 @@
 # M5 — Cross-Platform Core Independence
 
 **Branch:** `m5-cross-platform-core`
-**Base:** `9a5623a` (head of PR #4, `v1-macos-delivery`)
+**Base:** `main`; the branch was first created on PR #4's head `9a5623a`,
+M5 landed as PR #5, and the PR was retargeted to `main` after PR #4 merged
+and the CI work reached `main`.
 **Date:** 2026-11-12
-**Stacked PR:** targets `v1-macos-delivery`, not `main`
+**Pull request:** #5, base `main`, no longer stacked; not merged.
 **Status:** implementation and validation on macOS arm64; no Windows or Linux
 build exists and none is claimed.
 
@@ -46,8 +48,10 @@ reconstructed from memory.
 | R4.8 and hardening | `0b90024`, `f989142`, `4cac5cb` | Portable v4 file with lossless v3 import; recovery keeps v4 metadata; documentation corrected before merge. |
 | V1 hardening | `9a5623a` | Lifecycle, export reporting, batch failure count and inspector layout fixes; PR #4 head. |
 
-PR #3 (R4) is already merged as `a5ceb9b`; PR #4 is the open V1 PR and stays
-unmerged in M5.
+PR #3 (R4) is already merged as `a5ceb9b`. PR #4 was open at the start of M5
+and stayed unmerged through the M5 commits; it has since merged into `main`.
+PR #5 was then retargeted from PR #4's head to `main` and synchronized with a
+normal merge of `main` (section 12), so it is no longer stacked.
 
 ## 3. Dependency graph before and after
 
@@ -69,7 +73,7 @@ Platform layer
   AppKit, SwiftUI, Combine, Core Image, Vision, ImageIO, CoreText, UniformTypeIdentifiers
 ```
 
-After M5:
+After M5 (M6 then moved the document values; section 5.1):
 
 ```text
 StudioCore (Foundation only, still one import)
@@ -141,14 +145,45 @@ Verified by reading the sources and by the existing boundary gate:
 No existing type was duplicated: the app keeps one name per concept, and the
 core is the single home for the moved rules.
 
+### 5.1 M6 — the document value itself
+
+Roadmap item 2 (section 14) is done on the same branch:
+
+- `Sources/StudioCore/DocumentValue.swift` now owns `HealSpot`, `Sticker` and
+  `StickerKind`, `AIEdit`, `AnalysisRegion`, `AnalysisTint`,
+  `AnalysisExportMode`, `AnalysisSettings`, `DocumentOrientation` and
+  `DocumentState`. Every field is a Foundation value (`StudioPoint`,
+  `StudioSize`, `StudioRect`, `Double`, `String`, `UUID`), every type is
+  `Codable`, and `DocumentState` declares `HistoryState` next to its own
+  definition instead of an app-side retroactive conformance.
+- `Sources/RetouchStudio/Models/DocumentState.swift` is deleted; no app type
+  shadows the shared value.
+- CoreGraphics stays on the host: `StudioPoint.cgPoint`, `StudioRect.cgRect`
+  and `StudioRect.init(CGRect)` remain app-side adapters, and the call sites
+  that cross the boundary convert explicitly (`EditorModel`, `AnalysisRenderer`,
+  `AICompositor`, `DocumentRestoration`, `ProjectCodec`).
+- **v3 bytes are frozen behind wire records.** `RetouchProject` keeps portable
+  stored properties and converts only inside `init(from:)`/`encode(to:)`
+  through `HealSpotV3`, `StickerV3`, `AIEditV3` and `AnalysisSettingsV3`, which
+  still write CoreGraphics' unkeyed shapes. The fixture
+  `Tests/Fixtures/ProjectV3/project-v3-full.retouch` re-encodes byte-identically
+  and `testProjectV3BaselineByteIdentity()` passes unchanged.
+- **v4 got smaller.** `ProjectV4` dropped `HealSpotV4`, `StickerV4` and
+  `AIEditV4` in favour of the core types; `AnalysisSettingsV4` remains only
+  because it sorts regions for stable cross-architecture bytes.
+- The core suite grew by 34 checks (188 total): portable stamps, stickers,
+  edits and analysis defaults; orientation frames, composition, inverse and
+  straighten; portable JSON with named coordinates and no Core Graphics array
+  shape; and `DocumentState` as a step in the shared `DocumentHistory`.
+
 ## 6. What remains macOS-specific
 
 These are deliberate boundaries, not unfinished moves:
 
 | Area | Why it stays on macOS | Evidence |
 |---|---|---|
-| `DocumentState` | Holds `CGRect?` and app-owned `HealSpot`, `Sticker`, `AIEdit`, `AnalysisSettings`; moving it now would change field identity without a portability win. | `Sources/RetouchStudio/Models/DocumentState.swift:12-21` |
-| `ProjectCodec`, `ProjectV4`, `Project` | v3 JSON is CoreGraphics' unkeyed encoding; v4 uses portable geometry but is file-only. Changing the v3 types would change existing file bytes. | `Sources/RetouchStudio/Models/ProjectCodec.swift:1-16`, `Docs/STUDIOCORE_R4_8_PROJECT_V4.md` |
+| CoreGraphics adapters | The document value moved to StudioCore in M6; only the `CGPoint`/`CGRect` adapters and the renderers that consume them stay on macOS. | `Sources/StudioCore/DocumentValue.swift`, `Sources/StudioCore/StudioGeometry.swift` |
+| `ProjectCodec`, `ProjectV4`, `Project` | v3 JSON is CoreGraphics' unkeyed encoding, frozen behind `HealSpotV3`, `StickerV3`, `AIEditV3` and `AnalysisSettingsV3` inside `Project.swift`; v4 uses portable geometry but is file-only. Changing those records would change existing file bytes. | `Sources/RetouchStudio/Models/Project.swift`, `Sources/RetouchStudio/Models/ProjectCodec.swift`, `Docs/STUDIOCORE_R4_8_PROJECT_V4.md` |
 | `ExportPlanner`, `BatchPlanner` | Use `CGRect`/`CGSize` and `UTType`-adjacent policy. | `Sources/RetouchStudio/Models/ExportPlanner.swift`, `BatchPlanner.swift` |
 | `RecoveryStore` | Directory layout, renames, durability and quarantine execution. | `Sources/RetouchStudio/Models/Recovery.swift` |
 | Image engines | Core Image, Vision, ImageIO, CoreText, AppKit. | imports in `Sources/RetouchStudio/Core` |
@@ -189,10 +224,12 @@ All runs on the same Mac (Apple silicon), macOS 27.2, Command Line Tools
 
 | Gate | Arch | Result |
 |---|---|---|
-| `Tests/run-studiocore.sh` (boundary scan, independent build, core suite) | arm64 | PASS — `StudioCore: 154 checks passed` (36 new), binary links only Foundation/StudioCore |
+| `Tests/run-studiocore.sh` (boundary scan, independent build, core suite) | arm64 | PASS — `StudioCore: 188 checks passed` (34 added in M6), binary links only Foundation/StudioCore |
 | `Tests/Conformance/run-conformance.sh` (read-only corpus gate) | architecture-neutral (Python) | PASS — 21 fixtures, 78 cases, 21 references, 11 exports, SHA-256 verified; no baseline regenerated |
-| `RETOUCH_ARCH=arm64 Tests/run.sh` | arm64 | PASS — `StudioCore: 154 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
-| `RETOUCH_ARCH=x86_64 Tests/run.sh` | x86_64 under Rosetta (supplementary, not native Intel) | PASS — `StudioCore: 154 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
+| `RETOUCH_ARCH=arm64 Tests/run.sh` | arm64 | PASS — `StudioCore: 188 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
+| `RETOUCH_ARCH=x86_64 Tests/run.sh` | x86_64 under Rosetta (supplementary, not native Intel) | PASS — `StudioCore: 188 checks`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `RUNTIME PROCESS TESTS: PASS`, `RUNTIME V2 TESTS: PASS` |
+| `Tests/run-corpus.sh` (golden image corpus) | arm64 | PASS — 376 checks, 0 failures, verified against `baselines.json`; the two exported PNGs the harness rewrote were restored, not accepted as new baselines |
+| `RETOUCH_ARCH=arm64 ./build.sh` and `./build/bin/RetouchStudio --selftest` | arm64 | PASS — the app builds with `SelfCheck.swift` included and the headless self-test prints `SELFTEST: PASS` |
 
 ### 9.1 Rosetta result
 
@@ -209,30 +246,41 @@ non-Apple build.
 
 ## 10. Build results
 
-`RETOUCH_ARCH=arm64 ./build.sh release` on the same host: PASS.
+`RETOUCH_ARCH=arm64 ./build.sh release` on the same host, re-run after M6:
+PASS.
 
-- SDK probed by the script: `MacOSX26.5.sdk`; target `arm64-apple-macosx14.0`.
-- StudioCore built as a static library, app bundle assembled, engine
-  self-test passed (`✓ خودآزمون پردازش پاس شد`), bundle
-  `Retouch Studio.app` version `1.0.0 (1)`.
-- Warnings are pre-existing deprecations in Core Image kernels and three
-  unused-value notices; M5 introduced none.
+- SDK auto-probed by the script; target `arm64-apple-macosx14.0`.
+- StudioCore built as a static library, app bundle assembled, and the shipped
+  binary's headless check (`./build/bin/RetouchStudio --selftest`, which
+  includes the project round-trip) prints `SELFTEST: PASS`.
+- Warnings are pre-existing deprecations in Core Image kernels and unused
+  notices; M5 and M6 introduced none.
 - No signing or notarization step ran, and none is claimed.
 
 ## 11. Commits and branch
 
-- Branch: `m5-cross-platform-core`, created from `9a5623a`.
+- Branch: `m5-cross-platform-core`, created from `9a5623a` and later
+  synchronized with `main` by a normal merge.
 - M5 commit(s): one reviewable commit containing the three core files, the
   three app-side integrations, the test additions and the `run.sh` wiring.
-  The exact SHA is recorded in the PR and the delivery report, not in this
-  file (a commit cannot contain its own hash).
+- M6 commit(s): `Sources/StudioCore/DocumentValue.swift`, the deletion of the
+  app-side `DocumentState.swift`, the frozen v3 wire records in `Project.swift`,
+  the `ProjectV4` collapse, the boundary conversions in the editor and
+  renderers, the new core tests, the Linux runner and the CI job. Exact SHAs
+  are recorded in PR #5 and the delivery report, not here (a commit cannot
+  contain its own hash).
 - No rebase, no amend, no force push, no reset.
 
 ## 12. Pull request
 
-Stacked PR: head `m5-cross-platform-core` → base `v1-macos-delivery`
-(PR #4's head), because PR #4 is unmerged. PR #4 itself is untouched and
-remains unmerged. The M5 PR is not merged by this milestone.
+PR #5: head `m5-cross-platform-core` → base `main`. It was opened against
+PR #4's head while that PR was unmerged, then retargeted to `main` after PR #4
+merged, and the branch was brought up to date with a normal merge of `main`
+(no rebase, reset or force push). Required checks are the three jobs in
+`.github/workflows/ci.yml` (`StudioCore Boundary`, `Platform-neutral
+Conformance`, `macOS Integration`); M6 also adds a non-required `StudioCore on
+Linux` job that compiles the core with a non-Apple toolchain. PR #5 is not
+merged by this milestone.
 
 ## 13. Risks and limitations
 
@@ -244,9 +292,15 @@ remains unmerged. The M5 PR is not merged by this milestone.
   `DocumentState`. A future platform must supply its own initial state.
 - **Ports are only two.** File existence and bookmarks are separated; HTTP,
   image decoding and process supervision are not.
-- **v3 remains CoreGraphics-shaped.** The portable geometry is used for v4
-  files only. Any future migration must keep the v3 bytes stable or ship a
-  migration with fixtures.
+- **v3 remains CoreGraphics-shaped on the wire.** The in-memory values are
+  portable since M6, but `RetouchProject` still converts through the frozen
+  `*V3` records to keep old file bytes. Every future field must be added to
+  both the value and the wire record; the fixture byte-identity test and the
+  self-test round trip are the guard, and they only cover what they exercise.
+- **Linux coverage is core-only.** The `StudioCore on Linux` job compiles the
+  module and runs its tests with Swift 6.0 and its Foundation. It does not
+  build the app, the renderers or the AI runtime, and it is not a parity
+  claim for those layers.
 - **The boundary gate is textual.** It scans imports and type names; it
   cannot prove that a Foundation API behaves the same on another platform.
 - **Rosetta is not Intel.** The x86_64 run exercises translation, not native
@@ -254,13 +308,18 @@ remains unmerged. The M5 PR is not merged by this milestone.
 
 ## 14. Prioritized Windows/Linux roadmap
 
-1. Make the boundary gate a first-class CI job (the script already exists;
-   wiring it into `run.sh` is done, CI is still not configured).
-2. Extract the document value itself: make `HealSpot`, `Sticker`, `AIEdit`
-   and `AnalysisSettings` portable or define portable mirrors with explicit
-   boundary conversion, then move `DocumentState`.
-3. Extract project reading/writing behind the shared ports, keeping v3 bytes
-   frozen and v4 as the portable shape.
+1. ~~Make the boundary gate a first-class CI job.~~ Done: `StudioCore
+   Boundary` and `Platform-neutral Conformance` are required checks on `main`,
+   and M6 adds the `StudioCore on Linux` job, which builds and tests the
+   module with a non-Apple toolchain.
+2. ~~Extract the document value itself.~~ Done in M6 (section 5.1): the value
+   types and `DocumentState` live in StudioCore, with the v3 wire records
+   frozen at the codec boundary.
+3. **Next:** extract project reading/writing behind the shared ports, keeping
+   v3 bytes frozen and v4 as the portable shape. The file-system and bookmark
+   adapters stay on the host; the codec, restoration and codec tests move. A
+   Linux file round-trip test belongs to this step, because it is the first
+   non-Apple behaviour claim that would be worth making.
 4. Define a renderer interface and prove it with the existing canonical
    fixtures before choosing a backend; do not assume Core Image parity.
 5. Port the AI transport seam (newline framing and peer identity) behind a

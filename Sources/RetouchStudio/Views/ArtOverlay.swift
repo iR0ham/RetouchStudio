@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import StudioCore
 
 /// The sticker layer. A click on empty photo places the current sticker, a
 /// click on one selects it, and a drag moves it. Stickers live in the model as

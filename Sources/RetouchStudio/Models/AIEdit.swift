@@ -1,39 +1,25 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import StudioCore
 
-/// One generative edit: the pixels the worker produced, the alpha that says
-/// where they may be used, and where that rectangle sits on the original photo.
-///
-/// The photo itself is never rewritten. An edit is a layer — the preview and
-/// the export both re-composite it from these two files, so undo is a list
-/// change and a project can be reopened at any size.
-struct AIEdit: Codable, Equatable, Identifiable {
-    var id: UUID = UUID()
-    /// Which Quick Edit preset produced it, for the UI and the report.
-    var preset: String
-    var prompt: String
-    var seed: Int
-    /// `patch.png`: the worker's edited pixels for `box`, at the job's size.
-    var patchFile: String
-    /// `alpha.png`: 0…255, zero everywhere outside the authorized region.
-    var alphaFile: String
-    /// Authorized rectangle in normalized original-photo coordinates, top-left
-    /// origin, like `HealSpot` and `Sticker`.
-    var box: CGRect
-    /// The job image's pixel size. Used to keep the two files' true aspect when
-    /// a project is reopened at a different preview size.
-    var imagePixels: CGSize
-    /// Turn applied to the two files since they were written. Rotating the
-    /// document must rotate the edit with it; the rasters stay untouched on
-    /// disk so undo can point the same bytes back the other way.
-    var patchOrientation: DocumentOrientation? = nil
-    var createdAt: Date = Date()
+/// The edit value (`AIEdit`) lives in StudioCore, because a document carries it
+/// on every platform. Where its two files live and how they are adopted is this
+/// app's job and stays here.
 
-    /// How long the worker took, kept for the record and the status line.
-    var seconds: Double = 0
-    /// The worker's own report that nothing outside the region moved.
-    var outsidePixelsIdentical: Bool = true
+extension AIEdit {
+    /// Convenience for the worker reply and the editor, which measure in
+    /// CoreGraphics points. The stored value stays portable.
+    init(id: UUID = UUID(), preset: String, prompt: String, seed: Int,
+         patchFile: String, alphaFile: String, box: CGRect, imagePixels: CGSize,
+         patchOrientation: DocumentOrientation? = nil, createdAt: Date = Date(),
+         seconds: Double = 0, outsidePixelsIdentical: Bool = true) {
+        self.init(id: id, preset: preset, prompt: prompt, seed: seed,
+                  patchFile: patchFile, alphaFile: alphaFile,
+                  box: StudioRect(box), imagePixels: StudioSize(imagePixels),
+                  patchOrientation: patchOrientation, createdAt: createdAt,
+                  seconds: seconds, outsidePixelsIdentical: outsidePixelsIdentical)
+    }
 }
 
 /// Where edit pixels live on disk. One folder per edit id, next to the model

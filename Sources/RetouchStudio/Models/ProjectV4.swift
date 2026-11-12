@@ -137,9 +137,9 @@ struct ProjectV4: Codable, Equatable {
     var autoColorStrength: Double?
     var crop: StudioRect?
     var orientation: DocumentOrientation?
-    var healSpots: [HealSpotV4]?
-    var stickers: [StickerV4]?
-    var aiEdits: [AIEditV4]?
+    var healSpots: [HealSpot]?
+    var stickers: [Sticker]?
+    var aiEdits: [AIEdit]?
     var analysis: AnalysisSettingsV4?
     var selectedFace: Int?
     var requiredFeatures: [String]?
@@ -155,9 +155,9 @@ struct ProjectV4: Codable, Equatable {
         autoColorStrength = project.autoColorStrength
         crop = project.crop.map(StudioRect.init)
         orientation = project.orientation
-        healSpots = project.healSpots?.map(HealSpotV4.init)
-        stickers = project.stickers?.map(StickerV4.init)
-        aiEdits = project.aiEdits?.map(AIEditV4.init)
+        healSpots = project.healSpots
+        stickers = project.stickers
+        aiEdits = project.aiEdits
         analysis = project.analysis.map(AnalysisSettingsV4.init)
         selectedFace = project.selectedFace
         self.requiredFeatures = requiredFeatures.isEmpty ? nil : requiredFeatures
@@ -175,98 +175,12 @@ struct ProjectV4: Codable, Equatable {
                        autoRetouchStrength: autoRetouchStrength,
                        autoColorStrength: autoColorStrength,
                        crop: crop?.cgRect,
-                       healSpots: healSpots?.map(\.healSpot),
-                       stickers: stickers?.map(\.sticker),
-                       aiEdits: aiEdits?.map(\.edit),
+                       healSpots: healSpots,
+                       stickers: stickers,
+                       aiEdits: aiEdits,
                        analysis: analysis?.settings,
                        selectedFace: selectedFace,
                        orientation: orientation)
-    }
-}
-
-struct HealSpotV4: Codable, Equatable {
-    var center: StudioPoint
-    var radius: Double
-
-    init(_ spot: HealSpot) {
-        center = StudioPoint(spot.center)
-        radius = Double(spot.radius)
-    }
-
-    var healSpot: HealSpot {
-        HealSpot(center: center.cgPoint, radius: CGFloat(radius))
-    }
-}
-
-struct StickerV4: Codable, Equatable {
-    var id: UUID
-    var kind: StickerKind
-    var center: StudioPoint
-    var size: Double
-    var rotation: Double
-    var opacity: Double
-    var color: MakeupColor
-
-    init(_ sticker: Sticker) {
-        id = sticker.id
-        kind = sticker.kind
-        center = StudioPoint(sticker.center)
-        size = sticker.size
-        rotation = sticker.rotation
-        opacity = sticker.opacity
-        color = sticker.color
-    }
-
-    var sticker: Sticker {
-        var value = Sticker(center: center.cgPoint, size: size)
-        value.id = id
-        value.kind = kind
-        value.rotation = rotation
-        value.opacity = opacity
-        value.color = color
-        return value
-    }
-}
-
-struct AIEditV4: Codable, Equatable {
-    var id: UUID
-    var preset: String
-    var prompt: String
-    var seed: Int
-    var patchFile: String
-    var alphaFile: String
-    var box: StudioRect
-    var imagePixels: StudioSize
-    var patchOrientation: DocumentOrientation?
-    var createdAt: Date
-    var seconds: Double
-    var outsidePixelsIdentical: Bool
-
-    init(_ edit: AIEdit) {
-        id = edit.id
-        preset = edit.preset
-        prompt = edit.prompt
-        seed = edit.seed
-        patchFile = edit.patchFile
-        alphaFile = edit.alphaFile
-        box = StudioRect(edit.box)
-        imagePixels = StudioSize(edit.imagePixels)
-        patchOrientation = edit.patchOrientation
-        createdAt = edit.createdAt
-        seconds = edit.seconds
-        outsidePixelsIdentical = edit.outsidePixelsIdentical
-    }
-
-    var edit: AIEdit {
-        var value = AIEdit(preset: preset, prompt: prompt, seed: seed,
-                           patchFile: patchFile, alphaFile: alphaFile,
-                           box: box.cgRect, imagePixels: imagePixels.cgSize)
-        value.id = id
-        value.patchOrientation = patchOrientation
-        value.createdAt = createdAt
-        value.seconds = seconds
-        value.outsidePixelsIdentical = outsidePixelsIdentical
-        return value
     }
 }
 
@@ -291,8 +205,8 @@ struct AnalysisSettingsV4: Codable, Equatable {
         showsMesh = settings.showsMesh
         showsFaceOutline = settings.showsFaceOutline
         regions = settings.regions.sorted { $0.rawValue < $1.rawValue }
-        endpoints = settings.endpoints.mapValues(StudioPoint.init)
-        anchors = settings.anchors.mapValues(StudioPoint.init)
+        endpoints = settings.endpoints
+        anchors = settings.anchors
         lineOpacity = settings.lineOpacity
         lineWeight = settings.lineWeight
         tint = settings.tint
@@ -331,8 +245,8 @@ struct AnalysisSettingsV4: Codable, Equatable {
         value.showsMesh = showsMesh
         value.showsFaceOutline = showsFaceOutline
         value.regions = Set(regions)
-        value.endpoints = endpoints.mapValues { $0.cgPoint }
-        value.anchors = anchors.mapValues { $0.cgPoint }
+        value.endpoints = endpoints
+        value.anchors = anchors
         value.lineOpacity = lineOpacity
         value.lineWeight = lineWeight
         value.tint = tint

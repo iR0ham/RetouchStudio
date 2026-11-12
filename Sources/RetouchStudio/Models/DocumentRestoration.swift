@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// The document values a load contributes to the editor.
 ///
@@ -30,7 +31,7 @@ struct DocumentRestoration: Equatable {
         state.stickers = project.stickers ?? []
         state.aiEdits = project.aiEdits ?? []
         state.analysis = project.analysis ?? AnalysisSettings()
-        state.crop = project.crop
+        state.crop = project.crop.map(StudioRect.init)
         state.orientation = project.orientation ?? .identity
         state.selectedFaceIndex = project.selectedFace
 

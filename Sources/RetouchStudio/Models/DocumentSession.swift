@@ -1,11 +1,10 @@
 import Foundation
 import StudioCore
 
-/// A document state is a history step. The history rules live in StudioCore
-/// (`DocumentHistory`); the state stays in the application layer until its
-/// field types are portable too.
-extension DocumentState: HistoryState {}
-
+/// A document state is a history step. Both the value and the history rules
+/// live in StudioCore (`DocumentState`, `DocumentHistory`); this name and the
+/// zero-argument initializer are the app's shorthand for them.
+///
 /// The undo history of one open document, shared with every platform. The
 /// editor still owns the 350 ms coalescing timer, the busy guards, status
 /// tokens, applying a restored state to the published values and reloading

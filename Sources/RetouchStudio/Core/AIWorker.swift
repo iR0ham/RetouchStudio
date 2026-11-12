@@ -5,6 +5,7 @@ import Darwin
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import StudioCore
 
 /// Launches and talks to the local AI helper.
 ///

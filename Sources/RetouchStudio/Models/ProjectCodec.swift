@@ -83,7 +83,7 @@ enum ProjectCodec {
                               exportLongEdge: input.exportLongEdge == 0 ? nil : input.exportLongEdge,
                               autoRetouchStrength: input.autoRetouchStrength,
                               autoColorStrength: input.autoColorStrength,
-                              crop: state.crop,
+                              crop: state.crop?.cgRect,
                               healSpots: state.healSpots.isEmpty ? nil : state.healSpots,
                               stickers: state.stickers.isEmpty ? nil : state.stickers,
                               aiEdits: state.aiEdits.isEmpty ? nil : state.aiEdits,

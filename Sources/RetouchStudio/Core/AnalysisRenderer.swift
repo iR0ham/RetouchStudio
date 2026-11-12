@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreImage
 import Foundation
+import StudioCore
 
 /// Draws the face-analysis overlay. Everything is procedural Core Graphics, so
 /// the editor preview and the full-resolution export are the same picture.
@@ -186,7 +187,7 @@ enum AnalysisRenderer {
                        settings: AnalysisSettings) -> [AnalysisRegion: CGPoint] {
         var result = defaultEnds(face: face, regions: settings.regions)
         for region in settings.regions {
-            if let pinned = settings.endpoint(for: region) { result[region] = pinned }
+            if let pinned = settings.endpoint(for: region) { result[region] = pinned.cgPoint }
         }
         return result
     }
@@ -565,7 +566,8 @@ enum AnalysisRenderer {
 
         for region in settings.primaryCallouts {
             guard let end = ends[region] else { continue }
-            let placed = settings.anchor(for: region) ?? AnalysisRenderer.anchor(region, face: face)
+            let placed = settings.anchor(for: region)?.cgPoint
+                ?? AnalysisRenderer.anchor(region, face: face)
             let anchor = m.point(placed)
             var tip = m.point(end)
             if poster {

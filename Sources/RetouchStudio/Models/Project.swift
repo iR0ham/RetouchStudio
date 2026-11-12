@@ -115,10 +115,194 @@ struct RetouchProject: Codable {
         autoColorStrength = try c.decodeIfPresent(Double.self, forKey: .autoColorStrength)
         crop = try c.decodeIfPresent(CGRect.self, forKey: .crop)
         orientation = try c.decodeIfPresent(DocumentOrientation.self, forKey: .orientation)
-        healSpots = try c.decodeIfPresent([HealSpot].self, forKey: .healSpots)
-        stickers = try c.decodeIfPresent([Sticker].self, forKey: .stickers)
-        aiEdits = try c.decodeIfPresent([AIEdit].self, forKey: .aiEdits)
-        analysis = try c.decodeIfPresent(AnalysisSettings.self, forKey: .analysis)
+        healSpots = try c.decodeIfPresent([HealSpotV3].self, forKey: .healSpots)?
+            .map(\.spot)
+        stickers = try c.decodeIfPresent([StickerV3].self, forKey: .stickers)?
+            .map(\.sticker)
+        aiEdits = try c.decodeIfPresent([AIEditV3].self, forKey: .aiEdits)?
+            .map(\.edit)
+        analysis = try c.decodeIfPresent(AnalysisSettingsV3.self, forKey: .analysis)?
+            .settings
         selectedFace = try c.decodeIfPresent(Int.self, forKey: .selectedFace)
+    }
+
+    /// Writes the same bytes v3 always wrote: the portable values are turned
+    /// back into Core Graphics-shaped records here and nowhere else.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(imagePath, forKey: .imagePath)
+        try c.encodeIfPresent(imageBookmark, forKey: .imageBookmark)
+        try c.encode(adjustments, forKey: .adjustments)
+        try c.encode(exportFormat, forKey: .exportFormat)
+        try c.encode(exportQuality, forKey: .exportQuality)
+        try c.encodeIfPresent(exportLongEdge, forKey: .exportLongEdge)
+        try c.encode(autoRetouchStrength, forKey: .autoRetouchStrength)
+        try c.encodeIfPresent(autoColorStrength, forKey: .autoColorStrength)
+        try c.encodeIfPresent(crop, forKey: .crop)
+        try c.encodeIfPresent(orientation, forKey: .orientation)
+        try c.encodeIfPresent(healSpots?.map(HealSpotV3.init), forKey: .healSpots)
+        try c.encodeIfPresent(stickers?.map(StickerV3.init), forKey: .stickers)
+        try c.encodeIfPresent(aiEdits?.map(AIEditV3.init), forKey: .aiEdits)
+        try c.encodeIfPresent(analysis.map(AnalysisSettingsV3.init), forKey: .analysis)
+        try c.encodeIfPresent(selectedFace, forKey: .selectedFace)
+    }
+}
+
+// MARK: - Frozen v3 wire records
+
+/// Core Graphics' own Codable shape is unkeyed: a point is `[x, y]`, a size is
+/// `[width, height]` and a rect is `[[x, y], [width, height]]`. v3 files have
+/// always written those arrays, so these records keep that shape exactly while
+/// the editing code speaks the portable types. They are used only by
+/// `RetouchProject`'s coding and mean nothing outside it.
+
+struct HealSpotV3: Codable, Equatable {
+    var center: CGPoint
+    var radius: CGFloat
+
+    init(_ spot: HealSpot) {
+        center = spot.center.cgPoint
+        radius = CGFloat(spot.radius)
+    }
+
+    var spot: HealSpot {
+        HealSpot(center: StudioPoint(center), radius: Double(radius))
+    }
+}
+
+struct StickerV3: Codable, Equatable {
+    var id: UUID
+    var kind: StickerKind
+    var center: CGPoint
+    var size: Double
+    var rotation: Double
+    var opacity: Double
+    var color: MakeupColor
+
+    init(_ sticker: Sticker) {
+        id = sticker.id
+        kind = sticker.kind
+        center = sticker.center.cgPoint
+        size = sticker.size
+        rotation = sticker.rotation
+        opacity = sticker.opacity
+        color = sticker.color
+    }
+
+    var sticker: Sticker {
+        Sticker(id: id, kind: kind, center: StudioPoint(center), size: size,
+                rotation: rotation, opacity: opacity, color: color)
+    }
+}
+
+struct AIEditV3: Codable, Equatable {
+    var id: UUID
+    var preset: String
+    var prompt: String
+    var seed: Int
+    var patchFile: String
+    var alphaFile: String
+    var box: CGRect
+    var imagePixels: CGSize
+    var patchOrientation: DocumentOrientation?
+    var createdAt: Date
+    var seconds: Double
+    var outsidePixelsIdentical: Bool
+
+    init(_ edit: AIEdit) {
+        id = edit.id
+        preset = edit.preset
+        prompt = edit.prompt
+        seed = edit.seed
+        patchFile = edit.patchFile
+        alphaFile = edit.alphaFile
+        box = edit.box.cgRect
+        imagePixels = edit.imagePixels.cgSize
+        patchOrientation = edit.patchOrientation
+        createdAt = edit.createdAt
+        seconds = edit.seconds
+        outsidePixelsIdentical = edit.outsidePixelsIdentical
+    }
+
+    var edit: AIEdit {
+        AIEdit(id: id, preset: preset, prompt: prompt, seed: seed,
+               patchFile: patchFile, alphaFile: alphaFile,
+               box: StudioRect(box), imagePixels: StudioSize(imagePixels),
+               patchOrientation: patchOrientation, createdAt: createdAt,
+               seconds: seconds, outsidePixelsIdentical: outsidePixelsIdentical)
+    }
+}
+
+/// v3 wrote analysis pins as Core Graphics points and the chosen regions as a
+/// `Set`, and tolerated every key being absent. It still does.
+struct AnalysisSettingsV3: Codable, Equatable {
+    var isEnabled: Bool
+    var showsMesh: Bool
+    var showsFaceOutline: Bool
+    var regions: Set<AnalysisRegion>
+    var endpoints: [String: CGPoint]
+    var anchors: [String: CGPoint]
+    var lineOpacity: Double
+    var lineWeight: Double
+    var tint: AnalysisTint
+    var glow: Bool
+    var marginPercent: Double
+    var exportMode: AnalysisExportMode
+
+    init(_ settings: AnalysisSettings) {
+        isEnabled = settings.isEnabled
+        showsMesh = settings.showsMesh
+        showsFaceOutline = settings.showsFaceOutline
+        regions = settings.regions
+        endpoints = settings.endpoints.mapValues(\.cgPoint)
+        anchors = settings.anchors.mapValues(\.cgPoint)
+        lineOpacity = settings.lineOpacity
+        lineWeight = settings.lineWeight
+        tint = settings.tint
+        glow = settings.glow
+        marginPercent = settings.marginPercent
+        exportMode = settings.exportMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, showsMesh, showsFaceOutline, regions, endpoints, anchors,
+             lineOpacity, lineWeight, tint, glow, marginPercent, exportMode
+    }
+
+    /// The same tolerant decode the v3 model had: a project written before the
+    /// analysis tool existed opens with the tool off, not with an error.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        showsMesh = try c.decodeIfPresent(Bool.self, forKey: .showsMesh) ?? false
+        showsFaceOutline = try c.decodeIfPresent(Bool.self, forKey: .showsFaceOutline) ?? true
+        regions = try c.decodeIfPresent(Set<AnalysisRegion>.self, forKey: .regions)
+            ?? [.forehead, .eyeArea, .texture, .pigmentation, .jawline]
+        endpoints = try c.decodeIfPresent([String: CGPoint].self, forKey: .endpoints) ?? [:]
+        anchors = try c.decodeIfPresent([String: CGPoint].self, forKey: .anchors) ?? [:]
+        lineOpacity = try c.decodeIfPresent(Double.self, forKey: .lineOpacity) ?? 1
+        lineWeight = try c.decodeIfPresent(Double.self, forKey: .lineWeight) ?? 100
+        tint = try c.decodeIfPresent(AnalysisTint.self, forKey: .tint) ?? .chalk
+        glow = try c.decodeIfPresent(Bool.self, forKey: .glow) ?? true
+        marginPercent = try c.decodeIfPresent(Double.self, forKey: .marginPercent) ?? 12
+        exportMode = try c.decodeIfPresent(AnalysisExportMode.self, forKey: .exportMode) ?? .onPhoto
+    }
+
+    var settings: AnalysisSettings {
+        var value = AnalysisSettings()
+        value.isEnabled = isEnabled
+        value.showsMesh = showsMesh
+        value.showsFaceOutline = showsFaceOutline
+        value.regions = regions
+        value.endpoints = endpoints.mapValues(StudioPoint.init)
+        value.anchors = anchors.mapValues(StudioPoint.init)
+        value.lineOpacity = lineOpacity
+        value.lineWeight = lineWeight
+        value.tint = tint
+        value.glow = glow
+        value.marginPercent = marginPercent
+        value.exportMode = exportMode
+        return value
     }
 }

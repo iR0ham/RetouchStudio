@@ -316,9 +316,9 @@ final class EditorModel: ObservableObject {
 
     /// Everything one undo step covers. Stamping the healing brush and reframing
     /// with the crop tool are edits exactly like moving a slider, so all of them
-    /// travel through history together. The value lives in `DocumentState.swift`
-    /// and the stacks live in `DocumentSession.swift`; the editor keeps the
-    /// timer, guards and the work of applying a restored state.
+    /// travel through history together. The value lives in StudioCore's
+    /// `DocumentState` and the stacks live in `DocumentSession.swift`; the
+    /// editor keeps the timer, guards and the work of applying a restored state.
     private var session = DocumentSession()
     private var coalesceTask: Task<Void, Never>?
 
@@ -328,7 +328,8 @@ final class EditorModel: ObservableObject {
     private var currentState: DocumentState {
         DocumentState(adjustments: adjustments, healSpots: healSpots,
                       stickers: stickers, aiEdits: aiEdits, analysis: analysis,
-                      crop: appliedCrop, orientation: documentOrientation,
+                      crop: appliedCrop.map(StudioRect.init),
+                      orientation: documentOrientation,
                       selectedFaceIndex: selectedFaceIndex)
     }
 
@@ -389,7 +390,7 @@ final class EditorModel: ObservableObject {
     /// on screen. A crop change also has to re-read the pixels, which happens
     /// off the main actor without touching the history stack.
     private func restore(_ state: DocumentState) {
-        let cropChanged = state.crop != appliedCrop
+        let cropChanged = state.crop != appliedCrop.map(StudioRect.init)
         let orientationChanged = state.orientation != documentOrientation
         let selectionChanged = state.selectedFaceIndex != selectedFaceIndex
         adjustments = state.adjustments
@@ -405,7 +406,7 @@ final class EditorModel: ObservableObject {
         }
         updateCleanState()
         guard cropChanged || orientationChanged else { return }
-        appliedCrop = state.crop
+        appliedCrop = state.crop?.cgRect
         documentOrientation = state.orientation
         cropAspect = .free
         cropDraft = CropGeometry.full
@@ -1076,7 +1077,7 @@ final class EditorModel: ObservableObject {
         if let retouch = restoration.autoRetouchStrength { autoRetouchStrength = retouch }
         if let color = restoration.autoColorStrength { autoColorStrength = color }
         adjustments = restoration.state.adjustments
-        appliedCrop = restoration.state.crop
+        appliedCrop = restoration.state.crop?.cgRect
         documentOrientation = restoration.state.orientation
         // The stamps arrive with the project, so they are installed without the
         // change handling a user stamp needs.
@@ -1413,8 +1414,8 @@ final class EditorModel: ObservableObject {
         let clamped = CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y)))
         let visible = visibleHealSpots
         if let hit = visible.first(where: {
-            HealGeometry.shortSideDistance($0.spot.center, clamped, aspect: workingAspect)
-                <= $0.spot.radius
+            HealGeometry.shortSideDistance($0.spot.center.cgPoint, clamped, aspect: workingAspect)
+                <= CGFloat($0.spot.radius)
         }) {
             healSpots.remove(at: hit.index)
             statusToken = healSpots.isEmpty ? .healCleared : .healStampRemoved
@@ -1793,9 +1794,9 @@ final class EditorModel: ObservableObject {
     /// original photo's, so a crop keeps it attached.
     func moveSticker(_ id: UUID, to point: CGPoint) {
         guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
-        stickers[index].center = ArtGeometry.originalCenter(
+        stickers[index].center = StudioPoint(ArtGeometry.originalCenter(
             CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y))),
-            crop: appliedCrop)
+            crop: appliedCrop))
     }
 
     func updateSelectedSticker(_ update: (inout Sticker) -> Void) {
@@ -1828,10 +1829,10 @@ final class EditorModel: ObservableObject {
         copy.id = UUID()
         // Offset in the working frame so the copy is visible beside the
         // original instead of sitting exactly under it.
-        let center = ArtGeometry.workingCenter(selected.center, crop: appliedCrop)
+        let center = ArtGeometry.workingCenter(selected.center.cgPoint, crop: appliedCrop)
         let shifted = CGPoint(x: min(0.98, max(0.02, center.x + 0.04)),
                               y: min(0.98, max(0.02, center.y + 0.04)))
-        copy.center = ArtGeometry.originalCenter(shifted, crop: appliedCrop)
+        copy.center = StudioPoint(ArtGeometry.originalCenter(shifted, crop: appliedCrop))
         stickers.append(copy)
         self.selectedSticker = copy.id
         statusToken = .stickerAdded(stickers.count)
@@ -2008,7 +2009,7 @@ final class EditorModel: ObservableObject {
         guard analysis.isEnabled,
               let face = AnalysisRenderer.primaryFace(faces, focus: focusFace) else { return [] }
         return analysis.primaryCallouts.compactMap { region in
-            let point = analysis.anchor(for: region)
+            let point = analysis.anchor(for: region)?.cgPoint
                 ?? AnalysisRenderer.anchor(region, face: face)
             return (region, point)
         }
@@ -2547,8 +2548,9 @@ final class EditorModel: ObservableObject {
         for spot in spots {
             let working = HealSpot(center: spot.center, radius: spot.radius)
             let covered = (existing + addedWorking).contains {
-                HealGeometry.shortSideDistance($0.center, working.center, aspect: workingAspect)
-                    <= max($0.radius, working.radius)
+                HealGeometry.shortSideDistance($0.center.cgPoint, working.center.cgPoint,
+                                               aspect: workingAspect)
+                    <= CGFloat(max($0.radius, working.radius))
             }
             guard !covered else { continue }
             addedWorking.append(working)

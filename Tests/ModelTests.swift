@@ -1032,7 +1032,7 @@ func testProjectCodecFieldMapping() {
                             box: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4),
                             imagePixels: CGSize(width: 64, height: 64))]
     state.analysis.isEnabled = true
-    state.crop = CGRect(x: 0.05, y: 0.1, width: 0.8, height: 0.7)
+    state.crop = StudioRect(x: 0.05, y: 0.1, width: 0.8, height: 0.7)
     state.orientation = DocumentOrientation(quarterTurns: 1, flipped: true, angle: 2)
     state.selectedFaceIndex = 3
 
@@ -1052,7 +1052,7 @@ func testProjectCodecFieldMapping() {
     check(project.exportLongEdge == 2048, "a real long edge is kept")
     check(project.autoRetouchStrength == 55 && project.autoColorStrength == 45,
           "both auto strengths are copied")
-    check(project.crop == state.crop, "the crop is copied")
+    check(project.crop == state.crop?.cgRect, "the crop is copied")
     check(project.healSpots == state.healSpots, "healing stamps are copied")
     check(project.stickers == state.stickers, "stickers are copied")
     check(project.aiEdits == state.aiEdits, "AI edits are copied")
@@ -1678,7 +1678,7 @@ func testDocumentRestorationFromProject() {
     check(restoration.state.stickers == project.stickers, "stickers are restored")
     check(restoration.state.aiEdits == project.aiEdits, "AI edits are restored")
     check(restoration.state.analysis == project.analysis, "analysis is restored")
-    check(restoration.state.crop == project.crop, "the crop is restored")
+    check(restoration.state.crop == project.crop.map(StudioRect.init), "the crop is restored")
     check(restoration.state.orientation == project.orientation, "the orientation is restored")
     check(restoration.state.selectedFaceIndex == 2, "the chosen face is restored")
 }
@@ -6036,7 +6036,7 @@ func testDocumentStateValueSemantics() {
                            box: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3),
                            imagePixels: CGSize(width: 64, height: 64))]
     edit.analysis.isEnabled = true
-    edit.crop = CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.6)
+    edit.crop = StudioRect(x: 0.1, y: 0.1, width: 0.5, height: 0.6)
     edit.orientation = DocumentOrientation(quarterTurns: 1)
     edit.selectedFaceIndex = 2
 
@@ -6067,8 +6067,8 @@ func testDocumentStateValueSemantics() {
 
     let mutations: [(String, (inout DocumentState) -> Void)] = [
         ("adjustments", { $0.adjustments.smooth += 1 }),
-        ("healSpots", { $0.healSpots.append(HealSpot(center: .zero, radius: 0.01)) }),
-        ("stickers", { $0.stickers.append(Sticker(center: .zero, size: 0.1)) }),
+        ("healSpots", { $0.healSpots.append(HealSpot(center: CGPoint.zero, radius: 0.01)) }),
+        ("stickers", { $0.stickers.append(Sticker(center: StudioPoint.zero, size: 0.1)) }),
         ("aiEdits", { $0.aiEdits.removeAll() }),
         ("analysis", { $0.analysis.isEnabled.toggle() }),
         ("crop", { $0.crop = nil }),

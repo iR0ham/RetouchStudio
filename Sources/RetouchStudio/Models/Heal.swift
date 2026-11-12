@@ -1,17 +1,19 @@
 import CoreGraphics
 import Foundation
+import StudioCore
 
-/// One manual healing stamp: a disc the user placed on the photo. Coordinates
-/// are normalized with a top-left origin, the same convention the crop overlay
-/// uses, and the radius is a fraction of the image's short side.
-///
-/// Stamps are stored against the *original* photo, so applying a crop keeps
-/// them attached to the same fleck of skin instead of leaving them behind.
-struct HealSpot: Codable, Equatable {
-    var center: CGPoint
-    var radius: CGFloat
+/// The stamp value (`HealSpot`) lives in StudioCore. This convenience keeps the
+/// editor's canvas coordinates in CoreGraphics at the call site; the stored
+/// value stays portable and exact (`CGFloat` is 64-bit on every supported
+/// architecture).
+extension HealSpot {
+    init(center: CGPoint, radius: CGFloat) {
+        self.init(center: StudioPoint(center), radius: Double(radius))
+    }
 }
 
+/// Stamps are stored against the *original* photo, so applying a crop keeps
+/// them attached to the same fleck of skin instead of leaving them behind.
 enum HealGeometry {
 
     /// Radius a stamp needs to cover the same pixels after a crop. Fractions of
@@ -53,8 +55,8 @@ enum HealGeometry {
     /// the user clicks on in the cropped view addresses the right entry.
     static func indexed(_ spots: [HealSpot], crop: CGRect?) -> [(index: Int, spot: HealSpot)] {
         spots.enumerated().compactMap { offset, spot in
-            let center = workingCenter(spot.center, crop: crop)
-            let radius = workingRadius(spot.radius, crop: crop)
+            let center = workingCenter(spot.center.cgPoint, crop: crop)
+            let radius = workingRadius(CGFloat(spot.radius), crop: crop)
             guard center.x + radius > 0, center.y + radius > 0,
                   center.x - radius < 1, center.y - radius < 1 else { return nil }
             return (offset, HealSpot(center: center, radius: radius))
@@ -85,10 +87,11 @@ enum HealGeometry {
         let radiusX = ratio >= 1 ? 1 / ratio : 1
         let radiusY = ratio >= 1 ? 1 : ratio
         return spots.map { spot in
-            let rx = spot.radius * radiusX
-            let ry = spot.radius * radiusY
-            let rect = CGRect(x: spot.center.x - rx,
-                              y: 1 - spot.center.y - ry,
+            let center = spot.center.cgPoint
+            let rx = CGFloat(spot.radius) * radiusX
+            let ry = CGFloat(spot.radius) * radiusY
+            let rect = CGRect(x: center.x - rx,
+                              y: 1 - center.y - ry,
                               width: rx * 2, height: ry * 2)
             return MaskShape(mode: .add, ellipse: rect)
         }
