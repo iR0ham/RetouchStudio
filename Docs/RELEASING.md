@@ -46,7 +46,7 @@ lipo -archs "Retouch Studio.app/Contents/MacOS/RetouchStudio"   # arm64 x86_64
 "Retouch Studio.app/Contents/MacOS/RetouchStudio" --selftest --out /tmp/rs-selftest
 ```
 
-The build runs the self-test natively and, on an Apple-silicon machine with Rosetta, again on the Intel slice (`build/selftest-intel/`). A failure in either stops the build. Use `RETOUCH_ARCH=arm64` or `RETOUCH_ARCH=x86_64` only for a deliberate single-architecture build.
+The build runs the self-test on the executable **inside the bundle** (not the loose `build/bin` copy) natively and, on an Apple-silicon machine with Rosetta, again on the Intel slice (`build/selftest-intel/`). A failure in either stops the build. `build.sh` finishes with `codesign --verify --deep --strict` and `Tools/validate-bundle.sh`, which checks the plist keys, the architecture set, the signature kind and the bundled helper layout; a validation failure stops the build. Use `RETOUCH_ARCH=arm64` or `RETOUCH_ARCH=x86_64` only for a deliberate single-architecture build.
 
 Check the bundle contents:
 
@@ -60,19 +60,25 @@ Model weights must not appear inside the bundle. They belong in `~/Library/Appli
 
 ## 5. Signing and notarization
 
-`build.sh` signs ad-hoc (`codesign --sign -`). That is enough for the build machine and for other Macs where the user approves the first launch, but it is **not** a public, warning-free distribution.
+Without a signing identity, `build.sh` signs ad-hoc (`codesign --force --sign -`). That is enough for the build machine and for other Macs where the user approves the first launch, but it is **not** a public, warning-free distribution. The build no longer treats a failed signature as a warning: `codesign` errors and `codesign --verify --deep --strict` failures stop the build.
 
-A notarized release requires an Apple Developer ID Application certificate and a `notarytool` submission; neither exists in this repository or on the current machine. The future flow is:
+`build.sh` is identity-aware for the future public build:
 
 ```bash
-codesign --force --deep --options runtime --timestamp \
-  --sign "Developer ID Application: <Name> (<TEAMID>)" "Retouch Studio.app"
-ditto -c -k --keepParent "Retouch Studio.app" RetouchStudio.zip
-xcrun notarytool submit RetouchStudio.zip --keychain-profile <profile> --wait
-xcrun stapler staple "Retouch Studio.app"
+RETOUCH_SIGN_IDENTITY="Developer ID Application: <Name> (<TEAMID>)" \
+RETOUCH_ENTITLEMENTS=Resources/RetouchStudio.entitlements \
+  ./build.sh release
 ```
 
-Until then, release notes must state that the build is ad-hoc signed, light (the current build offers no runtime download; a future approved runtime package would be a separate Apple-silicon download), and opened with **right-click → Open** on first launch.
+With an identity it signs Hardened Runtime (`--options runtime --timestamp`), applies the entitlements file (empty today: file access and the bundled helper need no exceptions), signs the nested Mach-O files under `Contents/Resources/Worker` first, then the bundle. `Tools/validate-bundle.sh` reports the resulting signature as ad-hoc or Developer ID.
+
+A notarized release requires an Apple Developer ID Application certificate and a `notarytool` keychain profile; neither exists in this repository or on the current machine, and no credential is stored in the repository. Once they exist, use `Tools/notarize.sh`, which refuses to run without `RETOUCH_NOTARY_PROFILE` and a Developer ID signature:
+
+```bash
+./Tools/notarize.sh "Retouch Studio.app"          # or a .dmg
+```
+
+It submits with `notarytool ... --wait`, staples and validates the result, and runs `spctl --assess`. Until then, release notes must state that the build is ad-hoc signed, light (the current build offers no runtime download; a future approved runtime package would be a separate Apple-silicon download), and opened with **right-click → Open** on first launch.
 
 ## 6. Package and publish
 
@@ -129,6 +135,6 @@ Release notes should include:
 1. Ad-hoc signature, no notarization — Gatekeeper asks once on other Macs.
 2. No clean-machine install has been tested on a second physical Mac.
 3. The current build offers no AI runtime download. A future approved protocol-v2 runtime would be an optional ~390 MB Apple-silicon download (about 1.3 GB unpacked); models add tens of megabytes to several gigabytes on top. Intel has no AI.
-4. Windows and Linux are not supported by this codebase.
+4. Windows: only the shared StudioCore module has a Windows portability runner (`Tests/run-studiocore-windows.ps1`); there is no Windows application, renderer, UI or installer in this codebase. Linux is not a product target.
 5. The worker source lives outside this repository; a build from a fresh clone without it produces a light app whose AI tools report that the runtime is unavailable.
 6. Downloaded models range from tens of megabytes to several gigabytes under Application Support; removing the app and that folder is the documented uninstall.

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened runtime without sandbox exceptions: the app opens user-chosen
+         files, starts a bundled helper and downloads models it verifies. None
+         of that needs a runtime entitlement. A future sandbox or JIT decision
+         must add its own key and justify it here. -->
+</dict>
+</plist>

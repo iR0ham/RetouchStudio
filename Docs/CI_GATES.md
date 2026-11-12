@@ -57,6 +57,39 @@ RETOUCH_ARCH=arm64 ./Tests/run.sh
 The conformance gate needs `python3` (3.10 or newer, standard library only)
 and a C11 compiler. The other two need macOS with Command Line Tools.
 
+## Windows portability (prepared, not in the workflow)
+
+`Tests/run-studiocore-windows.ps1` is the Windows equivalent of
+`Tests/run-studiocore.sh`: it scans `Sources/StudioCore` for platform imports
+and types, builds the module and its tests with a native Windows Swift
+toolchain, and runs the same `StudioCoreTests`. It proves only that the shared
+module is portable — there is no Windows renderer, UI, installer or application
+behind it.
+
+The job intended for the workflow is:
+
+```yaml
+  windows-portability:
+    name: Windows StudioCore Portability
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: compnerd/gha-setup-swift@v0.3.0
+        with:
+          branch: swift-6.1-release
+          tag: swift-6.1-release
+      - shell: pwsh
+        run: ./Tests/run-studiocore-windows.ps1
+```
+
+This snippet is **NOT VERIFIED**: it has not been added to
+`.github/workflows/ci.yml`, because the token in use lacks the GitHub
+`workflow` scope and pushing a workflow change is rejected. The permission was
+not bypassed. The runner label `windows-2025`, the third-party action version
+and the toolchain tag must be confirmed on a Windows runner before the job can
+be made a required check. A required check needs a green run on the default
+branch first.
+
 ## Branch protection for `main`
 
 The required status checks are exactly:
@@ -101,7 +134,9 @@ JSON
 The workflow says nothing about Windows or Linux application support. A passing
 run proves the module boundary, the conformance fixtures and the macOS suites
 on the runner images named above; it does not prove rendering parity, Vision,
-AI runtime or UI behavior on any other platform.
+AI runtime or UI behavior on any other platform. The prepared Windows job above
+would prove only that `StudioCore` compiles and passes its own tests with a
+Windows toolchain. Linux is not a product target.
 
 The GitHub-hosted `macos-14` runner image was retired on 2026-11-02. This
 workflow therefore uses `macos-15` (arm64) instead.
