@@ -105,6 +105,9 @@ final class EditorModel: ObservableObject {
     @Published private(set) var faceCount = 0
     /// Where this edit was last saved as a project, if anywhere.
     @Published private(set) var projectURL: URL?
+    /// The version and unknown keys of the file this document came from. A new
+    /// photo starts at v3; a v4 project stays v4 across its saves.
+    private var projectWriteContext = ProjectWriteContext.v3
     /// Looks the owner saved from their own sliders, in the order they made them.
     @Published private(set) var userPresets: [UserPreset] = UserPresetStore.load()
     /// One small render per preset, made from the photo that is open.
@@ -936,7 +939,8 @@ final class EditorModel: ObservableObject {
 
     func load(url: URL, restoring project: RetouchProject? = nil,
               projectURL: URL? = nil, relinkURL: URL? = nil,
-              recoveryRestore: RecoveryRestore? = nil) {
+              recoveryRestore: RecoveryRestore? = nil,
+              projectFile: ProjectFile? = nil) {
         // A newer load wins over an older one, but no load may cut in front of
         // an export, a batch or a Smart analysis.
         guard let token = begin(.load) else {
@@ -978,7 +982,7 @@ final class EditorModel: ObservableObject {
                 return
             }
             self.apply(result, restoring: project, projectURL: projectURL,
-                       recoveryRestore: recoveryRestore)
+                       recoveryRestore: recoveryRestore, projectFile: projectFile)
             self.end(token)
             if !self.healSpots.isEmpty || !self.stickers.isEmpty { self.schedulePreview() }
         }
@@ -1032,7 +1036,8 @@ final class EditorModel: ObservableObject {
     private func apply(_ result: LoadResult,
                        restoring project: RetouchProject? = nil,
                        projectURL: URL? = nil,
-                       recoveryRestore: RecoveryRestore? = nil) {
+                       recoveryRestore: RecoveryRestore? = nil,
+                       projectFile: ProjectFile? = nil) {
         // Loading is not an edit. Every assignment below, including the ones
         // whose observers would schedule an autosave, stays out of the
         // recovery store until the restored document is complete.
@@ -1041,6 +1046,9 @@ final class EditorModel: ObservableObject {
         let restoration = project.map { DocumentRestoration.project($0, url: projectURL) }
             ?? DocumentRestoration.photo()
         self.projectURL = restoration.projectURL
+        // A photo, a recovery copy or a v3 project saves as v3. Only the file
+        // the document actually came from can keep it on v4.
+        projectWriteContext = projectFile?.context ?? .v3
 
         if let format = restoration.exportFormat { exportFormat = format }
         if let quality = restoration.exportQuality { exportQuality = quality }
@@ -3090,7 +3098,8 @@ final class EditorModel: ObservableObject {
     private func writeProject(to url: URL) {
         guard let project = makeProject() else { return }
         do {
-            try ProjectCodec.encode(project).write(to: url, options: .atomic)
+            try ProjectCodec.encode(project, context: projectWriteContext)
+                .write(to: url, options: .atomic)
             projectURL = url
             recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
@@ -3123,7 +3132,8 @@ final class EditorModel: ObservableObject {
         offeredRecovery = true
         guard confirmDiscardIfNeeded() else { return }
         do {
-            let project = try ProjectCodec.decode(Data(contentsOf: url))
+            let file = try ProjectCodec.read(Data(contentsOf: url))
+            let project = file.project
             var source = resolveProjectImage(project, projectURL: url)
             if source == nil { source = locatePhoto(for: project) }
             guard let source else {
@@ -3134,9 +3144,13 @@ final class EditorModel: ObservableObject {
             let relocated = source.standardizedFileURL != recorded
             guard prepareToReplaceDocument() else { return }
             load(url: source, restoring: project, projectURL: url,
-                 relinkURL: relocated ? url : nil)
+                 relinkURL: relocated ? url : nil, projectFile: file)
         } catch ProjectCodecError.tooNew(let version) {
             statusToken = .projectTooNew(version)
+        } catch ProjectCodecError.unsupportedFeatures {
+            // A required capability this build does not have: opening it would
+            // silently change the document, so it is refused like a newer file.
+            statusToken = .projectOpenFailed
         } catch {
             statusToken = .projectOpenFailed
         }
@@ -3173,7 +3187,8 @@ final class EditorModel: ObservableObject {
     private func rewriteProject(at url: URL) {
         guard let project = makeProject() else { return }
         do {
-            try ProjectCodec.encode(project).write(to: url, options: .atomic)
+            try ProjectCodec.encode(project, context: projectWriteContext)
+                .write(to: url, options: .atomic)
         } catch {
             // The photo still opens; only the next launch will ask again.
         }

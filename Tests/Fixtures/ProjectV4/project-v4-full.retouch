@@ -1,0 +1,256 @@
+{
+  "adjustments" : {
+    "backgroundBlur" : 0,
+    "backgroundFill" : 0,
+    "backgroundFillColor" : {
+      "hue" : 0,
+      "saturation" : 0,
+      "value" : 0.96
+    },
+    "backgroundImage" : "",
+    "backgroundImageAmount" : 100,
+    "backgroundImageName" : "",
+    "backgroundRemove" : false,
+    "backgroundSaturation" : 0,
+    "backgroundTone" : 0,
+    "blacks" : 0,
+    "blemish" : 20,
+    "blush" : 0,
+    "blushColor" : {
+      "hue" : 25,
+      "saturation" : 0.35,
+      "value" : 0.95
+    },
+    "bodyArms" : 0,
+    "bodyLegs" : 0,
+    "bodySlim" : 0,
+    "bodySmooth" : 0,
+    "bodyTone" : 0,
+    "bodyWaist" : 0,
+    "browColor" : {
+      "hue" : 28,
+      "saturation" : 0.22,
+      "value" : 0.4
+    },
+    "browDefine" : 0,
+    "cheekSize" : 0,
+    "chinLength" : 0,
+    "clarity" : 15,
+    "contour" : 0,
+    "contourColor" : {
+      "hue" : 26,
+      "saturation" : 0.24,
+      "value" : 0.52
+    },
+    "contrast" : 12,
+    "curveHighlights" : 0,
+    "curveMidtones" : 0,
+    "curveShadows" : 0,
+    "darkCircles" : 0,
+    "exposure" : 5,
+    "eyeBrighten" : 0,
+    "eyeSharpen" : 0,
+    "eyeSize" : 6,
+    "eyeliner" : 0,
+    "eyeshadow" : 0,
+    "faceLength" : 0,
+    "faceWidth" : 0,
+    "grain" : 6,
+    "hairColor" : 0,
+    "hairShine" : 0,
+    "hairTint" : {
+      "hue" : 22,
+      "saturation" : 0.34,
+      "value" : 0.24
+    },
+    "hairVolume" : 0,
+    "hslHue" : [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "hslLuminance" : [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "hslSaturation" : [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "irisEnhance" : 0,
+    "jawWidth" : 0,
+    "lashDarken" : 0,
+    "lensColor" : {
+      "hue" : 210,
+      "saturation" : 0.45,
+      "value" : 0.48
+    },
+    "lensTint" : 0,
+    "linerColor" : {
+      "hue" : 240,
+      "saturation" : 0.06,
+      "value" : 0.1
+    },
+    "lipColor" : {
+      "hue" : 350,
+      "saturation" : 0.6,
+      "value" : 0.77
+    },
+    "lipGloss" : 0,
+    "lipSize" : 0,
+    "lipTint" : 0,
+    "lookID" : "kodachrome",
+    "lookStrength" : 40,
+    "noseSize" : 0,
+    "noseTip" : 0,
+    "saturation" : 8,
+    "shadowColor" : {
+      "hue" : 28,
+      "saturation" : 0.2,
+      "value" : 0.58
+    },
+    "shine" : 0,
+    "skinBrighten" : 0,
+    "skinFinish" : 0,
+    "skinToneEvens" : 0,
+    "smooth" : 35,
+    "splitTone" : 0,
+    "teethAlign" : 0,
+    "teethWhiten" : 0,
+    "texturePreserve" : 70,
+    "vibrance" : 0,
+    "vignette" : 10,
+    "warmth" : -4,
+    "whites" : 0,
+    "wrinkle" : 0
+  },
+  "aiEdits" : [
+    {
+      "alphaFile" : "alpha.png",
+      "box" : {
+        "height" : 0.28,
+        "width" : 0.3,
+        "x" : 0.2,
+        "y" : 0.25
+      },
+      "createdAt" : 721692800,
+      "id" : "3C2E1D0B-A9F8-4E7D-8C6B-5A4938271605",
+      "imagePixels" : {
+        "height" : 768,
+        "width" : 1024
+      },
+      "outsidePixelsIdentical" : true,
+      "patchFile" : "patch.png",
+      "patchOrientation" : {
+        "angle" : 0,
+        "flipped" : false,
+        "quarterTurns" : 1
+      },
+      "preset" : "removeObject",
+      "prompt" : "remove the sign behind the subject",
+      "seconds" : 4.25,
+      "seed" : 20261112
+    }
+  ],
+  "analysis" : {
+    "anchors" : {
+      "forehead" : {
+        "x" : 0.48,
+        "y" : 0.26
+      }
+    },
+    "endpoints" : {
+      "forehead" : {
+        "x" : 0.5,
+        "y" : 0.2
+      }
+    },
+    "exportMode" : "poster",
+    "glow" : false,
+    "isEnabled" : true,
+    "lineOpacity" : 0.9,
+    "lineWeight" : 120,
+    "marginPercent" : 8,
+    "regions" : [
+      "forehead"
+    ],
+    "showsFaceOutline" : true,
+    "showsMesh" : true,
+    "tint" : "ink"
+  },
+  "autoColorStrength" : 80,
+  "autoRetouchStrength" : 65,
+  "crop" : {
+    "height" : 0.74,
+    "width" : 0.76,
+    "x" : 0.08,
+    "y" : 0.12
+  },
+  "exportFormat" : "jpeg",
+  "exportLongEdge" : 4096,
+  "exportQuality" : 0.87,
+  "futureFlag" : "kept",
+  "healSpots" : [
+    {
+      "center" : {
+        "x" : 0.42,
+        "y" : 0.37
+      },
+      "radius" : 0.018
+    },
+    {
+      "center" : {
+        "x" : 0.57,
+        "y" : 0.44
+      },
+      "radius" : 0.011
+    }
+  ],
+  "imageBookmark" : "Ym9va21hcmstdjM=",
+  "imagePath" : "\/Users\/owner\/Photos\/portrait-session-07.jpg",
+  "orientation" : {
+    "angle" : 3.5,
+    "flipped" : true,
+    "quarterTurns" : 1
+  },
+  "requiredFeatures" : [
+    "portable_geometry"
+  ],
+  "selectedFace" : 2,
+  "stickers" : [
+    {
+      "center" : {
+        "x" : 0.72,
+        "y" : 0.28
+      },
+      "color" : {
+        "hue" : 330,
+        "saturation" : 0.65,
+        "value" : 0.95
+      },
+      "id" : "8F14E45F-CE0A-4E7B-9C1D-3A5B7C9D1E2F",
+      "kind" : "heart",
+      "opacity" : 0.85,
+      "rotation" : 12,
+      "size" : 0.12
+    }
+  ],
+  "version" : 4
+}

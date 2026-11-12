@@ -71,6 +71,9 @@ struct ProjectSourceResolver {
 
 enum ProjectCodecError: Error, Equatable {
     case tooNew(Int)
+    /// A v4 file requires a capability this build does not implement. Reading
+    /// it as if the capability were absent would quietly change the document.
+    case unsupportedFeatures([String])
 }
 
 /// Reads and writes the v3 sidecar. Byte compatibility lives here: the encoder
@@ -78,6 +81,9 @@ enum ProjectCodecError: Error, Equatable {
 /// small as earlier readers expect. The version guard is part of decoding so a
 /// caller cannot open a format it does not understand.
 enum ProjectCodec {
+    /// Highest project file version this build reads.
+    static let currentVersion = ProjectV4.currentVersion
+
     static func makeProject(_ input: ProjectInput, bookmarks: ProjectBookmarkStore) -> RetouchProject {
         let state = input.state
         return RetouchProject(imagePath: input.imageURL.path,
@@ -97,17 +103,85 @@ enum ProjectCodec {
                               orientation: state.orientation.isIdentity ? nil : state.orientation)
     }
 
+    /// v3 bytes, unchanged. The baseline fixture proves this.
     static func encode(_ project: RetouchProject) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(project)
     }
 
-    static func decode(_ data: Data) throws -> RetouchProject {
-        let project = try JSONDecoder().decode(RetouchProject.self, from: data)
-        guard project.version <= RetouchProject.currentVersion else {
-            throw ProjectCodecError.tooNew(project.version)
+    /// Writes the version the document was read as. A v3 file never silently
+    /// becomes v4, and a v4 file keeps its keyed geometry and unknown keys.
+    static func encode(_ project: RetouchProject,
+                       context: ProjectWriteContext) throws -> Data {
+        if context.isV4 {
+            return try encodeV4(project,
+                                unknownFields: context.unknownFields,
+                                requiredFeatures: context.requiredFeatures)
         }
-        return project
+        let base = try encode(project)
+        guard !context.unknownFields.isEmpty else { return base }
+        return try merging(base, unknown: context.unknownFields,
+                           known: RetouchProject.knownJSONKeys)
+    }
+
+    /// The portable v4 document: named geometry records and a stable key order.
+    static func encodeV4(_ project: RetouchProject,
+                         unknownFields: [String: ProjectJSONValue] = [:],
+                         requiredFeatures: [String] = []) throws -> Data {
+        let record = ProjectV4(project: project, requiredFeatures: requiredFeatures)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let typed = try encoder.encode(record)
+        guard !unknownFields.isEmpty else { return typed }
+        return try merging(typed, unknown: unknownFields, known: ProjectV4.knownKeys)
+    }
+
+    static func decode(_ data: Data) throws -> RetouchProject {
+        try read(data).project
+    }
+
+    /// Reads a v3 or v4 file and keeps what a later save needs.
+    static func read(_ data: Data) throws -> ProjectFile {
+        let decoder = JSONDecoder()
+        let object = try decoder.decode([String: ProjectJSONValue].self, from: data)
+        let version = object["version"]?.integerValue ?? RetouchProject.currentVersion
+        guard version <= currentVersion else {
+            throw ProjectCodecError.tooNew(version)
+        }
+        if version >= ProjectV4.currentVersion {
+            let record = try decoder.decode(ProjectV4.self, from: data)
+            let required = record.requiredFeatures ?? []
+            let unsupported = required.filter { !ProjectV4.supportedFeatures.contains($0) }
+            guard unsupported.isEmpty else {
+                throw ProjectCodecError.unsupportedFeatures(unsupported.sorted())
+            }
+            return ProjectFile(
+                project: record.project,
+                context: ProjectWriteContext(
+                    version: version,
+                    unknownFields: object.filter { !ProjectV4.knownKeys.contains($0.key) },
+                    requiredFeatures: required))
+        }
+        let project = try decoder.decode(RetouchProject.self, from: data)
+        return ProjectFile(
+            project: project,
+            context: ProjectWriteContext(
+                version: version,
+                unknownFields: object.filter { !RetouchProject.knownJSONKeys.contains($0.key) },
+                requiredFeatures: []))
+    }
+
+    /// Keeps unknown data without letting it overwrite a field this build owns.
+    private static func merging(_ data: Data, unknown: [String: ProjectJSONValue],
+                                known: Set<String>) throws -> Data {
+        let decoder = JSONDecoder()
+        var object = try decoder.decode([String: ProjectJSONValue].self, from: data)
+        for (key, value) in unknown where !known.contains(key) {
+            object[key] = value
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(object)
     }
 }

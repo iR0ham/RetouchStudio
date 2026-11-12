@@ -861,13 +861,13 @@ func testProjectVersionGuard() async {
                                 exportFormat: "jpeg",
                                 exportQuality: 0.9,
                                 autoRetouchStrength: 70)
-    future.version = RetouchProject.currentVersion + 1
-    check(writeProject(future, to: projectURL), "a version-2 project is written")
+    future.version = ProjectCodec.currentVersion + 1
+    check(writeProject(future, to: projectURL), "a newer-format project is written")
 
     let model = EditorModel()
     model.openProject(at: projectURL)
     // The guard runs synchronously before the load, so no sleep is needed.
-    check(model.statusToken == .projectTooNew(RetouchProject.currentVersion + 1),
+    check(model.statusToken == .projectTooNew(ProjectCodec.currentVersion + 1),
           "the version guard explains why it was refused", "\(model.statusToken)")
     check(!model.hasImage, "nothing was loaded from the newer project")
 
@@ -989,6 +989,12 @@ private func projectV3Fixture() -> (url: URL, data: Data) {
     return (url, (try? Data(contentsOf: url)) ?? Data())
 }
 
+private func projectV4Fixture() -> (url: URL, data: Data) {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/ProjectV4/project-v4-full.retouch")
+    return (url, (try? Data(contentsOf: url)) ?? Data())
+}
+
 private func makeCodecInput(imageURL: URL) -> ProjectInput {
     ProjectInput(imageURL: imageURL,
                  state: DocumentState(),
@@ -1107,7 +1113,7 @@ func testProjectCodecVersionGuard() {
         check(false, "version fixture")
         return
     }
-    object["version"] = RetouchProject.currentVersion + 1
+    object["version"] = ProjectCodec.currentVersion + 1
     guard let newer = try? JSONSerialization.data(withJSONObject: object) else {
         check(false, "newer fixture")
         return
@@ -1117,7 +1123,7 @@ func testProjectCodecVersionGuard() {
         _ = try ProjectCodec.decode(newer)
         check(false, "a newer project is refused")
     } catch ProjectCodecError.tooNew(let version) {
-        check(version == RetouchProject.currentVersion + 1,
+        check(version == ProjectCodec.currentVersion + 1,
               "the refusal carries the file version", "v\(version)")
     } catch {
         check(false, "the refusal is a version error", "\(error)")
@@ -1219,6 +1225,357 @@ func testProjectCodecRelinkRewrite() {
     let first = try? ProjectCodec.encode(after)
     let second = try? ProjectCodec.encode(after)
     check(first != nil && first == second, "encoding the same project is deterministic")
+}
+
+// MARK: - R4.8 Project v4 and geometry migration
+
+private func fullV4Project() -> RetouchProject {
+    var adjustments = Adjustments()
+    adjustments.exposure = 7
+    adjustments.smooth = 21
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    analysis.regions = [.forehead, .chin]
+    analysis.setEndpoint(CGPoint(x: 0.22, y: 0.31), for: .forehead)
+    analysis.setAnchor(CGPoint(x: 0.12, y: 0.13), for: .chin)
+    return RetouchProject(
+        imagePath: "/v4/photos/portrait.heic",
+        imageBookmark: Data([0x10, 0x20]),
+        adjustments: adjustments,
+        exportFormat: "heic", exportQuality: 0.83, exportLongEdge: 3000,
+        autoRetouchStrength: 66, autoColorStrength: 44,
+        crop: CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8),
+        healSpots: [HealSpot(center: CGPoint(x: 0.25, y: 0.35), radius: 0.015)],
+        stickers: [Sticker(kind: .sparkle, center: CGPoint(x: 0.6, y: 0.4),
+                           size: 0.12, rotation: 12, opacity: 0.8)],
+        aiEdits: [AIEdit(preset: "retouch", prompt: "clean the wall", seed: 42,
+                         patchFile: "patch.png", alphaFile: "alpha.png",
+                         box: CGRect(x: 0.2, y: 0.3, width: 0.4, height: 0.5),
+                         imagePixels: CGSize(width: 512, height: 768),
+                         patchOrientation: DocumentOrientation(quarterTurns: 1),
+                         createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                         seconds: 2.5, outsidePixelsIdentical: true)],
+        analysis: analysis,
+        selectedFace: 1,
+        orientation: DocumentOrientation(quarterTurns: 3, flipped: true, angle: 4.5))
+}
+
+private func projectJSON(_ data: Data) -> [String: ProjectJSONValue]? {
+    try? JSONDecoder().decode([String: ProjectJSONValue].self, from: data)
+}
+
+private func projectJSONData(_ object: [String: ProjectJSONValue]) -> Data? {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    return try? encoder.encode(object)
+}
+
+private func keyedPoint(_ value: ProjectJSONValue?) -> Bool {
+    guard case .object(let point)? = value else { return false }
+    return point["x"] != nil && point["y"] != nil
+}
+
+@MainActor
+func testProjectV4PortableGeometry() {
+    print("\n[R4.8] v4 writes geometry as named records and reads it back exactly")
+
+    let project = fullV4Project()
+    guard let data = try? ProjectCodec.encodeV4(project),
+          let object = projectJSON(data) else {
+        check(false, "the v4 fixture encodes")
+        return
+    }
+    check(object["version"] == .int(4), "the file records version 4")
+
+    guard case .object(let crop)? = object["crop"] else {
+        check(false, "the crop is an object")
+        return
+    }
+    check(crop["x"] != nil && crop["width"] != nil,
+          "the crop uses named x/y/width/height keys")
+    guard case .array(let spots)? = object["healSpots"],
+          case .object(let spot)? = spots.first,
+          keyedPoint(spot["center"]) else {
+        check(false, "the healing stamp center is a named point")
+        return
+    }
+    guard case .array(let stickers)? = object["stickers"],
+          case .object(let sticker)? = stickers.first,
+          keyedPoint(sticker["center"]) else {
+        check(false, "the sticker center is a named point")
+        return
+    }
+    guard case .array(let edits)? = object["aiEdits"],
+          case .object(let edit)? = edits.first,
+          case .object(let box)? = edit["box"],
+          case .object(let pixels)? = edit["imagePixels"] else {
+        check(false, "the AI edit box and pixel size are named records")
+        return
+    }
+    check(box["width"] != nil && pixels["width"] != nil,
+          "the AI edit uses named width/height records")
+    guard case .object(let analysis)? = object["analysis"],
+          case .object(let endpoints)? = analysis["endpoints"],
+          keyedPoint(endpoints["forehead"]),
+          case .object(let anchors)? = analysis["anchors"],
+          keyedPoint(anchors["chin"]) else {
+        check(false, "analysis pins are named points")
+        return
+    }
+    guard case .array(let regions)? = analysis["regions"] else {
+        check(false, "analysis regions are an array")
+        return
+    }
+    check(regions == [.string("chin"), .string("forehead")],
+          "analysis regions are sorted, so the bytes do not depend on set order")
+
+    guard let file = try? ProjectCodec.read(data) else {
+        check(false, "the v4 file reads")
+        return
+    }
+    check(file.context.version == 4 && file.context.isV4,
+          "the file is remembered as v4")
+    check(file.context.unknownFields.isEmpty, "a clean v4 file has no unknown fields")
+    // v3 writes analysis regions from a `Set`, whose iteration order depends on
+    // insertion history, so compare the values rather than the bytes.
+    let source = file.project
+    check(source.crop == project.crop
+          && source.orientation == project.orientation
+          && source.healSpots == project.healSpots
+          && source.stickers == project.stickers
+          && source.aiEdits == project.aiEdits
+          && source.analysis == project.analysis
+          && source.selectedFace == project.selectedFace,
+          "every geometry value survives the v4 round trip")
+}
+
+@MainActor
+func testProjectV3ToV4Migration() {
+    print("\n[R4.8] the v3 baseline migrates to v4 without losing a value")
+
+    let fixture = projectV3Fixture()
+    guard let v3File = try? ProjectCodec.read(fixture.data) else {
+        check(false, "the v3 baseline reads")
+        return
+    }
+    check(v3File.context.version == 3 && !v3File.context.isV4,
+          "a v3 file is remembered as v3")
+    check(v3File.context.unknownFields.isEmpty,
+          "the baseline has no unknown fields")
+
+    guard let v4Data = try? ProjectCodec.encodeV4(v3File.project),
+          let v4File = try? ProjectCodec.read(v4Data) else {
+        check(false, "the v3 baseline migrates to v4")
+        return
+    }
+    check(v4File.context.version == 4, "the migrated file is v4")
+    check((try? ProjectCodec.encode(v4File.project)) == fixture.data,
+          "v3 -> v4 -> v3 reproduces the baseline bytes")
+
+    // The v4 projection is still a normal v3 document for the 1.0 reader.
+    guard let v3Projection = try? ProjectCodec.encode(v4File.project),
+          let reopened = try? ProjectCodec.decode(v3Projection) else {
+        check(false, "the v3 projection opens with the v3 reader")
+        return
+    }
+    check(reopened.version == RetouchProject.currentVersion,
+          "the projection is a v3 project", "v\(reopened.version)")
+    check(reopened.crop == v3File.project.crop
+            && reopened.healSpots == v3File.project.healSpots
+            && reopened.aiEdits == v3File.project.aiEdits,
+          "the projection carries the same geometry")
+}
+
+@MainActor
+func testProjectV4FixtureCrossArchitecture() {
+    print("\n[R4.8] the committed v4 file reads and re-encodes byte for byte")
+
+    let fixture = projectV4Fixture()
+    check(!fixture.data.isEmpty, "the v4 fixture is present")
+    guard let file = try? ProjectCodec.read(fixture.data) else {
+        check(false, "the v4 fixture reads")
+        return
+    }
+    check(file.context.version == 4, "the fixture is a v4 file")
+    check(file.context.requiredFeatures == ["portable_geometry"],
+          "the fixture records the feature it needs")
+    check(file.context.unknownFields["futureFlag"] == .string("kept"),
+          "the fixture carries an unknown field")
+
+    guard let rewritten = try? ProjectCodec.encodeV4(
+        file.project,
+        unknownFields: file.context.unknownFields,
+        requiredFeatures: file.context.requiredFeatures) else {
+        check(false, "the fixture re-encodes")
+        return
+    }
+    check(rewritten == fixture.data,
+          "the same bytes come back on every architecture")
+    check((try? ProjectCodec.encode(file.project)) == projectV3Fixture().data,
+          "the fixture projects to the v3 baseline bytes")
+}
+
+@MainActor
+func testProjectUnknownFieldsSurvive() {
+    print("\n[R4.8] unknown project data survives a save")
+
+    let project = fullV4Project()
+    guard let v4Data = try? ProjectCodec.encodeV4(project),
+          var object = projectJSON(v4Data) else {
+        check(false, "the v4 fixture encodes")
+        return
+    }
+    object["futureFlag"] = .bool(true)
+    object["futureShape"] = .object(["width": .double(1.5), "label": .string("frame")])
+    object["futureList"] = .array([.int(1), .string("two")])
+    guard let withUnknown = projectJSONData(object),
+          let file = try? ProjectCodec.read(withUnknown) else {
+        check(false, "a v4 file with unknown keys reads")
+        return
+    }
+    check(file.context.unknownFields["futureFlag"] == .bool(true)
+            && file.context.unknownFields["futureList"] == .array([.int(1), .string("two")]),
+          "unknown top-level keys are captured")
+    guard let saved = try? ProjectCodec.encode(file.project, context: file.context),
+          let savedObject = projectJSON(saved) else {
+        check(false, "the v4 document saves")
+        return
+    }
+    check(savedObject["futureFlag"] == .bool(true)
+            && savedObject["futureList"] == .array([.int(1), .string("two")])
+            && savedObject["futureShape"] == .object(["width": .double(1.5),
+                                                      "label": .string("frame")]),
+          "unknown keys survive a v4 save")
+    check(savedObject["version"] == .int(4), "the save stays v4")
+
+    // A v3 file with an unknown key keeps it too, without turning into v4.
+    let fixture = projectV3Fixture()
+    guard var legacy = projectJSON(fixture.data) else {
+        check(false, "the v3 baseline is JSON")
+        return
+    }
+    legacy["legacyExtra"] = .int(7)
+    guard let legacyData = projectJSONData(legacy),
+          let legacyFile = try? ProjectCodec.read(legacyData),
+          let legacySaved = try? ProjectCodec.encode(legacyFile.project,
+                                                     context: legacyFile.context),
+          let legacyObject = projectJSON(legacySaved) else {
+        check(false, "a v3 file with an unknown key saves")
+        return
+    }
+    check(legacyFile.context.version == 3, "an unknown key does not upgrade the file")
+    check(legacyObject["legacyExtra"] == .int(7),
+          "a v3 unknown key survives")
+    check(legacyObject["version"] == .int(3), "the v3 save stays v3")
+}
+
+@MainActor
+func testProjectV4Capabilities() {
+    print("\n[R4.8] v4 refuses a required capability this build does not have")
+
+    let project = fullV4Project()
+    let supported = (try? ProjectCodec.encodeV4(
+        project, requiredFeatures: ["portable_geometry"]))
+        .flatMap { try? ProjectCodec.read($0) }
+    check(supported?.context.version == 4,
+          "the portable geometry requirement is supported")
+
+    guard let unsupported = try? ProjectCodec.encodeV4(
+            project, requiredFeatures: ["future_geometry"]) else {
+        check(false, "the unsupported fixture encodes")
+        return
+    }
+    do {
+        _ = try ProjectCodec.read(unsupported)
+        check(false, "an unsupported requirement is refused")
+    } catch ProjectCodecError.unsupportedFeatures(let features) {
+        check(features == ["future_geometry"], "the refusal names the capability",
+              "\(features)")
+    } catch {
+        check(false, "the refusal is a capability error", "\(error)")
+    }
+}
+
+@MainActor
+func testProjectV4EditorRoundTrip() async {
+    print("\n[R4.8] the editor keeps a v4 project v4 and a v3 project v3")
+
+    let folder = workDir.appendingPathComponent("v4-roundtrip-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let photo = folder.appendingPathComponent("portrait.png")
+    guard let image = makeImage(width: 240, height: 300), writePNG(image, to: photo) else {
+        check(false, "v4 round-trip fixture")
+        return
+    }
+
+    var project = fullV4Project()
+    project.imagePath = photo.path
+    project.imageBookmark = nil
+    guard var object = projectJSON((try? ProjectCodec.encodeV4(project)) ?? Data()) else {
+        check(false, "v4 round-trip file")
+        return
+    }
+    object["futureFlag"] = .string("kept")
+    let v4URL = folder.appendingPathComponent("future.retouch")
+    guard let v4Data = projectJSONData(object),
+          (try? v4Data.write(to: v4URL, options: .atomic)) != nil else {
+        check(false, "v4 round-trip file written")
+        return
+    }
+
+    let model = EditorModel()
+    model.openProject(at: v4URL)
+    check(await waitUntil { model.hasImage && !model.isBusy }, "the v4 project opens")
+    check(model.projectURL == v4URL, "the v4 project is the document")
+    model.adjustments.exposure = 33
+    model.saveProject()
+    guard let savedV4 = projectJSON((try? Data(contentsOf: v4URL)) ?? Data()) else {
+        check(false, "the saved v4 file is JSON")
+        return
+    }
+    check(savedV4["version"] == .int(4), "editing and saving keeps v4")
+    check(savedV4["futureFlag"] == .string("kept"), "the unknown field survives the save")
+    guard case .object(let crop)? = savedV4["crop"] else {
+        check(false, "the saved crop stays portable")
+        return
+    }
+    check(crop["width"] != nil, "the saved geometry stays keyed")
+    guard let stored = try? ProjectCodec.read(Data(contentsOf: v4URL)) else {
+        check(false, "the saved v4 file reads")
+        return
+    }
+    check(stored.project.adjustments.exposure == 33,
+          "the edit is in the v4 file", "\(stored.project.adjustments.exposure)")
+
+    // The same flow on v3 never upgrades the file behind the owner's back.
+    let v3URL = folder.appendingPathComponent("today.retouch")
+    var v3Project = project
+    v3Project.imageBookmark = nil
+    guard let v3Data = try? ProjectCodec.encode(v3Project) else {
+        check(false, "the v3 fixture encodes")
+        return
+    }
+    check((try? v3Data.write(to: v3URL, options: .atomic)) != nil, "the v3 file is written")
+    let second = EditorModel()
+    second.openProject(at: v3URL)
+    check(await waitUntil { second.hasImage && !second.isBusy }, "the v3 project opens")
+    second.adjustments.contrast = 17
+    second.saveProject()
+    guard let savedV3 = projectJSON((try? Data(contentsOf: v3URL)) ?? Data()) else {
+        check(false, "the saved v3 file is JSON")
+        return
+    }
+    check(savedV3["version"] == .int(3), "a v3 project stays v3 after a save")
+    guard case .array(let cropArray)? = savedV3["crop"],
+          cropArray.count == 2,
+          case .array(let topLeft) = cropArray[0],
+          case .array(let bottomRight) = cropArray[1] else {
+        check(false, "the v3 crop keeps its array encoding")
+        return
+    }
+    check(topLeft == [.double(0.1), .double(0.05)]
+          && bottomRight == [.double(0.7), .double(0.8)],
+          "the v3 geometry is unchanged")
 }
 
 // MARK: - R4.4 Document restoration
@@ -5484,6 +5841,12 @@ func runAll() async {
     testProjectCodecReproducesBaseline()
     testProjectSourceResolverOrder()
     testProjectCodecRelinkRewrite()
+    testProjectV4PortableGeometry()
+    testProjectV3ToV4Migration()
+    testProjectV4FixtureCrossArchitecture()
+    testProjectUnknownFieldsSurvive()
+    testProjectV4Capabilities()
+    await testProjectV4EditorRoundTrip()
     testDocumentRestorationFromProject()
     testDocumentRestorationDefaultsAndPhoto()
     testExportPlannerNaming()
