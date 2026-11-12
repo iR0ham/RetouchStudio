@@ -1301,6 +1301,156 @@ func testDocumentRestorationDefaultsAndPhoto() {
           "a plain photo starts from an empty document")
 }
 
+// MARK: - R4.5 Export planner
+
+private func makeExportPlanner() -> ExportPlanner {
+    ExportPlanner(adjustments: .zero, healSpots: [], stickers: [], aiEdits: [],
+                  analysis: AnalysisSettings(), crop: nil, orientation: .identity,
+                  selectedFaceIndex: nil, imageName: "portrait.jpg", faceCount: 2,
+                  workingPixelSize: CGSize(width: 800, height: 600),
+                  format: .jpeg, quality: 0.9, longEdge: 0, aiUpscale: false,
+                  stripsMetadata: true, watermark: .disabled)
+}
+
+@MainActor
+func testExportPlannerNaming() {
+    print("\n[R4.5] the planner names the file and picks the format")
+
+    var planner = makeExportPlanner()
+    check(planner.suggestedFileName() == "portrait-retouched.jpg",
+          "a plain export keeps the format extension", planner.suggestedFileName())
+    check(planner.effectiveFormat == .jpeg, "no analysis keeps the chosen format")
+
+    planner.imageName = ""
+    check(planner.suggestedFileName() == "retouched.jpg", "an unnamed photo gets a fallback name")
+    planner.imageName = "portrait"
+
+    var onPhoto = AnalysisSettings()
+    onPhoto.isEnabled = true
+    onPhoto.exportMode = .onPhoto
+    planner.analysis = onPhoto
+    check(planner.suggestedFileName() == "portrait-retouched-analysis.jpg",
+          "analysis on the photo adds its suffix", planner.suggestedFileName())
+    check(planner.effectiveFormat == .jpeg, "drawing on the photo keeps the chosen format")
+
+    planner.analysis.exportMode = .poster
+    check(planner.suggestedFileName() == "portrait-retouched-analysis-poster.jpg",
+          "poster analysis names its own suffix", planner.suggestedFileName())
+
+    planner.analysis.exportMode = .overlayOnly
+    check(planner.suggestedFileName() == "portrait-retouched-analysis-lines.png",
+          "overlay-only names a png", planner.suggestedFileName())
+    check(planner.effectiveFormat == .png, "overlay-only always exports png")
+
+    planner.faceCount = 0
+    check(planner.suggestedFileName() == "portrait-retouched.jpg",
+          "without a face the name must not promise analysis")
+    check(planner.effectiveFormat == .jpeg, "without a face the chosen format stays")
+}
+
+@MainActor
+func testExportPlannerPixelSize() {
+    print("\n[R4.5] the planner decides the exported pixel size")
+
+    var planner = makeExportPlanner()
+    check(planner.pixelSize == CGSize(width: 800, height: 600),
+          "zero long edge keeps the working size")
+    check(!planner.upscaleAvailable && !planner.usesUpscale,
+          "no requested edge means no upscale")
+
+    planner.longEdge = 400
+    check(planner.pixelSize == CGSize(width: 400, height: 300),
+          "a smaller long edge downscales")
+
+    planner.longEdge = 1600
+    check(planner.pixelSize == CGSize(width: 800, height: 600),
+          "a larger edge does nothing while upscale is off")
+    check(planner.upscaleAvailable && !planner.usesUpscale,
+          "the upscaler is available but not requested")
+
+    planner.aiUpscale = true
+    check(planner.usesUpscale, "requested upscale runs when available")
+    check(planner.pixelSize == CGSize(width: 1600, height: 1200),
+          "the requested edge caps the upscale")
+    check(planner.upscaleEstimate == 50, "the estimate follows the 4x output",
+          "\(planner.upscaleEstimate)")
+
+    planner.longEdge = 5000
+    check(planner.pixelSize == CGSize(width: 3200, height: 2400),
+          "beyond 4x the photo the upscaler stops at its factor")
+
+    planner.workingPixelSize = CGSize(width: 4000, height: 3000)
+    planner.longEdge = 5000
+    check(!planner.upscaleAvailable, "too many output pixels disables the upscaler")
+    check(planner.pixelSize == CGSize(width: 4000, height: 3000),
+          "an unavailable upscale leaves the photo at its size")
+}
+
+@MainActor
+func testExportPlannerSnapshot() {
+    print("\n[R4.5] the planner builds the export snapshot")
+
+    var planner = makeExportPlanner()
+    planner.adjustments.exposure = 8
+    planner.healSpots = [HealSpot(center: CGPoint(x: 0.2, y: 0.3), radius: 0.01)]
+    planner.stickers = [Sticker(kind: .star, center: CGPoint(x: 0.4, y: 0.5), size: 0.1)]
+    planner.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 2,
+                              patchFile: "patch.png", alphaFile: "alpha.png",
+                              box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                              imagePixels: CGSize(width: 16, height: 16))]
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    planner.analysis = analysis
+    planner.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    planner.orientation = DocumentOrientation(quarterTurns: 1)
+    planner.selectedFaceIndex = 1
+    planner.format = .tiff
+    planner.quality = 0.8
+    planner.longEdge = 2048
+    planner.stripsMetadata = false
+    planner.aiUpscale = true
+    var watermark = WatermarkSettings()
+    watermark.enabled = true
+    watermark.text = "Studio"
+    planner.watermark = watermark
+
+    let snapshot = planner.snapshot()
+    check(snapshot.adjustments == planner.adjustments
+            && snapshot.healSpots == planner.healSpots
+            && snapshot.stickers == planner.stickers
+            && snapshot.aiEdits == planner.aiEdits
+            && snapshot.analysis == planner.analysis,
+          "document content is copied")
+    check(snapshot.crop == planner.crop && snapshot.orientation == planner.orientation
+            && snapshot.selectedFaceIndex == 1,
+          "frame and face choice are copied")
+    check(snapshot.format == .tiff && snapshot.quality == 0.8 && snapshot.longEdge == 2048,
+          "format, quality and long edge are copied")
+    check(snapshot.stripsPrivacyMetadata == false, "the metadata policy is copied")
+    check(snapshot.includeStamps && snapshot.includeAnalysis,
+          "single-photo export includes stamps and analysis by default")
+    check(snapshot.aiUpscale, "the snapshot records the upscale")
+    check(snapshot.watermark == watermark, "the watermark is copied")
+
+    let batch = planner.snapshot(includeStamps: false, includeAnalysis: false)
+    check(!batch.includeStamps && !batch.includeAnalysis,
+          "batch can exclude stamps and analysis")
+
+    var noEdge = makeExportPlanner()
+    noEdge.format = .png
+    noEdge.longEdge = 0
+    check(noEdge.snapshot().longEdge == nil, "zero long edge exports at the photo size")
+
+    var overlay = makeExportPlanner()
+    var lines = AnalysisSettings()
+    lines.isEnabled = true
+    lines.exportMode = .overlayOnly
+    overlay.analysis = lines
+    let linesSnapshot = overlay.snapshot()
+    check(linesSnapshot.format == .png && !linesSnapshot.aiUpscale,
+          "an overlay-only snapshot is png and never upscaled when not requested")
+}
+
 // MARK: - P1-5 / M-13 / M-4
 
 @MainActor
@@ -5139,6 +5289,9 @@ func runAll() async {
     testProjectCodecRelinkRewrite()
     testDocumentRestorationFromProject()
     testDocumentRestorationDefaultsAndPhoto()
+    testExportPlannerNaming()
+    testExportPlannerPixelSize()
+    testExportPlannerSnapshot()
     await testOperationCoordination()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()

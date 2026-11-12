@@ -2897,41 +2897,38 @@ final class EditorModel: ObservableObject {
     /// Whether the export can reach a larger size at all. The upscaler is a
     /// fixed 4x pass with a 40 MP output ceiling, so both the request being an
     /// enlargement and the photo fitting that ceiling decide this.
-    var exportUpscaleAvailable: Bool {
-        let size = workingPixelSize
-        guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return false }
-        let longest = max(size.width, size.height)
-        return longest < CGFloat(exportLongEdge) && ExportUpscale.canHandle(size)
+    private var exportPlanner: ExportPlanner {
+        ExportPlanner(adjustments: adjustments,
+                      healSpots: healSpots,
+                      stickers: stickers,
+                      aiEdits: aiEdits,
+                      analysis: analysis,
+                      crop: appliedCrop,
+                      orientation: documentOrientation,
+                      selectedFaceIndex: selectedFaceIndex,
+                      imageName: imageName,
+                      faceCount: faces.count,
+                      workingPixelSize: workingPixelSize,
+                      format: exportFormat,
+                      quality: exportQuality,
+                      longEdge: exportLongEdge,
+                      aiUpscale: exportAIUpscale,
+                      stripsMetadata: stripLocationMetadata,
+                      watermark: watermark)
     }
+
+    var exportUpscaleAvailable: Bool { exportPlanner.upscaleAvailable }
 
     /// The upscaling that will actually run, if any. Both the snapshot and the
     /// size text read this, so the sheet cannot advertise something the export
     /// will not do.
-    var usesExportUpscale: Bool { exportAIUpscale && exportUpscaleAvailable }
+    var usesExportUpscale: Bool { exportPlanner.usesUpscale }
 
     /// Rough wall time for the pass, from the rate measured on this machine.
-    var exportUpscaleEstimate: Int {
-        ExportUpscale.estimatedSeconds(for: workingPixelSize)
-    }
+    var exportUpscaleEstimate: Int { exportPlanner.upscaleEstimate }
 
-    /// Pixel size the export will actually write. Downscaling never enlarges a
-    /// photo; a larger long edge is only reached through the upscaler.
-    var exportPixelSize: CGSize {
-        let size = workingPixelSize
-        guard exportLongEdge > 0, size.width > 0, size.height > 0 else { return size }
-        let longest = max(size.width, size.height)
-        if longest >= CGFloat(exportLongEdge) {
-            let scale = CGFloat(exportLongEdge) / longest
-            return CGSize(width: (size.width * scale).rounded(),
-                          height: (size.height * scale).rounded())
-        }
-        guard usesExportUpscale else { return size }
-        let edge = ExportUpscale.outputLongEdge(sourceLong: longest,
-                                                requested: CGFloat(exportLongEdge))
-        let scale = edge / longest
-        return CGSize(width: (size.width * scale).rounded(),
-                      height: (size.height * scale).rounded())
-    }
+    /// Pixel size the export will actually write.
+    var exportPixelSize: CGSize { exportPlanner.pixelSize }
 
     var exportPixelText: String {
         let size = exportPixelSize
@@ -2959,29 +2956,10 @@ final class EditorModel: ObservableObject {
         showExportSheet = true
     }
 
-    func suggestedFileName() -> String {
-        let base = (imageName as NSString).deletingPathExtension
-        let name = base.isEmpty ? "retouched" : "\(base)-retouched"
-        // A file name that says "analysis" promises callouts the export cannot
-        // draw when Vision found no face.
-        guard analysis.isEnabled, !faces.isEmpty else {
-            return "\(name).\(exportFormat.fileExtension)"
-        }
-        switch analysis.exportMode {
-        case .onPhoto:
-            return "\(name)-analysis.\(exportFormat.fileExtension)"
-        case .poster:
-            return "\(name)-analysis-poster.\(exportFormat.fileExtension)"
-        case .overlayOnly:
-            return "\(name)-analysis-lines.png"
-        }
-    }
+    func suggestedFileName() -> String { exportPlanner.suggestedFileName() }
 
     /// PNG because an overlay-only export is lines on transparency.
-    private var effectiveExportFormat: ExportFormat {
-        analysis.isEnabled && analysis.exportMode == .overlayOnly && !faces.isEmpty
-            ? .png : exportFormat
-    }
+    private var effectiveExportFormat: ExportFormat { exportPlanner.effectiveFormat }
 
     func saveExport() {
         let panel = NSSavePanel()
@@ -2998,22 +2976,8 @@ final class EditorModel: ObservableObject {
     func makeExportSnapshot(includeStamps: Bool = true,
                             includeAnalysis: Bool = true) -> ExportSnapshot? {
         guard hasImage else { return nil }
-        return ExportSnapshot(adjustments: adjustments,
-                              healSpots: healSpots,
-                              stickers: stickers,
-                              aiEdits: aiEdits,
-                              analysis: analysis,
-                              crop: appliedCrop,
-                              orientation: documentOrientation,
-                              selectedFaceIndex: selectedFaceIndex,
-                              format: effectiveExportFormat,
-                              quality: exportQuality,
-                              longEdge: exportLongEdge > 0 ? CGFloat(exportLongEdge) : nil,
-                              stripsPrivacyMetadata: stripLocationMetadata,
-                              includeStamps: includeStamps,
-                              includeAnalysis: includeAnalysis,
-                              aiUpscale: usesExportUpscale,
-                              watermark: watermark)
+        return exportPlanner.snapshot(includeStamps: includeStamps,
+                                      includeAnalysis: includeAnalysis)
     }
 
     func export(to url: URL) {
