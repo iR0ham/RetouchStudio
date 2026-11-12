@@ -243,6 +243,12 @@ func runChild(_ arguments: [String]) -> Int32 {
             return 72
         }
 
+    case "--child-sleep":
+        // A process that lives inside a runtime path without doing anything,
+        // used as a stand-in for a helper left behind by a crashed app.
+        Thread.sleep(forTimeInterval: seconds(2, 20))
+        return 0
+
     case "--child-model-cli":
         // Starts the model CLI and stays alive only as its launcher. The CLI
         // itself must keep the runtime leased after this process is killed.
@@ -498,26 +504,32 @@ func testUnrelatedProcessIsNeverTerminated() {
     check(legacyBusy, "D: a live older build becomes a retryable busy answer")
 
     // A verified orphan helper inside this runtime is the one process that is
-    // stopped: copy a real binary so `proc_pidpath` reports the runtime path.
+    // stopped. The fixture is a copy of this suite's own ad-hoc signed binary:
+    // newer macOS releases kill a relocated copy of a platform binary before
+    // the test can observe it, which made this check pass without the code
+    // under test doing anything. The copy runs from the runtime path so
+    // `proc_pidpath` reports that path.
     let runtime = AIRuntime.installDirectory(in: support)
     do {
         try makeFakeRuntime(at: runtime, version: "orphan")
         let interpreter = runtime.appendingPathComponent("bin/python3")
         try FileManager.default.removeItem(at: interpreter)
-        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/sleep"),
-                                         to: interpreter)
+        try FileManager.default.copyItem(
+            at: URL(fileURLWithPath: CommandLine.arguments[0]), to: interpreter)
     } catch {
         check(false, "D: orphan fixture written", "\(error)")
         return
     }
     let orphan = Process()
     orphan.executableURL = runtime.appendingPathComponent("bin/python3")
-    orphan.arguments = ["20"]
+    orphan.arguments = ["--child-sleep", support.path, "20"]
     do { try orphan.run() } catch {
         check(false, "D: orphan helper started", "\(error)")
         return
     }
     let orphanPID = orphan.processIdentifier
+    check(pollUntil(2, { kill(orphanPID, 0) == 0 && orphan.isRunning }),
+          "D: the orphan fixture is running", "pid \(orphanPID)")
     writeHelperOwner(in: support, appPID: deadApp, workerPID: orphanPID,
                      executable: runtime.appendingPathComponent("bin/python3").path)
     try? AIWorker.prepareForRuntimeReplacement(support: support)

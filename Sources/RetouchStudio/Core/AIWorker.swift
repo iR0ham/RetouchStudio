@@ -410,9 +410,15 @@ enum AIWorker {
     private static func isInsideRuntime(_ executable: URL, support: URL) -> Bool {
         let supportPath = support.standardizedFileURL.resolvingSymlinksInPath().path
         let path = executable.standardizedFileURL.resolvingSymlinksInPath().path
-        return ["runtime/", "runtime-backup/", "runtime-rejected-"].contains {
-            path.hasPrefix(supportPath + "/" + $0)
-        }
+        // The tree the installer replaces comes from AIRuntime, so the names are
+        // derived from it instead of being repeated here. The `runtime` names
+        // are the pre-protocol-v2 layout; a helper an older build left behind
+        // there is still this app's to stop.
+        let installName = AIRuntime.installDirectory(in: support).lastPathComponent
+        let backupName = AIRuntime.backupDirectory(in: support).lastPathComponent
+        let owned = [installName + "/", backupName + "/", installName + "-rejected-",
+                     "runtime/", "runtime-backup/", "runtime-rejected-"]
+        return owned.contains { path.hasPrefix(supportPath + "/" + $0) }
     }
 
     // MARK: - Running the helper

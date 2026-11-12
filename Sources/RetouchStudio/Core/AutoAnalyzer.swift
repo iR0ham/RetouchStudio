@@ -467,8 +467,13 @@ enum AutoAnalyzer {
 
         // «همین الان متوازن است» یک جواب واقعی است. وقتی همهٔ اسلایدرها دو-سه
         // واحد تکان می‌خورند، نتیجه فقط جابه‌جا شدن بی‌دلیلِ عکس است.
-        let movement = abs(a.exposure) + abs(a.contrast) + abs(a.blacks) + abs(a.whites)
-            + abs(a.saturation) + abs(a.vibrance) + abs(a.warmth) + abs(a.clarity)
+        // Two statements on purpose: the same additions in one eight-term sum
+        // exceed the type checker's budget on older Swift compilers (Xcode
+        // 16.4 refuses it), while the order of the additions below is the
+        // same as the single expression had.
+        let tonalMovement = abs(a.exposure) + abs(a.contrast) + abs(a.blacks) + abs(a.whites)
+        let movement = tonalMovement + abs(a.saturation) + abs(a.vibrance)
+            + abs(a.warmth) + abs(a.clarity)
         return movement < 12 ? Adjustments() : a
     }
 
