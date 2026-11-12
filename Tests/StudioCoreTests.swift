@@ -430,6 +430,145 @@ check(trickyBack.x.bitPattern == tricky.x.bitPattern
       && trickyBack.height.bitPattern == tricky.height.bitPattern,
       "doubles round-trip bit-exactly")
 
+print("Document history: shared rules")
+
+struct CoreState: HistoryState, Equatable {
+    var value = 0
+    init() {}
+    init(_ value: Int) { self.value = value }
+}
+
+extension DocumentHistory where State == CoreState {
+    init() { self.init(CoreState()) }
+}
+
+var history = DocumentHistory<CoreState>()
+check(!history.canUndo(current: CoreState()) && !history.canRedo(current: CoreState()),
+      "a fresh history has no steps")
+check(history.undoStack.isEmpty && history.redoStack.isEmpty,
+      "a fresh history starts with empty stacks")
+check(history.lastCommitted == CoreState() && history.cleanState == CoreState(),
+      "a fresh history starts on an empty baseline")
+
+history.commit(CoreState(1))
+check(history.undoStack == [CoreState()], "a first commit records the empty baseline")
+check(history.canUndo(current: CoreState(1)), "an edit is undoable")
+check(history.undo(current: CoreState(1)) == CoreState(), "undo returns the baseline")
+check(history.redo(current: CoreState()) == CoreState(1), "redo returns the edit")
+check(history.cleanState == CoreState(), "undo and redo leave the clean baseline alone")
+
+let unchanged = history.undoStack.count
+history.commit(CoreState(1))
+check(history.undoStack.count == unchanged, "committing the recorded state adds no step")
+
+_ = history.undo(current: CoreState(1))
+check(history.canRedo(current: CoreState()), "undo opens a redo branch")
+history.commit(CoreState(2))
+check(!history.canRedo(current: CoreState(2)), "a new edit discards the redo branch")
+check(history.redo(current: CoreState(2)) == nil, "the discarded branch cannot be replayed")
+
+var capped = DocumentHistory<CoreState>()
+for value in 1...(DocumentHistory<CoreState>.stepLimit + 20) {
+    capped.commit(CoreState(value))
+}
+check(capped.undoStack.count == DocumentHistory<CoreState>.stepLimit,
+      "history keeps at most \(DocumentHistory<CoreState>.stepLimit) steps")
+var walked = CoreState(DocumentHistory<CoreState>.stepLimit + 20)
+var steps: [Int] = []
+while let previous = capped.undo(current: walked) {
+    steps.append(previous.value)
+    walked = previous
+}
+check(steps.count == DocumentHistory<CoreState>.stepLimit, "the kept steps are all reachable")
+check(steps.first == DocumentHistory<CoreState>.stepLimit + 19 && steps.last == 20,
+      "the oldest steps are dropped first")
+
+var reset = DocumentHistory<CoreState>()
+reset.commit(CoreState(1))
+reset.commit(CoreState(2))
+reset.reset(to: CoreState(7))
+check(reset.undoStack.isEmpty && reset.redoStack.isEmpty, "reset clears both stacks")
+check(reset.lastCommitted == CoreState(7) && reset.cleanState == CoreState(7),
+      "reset makes the state both baselines")
+
+var cleaned = DocumentHistory<CoreState>()
+cleaned.commit(CoreState(1))
+cleaned.markClean(CoreState(1))
+check(cleaned.cleanState == CoreState(1), "markClean moves the clean baseline")
+check(cleaned.undoStack.count == 1, "markClean leaves history intact")
+
+var original = DocumentHistory<CoreState>()
+original.commit(CoreState(1))
+var copy = original
+copy.commit(CoreState(2))
+check(original.undoStack.count == 1 && copy.undoStack.count == 2,
+      "two histories never share a stack")
+
+print("Recovery rules: shared decisions")
+
+var epoch = RecoveryRules.AutosaveEpoch()
+let captured = epoch.value
+check(epoch.accepts(captured), "a captured generation is accepted before invalidation")
+epoch.invalidate()
+check(!epoch.accepts(captured), "invalidation refuses work captured earlier")
+check(epoch.accepts(epoch.value), "the current generation is accepted")
+
+check(RecoveryRules.isCandidateFileName("0000000000000-abc.retouch"),
+      "a candidate copy is recognized by extension")
+check(!RecoveryRules.isCandidateFileName(".hidden.retouch"),
+      "a dotfile is never a candidate")
+check(!RecoveryRules.isCandidateFileName("snapshot.json"),
+      "another extension is not a candidate")
+check(!RecoveryRules.isCandidateFileName(".retouch"),
+      "a bare extension is not a candidate")
+
+let orderBase = Date(timeIntervalSince1970: 1_000)
+check(RecoveryRules.olderFirst(.init(savedAt: orderBase, name: "a"),
+                               .init(savedAt: orderBase, name: "b")),
+      "the same millisecond orders by name")
+check(RecoveryRules.olderFirst(.init(savedAt: orderBase, name: "z"),
+                               .init(savedAt: orderBase.addingTimeInterval(1), name: "a")),
+      "an older date wins before the name")
+
+check(RecoveryRules.monotonic(orderBase, after: nil) == orderBase,
+      "the first legacy copy keeps its date")
+check(RecoveryRules.monotonic(orderBase, after: orderBase) == orderBase.addingTimeInterval(0.001),
+      "a tie moves forward by a millisecond")
+let laterDate = orderBase.addingTimeInterval(5)
+check(RecoveryRules.monotonic(laterDate, after: orderBase) == laterDate,
+      "a later date is kept")
+
+let quarantineID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+check(RecoveryRules.quarantineFileName(base: "snap", pathExtension: "retouch", id: quarantineID)
+      == "snap-11111111-2222-3333-4444-555555555555.retouch",
+      "quarantine keeps the base and extension")
+check(RecoveryRules.quarantineFileName(base: "snap", pathExtension: "", id: quarantineID)
+      == "snap-11111111-2222-3333-4444-555555555555",
+      "an empty extension adds no dot")
+check(RecoveryRules.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID())
+      != RecoveryRules.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID()),
+      "two quarantines cannot collide")
+
+print("Project platform ports")
+
+struct CoreSources: ProjectSourceAccess {
+    var existing: Set<String>
+    func fileExists(at url: URL) -> Bool { existing.contains(url.path) }
+}
+
+struct CoreBookmarks: ProjectBookmarkStore {
+    var stored: [URL: Data] = [:]
+    func bookmark(for url: URL) -> Data? { stored[url] }
+    func resolveBookmark(_ data: Data) -> URL? { stored.first { $0.value == data }?.key }
+}
+
+let photoURL = URL(fileURLWithPath: "/tmp/photo.jpg")
+let coreSources = CoreSources(existing: [photoURL.path])
+let coreBookmarks = CoreBookmarks(stored: [photoURL: Data([1, 2, 3])])
+check(coreSources.fileExists(at: photoURL), "a host answers path existence")
+check(coreBookmarks.resolveBookmark(coreBookmarks.bookmark(for: photoURL)!) == photoURL,
+      "a host round-trips its own bookmark")
+
 print("")
 print(failures.isEmpty
       ? "StudioCore: \(checks) checks passed"

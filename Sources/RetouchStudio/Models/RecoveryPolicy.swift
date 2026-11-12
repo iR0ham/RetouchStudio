@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// How the photo a snapshot was made against relates to what is on disk now.
 /// `.available` offers the copy; `.changed` and `.missing` ask the owner before
@@ -12,8 +13,9 @@ enum RecoverySourceState: Equatable {
 /// The decisions a recovery launch makes, with no file system underneath.
 ///
 /// `RecoveryStore` still owns the directory layout, renames and durability.
-/// Everything that can be decided from values alone lives here, so the rules
-/// are testable without a store and the store cannot quietly change them.
+/// Everything that can be decided from values alone lives here or in
+/// `RecoveryRules`. The rules that read only names and dates live in
+/// StudioCore; the ones that need a snapshot or a project stay here.
 enum RecoveryPolicy {
 
     /// Why a candidate cannot be restored by this build. The copy itself is
@@ -24,35 +26,21 @@ enum RecoveryPolicy {
     }
 
     /// Invalidates work captured under an earlier generation.
-    struct AutosaveEpoch: Equatable {
-        private(set) var value = 0
-
-        mutating func invalidate() {
-            value &+= 1
-        }
-
-        func accepts(_ captured: Int) -> Bool {
-            captured == value
-        }
-    }
+    typealias AutosaveEpoch = RecoveryRules.AutosaveEpoch
 
     /// The date is what "oldest first" means. A candidate name carries only
     /// milliseconds, so two copies from the same millisecond keep a stable
     /// order by name without letting the name decide between different dates.
-    struct CandidateOrderKey: Equatable {
-        var savedAt: Date
-        var name: String
-    }
+    typealias CandidateOrderKey = RecoveryRules.CandidateOrderKey
 
     static func olderFirst(_ lhs: CandidateOrderKey, _ rhs: CandidateOrderKey) -> Bool {
-        if lhs.savedAt != rhs.savedAt { return lhs.savedAt < rhs.savedAt }
-        return lhs.name < rhs.name
+        RecoveryRules.olderFirst(lhs, rhs)
     }
 
     /// Candidate copies, never the working slot and never a dotfile the file
     /// system left behind.
     static func isCandidateFileName(_ name: String) -> Bool {
-        (name as NSString).pathExtension == "retouch" && !name.hasPrefix(".")
+        RecoveryRules.isCandidateFileName(name)
     }
 
     /// Reads either a snapshot or the bare project older releases wrote.
@@ -98,14 +86,12 @@ enum RecoveryPolicy {
     /// Legacy slots are promoted one at a time with increasing dates, so the
     /// postponed copy keeps being offered first.
     static func monotonic(_ date: Date, after previous: Date?) -> Date {
-        guard let previous else { return date }
-        return date > previous ? date : previous.addingTimeInterval(0.001)
+        RecoveryRules.monotonic(date, after: previous)
     }
 
     /// A quarantined file keeps its recognizable base name and gains the
     /// destination UUID, so a second damaged copy cannot replace the first.
     static func quarantineFileName(base: String, pathExtension: String, id: UUID) -> String {
-        pathExtension.isEmpty ? "\(base)-\(id.uuidString)"
-                              : "\(base)-\(id.uuidString).\(pathExtension)"
+        RecoveryRules.quarantineFileName(base: base, pathExtension: pathExtension, id: id)
     }
 }

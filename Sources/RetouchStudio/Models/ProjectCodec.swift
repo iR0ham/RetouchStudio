@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import StudioCore
 
 /// One snapshot of an open document, ready to become a project. The shell waives
 /// the cases the codec cannot decide (no photo open, blocking work running).
@@ -12,18 +13,6 @@ struct ProjectInput {
     var exportLongEdge: Int
     var autoRetouchStrength: Double
     var autoColorStrength: Double
-}
-
-/// Asks whether a path exists. The codec cannot touch the file system itself:
-/// the resolver only needs the answer, and tests supply their own.
-protocol ProjectSourceAccess {
-    func fileExists(at url: URL) -> Bool
-}
-
-/// Makes and resolves the bookmark that keeps a photo reachable after a move.
-protocol ProjectBookmarkStore {
-    func bookmark(for url: URL) -> Data?
-    func resolveBookmark(_ data: Data) -> URL?
 }
 
 struct FileProjectSourceAccess: ProjectSourceAccess {
