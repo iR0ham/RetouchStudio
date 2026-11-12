@@ -316,14 +316,15 @@ final class PersianL10n: L10n {
     override func batchProgress(_ index: Int, _ total: Int) -> String {
         "خروجی \(Digits.num(index)) از \(Digits.num(total))…"
     }
-    override func batchFinished(_ saved: Int, _ total: Int, cropsSkipped: Int) -> String {
+    override func batchFinished(_ saved: Int, _ total: Int, cropsSkipped: Int, failed: Int) -> String {
         let savedText = saved == total
             ? "\(Digits.num(saved)) عکس ذخیره شد"
             : "\(Digits.num(saved)) از \(Digits.num(total)) عکس ذخیره شد"
         let skippedText = cropsSkipped > 0
             ? " · \(Digits.num(cropsSkipped)) برش رد شد (شکل متفاوت)"
             : ""
-        return "خروجی گروهی تمام شد: \(savedText)\(skippedText)."
+        let failedText = failed > 0 ? " · \(Digits.num(failed)) ناموفق" : ""
+        return "خروجی گروهی تمام شد: \(savedText)\(skippedText)\(failedText)."
     }
     override var batchCancelled: String { "خروجی گروهی لغو شد." }
     override var batchSheetTitle: String { "خروجی گروهی" }

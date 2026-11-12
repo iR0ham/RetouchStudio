@@ -22,10 +22,10 @@ struct TopBar: View {
             // arrows swap their glyphs instead of being flipped as bitmaps.
             barButton(direction == .rightToLeft ? "arrow.uturn.forward" : "arrow.uturn.backward",
                       help: model.s.undoHelp,
-                      enabled: model.canUndo) { model.undo() }
+                      enabled: model.canUndo && !model.isHistoryBlocked) { model.undo() }
             barButton(direction == .rightToLeft ? "arrow.uturn.backward" : "arrow.uturn.forward",
                       help: model.s.redoHelp,
-                      enabled: model.canRedo) { model.redo() }
+                      enabled: model.canRedo && !model.isHistoryBlocked) { model.redo() }
 
             barButton("questionmark.circle",
                       help: TutorialCopy.current.buttonHelp) {
@@ -139,6 +139,7 @@ struct TopBar: View {
         .buttonStyle(PressableButtonStyle(dip: 0.9))
         .disabled(!enabled)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     private var exportPill: some View {
@@ -160,8 +161,9 @@ struct TopBar: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle(dip: 0.95))
-        .disabled(!model.hasImage)
+        .disabled(!model.hasImage || model.isOperationBlocking)
         .help(model.s.exportHelp)
+        .accessibilityLabel(model.s.export)
         .animation(Motion.snappy, value: model.hasImage)
     }
 }

@@ -911,8 +911,7 @@ func testProjectVersionGuard() async {
 func testProjectV3BaselineByteIdentity() {
     print("\n[R4.3] the project v3 fixture re-encodes byte for byte")
 
-    let fixtureURL = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
+    let fixtureURL = testsDirectory()
         .appendingPathComponent("Fixtures/ProjectV3/project-v3-full.retouch")
     guard let original = try? Data(contentsOf: fixtureURL) else {
         check(false, "the v3 fixture is readable", fixtureURL.path)
@@ -983,14 +982,27 @@ private struct StubBookmarks: ProjectBookmarkStore {
     func resolveBookmark(_ data: Data) -> URL? { resolved[data] }
 }
 
+/// Where the checked-in fixtures live. `run.sh` compiles each suite from a
+/// scratch copy under `main.swift`, so `#filePath` points into that scratch
+/// directory rather than the checkout. The harness passes the checkout root in
+/// `RETOUCH_TESTS_ROOT`; a direct compile of this file falls back to its own
+/// location.
+private func testsDirectory() -> URL {
+    if let root = ProcessInfo.processInfo.environment["RETOUCH_TESTS_ROOT"],
+       !root.isEmpty {
+        return URL(fileURLWithPath: root).appendingPathComponent("Tests")
+    }
+    return URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+}
+
 private func projectV3Fixture() -> (url: URL, data: Data) {
-    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    let url = testsDirectory()
         .appendingPathComponent("Fixtures/ProjectV3/project-v3-full.retouch")
     return (url, (try? Data(contentsOf: url)) ?? Data())
 }
 
 private func projectV4Fixture() -> (url: URL, data: Data) {
-    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    let url = testsDirectory()
         .appendingPathComponent("Fixtures/ProjectV4/project-v4-full.retouch")
     return (url, (try? Data(contentsOf: url)) ?? Data())
 }
@@ -1743,6 +1755,8 @@ func testExportPlannerNaming() {
     check(planner.suggestedFileName() == "portrait-retouched-analysis-lines.png",
           "overlay-only names a png", planner.suggestedFileName())
     check(planner.effectiveFormat == .png, "overlay-only always exports png")
+    check(planner.snapshot(includeAnalysis: false).format == .jpeg,
+          "a batch that draws no callouts keeps the chosen format")
 
     planner.faceCount = 0
     check(planner.suggestedFileName() == "portrait-retouched.jpg",
@@ -2093,7 +2107,8 @@ func testBatchCancellationStopsInFlightFile() async {
     check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
           "a batch runs normally after a cancellation")
     check(model.batchSavedCount == 1
-            && model.statusToken == .batchFinished(saved: 1, total: 1, cropsSkipped: 0),
+            && model.statusToken == .batchFinished(saved: 1, total: 1, cropsSkipped: 0,
+                                                   failed: 0),
           "the later batch saved its file", "\(model.statusToken)")
 }
 
@@ -2140,8 +2155,11 @@ func testBatchWriteFailureIsNotCounted() async {
           "\(model.batchSavedCount)")
     check(model.batchCompleted == 2,
           "the failed file still finishes its turn", "\(model.batchCompleted)")
-    check(model.statusToken == .batchFinished(saved: 1, total: 2, cropsSkipped: 0),
-          "the report says one of two was saved", "\(model.statusToken)")
+    check(model.statusToken == .batchFinished(saved: 1, total: 2, cropsSkipped: 0,
+                                             failed: 1),
+          "the report says one of two was saved and one failed", "\(model.statusToken)")
+    check(model.batchFailedCount == 1, "the failed write is reported as a failure",
+          "\(model.batchFailedCount)")
 
     let firstOut = folder.appendingPathComponent("\(prefix)-first-retouched.png")
     let secondOut = folder.appendingPathComponent("\(prefix)-second-retouched.png")
@@ -2160,7 +2178,8 @@ func testBatchWriteFailureIsNotCounted() async {
     check(await waitUntil(180) { !model.isBatchRunning && model.batchHasReport },
           "a batch runs normally after a failed write")
     check(model.batchSavedCount == 1
-            && model.statusToken == .batchFinished(saved: 1, total: 1, cropsSkipped: 0),
+            && model.statusToken == .batchFinished(saved: 1, total: 1, cropsSkipped: 0,
+                                                   failed: 0),
           "the later batch saved its file", "\(model.statusToken)")
 }
 
@@ -4652,6 +4671,58 @@ func testFailedLoadPreservesDocument() async {
 }
 
 @MainActor
+func testFailedOpenKeepsDocumentAutosave() async {
+    print("\n[M1-L2] a failed open keeps the surviving document's autosave")
+
+    await settleRecoveryWrites()
+    let settings = AppSettings.shared
+    let previousRecoverySetting = settings.recoveryEnabled
+    settings.recoveryEnabled = true
+    defer { settings.recoveryEnabled = previousRecoverySetting }
+
+    guard let good = recoveryFixture("failedopen-good.png", width: 400, height: 500),
+          let second = recoveryFixture("failedopen-second.png", width: 420, height: 500) else {
+        check(false, "failed-open fixtures written")
+        return
+    }
+    let bad = workDir.appendingPathComponent("failedopen-bad.png")
+    check((try? Data("not an image".utf8).write(to: bad)) != nil, "corrupt fixture written")
+
+    let model = EditorModel()
+    // The launch pass runs before any open in production, so the barrier is
+    // already satisfied and the working slot below belongs to this document.
+    model.offerRecoveryIfNeeded()
+    model.load(url: good)
+    check(await waitUntil(60) { model.hasImage && !model.isBusy }, "good fixture loads")
+    model.adjustments.smooth = 33
+    model.flushAutosave()
+    check(RecoveryStore.readWorking()?.project.adjustments.smooth == 33,
+          "the document's edit is durable before the failed open")
+
+    model.discardChoiceHandler = { true }
+    defer { model.discardChoiceHandler = nil }
+    model.requestLoad(url: bad)
+    check(await waitUntil(60) { model.status == L10n.current.couldNotRead },
+          "the failed open is reported", model.status)
+    check(model.hasImage, "the previous document remains on screen")
+    check(model.adjustments.smooth == 33, "the previous edit remains on screen")
+    check(RecoveryStore.readWorking()?.project.imagePath == good.path,
+          "the surviving document still owns the working slot")
+    check(RecoveryStore.readWorking()?.project.adjustments.smooth == 33,
+          "the surviving document's autosave copy is intact")
+
+    // Only a successful replacement may discard the old copy.
+    model.requestLoad(url: second)
+    check(await waitUntil(60) {
+        model.status != L10n.current.couldNotRead && model.hasImage && !model.isBusy
+    }, "the next open succeeds")
+    check(model.imageURL?.standardizedFileURL == second.standardizedFileURL,
+          "the second photo replaces the failed one", model.imageName)
+    check(RecoveryStore.readWorking() == nil,
+          "the replaced document's autosave copy is cleared on success")
+}
+
+@MainActor
 func testExportProtectsSource() async {
     print("\n[M1-X] export refuses the source path and every alias")
 
@@ -6177,6 +6248,7 @@ func runAll() async {
     await testRecoveryV4RestorePreservesMetadata()
     await testRecoveryRefusesUnsupportedRequiredFeatures()
     await testFailedLoadPreservesDocument()
+    await testFailedOpenKeepsDocumentAutosave()
     await testExportProtectsSource()
     await testBatchDoesNotOverwriteSource()
     testRuntimeTransactionalInstall()

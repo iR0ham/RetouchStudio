@@ -49,7 +49,9 @@ run_suite() {
     $SOURCES "$CORE_DIR/libStudioCore.a" \
     -framework SwiftUI -framework AppKit -framework CoreImage \
     -framework Vision -framework UniformTypeIdentifiers 2>&1 | grep -E "error:" && exit 1
-  "$out"
+  # The suites are compiled from a scratch copy, so fixture lookups cannot use
+  # #filePath. Hand the checkout root over instead.
+  RETOUCH_TESTS_ROOT="$PWD" "$out"
 }
 
 run_suite Tests/EngineTests.swift enginetests

@@ -107,96 +107,104 @@ struct ExportSheet: View {
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(model.s.format.uppercased())
-                    .font(Theme.Font.section)
-                    .tracking(0.6)
-                    .foregroundStyle(Theme.faint)
-                    .help(model.s.formatHelp)
-                formatPicker
-            }
-            .opacity(linesOnly ? 0.4 : 1)
-            .disabled(linesOnly)
-
-            if model.exportFormat.supportsQuality {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(model.s.quality.uppercased())
+            // Every section can be open at once on a small display; the shell
+            // scrolls instead of pushing Save past the bottom of the sheet.
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(model.s.format.uppercased())
                             .font(Theme.Font.section)
                             .tracking(0.6)
                             .foregroundStyle(Theme.faint)
-                        Spacer()
-                        Text(Digits.percent(Int((model.exportQuality * 100).rounded())))
-                            .font(Theme.Font.value)
-                            .foregroundStyle(Theme.text)
-                            .contentTransition(.numericText())
-                            .animation(Motion.snappy, value: model.exportQuality)
+                            .help(model.s.formatHelp)
+                        formatPicker
                     }
-                    BipolarSlider(value: $model.exportQuality, range: 0.4...1.0, step: 0.01)
-                }
-                .opacity(linesOnly ? 0.4 : 1)
-                .disabled(linesOnly)
-                .help("\(model.s.quality) — \(model.s.sliderHint(.exportQuality))")
-            }
+                    .opacity(linesOnly ? 0.4 : 1)
+                    .disabled(linesOnly)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(model.s.exportLongEdge.uppercased())
-                    .font(Theme.Font.section)
-                    .tracking(0.6)
-                    .foregroundStyle(Theme.faint)
-                HStack(spacing: 2) {
-                    ForEach(Self.longEdgeChoices, id: \.self) { edge in
-                        let active = model.exportLongEdge == edge
-                        Button {
-                            model.exportLongEdge = edge
-                        } label: {
-                            Text(edge == 0 ? model.s.exportOriginal : Digits.num(edge))
-                                .font(Theme.Font.face(size: 11.5, weight: active ? .semibold : .regular))
-                                .foregroundStyle(active ? Theme.accentInk : Theme.muted)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 28)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(active ? Theme.accent : Color.clear)
-                                )
-                                .contentShape(Rectangle())
+                    if model.exportFormat.supportsQuality {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(model.s.quality.uppercased())
+                                    .font(Theme.Font.section)
+                                    .tracking(0.6)
+                                    .foregroundStyle(Theme.faint)
+                                Spacer()
+                                Text(Digits.percent(Int((model.exportQuality * 100).rounded())))
+                                    .font(Theme.Font.value)
+                                    .foregroundStyle(Theme.text)
+                                    .contentTransition(.numericText())
+                                    .animation(Motion.snappy, value: model.exportQuality)
+                            }
+                            BipolarSlider(value: $model.exportQuality, range: 0.4...1.0, step: 0.01)
                         }
-                        .buttonStyle(PressableButtonStyle(dip: 0.96))
+                        .opacity(linesOnly ? 0.4 : 1)
+                        .disabled(linesOnly)
+                        .help("\(model.s.quality) — \(model.s.sliderHint(.exportQuality))")
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(model.s.exportLongEdge.uppercased())
+                            .font(Theme.Font.section)
+                            .tracking(0.6)
+                            .foregroundStyle(Theme.faint)
+                        HStack(spacing: 2) {
+                            ForEach(Self.longEdgeChoices, id: \.self) { edge in
+                                let active = model.exportLongEdge == edge
+                                Button {
+                                    model.exportLongEdge = edge
+                                } label: {
+                                    Text(edge == 0 ? model.s.exportOriginal : Digits.num(edge))
+                                        .font(Theme.Font.face(size: 11.5, weight: active ? .semibold : .regular))
+                                        .foregroundStyle(active ? Theme.accentInk : Theme.muted)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 28)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                .fill(active ? Theme.accent : Color.clear)
+                                        )
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(PressableButtonStyle(dip: 0.96))
+                            }
+                        }
+                        .padding(3)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                                .fill(Theme.background)
+                        )
+                    }
+                    .help(model.s.exportLongEdgeHelp)
+
+                    if model.exportEnlargementRequested, !linesOnly {
+                        upscaleSection
+                    }
+
+                    if model.analysis.isEnabled {
+                        analysisSection
+                    }
+
+                    watermarkSection
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(model.s.originalSize(model.imageInfo))
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.muted)
+                        if model.exportLongEdge > 0, model.exportPixelText != model.imageInfo {
+                            Text(model.s.exportSize(model.exportPixelText))
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(Theme.muted)
+                        }
+                        Text(model.s.suggestedName(model.suggestedFileName()))
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.faint)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
-                .padding(3)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                        .fill(Theme.background)
-                )
             }
-            .help(model.s.exportLongEdgeHelp)
-
-            if model.exportEnlargementRequested, !linesOnly {
-                upscaleSection
-            }
-
-            if model.analysis.isEnabled {
-                analysisSection
-            }
-
-            watermarkSection
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.s.originalSize(model.imageInfo))
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.muted)
-                if model.exportLongEdge > 0, model.exportPixelText != model.imageInfo {
-                    Text(model.s.exportSize(model.exportPixelText))
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(Theme.muted)
-                }
-                Text(model.s.suggestedName(model.suggestedFileName()))
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.faint)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            .scrollIndicators(.automatic)
+            .frame(maxHeight: 520)
 
             Hairline()
 
@@ -217,6 +225,10 @@ struct ExportSheet: View {
                 }
                 .buttonStyle(PressableButtonStyle())
                 .keyboardShortcut(.cancelAction)
+                // Closing the sheet during a render would leave the export
+                // running with no visible way to stop it.
+                .disabled(model.isExporting)
+                .opacity(model.isExporting ? 0.5 : 1)
 
                 Spacer()
 
@@ -564,7 +576,8 @@ struct BatchExportSheet: View {
             } else {
                 Text(model.s.statusText(.batchFinished(saved: model.batchSavedCount,
                                                        total: model.batchTotal,
-                                                       cropsSkipped: model.batchSkippedCrops)))
+                                                       cropsSkipped: model.batchSkippedCrops,
+                                                       failed: model.batchFailedCount)))
                     .font(Theme.Font.face(size: 11.5))
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
