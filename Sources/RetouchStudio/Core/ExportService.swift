@@ -21,6 +21,9 @@ struct ExportSource {
     var photoAspect: CGFloat
     var colorSpace: CGColorSpace?
     var metadata: [CFString: Any]
+    /// The source XMP graph. It has no property keys, so it travels apart from
+    /// `metadata` and is written only when privacy stripping is off.
+    var xmp: CGImageMetadata? = nil
 }
 
 struct RenderedExport {
@@ -245,9 +248,10 @@ enum ExportService {
                       to url: URL,
                       colorSpace: CGColorSpace?,
                       metadata: [CFString: Any],
+                      xmp: CGImageMetadata? = nil,
                       protecting protectedURL: URL? = nil) -> Bool {
         writeResult(rendered, snapshot: snapshot, to: url,
-                    colorSpace: colorSpace, metadata: metadata,
+                    colorSpace: colorSpace, metadata: metadata, xmp: xmp,
                     protecting: protectedURL) == .written
     }
 
@@ -256,6 +260,7 @@ enum ExportService {
                             to url: URL,
                             colorSpace: CGColorSpace?,
                             metadata: [CFString: Any],
+                            xmp: CGImageMetadata? = nil,
                             protecting protectedURL: URL?) -> WriteResult {
         if let protectedURL, referencesSameFile(url, protectedURL) {
             return .refusedOriginal
@@ -268,6 +273,7 @@ enum ExportService {
                                     quality: snapshot.quality,
                                     colorSpace: colorSpace,
                                     metadata: rendered.carriesSourceMetadata ? metadata : [:],
+                                    xmp: rendered.carriesSourceMetadata ? xmp : nil,
                                     stripPrivacyMetadata: snapshot.stripsPrivacyMetadata,
                                     maxDimension: snapshot.longEdge.map { CGFloat($0) })
         guard wrote else {

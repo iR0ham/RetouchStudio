@@ -302,3 +302,48 @@ Interpreting a failure:
 - **Reference PNG mismatch with a matching digest** is impossible unless the PNG writer changed; the harness decodes and compares pixels, not bytes.
 - **A fixture manifest mismatch** is a corpus problem, not an engine result.
 - **A cross-architecture or cross-platform mismatch** is expected at some level and must be judged with the methodology document; it is not automatically a defect.
+
+---
+
+## 11. Precision, colour-space and XMP decisions (2026-11-13)
+
+This section records engine changes made after the baseline table above and
+what they do and do not prove. The corpus baselines were not regenerated.
+
+**16-bit sources survive the upright bake.** `ImageProcessor.load` bakes an
+EXIF orientation by rendering the turned image through Core Image. That render
+used to request an RGBA8 intermediate unconditionally, so a 16-bit PNG or TIFF
+reached analysis and export with 8-bit values inside a 16-bit container. The
+intermediate format now follows the source's own depth
+(`renderFormat(for:)`: RGBA8 up to 8 bpc, RGBA16 up to 16, RGBAf above).
+`EngineTests` writes a 48×32 16-bit PNG tagged orientation 6 and compares its
+load against a pre-upright RGBA16 reference: the observed channel delta is 1
+LSB, while an 8-bit bake misses by about 127. This is a fix, not new behaviour
+to recapture — F10 is an 8-bit rotated fixture and F11 is 16-bit but not
+rotated, so no baseline depends on the old path.
+
+**The working colour space is named and wide.** An unconfigured `CIContext`
+on this toolchain reports `kCGColorSpaceExtendedLinearSRGB` as its working
+space (`CIContext.workingColorSpace`, measured). The context now names that
+space instead of inheriting it. Naming plain sRGB was tried and rejected: it
+is a narrower space, it clipped wide-gamut intermediates, and it shifted
+existing effect results (`reshape` and `teethWhiten` regressions in
+`EngineTests`). Source profiles still tag exports, so a Display P3 photo
+keeps its P3 profile. What is *not* proven: the preview surface, the PDF/print
+path, and any wide-gamut display path beyond the encoded file.
+
+**XMP survives when the owner keeps metadata.** `load` reads the XMP packet
+with `CGImageSourceCopyMetadataAtIndex` and carries it as `CGImageMetadata`
+(`LoadResult.xmp` → `ExportSource.xmp` → `ExportService.write`). When
+`stripPrivacyMetadata` is false, the writer uses
+`CGImageDestinationAddImageAndMetadata`, so `dc:`, `photoshop:` and other
+XMP namespaces the engine does not interpret travel with the export; when it
+is true, the previous property-dictionary path runs and XMP is not written.
+The EXIF/XMP orientation tags are removed from the carried graph because the
+pixels were already baked upright and a surviving tag would turn the photo a
+second time. The regression covers a JPEG round trip only; PNG, TIFF and HEIC
+XMP preservation is **NOT VERIFIED**.
+
+These changes do not characterize GPU-versus-CPU rendering, RAW decoding, or
+any Windows/Linux renderer. There is no Windows renderer in this repository
+yet.

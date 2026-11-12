@@ -67,6 +67,7 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
         switch ExportService.writeResult(output, snapshot: request, to: destination,
                                          colorSpace: colorSpace,
                                          metadata: source.metadata,
+                                         xmp: source.xmp,
                                          protecting: protectedURL) {
         case .written:
             return RenderResult(destination: destination,

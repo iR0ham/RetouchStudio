@@ -1230,6 +1230,56 @@ if let xmp = privacyXMP() {
     check(false, "XMP fixture")
 }
 
+// With privacy removal off, the source XMP graph must travel as XMP, not be
+// flattened into a few mirrored property keys. This reads a real file through
+// `ImageProcessor.load`, so the writer receives what the app actually carries.
+if let xmp = privacyXMP() {
+    let sourceURL = privacyDirectory.appendingPathComponent("xmp-keep-source.jpg")
+    let writeSource = CGImageDestinationCreateWithURL(
+        sourceURL as CFURL, ExportFormat.jpeg.utType.identifier as CFString, 1, nil)
+        .map { destination -> Bool in
+            CGImageDestinationAddImageAndMetadata(destination, privacyCG, xmp, nil)
+            return CGImageDestinationFinalize(destination)
+        } ?? false
+    if writeSource, let loaded = processor.load(from: sourceURL, previewMaxDimension: 512) {
+        check(loaded.xmp != nil, "load carries the source XMP graph")
+        let source = ExportSource(image: loaded.sourceFull, masks: nil, faces: [],
+                                  photoAspect: 1, colorSpace: loaded.colorSpace,
+                                  metadata: loaded.metadata, xmp: loaded.xmp)
+        let rendered = RenderedExport(image: source.image, carriesSourceMetadata: true)
+
+        var keep = privacySnapshot
+        keep.stripsPrivacyMetadata = false
+        let keepURL = privacyDirectory.appendingPathComponent("xmp-keep-out.jpg")
+        let wroteKeep = ExportService.writeResult(
+            rendered, snapshot: keep, to: keepURL, colorSpace: sRGB,
+            metadata: source.metadata, xmp: source.xmp, protecting: nil) == .written
+        let keptPaths = privacyXMPPaths(at: keepURL).map { $0.lowercased() }
+        check(wroteKeep
+                && keptPaths.contains { $0.contains("dc:creator") }
+                && keptPaths.contains { $0.contains("photoshop:city") },
+              "source XMP survives when privacy stripping is off",
+              keptPaths.joined(separator: ", "))
+
+        var strip = privacySnapshot
+        strip.stripsPrivacyMetadata = true
+        let stripURL = privacyDirectory.appendingPathComponent("xmp-strip-out.jpg")
+        _ = ExportService.writeResult(
+            rendered, snapshot: strip, to: stripURL, colorSpace: sRGB,
+            metadata: source.metadata, xmp: source.xmp, protecting: nil)
+        let strippedPaths = privacyXMPPaths(at: stripURL).map { $0.lowercased() }
+        check(!strippedPaths.contains {
+                $0.contains("dc:creator") || $0.contains("photoshop:city") || $0.contains("dc:rights")
+              },
+              "source XMP is dropped entirely when privacy stripping is on",
+              strippedPaths.joined(separator: ", "))
+    } else {
+        check(false, "the XMP keep-source fixture loads")
+    }
+} else {
+    check(false, "XMP keep fixture")
+}
+
 // Turning the policy off is the old behaviour: every key travels again.
 var keepSnapshot = privacySnapshot
 keepSnapshot.stripsPrivacyMetadata = false
@@ -1384,6 +1434,99 @@ if let flippedImage = processor.renderCGImage(
           "a flip moves the left half to the right", "L\(left) R\(right)")
 } else {
     check(false, "flip render")
+}
+
+// A rotated 16-bit photo must keep its low-order bits through the upright
+// bake. The reference is the same pixels turned with an RGBA16 render; a
+// stored RGBA8 orientation pass snaps them to multiples of 257 and misses
+// every 16-bit value in between.
+func deepFixture(width: Int, height: Int) -> CGImage {
+    let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 16,
+                        bytesPerRow: 0, space: sRGB,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(srgbRed: 32769.0 / 65535.0, green: 33023.0 / 65535.0,
+                             blue: 49151.0 / 65535.0, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(width) / 2, height: CGFloat(height)))
+    ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: CGFloat(width) / 2, y: 0,
+                    width: CGFloat(width) / 2, height: CGFloat(height)))
+    return ctx.makeImage()!
+}
+
+// A 16-bit CGContext stores components big-endian, so the words are decoded
+// from bytes; binding the buffer to UInt16 reads the halves swapped on arm64
+// and would compare nonsense values.
+func deepSample(_ image: CGImage, _ points: [(Int, Int)]) -> [(Int, Int, Int)] {
+    guard let ctx = CGContext(data: nil, width: image.width, height: image.height,
+                              bitsPerComponent: 16, bytesPerRow: 0, space: sRGB,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return [] }
+    ctx.interpolationQuality = .none
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    guard let raw = ctx.data else { return [] }
+    let bytesPerRow = ctx.bytesPerRow
+    let bytes = raw.bindMemory(to: UInt8.self, capacity: bytesPerRow * image.height)
+    return points.map { x, yTop in
+        let row = image.height - 1 - yTop
+        let base = row * bytesPerRow + x * 8
+        let channels = (0..<3).map { channel in
+            (Int(bytes[base + channel * 2]) << 8) | Int(bytes[base + channel * 2 + 1])
+        }
+        return (channels[0], channels[1], channels[2])
+    }
+}
+
+let storedDeep = deepFixture(width: 48, height: 32)
+let fixtureSample = deepSample(storedDeep, [(8, 8)]).first ?? (0, 0, 0)
+check(fixtureSample == (32769, 33023, 49151),
+      "the 16-bit fixture keeps values between the 8-bit steps", "\(fixtureSample)")
+if let deepReference = processor.renderCGImage(
+        CIImage(cgImage: storedDeep).oriented(forExifOrientation: 6),
+        scale: 1, colorSpace: sRGB, format: .RGBA16) {
+    let storedURL = privacyDirectory.appendingPathComponent("deep-orient6.png")
+    let uprightURL = privacyDirectory.appendingPathComponent("deep-upright.png")
+    let storedWrote = CGImageDestinationCreateWithURL(
+        storedURL as CFURL, UTType.png.identifier as CFString, 1, nil).map { destination -> Bool in
+            CGImageDestinationAddImage(destination, storedDeep,
+                                       [kCGImagePropertyOrientation: 6] as CFDictionary)
+            return CGImageDestinationFinalize(destination)
+        } ?? false
+    let uprightWrote = CGImageDestinationCreateWithURL(
+        uprightURL as CFURL, UTType.png.identifier as CFString, 1, nil).map { destination -> Bool in
+            CGImageDestinationAddImage(destination, deepReference, nil)
+            return CGImageDestinationFinalize(destination)
+        } ?? false
+    let storedLoaded = processor.load(from: storedURL, previewMaxDimension: 4096)
+    let uprightLoaded = processor.load(from: uprightURL, previewMaxDimension: 4096)
+    check(storedWrote && uprightWrote, "the 16-bit orientation fixtures are written")
+    check(storedLoaded?.pixelSize == CGSize(width: 32, height: 48)
+            && uprightLoaded?.pixelSize == CGSize(width: 32, height: 48),
+          "a rotated 16-bit source loads upright at 32x48",
+          "\(String(describing: storedLoaded?.pixelSize))")
+    if let storedLoaded, let uprightLoaded,
+       let storedImage = processor.renderCGImage(storedLoaded.sourceFull, scale: 1,
+                                                 colorSpace: sRGB, format: .RGBA16),
+       let uprightImage = processor.renderCGImage(uprightLoaded.sourceFull, scale: 1,
+                                                  colorSpace: sRGB, format: .RGBA16) {
+        // The deep half lands at the bottom after this turn, so the points
+        // cover both halves rather than only the white one.
+        let points = [(8, 40), (24, 40), (8, 8), (24, 8)]
+        let storedPixels = deepSample(storedImage, points)
+        let uprightPixels = deepSample(uprightImage, points)
+        let maxDelta = zip(storedPixels, uprightPixels).map { pair in
+            max(abs(pair.0.0 - pair.1.0),
+                max(abs(pair.0.1 - pair.1.1), abs(pair.0.2 - pair.1.2)))
+        }.max() ?? Int.max
+        // An eight-bit bake misses by ~127; a 16-bit round trip stays within
+        // colour-management rounding.
+        check(storedPixels.count == points.count && maxDelta <= 8,
+              "the upright bake keeps the source's 16-bit values",
+              "max channel delta \(maxDelta)")
+    } else {
+        check(false, "the 16-bit orientation render")
+    }
+} else {
+    check(false, "the 16-bit reference render")
 }
 
 if let straightened = processor.renderCGImage(straight.applied(to: orientationFixture(width: 40, height: 20)), scale: 1) {
