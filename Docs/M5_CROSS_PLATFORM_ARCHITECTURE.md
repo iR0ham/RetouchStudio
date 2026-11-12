@@ -231,6 +231,11 @@ All runs on the same Mac (Apple silicon), macOS 27.2, Command Line Tools
 | `Tests/run-corpus.sh` (golden image corpus) | arm64 | PASS — 376 checks, 0 failures, verified against `baselines.json`; the two exported PNGs the harness rewrote were restored, not accepted as new baselines |
 | `RETOUCH_ARCH=arm64 ./build.sh` and `./build/bin/RetouchStudio --selftest` | arm64 | PASS — the app builds with `SelfCheck.swift` included and the headless self-test prints `SELFTEST: PASS` |
 
+The Linux runner (`Tests/run-studiocore-linux.sh`) compiles and runs the same
+188 checks without an SDK probe; it was exercised on the macOS host with the
+generic driver but not yet on a Linux runner, so no Linux result is claimed
+here (section 13).
+
 ### 9.1 Rosetta result
 
 The x86_64 column is a Rosetta run of the Intel slice on Apple silicon. It is
@@ -266,9 +271,9 @@ PASS.
 - M6 commit(s): `Sources/StudioCore/DocumentValue.swift`, the deletion of the
   app-side `DocumentState.swift`, the frozen v3 wire records in `Project.swift`,
   the `ProjectV4` collapse, the boundary conversions in the editor and
-  renderers, the new core tests, the Linux runner and the CI job. Exact SHAs
-  are recorded in PR #5 and the delivery report, not here (a commit cannot
-  contain its own hash).
+  renderers, the new core tests and the Linux runner. Exact SHAs are recorded
+  in PR #5 and the delivery report, not here (a commit cannot contain its own
+  hash).
 - No rebase, no amend, no force push, no reset.
 
 ## 12. Pull request
@@ -278,9 +283,11 @@ PR #4's head while that PR was unmerged, then retargeted to `main` after PR #4
 merged, and the branch was brought up to date with a normal merge of `main`
 (no rebase, reset or force push). Required checks are the three jobs in
 `.github/workflows/ci.yml` (`StudioCore Boundary`, `Platform-neutral
-Conformance`, `macOS Integration`); M6 also adds a non-required `StudioCore on
-Linux` job that compiles the core with a non-Apple toolchain. PR #5 is not
-merged by this milestone.
+Conformance`, `macOS Integration`). The `Tests/run-studiocore-linux.sh` runner
+is in the branch, but wiring it into the workflow needs a credential with the
+GitHub `workflow` scope; the repository's current token does not have it, so
+the job was not added and no Linux claim is made. PR #5 is not merged by this
+milestone.
 
 ## 13. Risks and limitations
 
@@ -297,10 +304,11 @@ merged by this milestone.
   `*V3` records to keep old file bytes. Every future field must be added to
   both the value and the wire record; the fixture byte-identity test and the
   self-test round trip are the guard, and they only cover what they exercise.
-- **Linux coverage is core-only.** The `StudioCore on Linux` job compiles the
-  module and runs its tests with Swift 6.0 and its Foundation. It does not
-  build the app, the renderers or the AI runtime, and it is not a parity
-  claim for those layers.
+- **No Linux run yet.** `Tests/run-studiocore-linux.sh` compiles the module and
+  runs its tests without an SDK probe and was smoke-tested on the macOS host,
+  but no Linux runner has executed it. Wiring it into `.github/workflows/ci.yml`
+  requires a token with the `workflow` scope, which this checkout does not
+  have. Linux coverage is therefore a prepared runner, not evidence.
 - **The boundary gate is textual.** It scans imports and type names; it
   cannot prove that a Foundation API behaves the same on another platform.
 - **Rosetta is not Intel.** The x86_64 run exercises translation, not native
@@ -308,10 +316,10 @@ merged by this milestone.
 
 ## 14. Prioritized Windows/Linux roadmap
 
-1. ~~Make the boundary gate a first-class CI job.~~ Done: `StudioCore
-   Boundary` and `Platform-neutral Conformance` are required checks on `main`,
-   and M6 adds the `StudioCore on Linux` job, which builds and tests the
-   module with a non-Apple toolchain.
+1. ~~Make the boundary gate a first-class CI job.~~ Done for macOS: `StudioCore
+   Boundary` and `Platform-neutral Conformance` are required checks on `main`.
+   `Tests/run-studiocore-linux.sh` is ready, but adding its job needs a token
+   with the GitHub `workflow` scope; until then no Linux run exists.
 2. ~~Extract the document value itself.~~ Done in M6 (section 5.1): the value
    types and `DocumentState` live in StudioCore, with the v3 wire records
    frozen at the codec boundary.

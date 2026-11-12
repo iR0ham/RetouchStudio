@@ -95,42 +95,6 @@ jobs:
           path: ${{ runner.temp }}/conformance.log
           if-no-files-found: ignore
 
-  linux-core:
-    name: StudioCore on Linux
-    # The official Swift image supplies a non-Apple toolchain and Foundation.
-    # Its Ubuntu matches the 24.04 host, so the runner's node-based actions
-    # keep working inside the container.
-    runs-on: ubuntu-24.04
-    container: swift:6.0-noble
-    timeout-minutes: 20
-    steps:
-      - name: Check out
-        uses: actions/checkout@v4
-
-      - name: Record toolchain
-        run: |
-          set -euo pipefail
-          uname -m
-          swiftc --version
-
-      - name: Run StudioCore on Linux
-        run: |
-          set -euo pipefail
-          ./Tests/run-studiocore-linux.sh 2>&1 | tee "$RUNNER_TEMP/studioscore-linux.log"
-
-      - name: Assert the core compiled and ran its tests
-        run: |
-          set -euo pipefail
-          grep -qE 'StudioCore: [0-9]+ checks passed' "$RUNNER_TEMP/studioscore-linux.log"
-
-      - name: Upload gate log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: studioscore-linux-log
-          path: ${{ runner.temp }}/studioscore-linux.log
-          if-no-files-found: ignore
-
   macos-integration:
     name: macOS Integration
     runs-on: macos-15
