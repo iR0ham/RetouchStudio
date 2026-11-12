@@ -1451,6 +1451,106 @@ func testExportPlannerSnapshot() {
           "an overlay-only snapshot is png and never upscaled when not requested")
 }
 
+// MARK: - R4.6 Batch planner
+
+@MainActor
+func testBatchPlannerFilePolicy() {
+    print("\n[R4.6] the batch planner shares only what fits the file")
+
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    analysis.setEndpoint(CGPoint(x: 0.4, y: 0.4), for: .lips)
+    analysis.setAnchor(CGPoint(x: 0.5, y: 0.5), for: .lips)
+    var base = ExportSnapshot()
+    base.adjustments.exposure = 5
+    base.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    base.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 3,
+                           patchFile: "patch.png", alphaFile: "alpha.png",
+                           box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                           imagePixels: CGSize(width: 16, height: 16))]
+    base.analysis = analysis
+    base.selectedFaceIndex = 1
+    base.format = .png
+
+    let documentURL = URL(fileURLWithPath: "/doc/photo.jpg").resolvingSymlinksInPath()
+    let planner = BatchPlanner(base: base, documentURL: documentURL, documentAspect: 1.5)
+
+    let own = planner.plan(for: documentURL, fileAspect: 2.0)
+    check(own.snapshot == base && !own.skippedCrop,
+          "the open document keeps its exact snapshot")
+
+    let sameShape = planner.plan(for: URL(fileURLWithPath: "/doc/other.jpg"), fileAspect: 1.5)
+    check(sameShape.snapshot.crop == base.crop && !sameShape.skippedCrop,
+          "a file with the same shape keeps the crop")
+    check(sameShape.snapshot.adjustments == base.adjustments
+            && sameShape.snapshot.format == .png,
+          "the shared look and format travel")
+    check(sameShape.snapshot.aiEdits.isEmpty, "AI patches never travel to another photo")
+    check(sameShape.snapshot.orientation == .identity, "another photo opens upright")
+    check(sameShape.snapshot.selectedFaceIndex == nil, "the face choice stays with its photo")
+    check(sameShape.snapshot.analysis.endpoints.isEmpty
+            && sameShape.snapshot.analysis.anchors.isEmpty,
+          "dragged callout ends stay with their photo")
+
+    let differentShape = planner.plan(for: URL(fileURLWithPath: "/doc/wide.jpg"), fileAspect: 2.0)
+    check(differentShape.snapshot.crop == nil && differentShape.skippedCrop,
+          "a different shape drops the crop and reports it")
+
+    var turned = base
+    turned.orientation = DocumentOrientation(quarterTurns: 1)
+    let turnedPlanner = BatchPlanner(base: turned, documentURL: documentURL, documentAspect: 1.5)
+    let turnedFile = turnedPlanner.plan(for: URL(fileURLWithPath: "/doc/other.jpg"),
+                                        fileAspect: 1.5)
+    check(turnedFile.snapshot.crop == nil && turnedFile.skippedCrop,
+          "a turned document's crop does not travel")
+}
+
+@MainActor
+func testBatchPlannerUpscaleAndNaming() {
+    print("\n[R4.6] the batch planner fits upscaling and names files uniquely")
+
+    var base = ExportSnapshot()
+    base.aiUpscale = true
+    base.longEdge = 2000
+    let planner = BatchPlanner(base: base, documentURL: nil, documentAspect: 1.5)
+
+    check(planner.fitUpscale(base, to: CGSize(width: 800, height: 600)).aiUpscale,
+          "a smaller file keeps the requested upscale")
+    check(!planner.fitUpscale(base, to: CGSize(width: 2000, height: 1500)).aiUpscale,
+          "a file that already reaches the edge does not upscale")
+    check(!planner.fitUpscale(base, to: CGSize(width: 4000, height: 3000)).aiUpscale,
+          "a file past the 4x ceiling is written at its own size")
+
+    var off = base
+    off.aiUpscale = false
+    check(!planner.fitUpscale(off, to: CGSize(width: 800, height: 600)).aiUpscale,
+          "an unrequested upscale stays off")
+
+    let folder = URL(fileURLWithPath: "/out")
+    let file = URL(fileURLWithPath: "/in/photo.jpg")
+    check(BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .png) {
+        _ in false
+    }.lastPathComponent == "photo-retouched.png", "the first name is plain")
+
+    var taken: Set<String> = ["/out/photo-retouched.png"]
+    let second = BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .png) {
+        taken.contains($0.path)
+    }
+    check(second.lastPathComponent == "photo-retouched-2.png",
+          "a taken name gains a counter", second.lastPathComponent)
+
+    taken.insert("/out/photo-retouched-2.png")
+    let third = BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .png) {
+        taken.contains($0.path)
+    }
+    check(third.lastPathComponent == "photo-retouched-3.png",
+          "the counter keeps moving", third.lastPathComponent)
+
+    check(BatchPlanner.uniqueOutputURL(for: file, in: folder, format: .tiff) {
+        _ in false
+    }.lastPathComponent == "photo-retouched.tif", "the format extension is used")
+}
+
 // MARK: - P1-5 / M-13 / M-4
 
 @MainActor
@@ -5292,6 +5392,8 @@ func runAll() async {
     testExportPlannerNaming()
     testExportPlannerPixelSize()
     testExportPlannerSnapshot()
+    testBatchPlannerFilePolicy()
+    testBatchPlannerUpscaleAndNaming()
     await testOperationCoordination()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()

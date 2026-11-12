@@ -3245,8 +3245,9 @@ final class EditorModel: ObservableObject {
         batchFileTask?.cancel()
         batchFileTask = nil
 
-        let documentAspect = sourceAspect
-        let documentURL = imageURL?.resolvingSymlinksInPath()
+        let planner = BatchPlanner(base: snapshot,
+                                   documentURL: imageURL?.resolvingSymlinksInPath(),
+                                   documentAspect: sourceAspect)
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
         let willWrite = batchFileWillWriteHook
@@ -3273,9 +3274,7 @@ final class EditorModel: ObservableObject {
                 self?.statusToken = .batchProgress(index + 1, urls.count)
 
                 let fileTask = Task.detached(priority: .userInitiated) { () -> BatchOutcome in
-                    Self.exportOne(url, to: folder, snapshot: snapshot,
-                                   documentAspect: documentAspect,
-                                   documentURL: documentURL,
+                    Self.exportOne(url, to: folder, planner: planner,
                                    processor: processor,
                                    previewMaxDimension: previewMaxDimension,
                                    willWrite: willWrite,
@@ -3329,9 +3328,7 @@ final class EditorModel: ObservableObject {
     /// its own aspect. The document's crop is used only when the shape matches.
     private nonisolated static func exportOne(_ url: URL,
                                               to folder: URL,
-                                              snapshot: ExportSnapshot,
-                                              documentAspect: CGFloat,
-                                              documentURL: URL?,
+                                              planner: BatchPlanner,
                                               processor: ImageProcessor,
                                               previewMaxDimension: CGFloat,
                                               willWrite: (@Sendable (URL) -> Void)?,
@@ -3340,10 +3337,9 @@ final class EditorModel: ObservableObject {
         // photo, not after it has already paid for both.
         if Task.isCancelled { return .cancelled }
         let fileAspect = ExportService.pixelAspect(of: url) ?? 0
-        var fileSnapshot = BatchExportPolicy.snapshot(
-            snapshot, fileURL: url, documentURL: documentURL,
-            documentAspect: documentAspect, fileAspect: fileAspect)
-        let skippedCrop = snapshot.crop != nil && fileSnapshot.crop == nil
+        let plan = planner.plan(for: url, fileAspect: fileAspect)
+        var fileSnapshot = plan.snapshot
+        let skippedCrop = plan.skippedCrop
 
         guard let result = processor.load(from: url,
                                           previewMaxDimension: previewMaxDimension,
@@ -3359,21 +3355,13 @@ final class EditorModel: ObservableObject {
                                   photoAspect: fileAspect,
                                   colorSpace: result.colorSpace,
                                   metadata: result.metadata)
-        // Upscaling was decided for the document. A file that already reaches
-        // the requested size does not need it, and one past the 4x ceiling is
-        // written at its own size rather than failing the whole batch.
-        if fileSnapshot.aiUpscale {
-            let longest = max(result.pixelSize.width, result.pixelSize.height)
-            if longest >= (fileSnapshot.longEdge ?? 0)
-                || !ExportUpscale.canHandle(result.pixelSize) {
-                fileSnapshot.aiUpscale = false
-            }
-        }
+        fileSnapshot = planner.fitUpscale(fileSnapshot, to: result.pixelSize)
         guard let rendered = try? ExportService.renderFinal(fileSnapshot, source: source) else {
             return .failed
         }
         if Task.isCancelled { return .cancelled }
-        let out = uniqueOutputURL(for: url, in: folder, format: fileSnapshot.format)
+        let out = BatchPlanner.uniqueOutputURL(for: url, in: folder,
+                                               format: fileSnapshot.format)
         willWrite?(out)
         // The hook and the write are the last two steps, so a cancellation that
         // lands here leaves no file at all rather than a truncated one.
@@ -3390,18 +3378,6 @@ final class EditorModel: ObservableObject {
         return .exported(skippedCrop: skippedCrop)
     }
 
-    private nonisolated static func uniqueOutputURL(for url: URL,
-                                                    in folder: URL,
-                                                    format: ExportFormat) -> URL {
-        let base = url.deletingPathExtension().lastPathComponent
-        var out = folder.appendingPathComponent("\(base)-retouched.\(format.fileExtension)")
-        var counter = 2
-        while FileManager.default.fileExists(atPath: out.path) {
-            out = folder.appendingPathComponent("\(base)-retouched-\(counter).\(format.fileExtension)")
-            counter += 1
-        }
-        return out
-    }
 }
 
 private enum BatchOutcome {
