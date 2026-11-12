@@ -1038,29 +1038,25 @@ final class EditorModel: ObservableObject {
         // recovery store until the restored document is complete.
         isLoadingState = true
         install(result)
-        self.projectURL = projectURL
+        let restoration = project.map { DocumentRestoration.project($0, url: projectURL) }
+            ?? DocumentRestoration.photo()
+        self.projectURL = restoration.projectURL
 
-        if let project {
-            exportFormat = ExportFormat(rawValue: project.exportFormat) ?? .jpeg
-            exportQuality = project.exportQuality
-            exportLongEdge = project.exportLongEdge ?? 0
-            autoRetouchStrength = project.autoRetouchStrength
-            autoColorStrength = project.autoColorStrength ?? 100
-            adjustments = project.adjustments
-            appliedCrop = project.crop
-            documentOrientation = project.orientation ?? .identity
-        } else {
-            adjustments = .zero
-            appliedCrop = nil
-            documentOrientation = .identity
-        }
+        if let format = restoration.exportFormat { exportFormat = format }
+        if let quality = restoration.exportQuality { exportQuality = quality }
+        if let longEdge = restoration.exportLongEdge { exportLongEdge = longEdge }
+        if let retouch = restoration.autoRetouchStrength { autoRetouchStrength = retouch }
+        if let color = restoration.autoColorStrength { autoColorStrength = color }
+        adjustments = restoration.state.adjustments
+        appliedCrop = restoration.state.crop
+        documentOrientation = restoration.state.orientation
         // The stamps arrive with the project, so they are installed without the
         // change handling a user stamp needs.
-        healSpots = project?.healSpots ?? []
-        stickers = project?.stickers ?? []
-        aiEdits = project?.aiEdits ?? []
-        analysis = project?.analysis ?? AnalysisSettings()
-        applyFaceSelection(project?.selectedFace)
+        healSpots = restoration.state.healSpots
+        stickers = restoration.state.stickers
+        aiEdits = restoration.state.aiEdits
+        analysis = restoration.state.analysis
+        applyFaceSelection(restoration.state.selectedFaceIndex)
         selectedSticker = nil
         rebuildSpotMasks()
         refreshAnalysisOverlay()
@@ -1084,12 +1080,12 @@ final class EditorModel: ObservableObject {
         smartReport = nil
         isAnalyzingSmart = false
         showSmartSheet = false
-        if let projectURL {
+        if let projectURL = restoration.projectURL {
             recents.add(projectURL, isProject: true)
         } else {
             recents.add(result.url, isProject: false)
         }
-        if project != nil {
+        if restoration.isProject {
             statusToken = .projectOpened
         } else if result.faces.isEmpty {
             statusToken = .noFaceColorOnly
@@ -1106,7 +1102,7 @@ final class EditorModel: ObservableObject {
         if let relinkURL = pendingRelink {
             pendingRelink = nil
             rewriteProject(at: relinkURL)
-            if project != nil { statusToken = .projectRelinked }
+            if restoration.isProject { statusToken = .projectRelinked }
         }
         if let recoveryRestore {
             finishRestore(recoveryRestore)

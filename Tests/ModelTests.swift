@@ -1221,6 +1221,86 @@ func testProjectCodecRelinkRewrite() {
     check(first != nil && first == second, "encoding the same project is deterministic")
 }
 
+// MARK: - R4.4 Document restoration
+
+@MainActor
+func testDocumentRestorationFromProject() {
+    print("\n[R4.4] a project restores the document fields")
+
+    let projectURL = URL(fileURLWithPath: "/codec/restore.retouch")
+    var analysis = AnalysisSettings()
+    analysis.isEnabled = true
+    analysis.regions = [.lips]
+    var project = RetouchProject(
+        imagePath: "/codec/photo.jpg",
+        adjustments: .zero,
+        exportFormat: "tiff",
+        exportQuality: 0.75,
+        exportLongEdge: 2048,
+        autoRetouchStrength: 55,
+        autoColorStrength: 45,
+        crop: CGRect(x: 0.1, y: 0.2, width: 0.6, height: 0.5),
+        healSpots: [HealSpot(center: CGPoint(x: 0.3, y: 0.4), radius: 0.01)],
+        stickers: [Sticker(kind: .heart, center: CGPoint(x: 0.5, y: 0.5), size: 0.1)],
+        aiEdits: [AIEdit(preset: "cleanup", prompt: "wall", seed: 1,
+                         patchFile: "patch.png", alphaFile: "alpha.png",
+                         box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                         imagePixels: CGSize(width: 32, height: 32))],
+        analysis: analysis,
+        selectedFace: 2,
+        orientation: DocumentOrientation(quarterTurns: 2, angle: 1))
+    project.adjustments.exposure = 9
+
+    let restoration = DocumentRestoration.project(project, url: projectURL)
+    check(restoration.isProject && restoration.projectURL == projectURL,
+          "the restoration knows it came from a project")
+    check(restoration.exportFormat == .tiff && restoration.exportQuality == 0.75
+            && restoration.exportLongEdge == 2048,
+          "the export settings are restored")
+    check(restoration.autoRetouchStrength == 55 && restoration.autoColorStrength == 45,
+          "both auto strengths are restored")
+    check(restoration.state.adjustments == project.adjustments, "adjustments are restored")
+    check(restoration.state.healSpots == project.healSpots, "healing stamps are restored")
+    check(restoration.state.stickers == project.stickers, "stickers are restored")
+    check(restoration.state.aiEdits == project.aiEdits, "AI edits are restored")
+    check(restoration.state.analysis == project.analysis, "analysis is restored")
+    check(restoration.state.crop == project.crop, "the crop is restored")
+    check(restoration.state.orientation == project.orientation, "the orientation is restored")
+    check(restoration.state.selectedFaceIndex == 2, "the chosen face is restored")
+}
+
+@MainActor
+func testDocumentRestorationDefaultsAndPhoto() {
+    print("\n[R4.4] legacy projects and plain photos restore the right defaults")
+
+    let legacy = RetouchProject(imagePath: "/codec/legacy.jpg",
+                                adjustments: .zero,
+                                exportFormat: "not-a-format",
+                                exportQuality: 0.5,
+                                autoRetouchStrength: 70)
+    let restored = DocumentRestoration.project(legacy, url: nil)
+    check(restored.exportFormat == .jpeg, "an unknown export format falls back to jpeg")
+    check(restored.exportLongEdge == 0 && restored.autoColorStrength == 100,
+          "missing export preferences gain the v3 defaults")
+    check(restored.state == DocumentState(),
+          "a project without document fields restores an empty document")
+    check(restored.isProject && restored.projectURL == nil,
+          "a project without a URL is still a project")
+
+    var oriented = legacy
+    oriented.autoColorStrength = 30
+    let withColor = DocumentRestoration.project(oriented, url: nil)
+    check(withColor.autoColorStrength == 30 && withColor.exportLongEdge == 0,
+          "a recorded auto color strength is kept")
+
+    let photo = DocumentRestoration.photo()
+    check(photo.exportFormat == nil && photo.exportQuality == nil && photo.exportLongEdge == nil
+            && photo.autoRetouchStrength == nil && photo.autoColorStrength == nil,
+          "a plain photo keeps the owner's export settings")
+    check(photo.state == DocumentState() && !photo.isProject && photo.projectURL == nil,
+          "a plain photo starts from an empty document")
+}
+
 // MARK: - P1-5 / M-13 / M-4
 
 @MainActor
@@ -5057,6 +5137,8 @@ func runAll() async {
     testProjectCodecReproducesBaseline()
     testProjectSourceResolverOrder()
     testProjectCodecRelinkRewrite()
+    testDocumentRestorationFromProject()
+    testDocumentRestorationDefaultsAndPhoto()
     await testOperationCoordination()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()
