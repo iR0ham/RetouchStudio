@@ -89,10 +89,12 @@ enum RecoveryStore {
     /// next scenario; EditorModel also bumps it when the active document is
     /// discarded or replaced, so a task that already woke up cannot write the
     /// old document's snapshot afterwards.
-    private(set) static var epoch = 0
+    private static var autosaveEpoch = RecoveryPolicy.AutosaveEpoch()
+
+    static var epoch: Int { autosaveEpoch.value }
 
     static func invalidatePendingAutosaves() {
-        epoch += 1
+        autosaveEpoch.invalidate()
     }
 
     /// Tests point this at a scratch directory so they can never touch the
@@ -149,11 +151,7 @@ enum RecoveryStore {
         let snapshot: RecoverySnapshot
     }
 
-    enum SourceState: Equatable {
-        case available(URL)
-        case changed(URL)
-        case missing
-    }
+    typealias SourceState = RecoverySourceState
 
     struct CandidateListing {
         var candidates: [Candidate] = []
@@ -197,7 +195,7 @@ enum RecoveryStore {
                 if quarantine(url) { result.quarantined += 1 } else { result.failed = true }
                 continue
             }
-            let savedAt = monotonic(original.savedAt, after: previous)
+            let savedAt = RecoveryPolicy.monotonic(original.savedAt, after: previous)
             previous = savedAt
             var snapshot = original
             snapshot.savedAt = savedAt
@@ -283,9 +281,7 @@ enum RecoveryStore {
             return CandidateListing()
         }
         var listing = CandidateListing()
-        let ordered = urls
-            .filter { $0.pathExtension == "retouch" && !$0.lastPathComponent.hasPrefix(".") }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let ordered = urls.filter { RecoveryPolicy.isCandidateFileName($0.lastPathComponent) }
         for url in ordered {
             if let snapshot = readLoose(url) {
                 listing.candidates.append(Candidate(url: url, snapshot: snapshot))
@@ -295,14 +291,10 @@ enum RecoveryStore {
                 listing.failed = true
             }
         }
-        // The file name only carries milliseconds, so two copies written in the
-        // same millisecond would otherwise be ordered by UUID. The recorded
-        // date is what "oldest first" means; the name is only a tie-breaker.
         listing.candidates.sort {
-            if $0.snapshot.savedAt != $1.snapshot.savedAt {
-                return $0.snapshot.savedAt < $1.snapshot.savedAt
-            }
-            return $0.url.lastPathComponent < $1.url.lastPathComponent
+            RecoveryPolicy.olderFirst(
+                .init(savedAt: $0.snapshot.savedAt, name: $0.url.lastPathComponent),
+                .init(savedAt: $1.snapshot.savedAt, name: $1.url.lastPathComponent))
         }
         return listing
     }
@@ -340,23 +332,19 @@ enum RecoveryStore {
     }
 
     static func sourceState(for snapshot: RecoverySnapshot) -> SourceState {
-        guard let url = sourceURL(for: snapshot.project) else { return .missing }
-        guard let recorded = snapshot.source else {
-            // A legacy copy never recorded an identity, so it is offered just
-            // like the old autosave slot was. A new copy with no identity was
-            // written while its photo was already gone; something at that path
-            // now is not proven to be the same photo.
-            return snapshot.version == 0 ? .available(url) : .changed(url)
-        }
-        guard let current = RecoverySourceIdentity.of(url) else { return .available(url) }
-        return current == recorded ? .available(url) : .changed(url)
+        let url = sourceURL(for: snapshot.project)
+        return RecoveryPolicy.sourceState(
+            url: url,
+            recorded: snapshot.source,
+            version: snapshot.version,
+            current: url.flatMap(RecoverySourceIdentity.of))
     }
 
     // MARK: - Test cleanup
 
     /// Removes every scratch copy. No production path calls this.
     static func clearAll() {
-        epoch += 1
+        autosaveEpoch.invalidate()
         workingLocked = false
         let manager = FileManager.default
         for url in [workingURL, legacyActiveURL, legacyPendingURL] {
@@ -377,14 +365,8 @@ enum RecoveryStore {
     /// Reads either a snapshot or the bare project older releases wrote.
     private static func readLoose(_ url: URL) -> RecoverySnapshot? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let decoder = JSONDecoder()
-        if let snapshot = try? decoder.decode(RecoverySnapshot.self, from: data) {
-            return snapshot
-        }
-        guard let project = try? decoder.decode(RetouchProject.self, from: data) else { return nil }
         let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
-        return RecoverySnapshot(project: project, savedAt: modified ?? Date(),
-                                source: nil, version: 0)
+        return RecoveryPolicy.snapshot(from: data, modified: modified)
     }
 
     private static func write(_ snapshot: RecoverySnapshot, to url: URL) -> Bool {
@@ -422,10 +404,10 @@ enum RecoveryStore {
         let manager = FileManager.default
         do {
             try manager.createDirectory(at: quarantineDirectory, withIntermediateDirectories: true)
-            let base = url.deletingPathExtension().lastPathComponent
-            let ext = url.pathExtension
-            let name = ext.isEmpty ? "\(base)-\(UUID().uuidString)"
-                                   : "\(base)-\(UUID().uuidString).\(ext)"
+            let name = RecoveryPolicy.quarantineFileName(
+                base: url.deletingPathExtension().lastPathComponent,
+                pathExtension: url.pathExtension,
+                id: UUID())
             try manager.moveItem(at: url, to: quarantineDirectory.appendingPathComponent(name))
             return true
         } catch {
@@ -433,8 +415,4 @@ enum RecoveryStore {
         }
     }
 
-    private static func monotonic(_ date: Date, after previous: Date?) -> Date {
-        guard let previous else { return date }
-        return date > previous ? date : previous.addingTimeInterval(0.001)
-    }
 }

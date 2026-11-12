@@ -2679,6 +2679,103 @@ func testRecoveryChoiceMapping() {
           "the explicit Discard response is recognized")
 }
 
+@MainActor
+func testRecoveryPolicyDecisions() {
+    print("\n[R4.7] recovery decisions keep their rules without a store")
+
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    check(RecoveryPolicy.olderFirst(.init(savedAt: base, name: "b"),
+                                    .init(savedAt: base.addingTimeInterval(1), name: "a")),
+          "an earlier date is offered first")
+    check(RecoveryPolicy.olderFirst(.init(savedAt: base, name: "a"),
+                                    .init(savedAt: base, name: "b")),
+          "the name breaks a same-millisecond tie")
+    check(!RecoveryPolicy.olderFirst(.init(savedAt: base, name: "b"),
+                                     .init(savedAt: base, name: "a")),
+          "the tie-break is not reversed")
+    check(!RecoveryPolicy.olderFirst(.init(savedAt: base, name: "a"),
+                                     .init(savedAt: base, name: "a")),
+          "a candidate never sorts before itself")
+
+    check(RecoveryPolicy.isCandidateFileName("0000000000000-abc.retouch"),
+          "a candidate copy is recognized")
+    check(!RecoveryPolicy.isCandidateFileName(".hidden.retouch"),
+          "a dotfile left by the file system is not a candidate")
+    check(!RecoveryPolicy.isCandidateFileName("snapshot.json"),
+          "an unrelated file is not a candidate")
+    check(!RecoveryPolicy.isCandidateFileName(".retouch"),
+          "a leading-dot name has no candidate extension")
+
+    let photo = URL(fileURLWithPath: "/tmp/policy-photo.png")
+    let project = RetouchProject(imagePath: photo.path, adjustments: .zero,
+                                 exportFormat: "png", exportQuality: 0.8,
+                                 autoRetouchStrength: 60)
+    let identity = RecoverySourceIdentity(bytes: 10, modified: base)
+    let snapshot = RecoverySnapshot(project: project, savedAt: base,
+                                    source: identity, version: 1)
+    let encoder = JSONEncoder()
+    if let data = try? encoder.encode(snapshot),
+       let decoded = RecoveryPolicy.snapshot(from: data, modified: nil) {
+        check(decoded.version == 1 && decoded.savedAt == base && decoded.source == identity,
+              "a version 1 snapshot keeps its date and identity")
+    } else {
+        check(false, "a version 1 snapshot decodes")
+    }
+    if let data = try? encoder.encode(project),
+       let legacy = RecoveryPolicy.snapshot(from: data, modified: base) {
+        check(legacy.version == 0 && legacy.source == nil && legacy.savedAt == base,
+              "a bare project decodes as legacy version 0")
+    } else {
+        check(false, "a bare project decodes as a legacy snapshot")
+    }
+    check(RecoveryPolicy.snapshot(from: Data("not a snapshot".utf8), modified: nil) == nil,
+          "unreadable bytes are not a snapshot")
+
+    check(RecoveryPolicy.sourceState(url: nil, recorded: identity, version: 1,
+                                     current: nil) == .missing,
+          "no photo at all is missing")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: nil, version: 0,
+                                     current: nil) == .available(photo),
+          "a legacy copy is offered without an identity")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: nil, version: 1,
+                                     current: nil) == .changed(photo),
+          "a new copy with no identity is not proven to match")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: identity, version: 1,
+                                     current: identity) == .available(photo),
+          "the same size and date is the same photo")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: identity, version: 1,
+                                     current: .init(bytes: 11, modified: base)) == .changed(photo),
+          "a different identity is a changed photo")
+    check(RecoveryPolicy.sourceState(url: photo, recorded: identity, version: 1,
+                                     current: nil) == .available(photo),
+          "an unreadable identity does not claim the photo changed")
+
+    check(RecoveryPolicy.monotonic(base, after: nil) == base,
+          "the first legacy copy keeps its date")
+    check(RecoveryPolicy.monotonic(base, after: base) == base.addingTimeInterval(0.001),
+          "an equal date is pushed past the previous copy")
+    let later = base.addingTimeInterval(2)
+    check(RecoveryPolicy.monotonic(later, after: base) == later,
+          "a later date is not changed")
+
+    let id = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+    check(RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "retouch", id: id)
+            == "snap-11111111-1111-1111-1111-111111111111.retouch",
+          "a quarantined copy keeps its name and extension")
+    check(RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "", id: id)
+            == "snap-11111111-1111-1111-1111-111111111111",
+          "a quarantined file without an extension keeps its base")
+    check(RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID())
+            != RecoveryPolicy.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID()),
+          "two damaged copies cannot collide")
+
+    var gate = RecoveryPolicy.AutosaveEpoch()
+    check(gate.accepts(0), "a fresh epoch accepts its generation")
+    gate.invalidate()
+    check(!gate.accepts(0) && gate.accepts(1),
+          "invalidation rejects a task that captured the old generation")
+}
+
 func recoveryFixture(_ name: String, width: Int, height: Int) -> URL? {
     let url = workDir.appendingPathComponent(name)
     guard let image = makeImage(width: width, height: height),
@@ -5408,6 +5505,7 @@ func runAll() async {
     await testExportUpscalePolicy()
     await testAnalysisExportNeedsFace()
     testRecoveryChoiceMapping()
+    testRecoveryPolicyDecisions()
     await testRestoreLeavesSameImageCandidateIntact()
     await testCancelKeepsEveryCandidateWhileThirdDocumentEdits()
     await testMissingSourceCancelKeepsCandidate()

@@ -1,0 +1,91 @@
+import Foundation
+
+/// How the photo a snapshot was made against relates to what is on disk now.
+/// `.available` offers the copy; `.changed` and `.missing` ask the owner before
+/// anything is applied.
+enum RecoverySourceState: Equatable {
+    case available(URL)
+    case changed(URL)
+    case missing
+}
+
+/// The decisions a recovery launch makes, with no file system underneath.
+///
+/// `RecoveryStore` still owns the directory layout, renames and durability.
+/// Everything that can be decided from values alone lives here, so the rules
+/// are testable without a store and the store cannot quietly change them.
+enum RecoveryPolicy {
+
+    /// Invalidates work captured under an earlier generation.
+    struct AutosaveEpoch: Equatable {
+        private(set) var value = 0
+
+        mutating func invalidate() {
+            value &+= 1
+        }
+
+        func accepts(_ captured: Int) -> Bool {
+            captured == value
+        }
+    }
+
+    /// The date is what "oldest first" means. A candidate name carries only
+    /// milliseconds, so two copies from the same millisecond keep a stable
+    /// order by name without letting the name decide between different dates.
+    struct CandidateOrderKey: Equatable {
+        var savedAt: Date
+        var name: String
+    }
+
+    static func olderFirst(_ lhs: CandidateOrderKey, _ rhs: CandidateOrderKey) -> Bool {
+        if lhs.savedAt != rhs.savedAt { return lhs.savedAt < rhs.savedAt }
+        return lhs.name < rhs.name
+    }
+
+    /// Candidate copies, never the working slot and never a dotfile the file
+    /// system left behind.
+    static func isCandidateFileName(_ name: String) -> Bool {
+        (name as NSString).pathExtension == "retouch" && !name.hasPrefix(".")
+    }
+
+    /// Reads either a snapshot or the bare project older releases wrote.
+    /// A bare project decodes as version 0 with no source identity, which is
+    /// what makes legacy copies offerable without knowing their photo.
+    static func snapshot(from data: Data, modified: Date?) -> RecoverySnapshot? {
+        let decoder = JSONDecoder()
+        if let snapshot = try? decoder.decode(RecoverySnapshot.self, from: data) {
+            return snapshot
+        }
+        guard let project = try? decoder.decode(RetouchProject.self, from: data) else { return nil }
+        return RecoverySnapshot(project: project, savedAt: modified ?? Date(),
+                                source: nil, version: 0)
+    }
+
+    /// A legacy copy never recorded an identity, so it is offered just like the
+    /// old autosave slot was. A new copy with no identity was written while its
+    /// photo was already gone; something at that path now is not proven to be
+    /// the same photo.
+    static func sourceState(url: URL?, recorded: RecoverySourceIdentity?,
+                            version: Int, current: RecoverySourceIdentity?) -> RecoverySourceState {
+        guard let url else { return .missing }
+        guard let recorded else {
+            return version == 0 ? .available(url) : .changed(url)
+        }
+        guard let current else { return .available(url) }
+        return current == recorded ? .available(url) : .changed(url)
+    }
+
+    /// Legacy slots are promoted one at a time with increasing dates, so the
+    /// postponed copy keeps being offered first.
+    static func monotonic(_ date: Date, after previous: Date?) -> Date {
+        guard let previous else { return date }
+        return date > previous ? date : previous.addingTimeInterval(0.001)
+    }
+
+    /// A quarantined file keeps its recognizable base name and gains the
+    /// destination UUID, so a second damaged copy cannot replace the first.
+    static func quarantineFileName(base: String, pathExtension: String, id: UUID) -> String {
+        pathExtension.isEmpty ? "\(base)-\(id.uuidString)"
+                              : "\(base)-\(id.uuidString).\(pathExtension)"
+    }
+}
