@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - v1-macos-delivery
+      - m5-cross-platform-core
+      - 'ci/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  studioscore-boundary:
+    name: StudioCore Boundary
+    # macos-15 is the current GitHub-hosted Apple-silicon runner label.
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          uname -m
+          swiftc --version
+          xcode-select -p
+
+      - name: Run StudioCore boundary gate
+        run: |
+          set -euo pipefail
+          ./Tests/run-studiocore.sh 2>&1 | tee "$RUNNER_TEMP/studioscore-boundary.log"
+
+      - name: Assert the gate compiled and ran its tests
+        run: |
+          set -euo pipefail
+          grep -qE 'StudioCore: [0-9]+ checks passed' "$RUNNER_TEMP/studioscore-boundary.log"
+
+      - name: Upload gate log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studioscore-boundary-log
+          path: ${{ runner.temp }}/studioscore-boundary.log
+          if-no-files-found: ignore
+
+  platform-conformance:
+    name: Platform-neutral Conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          python3 -c 'import sys; print(sys.version); assert sys.version_info >= (3, 10), sys.version'
+          cc --version
+
+      - name: Run conformance gate
+        run: |
+          set -euo pipefail
+          ./Tests/Conformance/run-conformance.sh 2>&1 | tee "$RUNNER_TEMP/conformance.log"
+
+      - name: Assert the conformance verdicts
+        run: |
+          set -euo pipefail
+          grep -qx 'R1 conformance: PASS' "$RUNNER_TEMP/conformance.log"
+          grep -qx 'studioscore abi=1 status_count=20 error_codes=20' "$RUNNER_TEMP/conformance.log"
+
+      - name: Assert the golden corpus is unchanged
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            echo "the conformance gate modified tracked or untracked files" >&2
+            exit 1
+          fi
+
+      - name: Upload gate log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-log
+          path: ${{ runner.temp }}/conformance.log
+          if-no-files-found: ignore
+
+  macos-integration:
+    name: macOS Integration
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          uname -m
+          swiftc --version
+          xcode-select -p
+
+      - name: Run StudioCore gate
+        run: |
+          set -euo pipefail
+          ./Tests/run-studiocore.sh 2>&1 | tee "$RUNNER_TEMP/macos-integration.log"
+
+      - name: Run engine, model and runtime suites
+        env:
+          RETOUCH_ARCH: arm64
+        run: |
+          set -euo pipefail
+          ./Tests/run.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-integration.log"
+
+      - name: Assert every suite reported a verdict
+        run: |
+          set -euo pipefail
+          for verdict in \
+            'StudioCore: [0-9]+ checks passed' \
+            'ENGINE TESTS: PASS' \
+            'MODEL TESTS: PASS' \
+            'RUNTIME PROCESS TESTS: PASS' \
+            'RUNTIME V2 TESTS: PASS'; do
+            grep -qE "$verdict" "$RUNNER_TEMP/macos-integration.log"
+            echo "found: $verdict"
+          done
+
+      - name: Upload suite log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-integration-log
+          path: ${{ runner.temp }}/macos-integration.log
+          if-no-files-found: ignore
