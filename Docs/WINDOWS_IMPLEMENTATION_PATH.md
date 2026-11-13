@@ -167,7 +167,14 @@ both report `ABI TESTS: PASS (86 checks)`. The C test covers v3 and v4-unknown
 round trips, unknown-field preservation through an edit, too-new and invalid
 input refusals, the render plan compared with a pinned fixture, the full
 history sequence (including the 100-step limit) and the buffer ownership
-contract.
+contract. Merged on `main` as PR #10 (`4e51856`); the full macOS suite and
+`Tests/Conformance/run-conformance.sh` were re-run on that commit with the same
+verdicts.
+
+The `Platform-neutral Conformance` job compiles `core_smoke.c` with `cc` on
+`ubuntu-24.04`, so the header and its layout asserts are known to survive a
+non-Apple C toolchain. That is a portability signal only; it is not Windows
+compilation.
 
 Windows: `Tests/run-studiocore-windows.ps1` builds the same library and runs
 the same C test with the toolchain's `clang`. It has **never been executed on a
