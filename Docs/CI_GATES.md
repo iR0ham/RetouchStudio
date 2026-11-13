@@ -21,7 +21,7 @@ status check under its own name. The first three are the required merge checks:
 | `StudioCore Boundary` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` |
 | `Platform-neutral Conformance` | `ubuntu-24.04` (x64) | `./Tests/Conformance/run-conformance.sh` |
 | `macOS Integration` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` and `RETOUCH_ARCH=arm64 ./Tests/run.sh` |
-| `Windows StudioCore` (not yet required) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
+| `Windows StudioCore` (not required; green on 2026-11-13) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
 
 ## What each check proves
 
@@ -108,8 +108,8 @@ the 2.1 GB Windows installer (checked with a ranged HEAD request on 2026-11-13).
 The earlier 6.4.1 pin is superseded; 6.5 has no release tag yet.
 
 The runner labels in use (`macos-15`, `ubuntu-24.04`, `windows-2025`) are current
-GitHub-hosted labels; the Windows job remains **NOT VERIFIED** until it is
-installed and run.
+GitHub-hosted labels; the Windows job was installed and ran green on 2026-11-13
+([Verified runs](#verified-runs)).
 
 ### How the upgrade was installed
 
@@ -153,13 +153,56 @@ application, none of which exists yet.
 `windows-core` in `ci.yml` installs Swift 6.4.2 with
 `compnerd/gha-setup-swift@v0.5.1` on `windows-2025`, runs that script, then runs
 the same conformance gate with `CC=clang` (Git Bash on the Windows image has no
-`cc`) and `PYTHON=python`. The job is not a required check; it must first
-produce a green run on `main`, which is the only evidence that the runner
-label, the third-party action, the toolchain tag and the `clang` assumption
-hold. Until that run exists, the job is **NOT VERIFIED**.
+`cc`) and `PYTHON=python`. The job is not a required check. It first ran green
+on `eba8075` (PR #13) on 2026-11-13, which confirms the runner label, the
+third-party action, the toolchain tag and the `clang` assumption; the run is
+recorded under [Verified runs](#verified-runs).
 
 The Windows gap and the intended implementation are analysed in
 [`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md).
+
+## Verified runs
+
+Read from the GitHub Actions API, not simulated locally.
+
+| Date | Ref | Workflow | Result |
+|---|---|---|---|
+| 2026-11-13 | `eba8075` (PR #13, push and pull request) | `CI` | all four jobs green |
+
+The `Windows StudioCore` step log on `windows-2025` (Windows Server 2025,
+10.0.26100, Actions Runner 2.338.2) ends with:
+
+```
+-> building StudioCore on Microsoft Windows NT 10.0.26100.0
+StudioCore: 260 checks passed
+-> building the StudioCore C ABI library
+-> compiling the C11 ABI test against the public header
+-> linking the C test with the Swift libraries
+ABI TESTS: PASS (86 checks)
+StudioCore Windows portability check: PASS
+R1 conformance: PASS
+```
+
+The first real runs exposed four defects that no macOS run could show. Each was
+fixed on the branch:
+
+1. PowerShell `-match` is case-insensitive, so `\bColor\b` matched the lowercase
+   `.color` property and the boundary scan failed on `Adjustments.swift`. The
+   scan now uses `-cmatch`, matching the case-sensitive `grep -E` gate.
+2. Git for Windows ships a coreutils `link.exe` that shadowed the MSVC linker
+   the Swift driver calls. The script now resolves the VC tools directory
+   through `vswhere` and puts it first.
+3. The fixtures are compared byte for byte and the repository had no
+   `.gitattributes`, so the Windows checkout rewrote every text file to CRLF.
+   `* text=auto eol=lf` now pins the working tree on every host.
+4. `Tests/ABI/abi_tests.c` read and wrote its state length inside one argument
+   list. That is unsequenced behaviour: it happened to pass with the macOS
+   compiler and failed with the Windows one. The length is now computed at each
+   call site.
+
+This proves the shared module, its C ABI and the conformance fixtures work with
+a native Windows Swift toolchain. It does not prove any Windows renderer, UI,
+installer or application; none exists.
 
 ## Release pipeline
 

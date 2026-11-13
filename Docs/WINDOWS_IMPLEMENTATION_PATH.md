@@ -1,9 +1,11 @@
 # Windows Implementation Path
 
-**Status:** architecture audit and preparation only. There is no Windows
-application, renderer, installer or release. Nothing in this document was
-executed on a Windows host; every Windows runtime claim is **NOT VERIFIED**.
-macOS remains the only shipping product.
+**Status:** architecture audit and preparation. There is no Windows
+application, renderer, installer or release. The `StudioCore` build, its C ABI
+test and the conformance gate were executed on a native `windows-2025` runner on
+2026-11-13 (see [CI_GATES.md](CI_GATES.md#verified-runs)); every Windows
+application or runtime claim beyond that is **NOT VERIFIED**. macOS remains the
+only shipping product.
 
 **Date:** 2026-11-13
 **Basis:** repository at `037db3a` (`main` after PR #5 and PR #7 merged; tree
@@ -124,8 +126,8 @@ Swift side stays Foundation-only; the shell is responsible for pixels.
 
 | Step | Deliverable | Exit criterion |
 | --- | --- | --- |
-| W0 | Windows CI job in the workflow | `Tests/run-studiocore-windows.ps1` green on `windows-2025` |
-| W1 | StudioCore C ABI v0 (project + plan + history) | Same fixtures pass on macOS and Windows; ABI smoke test compiled by conformance. macOS half is green (see W1 status); the Windows half is **NOT VERIFIED** until a Windows runner executes it |
+| W0 | Windows CI job in the workflow | **Met 2026-11-13:** `Windows StudioCore` green on `windows-2025` (Swift 6.4.2) |
+| W1 | StudioCore C ABI v0 (project + plan + history) | Same fixtures pass on macOS and Windows; ABI smoke test compiled by conformance. macOS green; **Windows met 2026-11-13**: `ABI TESTS: PASS (86 checks)` on `windows-2025` |
 | W2 | C# host: WIC decode/encode, crop, orientation, global adjustments | Byte-level contract tests against render-plan fixtures; visual deltas recorded, not assumed |
 | W3 | Face analysis and masks | Auto Retouch output measured against the macOS corpus; parity level documented |
 | W4 | Shell and light-editor workflow | Open, edit, undo, save project, export on a real Windows runner |
@@ -176,9 +178,12 @@ The `Platform-neutral Conformance` job compiles `core_smoke.c` with `cc` on
 non-Apple C toolchain. That is a portability signal only; it is not Windows
 compilation.
 
-Windows: `Tests/run-studiocore-windows.ps1` builds the same library and runs
-the same C test with the toolchain's `clang`. It has **never been executed on a
-Windows host**, so W1's Windows exit criterion is **NOT VERIFIED**.
+Windows: `Tests/run-studiocore-windows.ps1` built the same library and ran the
+same C test with the toolchain's `clang` on `windows-2025` on 2026-11-13:
+`StudioCore: 260 checks passed`, `ABI TESTS: PASS (86 checks)`,
+`StudioCore Windows portability check: PASS`. W1's Windows exit criterion is
+therefore met. The Windows application milestones W2–W6 are untouched and
+**NOT VERIFIED**.
 
 ## 6. Distribution
 
@@ -207,6 +212,7 @@ notarization is required.
    would be a new dependency and are not assumed.
 5. **C ABI stability.** The ABI is new surface with its own versioning and
    ownership rules; it must be tested independently of any UI.
-6. **No Windows evidence yet.** No Windows runner or machine has executed this
-   repository. The runner label, Swift toolchain action/version and packaging
-   behaviour all remain **NOT VERIFIED**.
+6. **Limited Windows evidence.** The core build, C ABI test and conformance gate
+   ran green on `windows-2025` on 2026-11-13. Any renderer, UI, packaging and
+   runtime behaviour beyond that, including `Tools/package-windows.ps1`, remains
+   **NOT VERIFIED**.

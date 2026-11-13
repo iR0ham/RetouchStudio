@@ -13,12 +13,13 @@ the three distribution artifacts match their published SHA-256 files.
 | --- | --- | --- | --- | --- |
 | macOS 14+ | arm64 (native) | `build.sh release` PASS | `Tests/run.sh` PASS; corpus PASS; benchmarks PASS | shipping |
 | macOS 14+ | x86_64 (Rosetta on Apple silicon) | universal build PASS; `--selftest` runs the Intel slice | `RETOUCH_ARCH=x86_64 Tests/run.sh` PASS | shipping (Intel slice not tested on native Intel hardware) |
-| Windows | any | not built | `Tests/run-studiocore-windows.ps1` prepared, never run | **not a shipping target in 1.0.0** |
-| Linux | any | not built | `Tests/run-studiocore-linux.sh` prepared, smoke-tested on macOS only | supplementary test target only |
+| Windows | x64 | `StudioCore` built with Swift 6.4.2; no application | `Windows StudioCore` CI job on `windows-2025` PASS (260 core checks, 86 C ABI checks, conformance PASS), 2026-11-13 | **not a shipping target in 1.0.0** |
+| Linux | any | not built | `Tests/run-studiocore-linux.sh` prepared, smoke-tested on macOS only | long-term, after a verified Windows RC |
 
-No native Intel Mac, Windows machine or Linux machine is available in this
-environment. The x86_64 result is a Rosetta execution of an Intel slice, which
-is not the same as a native Intel run.
+No native Intel Mac, Windows machine or Linux machine is attached to this
+development checkout. The Windows result above comes from the GitHub-hosted
+`windows-2025` runner; the x86_64 macOS result is a Rosetta execution of an
+Intel slice, which is not the same as a native Intel run.
 
 ## Shared core (portable across all three)
 
@@ -43,6 +44,7 @@ Interchangeability evidence:
 | Unknown v4 fields survive save/reopen | recursive preservation tests added with the v4 codec |
 | Selection/refusal rules are host-independent | `UpdatePolicy` tests in `Tests/EngineTests.swift` |
 | The module builds without platform frameworks | boundary gate (260 checks) and independent `swiftc` build |
+| The module builds and passes its tests on Windows | `Windows StudioCore` CI job, `windows-2025`, 2026-11-13: 260 core checks, 86 C ABI checks, conformance PASS |
 
 ## macOS-specific (not portable)
 
@@ -51,38 +53,44 @@ Metal-backed preview, AppKit/SwiftUI UI, file dialogs, Keychain-free settings,
 the `.app` installer/updater and DMG packaging. A Windows release requires
 native implementations of all of these; no shim is claimed.
 
-## Windows path — what exists and what blocks it
+## Windows path — what exists and what does not
 
-Exists:
+Exists and is verified:
 
 - the portable core above, with a Windows PowerShell runner
   (`Tests/run-studiocore-windows.ps1`) that scans imports, builds the module and
   runs `StudioCoreTests` with a native Swift toolchain;
+- the `Windows StudioCore` CI job on the GitHub-hosted `windows-2025` runner.
+  It ran green on `eba8075` (PR #13) on 2026-11-13 with Swift 6.4.2:
+  `StudioCore: 260 checks passed`, `ABI TESTS: PASS (86 checks)` and
+  `R1 conformance: PASS`. The four defects found by the first runs are recorded
+  in [`CI_GATES.md`](CI_GATES.md#verified-runs);
+- the installed release workflow (`.github/workflows/release.yml`) that builds
+  both macOS DMGs, runs the Windows core job and verifies the SHA-256 manifests
+  before publishing; its Windows application job is gated behind the repository
+  variable `WINDOWS_APP_READY` and is skipped until an application exists;
+- a prepared packaging script that writes the Windows zip and SHA-256
+  (`Tools/package-windows.ps1`); it has not been executed on Windows;
 - a code-level Windows implementation audit with the reusable surfaces, the
   macOS-only replacements, the recommended host stack and milestones W0–W6
   (`Docs/WINDOWS_IMPLEMENTATION_PATH.md`);
-- an intended CI job (`Docs/CI_GATES.md` section "Windows portability"),
-- a prepared release workflow for macOS arm64, macOS x86_64 and one Windows x64
-  artifact (`Tools/ci/release-pipeline.yml`), with a packaging script that
-  writes the zip and SHA-256 (`Tools/package-windows.ps1`); neither is installed
-  or executed on Windows,
 - a technology decision document that keeps the renderer boundary
   implementation-agnostic (`Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md`).
 
-Blocked:
+Not implemented:
 
-1. **No Windows runner has executed the portability script.** The one available
-   token lacks the GitHub `workflow` scope, so the prepared job cannot be added
-   to `.github/workflows/ci.yml`; the permission was not bypassed and no claim
-   of a Windows run is made.
-2. **No Windows renderer/UI/installer exists.** Even a green portability run
-   would prove only that the shared module compiles on Windows.
-3. The `windows-2025` runner label, third-party Swift setup action and toolchain
-   tag in the prepared job are unconfirmed.
+1. **No Windows renderer, UI or installer exists.** The green portability run
+   proves only that the shared module and its C ABI work with a native Windows
+   toolchain.
+2. **No Windows artifact has been built or run.** The release workflow never
+   publishes a Windows product, and `Tools/package-windows.ps1` is untested.
+3. The Windows application work (W2–W6: C#/.NET host, WIC decode/encode, crop,
+   orientation, global adjustments, masks, editor shell, packaging) is designed
+   but not started.
 
-Result: Windows is **0% product-ready** and **unverified** for the shared core,
-while the core is **designed and prepared** for it. It is not a 1.0.0 shipping
-target. Linux remains a supplementary test target, not a product.
+Result: the shared core is **verified portable** on a real Windows runner, while
+Windows is **0% product-ready**. It is not a 1.0.0 shipping target. Linux is
+unimplemented and stays on the long-term roadmap after a verified Windows RC.
 
 ## Update compatibility
 
