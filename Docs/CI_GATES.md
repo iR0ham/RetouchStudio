@@ -93,6 +93,7 @@ The upgrade is installed:
 | `actions/upload-artifact` | `v7` (7.0.2, 2026-10-07) | `node24` | both workflows |
 | `actions/download-artifact` | `v8` (8.0.2, 2026-10-07) | `node24` | `release.yml` |
 | `compnerd/gha-setup-swift` | `v0.5.1` (2026-10-14) | composite, no Node runtime | the Windows jobs in both workflows |
+| `actions/setup-dotnet` | `v6` (`10.0.x`) | `node24` | the `Windows App` job |
 
 The installation PR keeps the three original jobs byte-for-byte apart from the
 checkout and upload-artifact majors, and adds one new `windows-core` job. No
@@ -282,10 +283,15 @@ platform-independent Windows job, because every other job carries
 create a release or a non-versioned artifact.
 
 The Windows application job is gated behind the repository variable
-`WINDOWS_APP_READY=true` and is skipped until a real application exists; a green
-release therefore never implies a Windows product. A job-level `hashFiles()`
-condition would be read before `actions/checkout`, so it was replaced with the
-repository variable.
+`WINDOWS_APP_READY=true` and is still skipped: the host builds and opens a
+window, but packaging, signing and a release decision are unverified, so the
+variable stays unset. The job now installs the .NET SDK and packages
+`build/windows/app`, but it has never executed, and the release job's `needs`
+list does not yet include it. Treat the job and `Tools/package-windows.ps1` as
+**NOT VERIFIED**; both must be reworked and run before the variable is set. A
+green release therefore never implies a Windows product. A job-level
+`hashFiles()` condition would be read before `actions/checkout`, so it was
+replaced with the repository variable.
 
 No paid signing certificate or notarization is used; macOS builds are ad-hoc
 signed and Windows output is unsigned.
