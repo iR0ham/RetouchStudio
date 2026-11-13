@@ -20,6 +20,24 @@ if (-not (Get-Command swiftc -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+# Git for Windows ships a coreutils `link.exe` in usr\bin, and the hosted
+# runner PATH can reach it before MSVC's linker, which the Swift driver calls
+# as plain `link`. Put the real VC tools directory first.
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (Test-Path $vswhere) {
+    $vsPath = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+    if ($vsPath) {
+        $linker = Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC\*\bin\Hostx64\x64\link.exe') `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($linker) {
+            $env:PATH = $linker.Directory.FullName + ';' + $env:PATH
+            Write-Host "-> using the MSVC linker at $($linker.FullName)"
+        }
+    }
+}
+
 $forbiddenImports = 'AppKit|SwiftUI|CoreImage|Vision|ImageIO|CoreGraphics|UIKit|UniformTypeIdentifiers|CoreVideo|Metal|AVFoundation|Cocoa|RetouchStudio'
 $platformTypes = 'NSColor|NSImage|NSFont|NSBezierPath|CIImage|CIColor|CIFilter|CGImage|CGColor|CGContext|CGRect|CGSize|CGPoint|CGFloat|CGAffineTransform|VNDetect[A-Za-z]*|VNImageRequestHandler|VNRecognize[A-Za-z]*|UTType|\bColor\b|\bImage\b|\bView\b'
 
