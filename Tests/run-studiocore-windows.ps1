@@ -35,20 +35,23 @@ Get-ChildItem Sources/StudioCore -Filter *.swift | ForEach-Object {
     $lines = Get-Content $_.FullName
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $code = $lines[$i] -replace '//.*$', ''
-        if ($code -match "^\s*(@[^\s]+\s+)*import\s+") {
+        # -cmatch, not -match: PowerShell matching is case-insensitive by
+        # default, which would make \bColor\b hit the lowercase `.color`
+        # property and diverge from the `grep -E` gate on macOS.
+        if ($code -cmatch "^\s*(@[^\s]+\s+)*import\s+") {
             $importSet[$code.Trim()] = $true
-            if ($code -match "^\s*(@[^\s]+\s+)*import\s+($forbiddenImports)\b") {
+            if ($code -cmatch "^\s*(@[^\s]+\s+)*import\s+($forbiddenImports)\b") {
                 Fail "$($_.Name):$($i + 1) imports a platform/app module: $code"
             }
         }
-        if ($code -match $platformTypes) {
+        if ($code -cmatch $platformTypes) {
             Fail "$($_.Name):$($i + 1) mentions a platform type: $code"
         }
     }
 }
 
 $imports = @($importSet.Keys | Sort-Object)
-if ($imports.Count -ne 1 -or $imports[0] -ne 'import Foundation') {
+if ($imports.Count -ne 1 -or $imports[0] -cne 'import Foundation') {
     Fail "StudioCore imports more than Foundation: $($imports -join ', ')"
 }
 if ($failed) {
