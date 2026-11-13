@@ -1,0 +1,103 @@
+# Retouch Studio for Windows
+
+A native Windows host for the same project files the macOS app writes. It is a
+light editor, not a port of the macOS feature set: the shared StudioCore rules
+(project bytes, versions, unknown fields, undo history, export plan) run behind
+the C ABI in `studioscore_core.dll`, and this host owns pixels through the
+in-box Windows Imaging Component.
+
+| Project | Role |
+| --- | --- |
+| `RetouchStudio.Core` | `net10.0`. The C ABI wrapper, the v4 document model, the undo session, the BGRA8 pixel buffer, crop/orientation/adjustment passes and the export runner. No WinRT, no WPF. |
+| `RetouchStudio.Imaging` | WIC decode and encode through `Windows.Graphics.Imaging`. |
+| `RetouchStudio.App` | The WPF window (`net10.0-windows10.0.19041.0`). |
+| `RetouchStudio.Tests` | Headless checks against the real DLL and the real WIC codec. |
+| `native/studioscore_core.def` | The complete export surface of the DLL. |
+
+## Build
+
+```powershell
+pwsh -File Tools/build-windows.ps1
+```
+
+Requires a Swift toolchain for Windows (`swiftc.exe` with its `clang.exe` and
+`lld`) and the .NET 10 SDK, both on PATH; the CI job installs both. The script
+
+1. builds `Sources/StudioCore` as a static library,
+2. links `Sources/StudioCoreABI` into `build/windows/native/studioscore_core.dll`
+   with `studioscore_core.def` as the export list, and checks every export when
+   `dumpbin` is available,
+3. copies the Swift runtime DLLs the app needs next to the exe, so the published
+   folder does not require the toolchain,
+4. publishes the app self-contained to `build/windows/app` (x64; Intel and AMD
+   run the same binary),
+5. runs the headless host tests, and
+6. starts the published exe and waits for it to open a window.
+
+`Tools/package-windows.ps1 -AppDir build/windows/app -Version 1.0.0` turns that
+folder into one zip plus a SHA-256 file.
+
+## What it does
+
+- Opens a JPEG/PNG/TIFF/BMP photo and decodes it upright to sRGB BGRA8, with the
+  file's EXIF orientation applied by the decoder.
+- Opens and saves the same `.retouch` project bytes as the macOS app, through
+  `ProjectCodec`: v3 files are read and rewritten as v3, v4 files keep their
+  version, their keyed geometry and every unknown key the file carried.
+- Nine global sliders in the same -100…100 range as macOS: exposure, contrast,
+  blacks, whites, saturation, vibrance, warmth, clarity, vignette. Undo, redo and
+  the dirty flag are the shared `DocumentHistory`, not a host copy.
+- Orientation: mirror, clockwise quarter turns and a straighten angle.
+- Centred crop presets (square, 4:5, 3:2, 16:9) written as the same normalized
+  crop record in photo coordinates that macOS reads.
+- Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
+  that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
+  and colour space are the shared decision, not the host's.
+- Exports never overwrite the opened photo.
+
+## What it does not do
+
+- No AI tools, skin/makeup/scene engines, healing, stickers, presets, batch,
+  analysis callouts, watermark or poster export.
+- No freeform crop; the presets are the whole crop UI.
+- 8-bit output only. A 16-bit source is reduced at decode, and a PNG or TIFF
+  plan still writes 8-bit pixels even though the plan says 16.
+- No source metadata: exports carry no EXIF/XMP/IPTC. The plan says
+  `carriesSourceMetadata: false` and the encoder copies nothing.
+- No HEIC write (the HEIF codec is an optional system component) and no HEIC
+  read path beyond whatever WIC happens to install.
+- No recovery store, updater, installer or signing. Packaging is a zip.
+- No macOS pixel parity claim. The sliders move in the documented direction and
+  the output is deterministic; the macOS Core Image pipeline is a different
+  renderer and is not reproduced stage for stage.
+
+## Pixel semantics
+
+- Buffer: tightly packed BGRA8, top-left origin, straight alpha, sRGB.
+- Document order: crop in normalized photo coordinates, then orientation
+  (mirror, quarter turns, straighten), then the nine global adjustments. The
+  crop is stored against the photo, exactly as the shared model says.
+- Straighten rotates clockwise for a positive angle, keeps the canvas size and
+  samples with clamped edges. The macOS renderer's sign and framing are not
+  claimed to match.
+- Preview renders the decoded photo resized to a 1600-pixel long edge; export
+  re-renders from the full-size decode.
+- A crop or a turn changes the frame's aspect, so the plan's pixel size
+  describes the whole photo and cannot be applied to the frame. In that case the
+  export keeps the frame's aspect and honours the requested long edge instead.
+
+## Why WPF and not WinUI 3
+
+`Docs/WINDOWS_IMPLEMENTATION_PATH.md` recommended a WinUI 3 shell. WPF is
+in-box with the .NET SDK, so the published folder needs no Windows App SDK
+bootstrapper, no MSIX and no NuGet package, and the same XAML subset costs
+nothing in maintenance for a light editor. The decision and its scope are
+recorded in that document under "W2 stack deviation"; WinUI 3 remains the
+choice to revisit if the Windows host grows past a light editor.
+
+## Verification
+
+The `Windows App` CI job (`.github/workflows/ci.yml`) runs this build, the host
+tests and the window smoke check on `windows-2025`. See
+[`Docs/CI_GATES.md`](../Docs/CI_GATES.md) for the recorded run; this document
+makes no claim about a commit the job has not covered.
