@@ -3,12 +3,18 @@
 **Status:** enabled on `main` on 2026-11-13. The three checks below are
 required, strict, and enforced for administrators; force pushes and branch
 deletion are disabled.
+**Actions:** the live workflow still runs `actions/checkout@v4` and
+`actions/upload-artifact@v4`, both on the deprecated Node.js 20 runtime;
+checkout prints the notice on every run. The Node 24 upgrade is validated in
+[`Tools/ci/ci-node24.yml`](../Tools/ci/ci-node24.yml) but cannot be installed
+yet; the reason and the install steps are under
+[Action runtimes and versions](#action-runtimes-and-versions).
 **Date:** 2026-11-13
 **Workflow:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 
 The repository workflow is named `CI`. It runs three jobs and each job reports a
-status check under its own name. Those three names are intended to become the
-required merge checks:
+status check under its own name. Those three names are the required merge
+checks:
 
 | Check | Runner | Command |
 |---|---|---|
@@ -59,6 +65,79 @@ RETOUCH_ARCH=arm64 ./Tests/run.sh
 The conformance gate needs `python3` (3.10 or newer, standard library only)
 and a C11 compiler. The other two need macOS with Command Line Tools.
 
+## Action runtimes and versions
+
+Audited on 2026-11-13 against the CI job logs for `main` (`cbf0b32`, dispatched
+run `43347128659`) and each action's published `action.yml`.
+
+The live workflow shows one deprecation, once per job:
+
+```
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20
+but are being forced to run on Node.js 24: actions/checkout@v4.
+```
+
+Those three identical lines are the only deprecation warnings in the logs: no
+`set-output`, no `save-state`, no deprecated input, no unsupported runner label.
+`actions/upload-artifact@v4` also targets Node.js 20 but runs only on failure, so
+a green run never prints its notice; it is upgraded as well.
+
+The upgrade is prepared and validated but **not installed**:
+
+| Action | Live in `ci.yml` | Prepared | Runtime | Where prepared |
+|---|---|---|---|---|
+| `actions/checkout` | `v4` | `v7` (7.0.1, 2026-07-20) | `node24` | `Tools/ci/ci-node24.yml`, `Tools/ci/release-pipeline.yml` |
+| `actions/upload-artifact` | `v4` | `v7` (7.0.2, 2026-10-07) | `node24` | same |
+| `actions/download-artifact` | — | `v8` (8.0.2, 2026-10-07) | `node24` | `Tools/ci/release-pipeline.yml` |
+| `compnerd/gha-setup-swift` | — | `v0.5.1` (2026-10-14) | composite, no Node runtime | `Tools/ci/release-pipeline.yml` |
+
+`Tools/ci/ci-node24.yml` is the live workflow with exactly two changes: the
+checkout and upload-artifact majors. Every job, runner, timeout, gate command and
+verdict assertion is identical, so no required check is weakened. It passes
+actionlint v1.7.12 and a PyYAML parse.
+
+Node 24 actions need Actions Runner 2.327.1 or newer, which GitHub-hosted
+runners satisfy. The prepared Windows jobs use the supported `swift-version`,
+`swift-build` and `build_arch` inputs; the deprecated `branch` and `tag` aliases
+are gone. They request Swift 6.4.1 (`swift-6.4.1-release` /
+`6.4.1-RELEASE`), the newest Windows installer line that `download.swift.org`
+serves (6.4 and 6.5 return 404).
+
+The runner labels in use (`macos-15`, `ubuntu-24.04`, `windows-2025`) are current
+GitHub-hosted labels; the Windows job remains **NOT VERIFIED** until it is
+installed and run.
+
+### Why the upgrade is not in the live workflow
+
+The token available to this checkout has the `gist`, `read:org` and `repo`
+scopes but not `workflow`. GitHub rejects any push that adds or edits a file
+under `.github/workflows`:
+
+```
+! [remote rejected] ci/node24-actions -> ci/node24-actions
+(refusing to allow an OAuth App to create or update workflow
+`.github/workflows/ci.yml` without `workflow` scope)
+```
+
+The permission was not bypassed: no token swap, no force push, no direct commit
+to `main`. Until a token with the `workflow` scope installs the copy, the
+Node.js 20 notice stays in the logs and is expected, not a regression.
+
+To finish it:
+
+```bash
+gh auth refresh -s workflow                         # interactive browser flow
+cp Tools/ci/ci-node24.yml .github/workflows/ci.yml  # then delete the file header
+git switch -c ci/node24-actions
+git add .github/workflows/ci.yml
+git commit -m "ci: move actions to the Node 24 majors"
+git push -u origin ci/node24-actions
+gh pr create --fill                                 # the three required checks must pass
+```
+
+Acceptance: a fresh run after that merge prints no `Node.js 20 is deprecated`
+line. It cannot be reached from the current token.
+
 ## Windows portability (prepared, not in the workflow)
 
 `Tests/run-studiocore-windows.ps1` is the Windows equivalent of
@@ -75,11 +154,12 @@ The job intended for the workflow is:
     name: Windows StudioCore Portability
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
-      - uses: compnerd/gha-setup-swift@v0.3.0
+      - uses: actions/checkout@v7
+      - uses: compnerd/gha-setup-swift@v0.5.1
         with:
-          branch: swift-6.1-release
-          tag: swift-6.1-release
+          swift-version: swift-6.4.1-release
+          swift-build: 6.4.1-RELEASE
+          build_arch: amd64
       - shell: pwsh
         run: ./Tests/run-studiocore-windows.ps1
 ```
@@ -105,8 +185,14 @@ builds an arm64 DMG, an x86_64 DMG, runs the Windows StudioCore portability job,
 verifies every SHA-256 manifest, and publishes a GitHub Release. The Windows
 application job is gated behind the repository variable
 `WINDOWS_APP_READY=true` and is skipped until a real application exists; a green
-release therefore never implies a Windows product. No paid signing certificate
-or notarization is used.
+release therefore never implies a Windows product. A job-level `hashFiles()`
+condition would be read before `actions/checkout`, so it was replaced with the
+repository variable.
+
+The file was refreshed on 2026-11-13 with the actions in the table above and
+validated with actionlint v1.7.12. It is installed at the same time as
+`Tools/ci/ci-node24.yml`, with the same `workflow` scope, and no paid signing
+certificate or notarization is used.
 
 ## Branch protection for `main`
 
@@ -118,13 +204,11 @@ Platform-neutral Conformance
 macOS Integration
 ```
 
-After these checks have completed successfully on the default branch, the
-repository owner can enforce them with branch protection. The intended policy
-is strict (a branch must be up to date with `main` before merging), applies to
-administrators, disallows force pushes and branch deletion, and does not add a
-review requirement that the repository did not previously have.
-
-Example command (run only after the checks exist on `main`):
+This policy is applied to `main` and was read back on 2026-11-13 with
+`gh api repos/iR0ham/RetouchStudio/branches/main/protection`: strict, the three
+contexts above, `enforce_admins` on, force pushes off, deletions off, no required
+review. The configuration is reproduced here so it can be re-applied if it is
+ever lost:
 
 ```bash
 gh api -X PUT repos/iR0ham/RetouchStudio/branches/main/protection \
@@ -146,6 +230,10 @@ gh api -X PUT repos/iR0ham/RetouchStudio/branches/main/protection \
 }
 JSON
 ```
+
+Because the checks are strict, every PR must be re-run against the current
+`main` before merging. That is what blocked nothing in the 2026-11-13
+consolidation, but it does mean an old green run is never enough.
 
 ## Scope
 
