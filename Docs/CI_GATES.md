@@ -89,19 +89,20 @@ The upgrade is prepared and validated but **not installed**:
 | `actions/checkout` | `v4` | `v7` (7.0.1, 2026-07-20) | `node24` | `Tools/ci/ci-node24.yml`, `Tools/ci/release-pipeline.yml` |
 | `actions/upload-artifact` | `v4` | `v7` (7.0.2, 2026-10-07) | `node24` | same |
 | `actions/download-artifact` | — | `v8` (8.0.2, 2026-10-07) | `node24` | `Tools/ci/release-pipeline.yml` |
-| `compnerd/gha-setup-swift` | — | `v0.5.1` (2026-10-14) | composite, no Node runtime | `Tools/ci/release-pipeline.yml` |
+| `compnerd/gha-setup-swift` | — | `v0.5.1` (2026-10-14) | composite, no Node runtime | both prepared files |
 
-`Tools/ci/ci-node24.yml` is the live workflow with exactly two changes: the
-checkout and upload-artifact majors. Every job, runner, timeout, gate command and
-verdict assertion is identical, so no required check is weakened. It passes
-actionlint v1.7.12 and a PyYAML parse.
+`Tools/ci/ci-node24.yml` keeps the three live jobs byte-for-byte apart from the
+checkout and upload-artifact majors, and adds one new `windows-core` job. No
+existing job, runner, timeout, gate command or verdict assertion changes, so no
+required check is weakened. It passes actionlint v1.7.12 and a PyYAML parse.
 
 Node 24 actions need Actions Runner 2.327.1 or newer, which GitHub-hosted
 runners satisfy. The prepared Windows jobs use the supported `swift-version`,
 `swift-build` and `build_arch` inputs; the deprecated `branch` and `tag` aliases
-are gone. They request Swift 6.4.1 (`swift-6.4.1-release` /
-`6.4.1-RELEASE`), the newest Windows installer line that `download.swift.org`
-serves (6.4 and 6.5 return 404).
+are gone. They request Swift 6.4.2 (`swift-6.4.2-release` / `6.4.2-RELEASE`):
+the tag exists on `swiftlang/swift` (2026-10-30) and `download.swift.org` serves
+the 2.1 GB Windows installer (checked with a ranged HEAD request on 2026-11-13).
+The earlier 6.4.1 pin is superseded; 6.5 has no release tag yet.
 
 The runner labels in use (`macos-15`, `ubuntu-24.04`, `windows-2025`) are current
 GitHub-hosted labels; the Windows job remains **NOT VERIFIED** until it is
@@ -147,30 +148,17 @@ toolchain, and runs the same `StudioCoreTests`. It proves only that the shared
 module is portable — there is no Windows renderer, UI, installer or application
 behind it.
 
-The job intended for the workflow is:
-
-```yaml
-  windows-portability:
-    name: Windows StudioCore Portability
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v7
-      - uses: compnerd/gha-setup-swift@v0.5.1
-        with:
-          swift-version: swift-6.4.1-release
-          swift-build: 6.4.1-RELEASE
-          build_arch: amd64
-      - shell: pwsh
-        run: ./Tests/run-studiocore-windows.ps1
-```
-
-This snippet is **NOT VERIFIED**: it has not been added to
+The job is now part of the prepared workflow (`windows-core` in
+[`Tools/ci/ci-node24.yml`](../Tools/ci/ci-node24.yml)): it installs the Swift
+toolchain, runs `Tests/run-studiocore-windows.ps1`, then runs the same
+conformance gate with `CC=clang` because Git Bash on the Windows image has no
+`cc`. It is **NOT VERIFIED**: it has not been added to
 `.github/workflows/ci.yml`, because the token in use lacks the GitHub
 `workflow` scope and pushing a workflow change is rejected. The permission was
-not bypassed. The runner label `windows-2025`, the third-party action version
-and the toolchain tag must be confirmed on a Windows runner before the job can
-be made a required check. A required check needs a green run on the default
-branch first.
+not bypassed. The runner label `windows-2025`, the third-party action version,
+the toolchain tag and the `clang` assumption must be confirmed on a Windows
+runner before the job can be made a required check. A required check needs a
+green run on the default branch first.
 
 The Windows gap and the intended implementation are analysed in
 [`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md). The release
