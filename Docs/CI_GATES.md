@@ -1,7 +1,9 @@
 # CI Merge Gates
 
-**Status:** Proposed in PR; required branch protection is not yet enabled.
-**Date:** 2026-11-12
+**Status:** enabled on `main` on 2026-11-13. The three checks below are
+required, strict, and enforced for administrators; force pushes and branch
+deletion are disabled.
+**Date:** 2026-11-13
 **Workflow:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 
 The repository workflow is named `CI`. It runs three jobs and each job reports a
@@ -89,6 +91,22 @@ not bypassed. The runner label `windows-2025`, the third-party action version
 and the toolchain tag must be confirmed on a Windows runner before the job can
 be made a required check. A required check needs a green run on the default
 branch first.
+
+The Windows gap and the intended implementation are analysed in
+[`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md). The release
+workflow for macOS arm64, macOS x86_64 and Windows x64 is prepared at
+[`Tools/ci/release-pipeline.yml`](../Tools/ci/release-pipeline.yml); it is also
+**not installed** for the same scope reason.
+
+## Release pipeline (prepared, not installed)
+
+`Tools/ci/release-pipeline.yml` is a copy-ready workflow, not a live one. It
+builds an arm64 DMG, an x86_64 DMG, runs the Windows StudioCore portability job,
+verifies every SHA-256 manifest, and publishes a GitHub Release. The Windows
+application job is gated behind the repository variable
+`WINDOWS_APP_READY=true` and is skipped until a real application exists; a green
+release therefore never implies a Windows product. No paid signing certificate
+or notarization is used.
 
 ## Branch protection for `main`
 
