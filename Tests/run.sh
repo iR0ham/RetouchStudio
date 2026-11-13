@@ -35,9 +35,11 @@ done
 SOURCES=$(find Sources/RetouchStudio -name '*.swift' ! -name 'App.swift' ! -name 'SelfCheck.swift')
 
 CORE_DIR="build/studiocore/$TARGET_ARCH"
-# The boundary gate, the independent build and the core suite run together
-# so a forbidden import or a non-portable rule fails the full validation.
+# The boundary gate, the independent build, the core suite and the C ABI run
+# together so a forbidden import or a non-portable rule fails the full
+# validation.
 ./Tests/run-studiocore.sh "$TARGET_ARCH"
+./Tests/run-abi.sh "$TARGET_ARCH" "$SDK"
 
 run_suite() {
   local suite="$1" name="$2"

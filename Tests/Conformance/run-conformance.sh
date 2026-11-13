@@ -19,3 +19,12 @@ trap cleanup EXIT
   -o "$WORK/abi_smoke"
 
 "$WORK/abi_smoke"
+
+# The StudioCore C ABI v0 header is a separate contract from the image-engine
+# draft, so it gets its own header-only translation unit.
+"$CC" -std=c11 -Wall -Wextra -Werror -pedantic \
+  -I Sources/StudioCoreABI/include \
+  Tests/Conformance/ABI/core_smoke.c \
+  -o "$WORK/core_smoke"
+
+"$WORK/core_smoke"

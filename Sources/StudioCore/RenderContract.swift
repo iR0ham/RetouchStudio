@@ -114,7 +114,7 @@ public enum RenderColorSpace: String, Codable, Equatable, Sendable {
 
 /// One image's measurements, as the host decoded them. The pixels stay behind
 /// the port; this is what the shared policy is allowed to read.
-public struct RenderSourceDescription: Equatable, Sendable {
+public struct RenderSourceDescription: Codable, Equatable, Sendable {
     public var pixelSize: StudioSize
     /// Pixel aspect ratio of the whole photo before any crop.
     public var photoAspect: Double
@@ -134,7 +134,7 @@ public struct RenderSourceDescription: Equatable, Sendable {
 /// Everything an export takes from the document instead of from the pixels it
 /// lands on. The single-photo export and the batch export both build one of
 /// these, so the two entry points cannot drift.
-public struct RenderRequest: Equatable {
+public struct RenderRequest: Codable, Equatable {
     public var adjustments: Adjustments
     public var healSpots: [HealSpot]
     public var stickers: [Sticker]
@@ -206,7 +206,7 @@ public struct RenderRequest: Equatable {
 /// must honour: whether to run the upscaler, whether callouts and a signature
 /// belong on the result, and how the file is encoded. Two hosts can therefore
 /// make the same decisions with different pixel types.
-public struct RenderPlan: Equatable, Sendable {
+public struct RenderPlan: Codable, Equatable, Sendable {
     public var format: ExportFormat
     public var pixelSize: StudioSize
     public var upscales: Bool

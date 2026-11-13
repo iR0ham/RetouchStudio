@@ -1,15 +1,16 @@
 # Builds StudioCore with a native Windows Swift toolchain, proves the module is
-# still Foundation-only, then runs Tests/StudioCoreTests.swift linked against
-# the module alone. This is the executable form of the Windows portability
-# claim for the shared core. It does not build the macOS app, and it is not
-# evidence for any Windows renderer, UI or packaging behaviour — those do not
-# exist yet.
+# still Foundation-only, runs Tests/StudioCoreTests.swift linked against the
+# module alone, then builds the StudioCore C ABI v0 library and runs the C test
+# that links it. This is the executable form of the Windows portability claim
+# for the shared core. It does not build the macOS app, and it is not evidence
+# for any Windows renderer, UI or packaging behaviour — those do not exist yet.
 #
 #   pwsh -File Tests/run-studiocore-windows.ps1
 #
-# Requires a Swift toolchain for Windows on PATH (swiftc.exe). The script was
-# written against the swift.org Windows toolchain layout; it has not been run
-# on a Windows host from this repository yet.
+# Requires a Swift toolchain for Windows on PATH (swiftc.exe) and the clang.exe
+# that ships with it. The script was written against the swift.org Windows
+# toolchain layout; it has not been run on a Windows host from this repository
+# yet, so its pass line is NOT VERIFIED.
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
@@ -91,6 +92,40 @@ try {
     $env:STUDIOCORE_ROOT = (Get-Location).Path
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "StudioCore tests failed ($LASTEXITCODE)" }
+
+    # The same C ABI library and C test as macOS. clang.exe ships with the
+    # Swift toolchain, so the C side compiles with the same compiler family.
+    $clang = Get-Command clang -ErrorAction SilentlyContinue
+    if (-not $clang) { throw 'clang is not on PATH; it ships with the Swift toolchain' }
+
+    Write-Host '-> building the StudioCore C ABI library'
+    $abiDir = 'build/studioabi/windows'
+    New-Item -ItemType Directory -Force -Path $abiDir | Out-Null
+    $abiSources = @(Get-ChildItem Sources/StudioCoreABI -Filter *.swift |
+        ForEach-Object { $_.FullName })
+    & swiftc -O -module-name StudioCoreABI -module-cache-path $cacheDir `
+        -emit-module -emit-module-path (Join-Path $abiDir 'StudioCoreABI.swiftmodule') `
+        -emit-library -static -o (Join-Path $abiDir 'StudioCoreABI.lib') `
+        -I $coreDir $abiSources
+    if ($LASTEXITCODE -ne 0) { throw "StudioCoreABI compilation failed ($LASTEXITCODE)" }
+
+    Write-Host '-> compiling the C11 ABI test against the public header'
+    $object = Join-Path $workDir 'abi_tests.obj'
+    & clang -std=c11 -Wall -Wextra -Werror -pedantic `
+        -I Sources/StudioCoreABI/include `
+        -c Tests/ABI/abi_tests.c -o $object
+    if ($LASTEXITCODE -ne 0) { throw "C ABI test compilation failed ($LASTEXITCODE)" }
+
+    Write-Host '-> linking the C test with the Swift libraries'
+    $abiExe = Join-Path $workDir 'abi_tests.exe'
+    & swiftc -O -module-cache-path $cacheDir -o $abiExe `
+        $object `
+        (Join-Path $abiDir 'StudioCoreABI.lib') (Join-Path $coreDir 'StudioCore.lib')
+    if ($LASTEXITCODE -ne 0) { throw "C ABI test link failed ($LASTEXITCODE)" }
+
+    Write-Host '-> running the C ABI tests'
+    & $abiExe
+    if ($LASTEXITCODE -ne 0) { throw "C ABI tests failed ($LASTEXITCODE)" }
 }
 finally {
     Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
