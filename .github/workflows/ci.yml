@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Record toolchain
         run: |
@@ -47,7 +47,7 @@ jobs:
 
       - name: Upload gate log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: studioscore-boundary-log
           path: ${{ runner.temp }}/studioscore-boundary.log
@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Record toolchain
         run: |
@@ -89,7 +89,7 @@ jobs:
 
       - name: Upload gate log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: conformance-log
           path: ${{ runner.temp }}/conformance.log
@@ -101,7 +101,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Record toolchain
         run: |
@@ -137,8 +137,53 @@ jobs:
 
       - name: Upload suite log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-integration-log
           path: ${{ runner.temp }}/macos-integration.log
+          if-no-files-found: ignore
+
+  windows-core:
+    name: Windows StudioCore
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install the Swift toolchain
+        uses: compnerd/gha-setup-swift@v0.5.1
+        with:
+          swift-version: swift-6.4.2-release
+          swift-build: 6.4.2-RELEASE
+          build_arch: amd64
+
+      - name: Record toolchain
+        shell: pwsh
+        run: |
+          swiftc --version
+          $PSVersionTable.PSVersion.ToString()
+
+      - name: Build StudioCore and run the core plus C ABI tests
+        shell: pwsh
+        run: ./Tests/run-studiocore-windows.ps1
+
+      - name: Run the platform-neutral conformance gate
+        shell: bash
+        env:
+          # Git Bash on the Windows image has no `cc`; the Swift toolchain
+          # installs clang.exe and puts it on PATH. Python is on PATH as
+          # `python`, not `python3`.
+          CC: clang
+          PYTHON: python
+        run: ./Tests/Conformance/run-conformance.sh
+
+      - name: Upload gate logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-core-log
+          path: |
+            build/**/*.log
+            ${{ runner.temp }}/conformance.log
           if-no-files-found: ignore

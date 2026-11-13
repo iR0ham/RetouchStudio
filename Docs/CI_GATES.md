@@ -3,24 +3,25 @@
 **Status:** enabled on `main` on 2026-11-13. The three checks below are
 required, strict, and enforced for administrators; force pushes and branch
 deletion are disabled.
-**Actions:** the live workflow still runs `actions/checkout@v4` and
-`actions/upload-artifact@v4`, both on the deprecated Node.js 20 runtime;
-checkout prints the notice on every run. The Node 24 upgrade is validated in
-[`Tools/ci/ci-node24.yml`](../Tools/ci/ci-node24.yml) but cannot be installed
-yet; the reason and the install steps are under
-[Action runtimes and versions](#action-runtimes-and-versions).
+**Actions:** the workflows run `actions/checkout@v7`,
+`actions/upload-artifact@v7` and `actions/download-artifact@v8` on the Node 24
+runtime, so the deprecated Node.js 20 notices are gone. A fourth job,
+`Windows StudioCore`, runs on `windows-2025`. Both workflows were installed on
+2026-11-13 after the GitHub token gained the `workflow` scope; the history is
+under [Action runtimes and versions](#action-runtimes-and-versions).
 **Date:** 2026-11-13
-**Workflow:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+**Workflows:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml),
+[`.github/workflows/release.yml`](../.github/workflows/release.yml)
 
-The repository workflow is named `CI`. It runs three jobs and each job reports a
-status check under its own name. Those three names are the required merge
-checks:
+The repository workflow is named `CI`. It runs four jobs and each job reports a
+status check under its own name. The first three are the required merge checks:
 
 | Check | Runner | Command |
 |---|---|---|
 | `StudioCore Boundary` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` |
 | `Platform-neutral Conformance` | `ubuntu-24.04` (x64) | `./Tests/Conformance/run-conformance.sh` |
 | `macOS Integration` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` and `RETOUCH_ARCH=arm64 ./Tests/run.sh` |
+| `Windows StudioCore` (not yet required) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
 
 ## What each check proves
 
@@ -82,19 +83,21 @@ Those three identical lines are the only deprecation warnings in the logs: no
 `actions/upload-artifact@v4` also targets Node.js 20 but runs only on failure, so
 a green run never prints its notice; it is upgraded as well.
 
-The upgrade is prepared and validated but **not installed**:
+The upgrade is installed:
 
-| Action | Live in `ci.yml` | Prepared | Runtime | Where prepared |
-|---|---|---|---|---|
-| `actions/checkout` | `v4` | `v7` (7.0.1, 2026-07-20) | `node24` | `Tools/ci/ci-node24.yml`, `Tools/ci/release-pipeline.yml` |
-| `actions/upload-artifact` | `v4` | `v7` (7.0.2, 2026-10-07) | `node24` | same |
-| `actions/download-artifact` | — | `v8` (8.0.2, 2026-10-07) | `node24` | `Tools/ci/release-pipeline.yml` |
-| `compnerd/gha-setup-swift` | — | `v0.5.1` (2026-10-14) | composite, no Node runtime | both prepared files |
+| Action | Installed | Runtime | Used by |
+|---|---|---|---|
+| `actions/checkout` | `v7` (7.0.1, 2026-07-20) | `node24` | both workflows |
+| `actions/upload-artifact` | `v7` (7.0.2, 2026-10-07) | `node24` | both workflows |
+| `actions/download-artifact` | `v8` (8.0.2, 2026-10-07) | `node24` | `release.yml` |
+| `compnerd/gha-setup-swift` | `v0.5.1` (2026-10-14) | composite, no Node runtime | the Windows jobs in both workflows |
 
-`Tools/ci/ci-node24.yml` keeps the three live jobs byte-for-byte apart from the
+The installation PR keeps the three original jobs byte-for-byte apart from the
 checkout and upload-artifact majors, and adds one new `windows-core` job. No
 existing job, runner, timeout, gate command or verdict assertion changes, so no
-required check is weakened. It passes actionlint v1.7.12 and a PyYAML parse.
+required check is weakened. Both workflows pass actionlint v1.7.12 and a PyYAML
+parse. The tag of every referenced action was resolved through the GitHub API
+before the push.
 
 Node 24 actions need Actions Runner 2.327.1 or newer, which GitHub-hosted
 runners satisfy. The prepared Windows jobs use the supported `swift-version`,
@@ -108,11 +111,11 @@ The runner labels in use (`macos-15`, `ubuntu-24.04`, `windows-2025`) are curren
 GitHub-hosted labels; the Windows job remains **NOT VERIFIED** until it is
 installed and run.
 
-### Why the upgrade is not in the live workflow
+### How the upgrade was installed
 
-The token available to this checkout has the `gist`, `read:org` and `repo`
-scopes but not `workflow`. GitHub rejects any push that adds or edits a file
-under `.github/workflows`:
+Until 2026-11-13 the token available to this checkout had the `gist`,
+`read:org` and `repo` scopes but not `workflow`, and GitHub rejected every push
+that added or edited a file under `.github/workflows`:
 
 ```
 ! [remote rejected] ci/node24-actions -> ci/node24-actions
@@ -121,66 +124,61 @@ under `.github/workflows`:
 ```
 
 The permission was not bypassed: no token swap, no force push, no direct commit
-to `main`. Until a token with the `workflow` scope installs the copy, the
-Node.js 20 notice stays in the logs and is expected, not a regression.
+to `main`, and the live workflow stayed on the Node 20 majors while the blocker
+held.
 
-To finish it:
+On 2026-11-13 the account completed `gh auth refresh -s workflow` and the
+upgrade was installed normally through a pull request. `Tools/ci/ci-node24.yml`
+and `Tools/ci/release-pipeline.yml` were deleted in that PR: the installed
+workflows are now the only copy, so the two cannot drift apart.
 
-```bash
-gh auth refresh -s workflow                         # interactive browser flow
-cp Tools/ci/ci-node24.yml .github/workflows/ci.yml  # then delete the file header
-git switch -c ci/node24-actions
-git add .github/workflows/ci.yml
-git commit -m "ci: move actions to the Node 24 majors"
-git push -u origin ci/node24-actions
-gh pr create --fill                                 # the three required checks must pass
-```
+`Tests/Conformance/run-conformance.sh` honours a `PYTHON` variable and falls
+back to `python` when `python3` is absent, because the Windows images expose
+the interpreter as `python`. The macOS and Linux jobs still use `python3`.
 
-Acceptance: a fresh run after that merge prints no `Node.js 20 is deprecated`
-line. It cannot be reached from the current token.
+Acceptance: a run on `main` after the merge prints no
+`Node.js 20 is deprecated` line. The merge run is recorded under
+[Verified runs](#verified-runs).
 
-## Windows portability (prepared, not in the workflow)
+## Windows portability job
 
 `Tests/run-studiocore-windows.ps1` is the Windows equivalent of
 `Tests/run-studiocore.sh`: it scans `Sources/StudioCore` for platform imports
 and types, builds the module and its tests with a native Windows Swift
-toolchain, and runs the same `StudioCoreTests`. It proves only that the shared
-module is portable — there is no Windows renderer, UI, installer or application
-behind it.
+toolchain, runs the same `StudioCoreTests`, builds the StudioCore C ABI static
+library and runs the C ABI test. It proves only that the shared module is
+portable — it says nothing about a Windows renderer, UI, installer or
+application, none of which exists yet.
 
-The job is now part of the prepared workflow (`windows-core` in
-[`Tools/ci/ci-node24.yml`](../Tools/ci/ci-node24.yml)): it installs the Swift
-toolchain, runs `Tests/run-studiocore-windows.ps1`, then runs the same
-conformance gate with `CC=clang` because Git Bash on the Windows image has no
-`cc`. It is **NOT VERIFIED**: it has not been added to
-`.github/workflows/ci.yml`, because the token in use lacks the GitHub
-`workflow` scope and pushing a workflow change is rejected. The permission was
-not bypassed. The runner label `windows-2025`, the third-party action version,
-the toolchain tag and the `clang` assumption must be confirmed on a Windows
-runner before the job can be made a required check. A required check needs a
-green run on the default branch first.
+`windows-core` in `ci.yml` installs Swift 6.4.2 with
+`compnerd/gha-setup-swift@v0.5.1` on `windows-2025`, runs that script, then runs
+the same conformance gate with `CC=clang` (Git Bash on the Windows image has no
+`cc`) and `PYTHON=python`. The job is not a required check; it must first
+produce a green run on `main`, which is the only evidence that the runner
+label, the third-party action, the toolchain tag and the `clang` assumption
+hold. Until that run exists, the job is **NOT VERIFIED**.
 
 The Windows gap and the intended implementation are analysed in
-[`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md). The release
-workflow for macOS arm64, macOS x86_64 and Windows x64 is prepared at
-[`Tools/ci/release-pipeline.yml`](../Tools/ci/release-pipeline.yml); it is also
-**not installed** for the same scope reason.
+[`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md).
 
-## Release pipeline (prepared, not installed)
+## Release pipeline
 
-`Tools/ci/release-pipeline.yml` is a copy-ready workflow, not a live one. It
-builds an arm64 DMG, an x86_64 DMG, runs the Windows StudioCore portability job,
-verifies every SHA-256 manifest, and publishes a GitHub Release. The Windows
-application job is gated behind the repository variable
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds an
+arm64 DMG, an x86_64 DMG, runs the Windows StudioCore portability job, verifies
+every SHA-256 manifest, and publishes a GitHub Release. It triggers on `v*` tag
+pushes and on manual dispatch; a manual dispatch runs only the
+platform-independent Windows job, because every other job carries
+`if: startsWith(github.ref, 'refs/tags/v')`. A manual dispatch therefore cannot
+create a release or a non-versioned artifact.
+
+The Windows application job is gated behind the repository variable
 `WINDOWS_APP_READY=true` and is skipped until a real application exists; a green
 release therefore never implies a Windows product. A job-level `hashFiles()`
 condition would be read before `actions/checkout`, so it was replaced with the
 repository variable.
 
-The file was refreshed on 2026-11-13 with the actions in the table above and
-validated with actionlint v1.7.12. It is installed at the same time as
-`Tools/ci/ci-node24.yml`, with the same `workflow` scope, and no paid signing
-certificate or notarization is used.
+No paid signing certificate or notarization is used; macOS builds are ad-hoc
+signed and Windows output is unsigned.
 
 ## Branch protection for `main`
 
@@ -225,12 +223,15 @@ consolidation, but it does mean an old green run is never enough.
 
 ## Scope
 
-The workflow says nothing about Windows or Linux application support. A passing
-run proves the module boundary, the conformance fixtures and the macOS suites
-on the runner images named above; it does not prove rendering parity, Vision,
-AI runtime or UI behavior on any other platform. The prepared Windows job above
-would prove only that `StudioCore` compiles and passes its own tests with a
-Windows toolchain. Linux is not a product target.
+The macOS jobs prove the module boundary, the conformance fixtures and the
+macOS suites on the runner images named above. They say nothing about rendering
+parity, Vision, AI runtime or UI behavior on any other platform. `Windows
+StudioCore` proves only that `StudioCore` compiles and passes its own tests with
+a Windows toolchain; it is not a Windows application.
+
+Linux is not implemented. It remains on the long-term roadmap and starts only
+after a Windows release candidate is verified; the repository ships no Linux
+build and no CI job here validates one.
 
 The GitHub-hosted `macos-14` runner image was retired on 2026-11-02. This
 workflow therefore uses `macos-15` (arm64) instead.
