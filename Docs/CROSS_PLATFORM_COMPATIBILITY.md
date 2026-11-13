@@ -3,6 +3,10 @@
 Status of each platform for the 1.0.0 release cycle. "Verified" means a command
 was run on this checkout and its output was inspected; everything else says so.
 
+Last full macOS gate: 2026-11-13 at `037db3a` (`main`). arm64 and x86_64 suites
+PASS, golden corpus 376 checks / 0 failures against the captured baselines, and
+the three distribution artifacts match their published SHA-256 files.
+
 ## Platform matrix
 
 | Platform | Architecture | Build | Tests | Product status |
@@ -54,7 +58,14 @@ Exists:
 - the portable core above, with a Windows PowerShell runner
   (`Tests/run-studiocore-windows.ps1`) that scans imports, builds the module and
   runs `StudioCoreTests` with a native Swift toolchain;
+- a code-level Windows implementation audit with the reusable surfaces, the
+  macOS-only replacements, the recommended host stack and milestones W0–W6
+  (`Docs/WINDOWS_IMPLEMENTATION_PATH.md`);
 - an intended CI job (`Docs/CI_GATES.md` section "Windows portability"),
+- a prepared release workflow for macOS arm64, macOS x86_64 and one Windows x64
+  artifact (`Tools/ci/release-pipeline.yml`), with a packaging script that
+  writes the zip and SHA-256 (`Tools/package-windows.ps1`); neither is installed
+  or executed on Windows,
 - a technology decision document that keeps the renderer boundary
   implementation-agnostic (`Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md`).
 
