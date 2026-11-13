@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The Windows imaging layer. It uses the in-box Windows Imaging Component
+    through the Windows.Graphics.Imaging projection: decode to sRGB RGBA8 with
+    the EXIF orientation applied, encode JPEG/PNG/TIFF. No third-party package.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>RetouchStudio.Imaging</RootNamespace>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RetouchStudio.Core\RetouchStudio.Core.csproj" />
+  </ItemGroup>
+</Project>

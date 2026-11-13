@@ -7,6 +7,11 @@ build/
 *.app
 *.dSYM
 *.xcuserstate
+Windows/**/bin/
+Windows/**/obj/
+# The *.app rule above is for macOS bundles; the Windows host's project
+# directory happens to end in .App, so re-include it explicitly.
+!Windows/RetouchStudio.App/
 
 # Local-only portrait fixtures (personal photos; never publish)
 Tests/Fixtures/private/

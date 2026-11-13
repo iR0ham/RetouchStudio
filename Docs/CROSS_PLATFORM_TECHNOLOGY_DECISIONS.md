@@ -260,6 +260,12 @@ Rules:
 
 ## 9. D6 — UI: keep macOS, make Qt the candidate for Windows/Linux
 
+> **Superseded in part (2026-11-13):** the W2 Windows shell was built as
+> C#/.NET 10 + WPF, not Qt or WinUI 3. Qt remains the candidate if the Windows
+> host ever needs Linux-quality canvas parity; the reasoning and scope of the
+> deviation are in
+> [`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md#w2-stack-deviation-2026-11-13).
+
 ### 9.1 Requirements
 
 The UI must support:

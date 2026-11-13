@@ -1,15 +1,18 @@
 # Windows Implementation Path
 
-**Status:** architecture audit and preparation. There is no Windows
-application, renderer, installer or release. The `StudioCore` build, its C ABI
-test and the conformance gate were executed on a native `windows-2025` runner on
-2026-11-13 (see [CI_GATES.md](CI_GATES.md#verified-runs)); every Windows
-application or runtime claim beyond that is **NOT VERIFIED**. macOS remains the
-only shipping product.
+**Status:** the core and a light editor are real; the product is not. The
+`StudioCore` build, its C ABI test and the conformance gate run on a native
+`windows-2025` runner (2026-11-13). A C#/WPF light editor in `Windows/` —
+WIC decode/encode, crop, orientation, nine global sliders, shared project files
+and history — builds and loads its window there, with 55 host checks green (see
+[CI_GATES.md](CI_GATES.md#verified-runs)). There is no Windows installer,
+published artifact, AI support or macOS pixel parity, so every product claim
+beyond "a light editor opens on `windows-2025`" is **NOT VERIFIED**. macOS
+remains the only shipping product.
 
 **Date:** 2026-11-13
-**Basis:** repository at `037db3a` (`main` after PR #5 and PR #7 merged; tree
-identical to `16a4ab9`).
+**Basis:** repository at `28f8462` on branch `windows/w2-app-host` (off `main`
+`260cb41`).
 
 ## 1. What is already reusable, unchanged
 
@@ -43,9 +46,9 @@ compiled on Windows without edits: `Adjustments`, `AppSettings`,
 `ToolMode`. Everything under `Views/`, `EditorModel`, and the `Core/` engines
 imports at least one Apple framework.
 
-`Tests/run-studiocore-windows.ps1` already scans the module for platform
-imports, builds it with a native Swift toolchain and runs `StudioCoreTests`.
-It has never been executed on Windows, so it proves preparation, not support.
+`Tests/run-studiocore-windows.ps1` scans the module for platform imports, builds
+it with a native Swift toolchain and runs `StudioCoreTests`; it is green on
+`windows-2025`. It proves portability of the shared module only.
 
 ## 2. macOS-only surface and its Windows replacement
 
@@ -97,6 +100,14 @@ define the stage order and are the acceptance contract for a Windows renderer.
 9. **CI** — run the portability runner and real tests on `windows-2025`;
    publish one x64 artifact (Intel and AMD both run x64).
 
+The first slice of steps 1, 2, 3 (crop, orientation and the nine global
+adjustments only) and 6 (JPEG/PNG/TIFF at a chosen long edge, source
+protection, no metadata) exists in `Windows/` and is proven to build and open a
+window on `windows-2025`. The canvas is a preview, not a before/after tool; there
+is no progress/cancellation UI, no batch, no masks, no recovery and no updater.
+Steps 4, 5 (beyond opening and saving project bytes), 7, 8 and packaging are
+open.
+
 ## 4. Stack decision
 
 | Option | UI effort | Core reuse | Verdict |
@@ -108,6 +119,23 @@ define the stage order and are the acceptance contract for a Windows renderer.
 The recommended split keeps the shared rules in one place and lets each host
 own pixels, which is exactly the existing macOS seam (`MacDocumentRenderer` is
 the only Core Image implementation of `DocumentRenderPipeline`).
+
+### W2 stack deviation (2026-11-13)
+
+The shell is **C# on WPF**, not WinUI 3. The split above still holds — C#/.NET
+host, StudioCore behind the C ABI — and only the UI framework changed:
+
+- WPF ships inside the .NET SDK. WinUI 3 would add the Windows App SDK
+  bootstrapper, an MSIX or unpackaged-deployment story and a NuGet dependency
+  chain, none of which a free, zipped, unsigned build wants.
+- The host needs a window, a toolbar, a slider panel and an image surface. WPF
+  covers all four without a package manager, and `BitmapSource.Create` accepts
+  the BGRA8 buffer the pipeline already produces.
+- WinUI 3 remains the better choice if the Windows host grows into a
+  macOS-parity editor; that is a UI rewrite, not a core one.
+
+The W2 host lives in `Windows/` and is described in
+[`../Windows/README.md`](../Windows/README.md).
 
 **Do not start by implementing the draft image-engine ABI**
 (`Tests/Conformance/ABI/studioscore_image_engine.h`). It would force a Windows
@@ -128,7 +156,7 @@ Swift side stays Foundation-only; the shell is responsible for pixels.
 | --- | --- | --- |
 | W0 | Windows CI job in the workflow | **Met 2026-11-13:** `Windows StudioCore` green on `windows-2025` (Swift 6.4.2) |
 | W1 | StudioCore C ABI v0 (project + plan + history) | Same fixtures pass on macOS and Windows; ABI smoke test compiled by conformance. macOS green; **Windows met 2026-11-13**: `ABI TESTS: PASS (86 checks)` on `windows-2025` |
-| W2 | C# host: WIC decode/encode, crop, orientation, global adjustments | Byte-level contract tests against render-plan fixtures; visual deltas recorded, not assumed |
+| W2 | C# host: WIC decode/encode, crop, orientation, global adjustments | **Partially met 2026-11-13:** the host builds, passes 55 checks against the real DLL and WIC codec, and opens its window on `windows-2025` (PR #14, `28f8462`). Byte-level render-plan fixture comparison and recorded visual deltas remain open |
 | W3 | Face analysis and masks | Auto Retouch output measured against the macOS corpus; parity level documented |
 | W4 | Shell and light-editor workflow | Open, edit, undo, save project, export on a real Windows runner |
 | W5 | Packaging and updater | One x64 zip plus SHA-256; updater installs a signed manifest build |
@@ -182,8 +210,41 @@ Windows: `Tests/run-studiocore-windows.ps1` built the same library and ran the
 same C test with the toolchain's `clang` on `windows-2025` on 2026-11-13:
 `StudioCore: 260 checks passed`, `ABI TESTS: PASS (86 checks)`,
 `StudioCore Windows portability check: PASS`. W1's Windows exit criterion is
-therefore met. The Windows application milestones W2–W6 are untouched and
-**NOT VERIFIED**.
+therefore met.
+
+### W2 status (2026-11-13)
+
+The host in `Windows/` is a C#/.NET 10 solution published as one x64 folder:
+
+| Piece | File or project |
+| --- | --- |
+| C ABI wrapper and history | `Windows/RetouchStudio.Core/Interop/` (`StudioCoreApi`, `StudioHistory`) |
+| v4 document model and session | `Windows/RetouchStudio.Core/Project/` (`DocumentModel`, `ProjectSession`) |
+| BGRA8 buffer, crop, orientation, adjustments | `Windows/RetouchStudio.Core/Imaging/` |
+| Export plan and runner | `Windows/RetouchStudio.Core/Render/` |
+| WIC decode and encode | `Windows/RetouchStudio.Imaging/WindowsImageCodec.cs` |
+| WPF window and view model | `Windows/RetouchStudio.App/` |
+| Headless checks | `Windows/RetouchStudio.Tests/Program.cs` |
+| Build, test and smoke run | `Tools/build-windows.ps1` |
+| Packaging | `Tools/package-windows.ps1` (written, **NOT VERIFIED**) |
+
+Proven on `windows-2025`, head `28f8462`: `all 13 exports present`,
+`copied 142 runtime DLLs`, `WINDOWS HOST TESTS: PASS (55 checks)`,
+`the published app loaded its window: 'Retouch Studio'`, `WINDOWS APP BUILD:
+PASS`. The 55 checks cover v4 project round trips (an unknown top-level key
+survives), the shared history sequence, crop and orientation geometry on real
+pixels, exposure/warmth/vignette response, export-plan decisions, PNG/JPEG
+encode-decode and source-is-destination protection.
+
+Open, and therefore still **NOT VERIFIED**:
+
+- no byte-level or visual comparison against the render-plan fixtures; the
+  macOS Core Image pipeline is not reproduced stage for stage;
+- 8-bit output only, no metadata in exports, no HEIC write;
+- no installer, zip artifact verification, signing or updater;
+- no AI, analysis, masks, healing, presets or watermark.
+
+W3–W6 are untouched.
 
 ## 6. Distribution
 
@@ -212,7 +273,8 @@ notarization is required.
    would be a new dependency and are not assumed.
 5. **C ABI stability.** The ABI is new surface with its own versioning and
    ownership rules; it must be tested independently of any UI.
-6. **Limited Windows evidence.** The core build, C ABI test and conformance gate
-   ran green on `windows-2025` on 2026-11-13. Any renderer, UI, packaging and
-   runtime behaviour beyond that, including `Tools/package-windows.ps1`, remains
-   **NOT VERIFIED**.
+6. **Limited Windows evidence.** The core build, the C ABI test, the conformance
+   gate and a light WPF editor that loads its window all ran green on
+   `windows-2025` on 2026-11-13. Installer, zip packaging
+   (`Tools/package-windows.ps1`), signing, updater, AI, metadata and pixel
+   parity remain **NOT VERIFIED**, and no Windows artifact has been published.

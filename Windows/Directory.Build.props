@@ -1,0 +1,16 @@
+<Project>
+  <!-- Shared settings for the Windows host. Nothing here affects the macOS app. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <!-- WPF bindings resolve the XML language to a real culture; invariant
+         globalization makes that lookup throw during the first layout. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <Company>Retouch Studio</Company>
+    <Product>Retouch Studio</Product>
+    <Version>1.0.0</Version>
+    <Authors>iR0ham</Authors>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The platform-neutral half of the Windows host: the StudioCore C ABI, the
+    project document, the undo session and the pixel pipeline. It targets plain
+    net10.0 so it can be compiled and tested on any host, and so the WinRT and
+    WPF layers stay outside it.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>RetouchStudio.Core</RootNamespace>
+  </PropertyGroup>
+</Project>

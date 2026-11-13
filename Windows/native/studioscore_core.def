@@ -1,0 +1,22 @@
+; The complete export surface of studioscore_core.dll. The host's DllImport
+; table (Windows/RetouchStudio.Core/Interop/StudioCoreApi.cs) and the public
+; header (Sources/StudioCoreABI/include/studioscore_core.h) list the same
+; names; Tools/build-windows.ps1 checks the built DLL against this file.
+;
+; A symbol added to the ABI must be added here as well, or the host compiles
+; and fails at the first call instead of at link time.
+LIBRARY studioscore_core
+EXPORTS
+    sc_core_abi_version
+    sc_core_bytes_release
+    sc_project_read
+    sc_project_write
+    sc_render_plan
+    sc_history_create
+    sc_history_destroy
+    sc_history_commit
+    sc_history_undo
+    sc_history_redo
+    sc_history_flags
+    sc_history_mark_clean
+    sc_history_is_dirty

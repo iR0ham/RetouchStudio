@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The Retouch Studio desktop host for Windows. WPF is in-box with the .NET
+    SDK: no Windows App SDK bootstrapper, no MSIX tooling and no third-party
+    package, so the published folder runs from a zip and every dependency is
+    either the .NET runtime or Microsoft's own.
+
+    The stack decision and this deviation from the earlier WinUI 3
+    recommendation are recorded in Docs/WINDOWS_IMPLEMENTATION_PATH.md.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>RetouchStudio.App</RootNamespace>
+    <AssemblyName>RetouchStudio</AssemblyName>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RetouchStudio.Core\RetouchStudio.Core.csproj" />
+    <ProjectReference Include="..\RetouchStudio.Imaging\RetouchStudio.Imaging.csproj" />
+  </ItemGroup>
+</Project>

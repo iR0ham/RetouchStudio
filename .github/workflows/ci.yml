@@ -187,3 +187,51 @@ jobs:
             build/**/*.log
             ${{ runner.temp }}/conformance.log
           if-no-files-found: ignore
+
+  # The host itself, not just the shared core: builds studioscore_core.dll,
+  # publishes the self-contained WPF app, runs the headless host tests against
+  # the real DLL and Windows Imaging Component, and smoke-runs the published
+  # exe until it opens a window. Not a required check; it proves a Windows
+  # build and runtime start, nothing about an installer or a release.
+  windows-app:
+    name: Windows App
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install the Swift toolchain
+        uses: compnerd/gha-setup-swift@v0.5.1
+        with:
+          swift-version: swift-6.4.2-release
+          swift-build: 6.4.2-RELEASE
+          build_arch: amd64
+
+      - name: Install the .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Record toolchains
+        shell: pwsh
+        run: |
+          swiftc --version
+          dotnet --version
+          dotnet --list-runtimes
+
+      - name: Build, test and smoke-run the Windows host
+        shell: pwsh
+        run: ./Tools/build-windows.ps1
+
+      - name: Upload the published host on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-app-publish
+          path: build/windows/app/**
+          if-no-files-found: ignore
