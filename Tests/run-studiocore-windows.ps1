@@ -132,7 +132,10 @@ try {
 
     Write-Host '-> compiling the C11 ABI test against the public header'
     $object = Join-Path $workDir 'abi_tests.obj'
+    # The MSVC CRT marks getenv/fopen deprecated; the test is portable C11 and
+    # is compiled with -Werror, so silence only that CRT warning.
     & clang -std=c11 -Wall -Wextra -Werror -pedantic `
+        -D_CRT_SECURE_NO_WARNINGS `
         -I Sources/StudioCoreABI/include `
         -c Tests/ABI/abi_tests.c -o $object
     if ($LASTEXITCODE -ne 0) { throw "C ABI test compilation failed ($LASTEXITCODE)" }
