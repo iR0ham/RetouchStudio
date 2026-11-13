@@ -20,6 +20,24 @@ if (-not (Get-Command swiftc -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+# Git for Windows ships a coreutils `link.exe` in usr\bin, and the hosted
+# runner PATH can reach it before MSVC's linker, which the Swift driver calls
+# as plain `link`. Put the real VC tools directory first.
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (Test-Path $vswhere) {
+    $vsPath = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+    if ($vsPath) {
+        $linker = Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC\*\bin\Hostx64\x64\link.exe') `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($linker) {
+            $env:PATH = $linker.Directory.FullName + ';' + $env:PATH
+            Write-Host "-> using the MSVC linker at $($linker.FullName)"
+        }
+    }
+}
+
 $forbiddenImports = 'AppKit|SwiftUI|CoreImage|Vision|ImageIO|CoreGraphics|UIKit|UniformTypeIdentifiers|CoreVideo|Metal|AVFoundation|Cocoa|RetouchStudio'
 $platformTypes = 'NSColor|NSImage|NSFont|NSBezierPath|CIImage|CIColor|CIFilter|CGImage|CGColor|CGContext|CGRect|CGSize|CGPoint|CGFloat|CGAffineTransform|VNDetect[A-Za-z]*|VNImageRequestHandler|VNRecognize[A-Za-z]*|UTType|\bColor\b|\bImage\b|\bView\b'
 
@@ -35,20 +53,23 @@ Get-ChildItem Sources/StudioCore -Filter *.swift | ForEach-Object {
     $lines = Get-Content $_.FullName
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $code = $lines[$i] -replace '//.*$', ''
-        if ($code -match "^\s*(@[^\s]+\s+)*import\s+") {
+        # -cmatch, not -match: PowerShell matching is case-insensitive by
+        # default, which would make \bColor\b hit the lowercase `.color`
+        # property and diverge from the `grep -E` gate on macOS.
+        if ($code -cmatch "^\s*(@[^\s]+\s+)*import\s+") {
             $importSet[$code.Trim()] = $true
-            if ($code -match "^\s*(@[^\s]+\s+)*import\s+($forbiddenImports)\b") {
+            if ($code -cmatch "^\s*(@[^\s]+\s+)*import\s+($forbiddenImports)\b") {
                 Fail "$($_.Name):$($i + 1) imports a platform/app module: $code"
             }
         }
-        if ($code -match $platformTypes) {
+        if ($code -cmatch $platformTypes) {
             Fail "$($_.Name):$($i + 1) mentions a platform type: $code"
         }
     }
 }
 
 $imports = @($importSet.Keys | Sort-Object)
-if ($imports.Count -ne 1 -or $imports[0] -ne 'import Foundation') {
+if ($imports.Count -ne 1 -or $imports[0] -cne 'import Foundation') {
     Fail "StudioCore imports more than Foundation: $($imports -join ', ')"
 }
 if ($failed) {
@@ -111,7 +132,10 @@ try {
 
     Write-Host '-> compiling the C11 ABI test against the public header'
     $object = Join-Path $workDir 'abi_tests.obj'
+    # The MSVC CRT marks getenv/fopen deprecated; the test is portable C11 and
+    # is compiled with -Werror, so silence only that CRT warning.
     & clang -std=c11 -Wall -Wextra -Werror -pedantic `
+        -D_CRT_SECURE_NO_WARNINGS `
         -I Sources/StudioCoreABI/include `
         -c Tests/ABI/abi_tests.c -o $object
     if ($LASTEXITCODE -ne 0) { throw "C ABI test compilation failed ($LASTEXITCODE)" }

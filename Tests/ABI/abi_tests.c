@@ -320,8 +320,11 @@ static void test_render_plan(void) {
 
 /* MARK: - History */
 
-static const uint8_t *state(const char *bytes, size_t *length) {
-  *length = strlen(bytes);
+/* The bytes and their length are separate arguments. The length is computed at
+   the call site from the same string the bytes come from, so no argument list
+   reads a variable another argument writes — the old out-parameter form was
+   unsequenced and let a compiler pass a stale zero for the initial state. */
+static const uint8_t *state(const char *bytes) {
   return (const uint8_t *)bytes;
 }
 
@@ -332,83 +335,82 @@ static int state_is(const ScCoreBytes *buffer, const char *expected) {
 }
 
 static void test_history(void) {
-  size_t length = 0;
   ScCoreBytes error = {0};
   ScCoreHistory *history = NULL;
-  ok(sc_history_create(state("A", &length), length, &history, &error) == SC_CORE_OK,
+  ok(sc_history_create(state("A"), strlen("A"), &history, &error) == SC_CORE_OK,
      "create returns OK");
   ok(history != NULL, "create returns a handle");
 
   ScCoreBytes step = {0};
-  ok(sc_history_commit(history, state("B", &length), length) == SC_CORE_OK,
+  ok(sc_history_commit(history, state("B"), strlen("B")) == SC_CORE_OK,
      "commit returns OK");
-  ok(sc_history_commit(history, state("B", &length), length) == SC_CORE_OK,
+  ok(sc_history_commit(history, state("B"), strlen("B")) == SC_CORE_OK,
      "a repeated commit is a no-op");
 
   int32_t canUndo = -1, canRedo = -1;
-  ok(sc_history_flags(history, state("B", &length), length,
+  ok(sc_history_flags(history, state("B"), strlen("B"),
                       &canUndo, &canRedo) == SC_CORE_OK,
      "flags returns OK");
   ok(canUndo == 1 && canRedo == 0, "one step back, no redo");
 
   int32_t dirty = -1;
-  ok(sc_history_is_dirty(history, state("B", &length), length, &dirty) == SC_CORE_OK,
+  ok(sc_history_is_dirty(history, state("B"), strlen("B"), &dirty) == SC_CORE_OK,
      "is_dirty returns OK");
   ok(dirty == 1, "a step away from the clean state is dirty");
 
-  ok(sc_history_undo(history, state("B", &length), length, &step) == SC_CORE_OK,
+  ok(sc_history_undo(history, state("B"), strlen("B"), &step) == SC_CORE_OK,
      "undo returns OK");
   ok(state_is(&step, "A"), "undo returns the previous state");
   sc_core_bytes_release(&step);
 
-  ok(sc_history_flags(history, state("A", &length), length,
+  ok(sc_history_flags(history, state("A"), strlen("A"),
                       &canUndo, &canRedo) == SC_CORE_OK,
      "flags after undo returns OK");
   ok(canUndo == 0 && canRedo == 1, "nothing further back, one step forward");
 
-  ok(sc_history_redo(history, state("A", &length), length, &step) == SC_CORE_OK,
+  ok(sc_history_redo(history, state("A"), strlen("A"), &step) == SC_CORE_OK,
      "redo returns OK");
   ok(state_is(&step, "B"), "redo returns the next state");
   sc_core_bytes_release(&step);
 
   /* A new commit after undo discards the redo branch. */
-  ok(sc_history_undo(history, state("B", &length), length, &step) == SC_CORE_OK,
+  ok(sc_history_undo(history, state("B"), strlen("B"), &step) == SC_CORE_OK,
      "second undo returns OK");
   ok(state_is(&step, "A"), "second undo returns the previous state");
   sc_core_bytes_release(&step);
-  ok(sc_history_commit(history, state("C", &length), length) == SC_CORE_OK,
+  ok(sc_history_commit(history, state("C"), strlen("C")) == SC_CORE_OK,
      "commit after undo returns OK");
-  ok(sc_history_flags(history, state("C", &length), length,
+  ok(sc_history_flags(history, state("C"), strlen("C"),
                       &canUndo, &canRedo) == SC_CORE_OK,
      "flags on the new branch returns OK");
   ok(canUndo == 1 && canRedo == 0, "the redo branch is discarded");
 
-  ok(sc_history_undo(history, state("C", &length), length, &step) == SC_CORE_OK,
+  ok(sc_history_undo(history, state("C"), strlen("C"), &step) == SC_CORE_OK,
      "undo on the new branch returns OK");
   ok(state_is(&step, "A"), "undo on the new branch returns A");
   sc_core_bytes_release(&step);
-  ok(sc_history_undo(history, state("A", &length), length, &step) == SC_CORE_OK,
+  ok(sc_history_undo(history, state("A"), strlen("A"), &step) == SC_CORE_OK,
      "undo at the beginning returns OK");
   ok(step.ptr == NULL && step.len == 0, "undo at the beginning writes no state");
   sc_core_bytes_release(&step);
-  ok(sc_history_redo(history, state("A", &length), length, &step) == SC_CORE_OK,
+  ok(sc_history_redo(history, state("A"), strlen("A"), &step) == SC_CORE_OK,
      "redo after the last undo returns OK");
   ok(state_is(&step, "C"), "redo returns the abandoned state");
   sc_core_bytes_release(&step);
 
-  ok(sc_history_mark_clean(history, state("C", &length), length) == SC_CORE_OK,
+  ok(sc_history_mark_clean(history, state("C"), strlen("C")) == SC_CORE_OK,
      "mark_clean returns OK");
-  ok(sc_history_is_dirty(history, state("C", &length), length, &dirty) == SC_CORE_OK,
+  ok(sc_history_is_dirty(history, state("C"), strlen("C"), &dirty) == SC_CORE_OK,
      "is_dirty after mark_clean returns OK");
   ok(dirty == 0, "mark_clean makes the current state clean");
-  ok(sc_history_is_dirty(history, state("A", &length), length, &dirty) == SC_CORE_OK,
+  ok(sc_history_is_dirty(history, state("A"), strlen("A"), &dirty) == SC_CORE_OK,
      "is_dirty on another state returns OK");
   ok(dirty == 1, "another state is dirty");
 
-  ok(sc_history_flags(history, state("C", &length), length, NULL, &canRedo) ==
+  ok(sc_history_flags(history, state("C"), strlen("C"), NULL, &canRedo) ==
          SC_CORE_INVALID_ARGUMENT,
      "flags requires both out values");
-  ok(sc_history_commit(NULL, state("A", &length), length) ==
+  ok(sc_history_commit(NULL, state("A"), strlen("A")) ==
          SC_CORE_INVALID_ARGUMENT,
      "a NULL handle is refused");
 
@@ -418,15 +420,14 @@ static void test_history(void) {
 }
 
 static void test_history_limit(void) {
-  size_t length = 0;
   ScCoreBytes error = {0};
   ScCoreHistory *history = NULL;
   char text[16];
-  ok(sc_history_create(state("0", &length), length, &history, &error) == SC_CORE_OK,
+  ok(sc_history_create(state("0"), strlen("0"), &history, &error) == SC_CORE_OK,
      "step-limit history created");
   for (int i = 1; i <= 120; i++) {
     snprintf(text, sizeof text, "%d", i);
-    if (sc_history_commit(history, state(text, &length), length) != SC_CORE_OK) {
+    if (sc_history_commit(history, state(text), strlen(text)) != SC_CORE_OK) {
       ok(0, "step-limit commit returns OK");
       break;
     }
@@ -436,7 +437,7 @@ static void test_history_limit(void) {
   int steps = 0;
   ScCoreBytes step = {0};
   while (steps < 200 &&
-         sc_history_undo(history, state(current, &length), length, &step) ==
+         sc_history_undo(history, state(current), strlen(current), &step) ==
              SC_CORE_OK &&
          step.ptr != NULL) {
     steps++;

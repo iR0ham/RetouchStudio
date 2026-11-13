@@ -44,7 +44,7 @@ The screenshots use an AI-generated fictional portrait. No personal photo is inc
 - To run a release build: nothing else. The app is self-contained.
 - To build from source: Xcode Command Line Tools (`xcode-select --install`). Xcode itself is not required; `build.sh` compiles directly with `swiftc`.
 
-Windows is the planned second platform: the shared `StudioCore` module (document model, project codec, render contract and update policy) is Foundation-only and has a Windows portability runner, but there is no Windows renderer, UI or installer yet, and no native Windows test run has happened. Linux is not a product target; the Linux test script for `StudioCore` is supplementary only.
+Windows is the planned second platform: the shared `StudioCore` module (document model, project codec, render contract and update policy) is Foundation-only, and its portability job runs on a native `windows-2025` GitHub runner, where the 260 core checks, the 86-check C ABI suite and the conformance gate pass. There is still no Windows renderer, UI or installer, so Windows is not a shipping target. Linux comes only after a verified Windows release candidate; the Linux `StudioCore` script is supplementary today and no Linux build is shipped.
 
 ## Run a release build
 

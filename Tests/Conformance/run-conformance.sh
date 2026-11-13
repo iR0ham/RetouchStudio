@@ -6,7 +6,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-python3 Tests/Conformance/conformance.py
+# Windows images ship the interpreter as `python`, and Git Bash has no
+# `python3` alias. PYTHON lets a caller pin the executable explicitly.
+PYTHON="${PYTHON:-python3}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  PYTHON=python
+fi
+"$PYTHON" Tests/Conformance/conformance.py
 
 CC="${CC:-cc}"
 WORK="$(mktemp -d)"

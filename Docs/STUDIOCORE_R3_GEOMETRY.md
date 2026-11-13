@@ -242,7 +242,8 @@ whose migration would only add churn without proving portability.
 | Bottom-left analysis pins | Documented; not migrated. A future adapter must flip at the boundary. |
 | Straighten mapping | Unchanged; it remains pixel-space and bounded for rects. |
 | Canonical number formatting | **NOT VERIFIED** across languages; only shape and Swift round-trip tested. |
-| Windows/Linux behavior | **NOT VERIFIED**; no non-Apple build is claimed. |
+| Windows behavior | Swift build and fixture tests pass on `windows-2025` (2026-11-13); no Windows application. |
+| Linux behavior | **NOT VERIFIED**; no Linux build is claimed. |
 
 ---
 
