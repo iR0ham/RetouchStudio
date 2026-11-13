@@ -1,0 +1,14 @@
+{
+  "appliesAnalysis" : true,
+  "appliesWatermark" : true,
+  "bitsPerChannel" : 8,
+  "carriesSourceMetadata" : true,
+  "colorSpace" : "source",
+  "flattensAlpha" : true,
+  "format" : "jpeg",
+  "pixelSize" : {
+    "height" : 1500,
+    "width" : 2000
+  },
+  "upscales" : false
+}

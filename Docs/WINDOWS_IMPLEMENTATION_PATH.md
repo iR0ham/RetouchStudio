@@ -125,7 +125,7 @@ Swift side stays Foundation-only; the shell is responsible for pixels.
 | Step | Deliverable | Exit criterion |
 | --- | --- | --- |
 | W0 | Windows CI job in the workflow | `Tests/run-studiocore-windows.ps1` green on `windows-2025` |
-| W1 | StudioCore C ABI v0 (project + plan + history) | Same fixtures pass on macOS and Windows; ABI smoke test compiled by conformance |
+| W1 | StudioCore C ABI v0 (project + plan + history) | Same fixtures pass on macOS and Windows; ABI smoke test compiled by conformance. macOS half is green (see W1 status); the Windows half is **NOT VERIFIED** until a Windows runner executes it |
 | W2 | C# host: WIC decode/encode, crop, orientation, global adjustments | Byte-level contract tests against render-plan fixtures; visual deltas recorded, not assumed |
 | W3 | Face analysis and masks | Auto Retouch output measured against the macOS corpus; parity level documented |
 | W4 | Shell and light-editor workflow | Open, edit, undo, save project, export on a real Windows runner |
@@ -133,6 +133,45 @@ Swift side stays Foundation-only; the shell is responsible for pixels.
 | W6 | Release | Native Windows runtime tests and artifacts published to GitHub Releases |
 
 No step may be labelled supported before its native runner run is green.
+
+### W1 status (2026-11-13)
+
+A first version of the ABI exists and is proven on macOS:
+
+| Piece | File |
+| --- | --- |
+| Public contract and ownership rules | `Sources/StudioCoreABI/include/studioscore_core.h` |
+| Swift implementation | `Sources/StudioCoreABI/{ABISupport,ProjectABI,RenderPlanABI,HistoryABI}.swift` |
+| C11 behaviour test | `Tests/ABI/abi_tests.c` + `Tests/ABI/Fixtures/*.json` |
+| Build and run | `Tests/run-abi.sh` (called by `Tests/run.sh`) |
+| Header-only conformance smoke | `Tests/Conformance/ABI/core_smoke.c` (compiled by `Tests/Conformance/run-conformance.sh`) |
+
+Decisions worth keeping:
+
+- **JSON in, JSON out.** Every payload is a byte slice; there is no Swift type
+  in the contract. History states are compared byte for byte, so a host must
+  pass the canonical v4 document bytes from `sc_project_read`. A v3 file
+  written by `sc_project_write` is not a safe history state because v3 encodes
+  analysis regions as an unordered set.
+- **`@_cdecl` cannot expose a Swift struct.** Every out-parameter is `void *`
+  and the entry point binds it to `ScCoreBytes`; the two-machine-word layout is
+  asserted from C (`_Static_assert` in both the smoke test and `abi_tests.c`).
+- **One module, two headers.** `studioscore_core.h` is implemented;
+  `studioscore_image_engine.h` remains a draft. They share no names, so a
+  translation unit may include either, never both.
+- **Fixtures match the codec encoder exactly**, including escaping `/`, so a
+  save is compared byte for byte with the file that was read.
+
+macOS evidence: `./Tests/run-abi.sh arm64` and `./Tests/run-abi.sh x86_64`
+both report `ABI TESTS: PASS (86 checks)`. The C test covers v3 and v4-unknown
+round trips, unknown-field preservation through an edit, too-new and invalid
+input refusals, the render plan compared with a pinned fixture, the full
+history sequence (including the 100-step limit) and the buffer ownership
+contract.
+
+Windows: `Tests/run-studiocore-windows.ps1` builds the same library and runs
+the same C test with the toolchain's `clang`. It has **never been executed on a
+Windows host**, so W1's Windows exit criterion is **NOT VERIFIED**.
 
 ## 6. Distribution
 
