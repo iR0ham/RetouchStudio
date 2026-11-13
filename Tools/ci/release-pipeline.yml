@@ -23,6 +23,11 @@
 # which GitHub-hosted runners satisfy. The setup action is a composite action
 # and uses the current `swift-version` / `swift-build` inputs, not the
 # deprecated `branch` / `tag` aliases.
+#
+# The Windows toolchain is swift-6.4.2-release / 6.4.2-RELEASE: the tag exists on
+# swiftlang/swift (2026-10-30) and download.swift.org serves the 2.1 GB Windows
+# installer. No Windows job here has ever run — see the NOT VERIFIED notes in
+# Docs/CI_GATES.md.
 
 name: Release
 
@@ -102,14 +107,19 @@ jobs:
       - name: Install the Swift toolchain
         uses: compnerd/gha-setup-swift@v0.5.1
         with:
-          swift-version: swift-6.4.1-release
-          swift-build: 6.4.1-RELEASE
+          swift-version: swift-6.4.2-release
+          swift-build: 6.4.2-RELEASE
           build_arch: amd64
       - name: Build and run the portable core tests
         shell: pwsh
         run: ./Tests/run-studiocore-windows.ps1
       - name: Run the platform-neutral conformance gate
-        run: python Tests/Conformance/conformance.py
+        shell: bash
+        env:
+          # Git Bash on the Windows image has no `cc`; the Swift toolchain
+          # installs clang.exe and puts it on PATH.
+          CC: clang
+        run: ./Tests/Conformance/run-conformance.sh
 
   # Enable this job only after a real Windows application exists under
   # Windows/ and Tools/build-windows.ps1 has produced a runnable light editor.
@@ -129,8 +139,8 @@ jobs:
       - name: Install the Swift toolchain
         uses: compnerd/gha-setup-swift@v0.5.1
         with:
-          swift-version: swift-6.4.1-release
-          swift-build: 6.4.1-RELEASE
+          swift-version: swift-6.4.2-release
+          swift-build: 6.4.2-RELEASE
           build_arch: amd64
       - name: Build the Windows application
         shell: pwsh

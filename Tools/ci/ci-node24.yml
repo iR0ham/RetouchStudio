@@ -11,9 +11,15 @@
 #   2. cp Tools/ci/ci-node24.yml .github/workflows/ci.yml # then delete this header
 #   3. commit and open a PR; the three required checks must pass before merge
 #
-# Every job, runner, timeout, gate command and verdict assertion is identical to
-# the live workflow. Validated on 2026-11-13 with actionlint v1.7.12 and
-# PyYAML 6.0.2.
+# Every macOS and Linux job, runner, timeout, gate command and verdict assertion
+# is identical to the live workflow. The `windows-core` job is new here: it has
+# never run, because installing this file is the blocked step. Its Swift
+# toolchain (6.4.2), runner label (`windows-2025`) and installer URL were
+# verified against swift.org, the swiftlang/swift releases and the
+# actions/runner-images README on 2026-11-13; everything a Windows host would do
+# with them is NOT VERIFIED.
+#
+# Validated on 2026-11-13 with actionlint v1.7.12 and PyYAML 6.0.2.
 
 name: CI
 
@@ -111,6 +117,39 @@ jobs:
           name: conformance-log
           path: ${{ runner.temp }}/conformance.log
           if-no-files-found: ignore
+
+  windows-core:
+    name: Windows StudioCore
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install the Swift toolchain
+        uses: compnerd/gha-setup-swift@v0.5.1
+        with:
+          swift-version: swift-6.4.2-release
+          swift-build: 6.4.2-RELEASE
+          build_arch: amd64
+
+      - name: Record toolchain
+        shell: pwsh
+        run: |
+          swiftc --version
+          $PSVersionTable.PSVersion.ToString()
+
+      - name: Build StudioCore and run the core plus C ABI tests
+        shell: pwsh
+        run: ./Tests/run-studiocore-windows.ps1
+
+      - name: Run the platform-neutral conformance gate
+        shell: bash
+        env:
+          # Git Bash on the Windows image has no `cc`; the Swift toolchain
+          # installs clang.exe and puts it on PATH.
+          CC: clang
+        run: ./Tests/Conformance/run-conformance.sh
 
   macos-integration:
     name: macOS Integration
