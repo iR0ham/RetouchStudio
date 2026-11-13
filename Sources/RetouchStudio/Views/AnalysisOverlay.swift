@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import StudioCore
 
 /// Drag targets for the analysis line ends and the dots on the face. The lines
 /// themselves are drawn by `AnalysisRenderer`; this layer only moves where a

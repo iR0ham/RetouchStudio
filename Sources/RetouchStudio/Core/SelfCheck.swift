@@ -2000,7 +2000,7 @@ enum SelfCheck {
         var adjustments = Adjustments()
         adjustments.contrast = 20
         let crop = CGRect(x: 0.25, y: 0, width: 0.5, height: 1)
-        let snapshot = ExportSnapshot(adjustments: adjustments, crop: crop,
+        let snapshot = ExportSnapshot(adjustments: adjustments, crop: StudioRect(crop),
                                       format: .png, quality: 1,
                                       includeStamps: false, includeAnalysis: false)
 
@@ -2008,9 +2008,9 @@ enum SelfCheck {
             let aspect = ExportService.pixelAspect(of: url) ?? 0
             let applies = ExportService.cropApplies(crop, documentAspect: 2, fileAspect: aspect)
             var fileSnapshot = snapshot
-            fileSnapshot.crop = applies ? crop : nil
+            fileSnapshot.crop = applies ? StudioRect(crop) : nil
             guard let result = processor.load(from: url, previewMaxDimension: 400,
-                                              crop: fileSnapshot.crop) else { return (0, 0, applies) }
+                                              crop: fileSnapshot.crop?.cgRect) else { return (0, 0, applies) }
             // The renderer builds this file's mask set at export resolution itself.
             let source = ExportSource(image: result.sourceFull, masks: nil,
                                       faces: result.faces, photoAspect: aspect,
@@ -2153,7 +2153,7 @@ enum SelfCheck {
     }
 
     private static func checkProjectRoundTrip() -> Bool {
-        let crop = CGRect(x: 0.1, y: 0.2, width: 0.5, height: 0.6)
+        let crop = StudioRect(x: 0.1, y: 0.2, width: 0.5, height: 0.6)
         let spots = [HealSpot(center: CGPoint(x: 0.3, y: 0.7), radius: 0.02),
                      HealSpot(center: CGPoint(x: 0.8, y: 0.15), radius: 0.035)]
         var adjustments = Adjustments()
@@ -2243,7 +2243,7 @@ enum SelfCheck {
                                      exportFormat: "png",
                                      exportQuality: 1,
                                      autoRetouchStrength: 50,
-                                     crop: CGRect(x: 0, y: 0.5, width: 0.5, height: 0.5))
+                                     crop: StudioRect(x: 0, y: 0.5, width: 0.5, height: 0.5))
         guard let data = try? JSONEncoder().encode(project),
               let reopened = try? JSONDecoder().decode(RetouchProject.self, from: data) else {
             print("  ✗ could not encode/decode the crop-flow project")
@@ -2251,7 +2251,7 @@ enum SelfCheck {
         }
         guard let loaded = processor.load(from: URL(fileURLWithPath: reopened.imagePath),
                                           previewMaxDimension: 400,
-                                          crop: reopened.crop) else {
+                                          crop: reopened.crop?.cgRect) else {
             print("  ✗ could not reopen the cropped project")
             return false
         }
@@ -2337,12 +2337,12 @@ enum SelfCheck {
             print("  ✗ the stamp was dropped by a crop that contains it")
             return false
         }
-        let back = HealSpot(center: HealGeometry.originalCenter(mapped.center, crop: crop),
+        let back = HealSpot(center: HealGeometry.originalCenter(mapped.center.cgPoint, crop: crop),
                             radius: HealGeometry.originalRadius(mapped.radius, crop: crop))
         let roundTripOK = abs(back.center.x - stamp.center.x) < 0.0001
             && abs(back.center.y - stamp.center.y) < 0.0001
             && abs(back.radius - stamp.radius) < 0.0001
-        print("  \(roundTripOK ? "✓" : "✗") stamp survives a crop round trip: \(fmtPoint(back.center)) r=\(String(format: "%.4f", back.radius))")
+        print("  \(roundTripOK ? "✓" : "✗") stamp survives a crop round trip: \(fmtPoint(back.center.cgPoint)) r=\(String(format: "%.4f", back.radius))")
 
         let outside = HealSpot(center: CGPoint(x: 0.9, y: 0.9), radius: 0.02)
         let droppedOK = HealGeometry.workingSpots([outside], crop: crop).isEmpty
@@ -3734,7 +3734,7 @@ enum SelfCheck {
 
         // Crop mapping: normalize into the working frame and back.
         let crop = CGRect(x: 0.2, y: 0.25, width: 0.5, height: 0.5)
-        let working = ArtGeometry.workingCenter(sticker.center, crop: crop)
+        let working = ArtGeometry.workingCenter(sticker.center.cgPoint, crop: crop)
         let restored = ArtGeometry.originalCenter(working, crop: crop)
         let workingSize = ArtGeometry.workingSize(sticker.size, crop: crop)
         let restoreSize = ArtGeometry.originalSize(workingSize, crop: crop)

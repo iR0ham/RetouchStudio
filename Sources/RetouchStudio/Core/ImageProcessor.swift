@@ -4,43 +4,6 @@ import CoreImage
 import Foundation
 import ImageIO
 import StudioCore
-import UniformTypeIdentifiers
-
-enum ExportFormat: String, CaseIterable, Identifiable {
-    case jpeg, png, tiff, heic
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .jpeg: return "JPEG"
-        case .png: return "PNG"
-        case .tiff: return "TIFF"
-        case .heic: return "HEIC"
-        }
-    }
-
-    var fileExtension: String {
-        switch self {
-        case .jpeg: return "jpg"
-        case .png: return "png"
-        case .tiff: return "tif"
-        case .heic: return "heic"
-        }
-    }
-
-    var utType: UTType {
-        switch self {
-        case .jpeg: return .jpeg
-        case .png: return .png
-        case .tiff: return .tiff
-        case .heic: return .heic
-        }
-    }
-
-    /// Formats that carry a compression slider.
-    var supportsQuality: Bool { self == .jpeg || self == .heic }
-}
 
 /// Every mask the pipeline needs, for one image size. Each mask is
 /// white-on-transparent and overlays the image extent exactly, so it can be fed
@@ -121,6 +84,11 @@ struct LoadResult {
     /// Source metadata (EXIF, TIFF, IPTC, GPS), carried into exports so camera,
     /// lens, date and copyright survive a retouch.
     var metadata: [CFString: Any]
+    /// XMP lives outside the property dictionary. It is kept separately so an
+    /// export with privacy stripping off can write it back; stripping on drops
+    /// it whole, because XMP may hold creator, location and contact data that
+    /// the property allowlist cannot enumerate.
+    var xmp: CGImageMetadata?
 }
 
 /// Retouch engine on Core Image.
@@ -139,7 +107,18 @@ final class ImageProcessor {
     let defaultColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     private init() {
-        context = CIContext(options: [.cacheIntermediates: true, .useSoftwareRenderer: false])
+        // An unconfigured CIContext works in extended linear sRGB on this
+        // toolchain (verified by reading CIContext.workingColorSpace). That
+        // space is wider than Display P3, so an intermediate render does not
+        // clip a wide-gamut source; the source profile still tags the output.
+        // Naming it keeps a toolchain default change from silently retagging
+        // every render, and a narrower sRGB working space is known to shift
+        // effect results (see Docs/IMAGE_ENGINE_CHARACTERIZATION.md).
+        context = CIContext(options: [
+            .cacheIntermediates: true,
+            .useSoftwareRenderer: false,
+            .workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB) as Any
+        ])
     }
 
     // MARK: - Loading
@@ -150,7 +129,7 @@ final class ImageProcessor {
     /// analysis, so faces, masks and the preview all describe the cropped image.
     func load(from url: URL, previewMaxDimension: CGFloat, crop: CGRect? = nil,
               orientation: DocumentOrientation = .identity) -> LoadResult? {
-        guard let (image, colorSpace, metadata) = loadCGImageWithColorSpace(url: url) else { return nil }
+        guard let (image, colorSpace, metadata, xmp) = loadCGImageWithColorSpace(url: url) else { return nil }
 
         var full = CIImage(cgImage: image)
             .cropped(to: CGRect(x: 0, y: 0, width: image.width, height: image.height))
@@ -219,26 +198,57 @@ final class ImageProcessor {
                           fileName: url.lastPathComponent,
                           url: url,
                           colorSpace: colorSpace,
-                          metadata: metadata)
+                          metadata: metadata,
+                          xmp: xmp)
     }
 
-    private func loadCGImageWithColorSpace(url: URL) -> (CGImage, CGColorSpace, [CFString: Any])? {
+    private func loadCGImageWithColorSpace(url: URL) -> (CGImage, CGColorSpace, [CFString: Any], CGImageMetadata?)? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: true] as CFDictionary)
         else { return nil }
 
         let colorSpace = cgImage.colorSpace ?? defaultColorSpace
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
+        let xmp = CGImageSourceCopyMetadataAtIndex(source, 0, nil)
         let raw = (properties[kCGImagePropertyOrientation] as? UInt32)
             ?? UInt32((properties[kCGImagePropertyOrientation] as? Int) ?? 1)
         let orientation = CGImagePropertyOrientation(rawValue: raw) ?? .up
-        guard orientation != .up else { return (cgImage, colorSpace, properties) }
+        guard orientation != .up else { return (cgImage, colorSpace, properties, xmp) }
 
         let oriented = CIImage(cgImage: cgImage).oriented(forExifOrientation: Int32(orientation.rawValue))
         let zeroed = oriented.transformed(by: CGAffineTransform(translationX: -oriented.extent.origin.x,
                                                                y: -oriented.extent.origin.y))
-        guard let normalized = renderCGImage(zeroed, scale: 1, colorSpace: colorSpace) else { return nil }
-        return (normalized, colorSpace, properties)
+        // Baking the orientation must not also drop depth: a 16-bit photo used
+        // to pass through this RGBA8 step and reach analysis and export with
+        // eight-bit values, then get written into a 16-bit container. The
+        // source's own storage depth picks the intermediate.
+        guard let normalized = renderCGImage(zeroed, scale: 1, colorSpace: colorSpace,
+                                             format: Self.renderFormat(for: cgImage.bitsPerComponent))
+        else { return nil }
+        // The pixels are upright now; an XMP orientation tag would describe the
+        // old frame and make another app turn the photo twice.
+        return (normalized, colorSpace, properties, Self.withoutOrientation(xmp))
+    }
+
+    /// The CI intermediate for a decoded source depth. Anything deeper than
+    /// eight bits keeps at least sixteen; a float source keeps float so values
+    /// outside 0…1 are not clipped by the orientation pass.
+    static func renderFormat(for bitsPerComponent: Int) -> CIFormat {
+        if bitsPerComponent > 16 { return .RGBAf }
+        if bitsPerComponent > 8 { return .RGBA16 }
+        return .RGBA8
+    }
+
+    /// Drops the orientation tags from a copied XMP block after the rotation has
+    /// been baked into pixels.
+    private static func withoutOrientation(_ metadata: CGImageMetadata?) -> CGImageMetadata? {
+        guard let metadata, let copy = CGImageMetadataCreateMutableCopy(metadata) else {
+            return metadata
+        }
+        for path in ["tiff:Orientation", "exif:Orientation"] {
+            _ = CGImageMetadataRemoveTagWithPath(copy, nil, path as CFString)
+        }
+        return copy
     }
 
     // MARK: - Masks
@@ -1145,9 +1155,10 @@ final class ImageProcessor {
                quality: Double,
                colorSpace: CGColorSpace? = nil,
                metadata: [CFString: Any] = [:],
+               xmp: CGImageMetadata? = nil,
                stripPrivacyMetadata: Bool = true,
                maxDimension: CGFloat? = nil) -> Bool {
-        let ciFormat: CIFormat = format.supportsQuality ? .RGBA8 : .RGBA16
+        let ciFormat: CIFormat = format.bitsPerChannel > 8 ? .RGBA16 : .RGBA8
         var output = image
         if let maxDimension, maxDimension > 0 {
             let longest = max(image.extent.width, image.extent.height)
@@ -1160,7 +1171,7 @@ final class ImageProcessor {
         // real backdrop instead of the black pixels an ignored alpha would
         // leave behind.
         var flattened = output
-        if format == .jpeg || format == .heic {
+        if format.flattensAlpha {
             let white = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1))
                 .cropped(to: output.extent)
             flattened = output.composited(over: white)
@@ -1169,7 +1180,7 @@ final class ImageProcessor {
             return false
         }
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL,
-                                                              format.utType.identifier as CFString,
+                                                              format.uniformTypeIdentifier as CFString,
                                                               1,
                                                               nil) else { return false }
         var properties = metadata
@@ -1190,7 +1201,16 @@ final class ImageProcessor {
         if format.supportsQuality {
             properties[kCGImageDestinationLossyCompressionQuality] = quality
         }
-        CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+        // XMP is a separate metadata graph, not a property key, so it needs the
+        // metadata-aware add. Stripping drops it entirely rather than filtering
+        // tags: creator, rights and location live in free-form namespaces that
+        // an allowlist over a fixed key set would miss.
+        if !stripPrivacyMetadata, let xmp {
+            CGImageDestinationAddImageAndMetadata(destination, cgImage, xmp,
+                                                  properties as CFDictionary)
+        } else {
+            CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+        }
         return CGImageDestinationFinalize(destination)
     }
 

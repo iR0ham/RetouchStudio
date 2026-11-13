@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// What the owner chose when the launch recovery prompt appeared. Cancel is a
 /// first-class answer: it postpones the decision and keeps the recovery copy.

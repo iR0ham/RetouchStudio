@@ -27,6 +27,13 @@ case "${RETOUCH_ARCH:-universal}" in
     ;;
 esac
 
+case "${ARCHS[*]}" in
+  "arm64 x86_64"|"x86_64 arm64") BUNDLE_ARCH=universal ;;
+  arm64) BUNDLE_ARCH=arm64 ;;
+  x86_64) BUNDLE_ARCH=x86_64 ;;
+  *) BUNDLE_ARCH="" ;;
+esac
+
 # --- پیدا کردن SDK سازگار (آنی که ماکروهای SwiftUI را دارد) ---
 SDK=""
 for candidate in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk 2>/dev/null | sort -Vr); do
@@ -162,12 +169,46 @@ else
   echo "    Set RETOUCH_WORKER_ROOT and RETOUCH_WORKER_VENV, or RETOUCH_SKIP_WORKER=1 to silence this."
 fi
 
-# امضای ad-hoc تا مک بدون هشدار بازش کند
-codesign --force --sign - "$APP_BUNDLE" >/dev/null 2>&1 || echo "  (بدون امضا ادامه می‌دهیم)"
+# --- امضا ---
+# ad-hoc فقط برای اجرای محلی است. انتشار عمومی به Developer ID، Hardened
+# Runtime و notarization نیاز دارد؛ RETOUCH_SIGN_IDENTITY آن مسیر را باز می‌کند.
+SIGN_IDENTITY="${RETOUCH_SIGN_IDENTITY:-}"
+ENTITLEMENTS="${RETOUCH_ENTITLEMENTS:-Resources/RetouchStudio.entitlements}"
+if [ -n "$SIGN_IDENTITY" ]; then
+  SIGN_ARGS=(--force --timestamp --options runtime)
+  [ -f "$ENTITLEMENTS" ] && SIGN_ARGS+=(--entitlements "$ENTITLEMENTS")
+  SIGN_TARGET="$SIGN_IDENTITY"
+  echo "→ امضای بسته با Developer ID + Hardened Runtime"
+else
+  SIGN_ARGS=(--force)
+  SIGN_TARGET="-"
+  echo "  ! امضای ad-hoc — فقط برای اجرای محلی؛ امضای انتشار عمومی نیست."
+  echo "    برای انتشار: RETOUCH_SIGN_IDENTITY=\"Developer ID Application: …\" ./build.sh"
+fi
+
+# Nested Mach-O code (the bundled Python interpreter and its libraries) must be
+# signed before the outer bundle, or hardened runtime rejects it at launch.
+if [ -d "$APP_BUNDLE/Contents/Resources/Worker" ]; then
+  nested=0
+  while IFS= read -r -d '' candidate; do
+    if file -b "$candidate" 2>/dev/null | grep -q "Mach-O"; then
+      codesign "${SIGN_ARGS[@]}" --sign "$SIGN_TARGET" "$candidate"
+      nested=$((nested + 1))
+    fi
+  done < <(find "$APP_BUNDLE/Contents/Resources/Worker" -type f \
+             \( -name '*.so' -o -name '*.dylib' -o -perm -111 \) -print0 2>/dev/null || true)
+  echo "  · nested Mach-O signed: $nested"
+fi
+codesign "${SIGN_ARGS[@]}" --sign "$SIGN_TARGET" "$APP_BUNDLE"
+codesign --verify --deep --strict "$APP_BUNDLE"
+
+echo "→ بررسی بسته…"
+./Tools/validate-bundle.sh "$APP_BUNDLE" "$BUNDLE_ARCH" || exit 1
 
 echo "→ بررسی سلامت موتور پردازش…"
 mkdir -p build/selftest
-if "$OUT_DIR/$BINARY_NAME" --selftest --out build/selftest > build/selftest/selftest.log 2>&1; then
+BUNDLED_BINARY="$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
+if "$BUNDLED_BINARY" --selftest --out build/selftest > build/selftest/selftest.log 2>&1; then
   echo "  ✓ خودآزمون پردازش پاس شد"
 else
   echo "✗ خودآزمون پردازش خطا داد — بیلد متوقف شد." >&2
@@ -182,7 +223,7 @@ fi
 if [ ${#ARCHS[@]} -gt 1 ] && [ "$(uname -m)" = "arm64" ] \
    && arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
   mkdir -p build/selftest-intel
-  if arch -x86_64 "$OUT_DIR/$BINARY_NAME" --selftest --out build/selftest-intel \
+  if arch -x86_64 "$BUNDLED_BINARY" --selftest --out build/selftest-intel \
        > build/selftest-intel/selftest.log 2>&1; then
     echo "  ✓ خودآزمون پردازش روی بخش Intel هم پاس شد"
   else

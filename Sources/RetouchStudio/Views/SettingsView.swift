@@ -1,3 +1,4 @@
+import StudioCore
 import SwiftUI
 
 /// Preferences that survive a restart. Each control writes straight into the

@@ -1,4 +1,5 @@
 import Foundation
+import StudioCore
 
 /// The document values a load contributes to the editor.
 ///

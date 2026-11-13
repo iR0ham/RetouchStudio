@@ -5,6 +5,7 @@ import Darwin
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import StudioCore
 
 /// Launches and talks to the local AI helper.
 ///
@@ -1464,7 +1465,7 @@ enum AIWorker {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("source.png")
         guard processor.write(image, to: url, format: .png, quality: 1.0,
-                              colorSpace: ExportUpscale.workingColorSpace,
+                              colorSpace: RenderColorSpace.sRGB.cgColorSpace,
                               metadata: [:]) else {
             throw AIWorkerFailure(code: -32000, message: L10n.current.aiBadReply)
         }

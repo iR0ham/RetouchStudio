@@ -430,6 +430,755 @@ check(trickyBack.x.bitPattern == tricky.x.bitPattern
       && trickyBack.height.bitPattern == tricky.height.bitPattern,
       "doubles round-trip bit-exactly")
 
+print("Document history: shared rules")
+
+struct CoreState: HistoryState, Equatable {
+    var value = 0
+    init() {}
+    init(_ value: Int) { self.value = value }
+}
+
+extension DocumentHistory where State == CoreState {
+    init() { self.init(CoreState()) }
+}
+
+var history = DocumentHistory<CoreState>()
+check(!history.canUndo(current: CoreState()) && !history.canRedo(current: CoreState()),
+      "a fresh history has no steps")
+check(history.undoStack.isEmpty && history.redoStack.isEmpty,
+      "a fresh history starts with empty stacks")
+check(history.lastCommitted == CoreState() && history.cleanState == CoreState(),
+      "a fresh history starts on an empty baseline")
+
+history.commit(CoreState(1))
+check(history.undoStack == [CoreState()], "a first commit records the empty baseline")
+check(history.canUndo(current: CoreState(1)), "an edit is undoable")
+check(history.undo(current: CoreState(1)) == CoreState(), "undo returns the baseline")
+check(history.redo(current: CoreState()) == CoreState(1), "redo returns the edit")
+check(history.cleanState == CoreState(), "undo and redo leave the clean baseline alone")
+
+let unchanged = history.undoStack.count
+history.commit(CoreState(1))
+check(history.undoStack.count == unchanged, "committing the recorded state adds no step")
+
+_ = history.undo(current: CoreState(1))
+check(history.canRedo(current: CoreState()), "undo opens a redo branch")
+history.commit(CoreState(2))
+check(!history.canRedo(current: CoreState(2)), "a new edit discards the redo branch")
+check(history.redo(current: CoreState(2)) == nil, "the discarded branch cannot be replayed")
+
+var capped = DocumentHistory<CoreState>()
+for value in 1...(DocumentHistory<CoreState>.stepLimit + 20) {
+    capped.commit(CoreState(value))
+}
+check(capped.undoStack.count == DocumentHistory<CoreState>.stepLimit,
+      "history keeps at most \(DocumentHistory<CoreState>.stepLimit) steps")
+var walked = CoreState(DocumentHistory<CoreState>.stepLimit + 20)
+var steps: [Int] = []
+while let previous = capped.undo(current: walked) {
+    steps.append(previous.value)
+    walked = previous
+}
+check(steps.count == DocumentHistory<CoreState>.stepLimit, "the kept steps are all reachable")
+check(steps.first == DocumentHistory<CoreState>.stepLimit + 19 && steps.last == 20,
+      "the oldest steps are dropped first")
+
+var reset = DocumentHistory<CoreState>()
+reset.commit(CoreState(1))
+reset.commit(CoreState(2))
+reset.reset(to: CoreState(7))
+check(reset.undoStack.isEmpty && reset.redoStack.isEmpty, "reset clears both stacks")
+check(reset.lastCommitted == CoreState(7) && reset.cleanState == CoreState(7),
+      "reset makes the state both baselines")
+
+var cleaned = DocumentHistory<CoreState>()
+cleaned.commit(CoreState(1))
+cleaned.markClean(CoreState(1))
+check(cleaned.cleanState == CoreState(1), "markClean moves the clean baseline")
+check(cleaned.undoStack.count == 1, "markClean leaves history intact")
+
+var original = DocumentHistory<CoreState>()
+original.commit(CoreState(1))
+var copy = original
+copy.commit(CoreState(2))
+check(original.undoStack.count == 1 && copy.undoStack.count == 2,
+      "two histories never share a stack")
+
+print("Recovery rules: shared decisions")
+
+var epoch = RecoveryRules.AutosaveEpoch()
+let captured = epoch.value
+check(epoch.accepts(captured), "a captured generation is accepted before invalidation")
+epoch.invalidate()
+check(!epoch.accepts(captured), "invalidation refuses work captured earlier")
+check(epoch.accepts(epoch.value), "the current generation is accepted")
+
+check(RecoveryRules.isCandidateFileName("0000000000000-abc.retouch"),
+      "a candidate copy is recognized by extension")
+check(!RecoveryRules.isCandidateFileName(".hidden.retouch"),
+      "a dotfile is never a candidate")
+check(!RecoveryRules.isCandidateFileName("snapshot.json"),
+      "another extension is not a candidate")
+check(!RecoveryRules.isCandidateFileName(".retouch"),
+      "a bare extension is not a candidate")
+
+let orderBase = Date(timeIntervalSince1970: 1_000)
+check(RecoveryRules.olderFirst(.init(savedAt: orderBase, name: "a"),
+                               .init(savedAt: orderBase, name: "b")),
+      "the same millisecond orders by name")
+check(RecoveryRules.olderFirst(.init(savedAt: orderBase, name: "z"),
+                               .init(savedAt: orderBase.addingTimeInterval(1), name: "a")),
+      "an older date wins before the name")
+
+check(RecoveryRules.monotonic(orderBase, after: nil) == orderBase,
+      "the first legacy copy keeps its date")
+check(RecoveryRules.monotonic(orderBase, after: orderBase) == orderBase.addingTimeInterval(0.001),
+      "a tie moves forward by a millisecond")
+let laterDate = orderBase.addingTimeInterval(5)
+check(RecoveryRules.monotonic(laterDate, after: orderBase) == laterDate,
+      "a later date is kept")
+
+let quarantineID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+check(RecoveryRules.quarantineFileName(base: "snap", pathExtension: "retouch", id: quarantineID)
+      == "snap-11111111-2222-3333-4444-555555555555.retouch",
+      "quarantine keeps the base and extension")
+check(RecoveryRules.quarantineFileName(base: "snap", pathExtension: "", id: quarantineID)
+      == "snap-11111111-2222-3333-4444-555555555555",
+      "an empty extension adds no dot")
+check(RecoveryRules.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID())
+      != RecoveryRules.quarantineFileName(base: "snap", pathExtension: "retouch", id: UUID()),
+      "two quarantines cannot collide")
+
+print("Project platform ports")
+
+struct CoreSources: ProjectSourceAccess {
+    var existing: Set<String>
+    func fileExists(at url: URL) -> Bool { existing.contains(url.path) }
+}
+
+struct CoreBookmarks: ProjectBookmarkStore {
+    var stored: [URL: Data] = [:]
+    func bookmark(for url: URL) -> Data? { stored[url] }
+    func resolveBookmark(_ data: Data) -> URL? { stored.first { $0.value == data }?.key }
+}
+
+let photoURL = URL(fileURLWithPath: "/tmp/photo.jpg")
+let coreSources = CoreSources(existing: [photoURL.path])
+let coreBookmarks = CoreBookmarks(stored: [photoURL: Data([1, 2, 3])])
+check(coreSources.fileExists(at: photoURL), "a host answers path existence")
+check(coreBookmarks.resolveBookmark(coreBookmarks.bookmark(for: photoURL)!) == photoURL,
+      "a host round-trips its own bookmark")
+
+print("Document value: portable stamps, stickers, edits and analysis")
+
+let stamp = HealSpot(center: StudioPoint(x: 0.42, y: 0.37), radius: 0.018)
+check(stamp.radius == 0.018 && stamp.center.x == 0.42,
+      "a healing stamp keeps its normalized value")
+
+let sticker = Sticker(kind: .heart, center: StudioPoint(x: 0.72, y: 0.28), size: 0.12)
+check(sticker.kind == .heart && sticker.size == 0.12 && sticker.opacity == 1,
+      "a sticker carries its shape, size and default opacity")
+check(sticker.rotation == 0 && sticker.color == Sticker.defaultColor,
+      "an unrotated sticker uses the default colour")
+check(Sticker.defaultSize == 0.14, "the default sticker size is 14% of the short side")
+
+let edit = AIEdit(preset: "removeObject", prompt: "remove the sign", seed: 7,
+                  patchFile: "patch.png", alphaFile: "alpha.png",
+                  box: StudioRect(x: 0.2, y: 0.25, width: 0.1, height: 0.03),
+                  imagePixels: StudioSize(width: 1024, height: 768),
+                  seconds: 4.25, outsidePixelsIdentical: true)
+check(edit.box.width == 0.1 && edit.imagePixels.width == 1024,
+      "an AI edit keeps its authorized box and job size")
+check(edit.patchOrientation == nil && edit.outsidePixelsIdentical,
+      "an edit starts unrotated and trusts the worker's outside report")
+
+var analysis = AnalysisSettings()
+check(!analysis.isEnabled && analysis.showsFaceOutline && analysis.glow,
+      "analysis starts off with the outline on")
+check(analysis.regions == [.forehead, .eyeArea, .texture, .pigmentation, .jawline],
+      "the default analysis chooses five regions")
+check(analysis.primaryCallouts == [.forehead, .eyeArea, .texture, .pigmentation, .jawline],
+      "callouts follow the catalogue order, not set order")
+analysis.setEndpoint(StudioPoint(x: 0.5, y: 0.2), for: .forehead)
+analysis.setAnchor(StudioPoint(x: 0.48, y: 0.26), for: .forehead)
+check(analysis.endpoint(for: .forehead) == StudioPoint(x: 0.5, y: 0.2)
+      && analysis.anchor(for: .forehead) == StudioPoint(x: 0.48, y: 0.26),
+      "dragged pins are stored per region")
+analysis.resetEndpoints()
+analysis.resetAnchors()
+check(analysis.endpoints.isEmpty && analysis.anchors.isEmpty,
+      "resetting pins clears both kinds")
+check(AnalysisRegion.forehead.defaultsToRight && !AnalysisRegion.jawline.defaultsToRight,
+      "leader sides keep their default directions")
+check(AnalysisTint.ink.isDark && !AnalysisTint.chalk.isDark,
+      "only the ink tint is marked dark")
+
+let emptySettings = try! JSONDecoder().decode(AnalysisSettings.self,
+                                             from: Data("{}".utf8))
+check(emptySettings == AnalysisSettings(),
+      "a project written before the analysis tool opens with the defaults")
+
+print("Document value: orientation is a portable value")
+
+let turned = DocumentOrientation(quarterTurns: 1, flipped: false, angle: 3.5)
+check(turned.outputSize(base: StudioSize(width: 400, height: 300))
+      == StudioSize(width: 300, height: 400),
+      "a quarter turn swaps the frame size")
+check(DocumentOrientation(quarterTurns: 2).outputSize(base: StudioSize(width: 400, height: 300))
+      == StudioSize(width: 400, height: 300),
+      "a half turn keeps the frame size")
+check(turned.rotationDegrees == 93.5, "rotation totals the quarter turns and the angle")
+check(DocumentOrientation.compose(DocumentOrientation(quarterTurns: 1), over: turned)
+      == DocumentOrientation(quarterTurns: 2, flipped: false, angle: 3.5),
+      "composing adds turns in the new frame and keeps the angle")
+check(DocumentOrientation.compose(DocumentOrientation(flipped: true), over: turned)
+      == DocumentOrientation(quarterTurns: turned.quarterTurns,
+                             flipped: true, angle: turned.angle),
+      "mirroring composes without changing the turn")
+check(DocumentOrientation(quarterTurns: 1).inverted
+      == DocumentOrientation(quarterTurns: 3, angle: 0),
+      "the inverse of a turn is the opposite quarter")
+check(DocumentOrientation(quarterTurns: 1, flipped: true).inverted
+      == DocumentOrientation(quarterTurns: 1, flipped: true),
+      "a mirrored turn is its own inverse")
+check(DocumentOrientation(quarterTurns: 3).rotatedClockwise().quarterTurns == 0,
+      "turning clockwise wraps past three")
+check(DocumentOrientation(quarterTurns: -1).quarterTurns == 3,
+      "negative turns normalize into 0...3")
+check(DocumentOrientation(angle: 10).straightened(to: 4).angle == 4,
+      "straighten sets the angle directly")
+let mirroredStraighten = DocumentOrientation(flipped: true, angle: 10).straightened(to: 4)
+check(mirroredStraighten.angle == 4 && mirroredStraighten.flipped,
+      "a mirrored frame reaches the straighten target and stays mirrored")
+let partialOrientation = try! JSONDecoder().decode(
+    DocumentOrientation.self, from: Data("{\"quarterTurns\":1}".utf8))
+check(partialOrientation == DocumentOrientation(quarterTurns: 1),
+      "a partial orientation decodes with the missing keys at their defaults")
+check(DocumentOrientation(quarterTurns: 4) == DocumentOrientation()
+      && !DocumentOrientation(angle: 0.5).isIdentity
+      && !DocumentOrientation(flipped: true).isIdentity
+      && DocumentOrientation().isIdentity,
+      "a full turn wraps to identity while a real turn, mirror or angle does not")
+
+print("Document value: portable JSON and shared history")
+
+let portable = DocumentState(
+    healSpots: [stamp],
+    stickers: [sticker],
+    aiEdits: [edit],
+    analysis: analysis,
+    crop: StudioRect(x: 0.1, y: 0.1, width: 0.5, height: 0.6),
+    orientation: turned,
+    selectedFaceIndex: 2)
+let encoded = prettySorted(portable)
+check(encoded.contains("\"center\" : {") && encoded.contains("\"x\" : 0.42"),
+      "portable points write named coordinates, not Core Graphics arrays")
+check(!encoded.contains("[["),
+      "no Core Graphics array shape appears in the portable form")
+let decoded = try! JSONDecoder().decode(DocumentState.self, from: Data(encoded.utf8))
+check(decoded == portable, "a document state round-trips through portable JSON")
+check(DocumentState() == DocumentState(adjustments: Adjustments()),
+      "a fresh state is the identity document")
+var documentHistory = DocumentHistory(DocumentState())
+documentHistory.commit(portable)
+check(documentHistory.undoStack.count == 1 && documentHistory.cleanState == DocumentState(),
+      "a document state is a history step in the shared history")
+check(documentHistory.undo(current: portable) == DocumentState()
+      && documentHistory.canRedo(current: DocumentState()),
+      "undo returns the previous document")
+check(documentHistory.redo(current: DocumentState()) == portable,
+      "redo returns the edited document")
+
+print("Project document: the v3 fixture and the portable ports")
+
+/// A host's byte storage without a file system: the store's order of
+/// operations must be observable without one.
+final class MemoryProjectBytes: ProjectByteStore {
+    var files: [URL: Data] = [:]
+    var readFailure: ProjectIOError?
+    var writeFailure: ProjectIOError?
+
+    func readProjectData(at url: URL) throws -> Data {
+        if let readFailure { throw readFailure }
+        guard let data = files[url] else { throw ProjectIOError.readFailed }
+        return data
+    }
+
+    func writeProjectData(_ data: Data, to url: URL) throws {
+        if let writeFailure { throw writeFailure }
+        files[url] = data
+    }
+}
+
+struct MissingProjectSources: ProjectSourceAccess {
+    func fileExists(at url: URL) -> Bool { false }
+}
+
+struct EmptyProjectBookmarks: ProjectBookmarkStore {
+    func bookmark(for url: URL) -> Data? { nil }
+    func resolveBookmark(_ data: Data) -> URL? { nil }
+}
+
+let v3FixtureURL = URL(fileURLWithPath: root)
+    .appendingPathComponent("Tests/Fixtures/ProjectV3/project-v3-full.retouch")
+if let fixtureBytes = try? Data(contentsOf: v3FixtureURL),
+   let fixtureProject = try? ProjectCodec.decode(fixtureBytes) {
+    check((try? ProjectCodec.encode(fixtureProject)) == fixtureBytes,
+          "StudioCore reproduces the v3 fixture byte for byte")
+    check(fixtureProject.crop == StudioRect(x: 0.08, y: 0.12, width: 0.76, height: 0.74),
+          "the v3 array crop decodes to portable geometry")
+    check(fixtureProject.healSpots?.first?.center == StudioPoint(x: 0.42, y: 0.37),
+          "the v3 array point decodes to a portable point")
+    check(fixtureProject.aiEdits?.first?.imagePixels == StudioSize(width: 1024, height: 768),
+          "the v3 array size decodes to a portable size")
+    check(fixtureProject.stickers?.first?.color == MakeupColor(hue: 330, saturation: 0.65, value: 0.95),
+          "the v3 sticker keeps its colour")
+} else {
+    check(false, "the v3 fixture is readable", v3FixtureURL.path)
+}
+
+let memory = MemoryProjectBytes()
+let store = ProjectStore(bytes: memory, sources: MissingProjectSources(),
+                         bookmarks: EmptyProjectBookmarks())
+let projectURL = URL(fileURLWithPath: "/portable/project.retouch")
+var ported = RetouchProject(imagePath: "/portable/photo.heic", adjustments: Adjustments(),
+                            exportFormat: "jpeg", exportQuality: 0.9,
+                            autoRetouchStrength: 70,
+                            crop: StudioRect(x: 0.1, y: 0.2, width: 0.5, height: 0.6))
+ported.adjustments.exposure = 8
+try! store.write(ported, context: .v3, to: projectURL)
+check(memory.files[projectURL] == (try? ProjectCodec.encode(ported)),
+      "the store writes the codec's exact v3 bytes")
+let loaded = try? store.read(at: projectURL)
+check(loaded?.project.crop == ported.crop && loaded?.project.adjustments == ported.adjustments,
+      "the store reads back the project through the port")
+check(loaded?.context == ProjectWriteContext.v3,
+      "a v3 file keeps a v3 write context")
+
+let v4Context = ProjectWriteContext(version: 4,
+                                    unknownFields: ["futureFlag": .string("kept")],
+                                    requiredFeatures: ["portable_geometry"])
+_ = try! store.write(ported, context: v4Context, to: projectURL)
+let v4Bytes = memory.files[projectURL]!
+let reread = try? store.read(at: projectURL)
+check(reread?.context.isV4 == true
+      && reread?.context.unknownFields["futureFlag"] == .string("kept")
+      && reread?.context.requiredFeatures == ["portable_geometry"],
+      "a v4 file keeps its version, unknown field and required feature")
+_ = try! store.write(reread!.project, context: reread!.context, to: projectURL)
+check(memory.files[projectURL] == v4Bytes,
+      "saving a read v4 document reproduces its bytes")
+
+memory.readFailure = .readFailed
+do {
+    _ = try store.read(at: projectURL)
+    check(false, "a failed read is reported")
+} catch ProjectIOError.readFailed {
+    check(true, "a failed read is reported as a read failure")
+} catch {
+    check(false, "a failed read keeps the port's error domain", "\(error)")
+}
+memory.readFailure = nil
+
+memory.writeFailure = .writeFailed
+do {
+    _ = try store.write(ported, context: .v3, to: projectURL)
+    check(false, "a failed write is reported")
+} catch ProjectIOError.writeFailed {
+    check(true, "a failed write is reported as a write failure")
+} catch {
+    check(false, "a failed write keeps the port's error domain", "\(error)")
+}
+memory.writeFailure = nil
+check(memory.files[projectURL] == v4Bytes,
+      "a refused write leaves the previous project untouched")
+
+print("\n[M7] unknown data nested in a v4 document survives the store")
+
+/// The store's read-modify-write path end to end: a file with unknown data at
+/// several depths is read, a known field is edited, and the write keeps the
+/// unknown data without disturbing the edit.
+let nestedStoreChecks: () -> Void = {
+    var nestedProject = RetouchProject(
+        imagePath: "/portable/nested.heic", adjustments: Adjustments(),
+        exportFormat: "png", exportQuality: 0.9, autoRetouchStrength: 60,
+        crop: StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8),
+        healSpots: [HealSpot(center: StudioPoint(x: 0.25, y: 0.35), radius: 0.02)],
+        stickers: [Sticker(kind: .heart, center: StudioPoint(x: 0.6, y: 0.4), size: 0.1)])
+    nestedProject.adjustments.exposure = 4
+
+    let jsonEncoder = JSONEncoder()
+    jsonEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let encoded = try? ProjectCodec.encodeV4(nestedProject),
+          var nestedObject = try? JSONDecoder().decode([String: ProjectJSONValue].self,
+                                                       from: encoded),
+          case .object(var nestedAdjustments)? = nestedObject["adjustments"],
+          case .array(var nestedSpots)? = nestedObject["healSpots"],
+          case .object(var nestedSpot)? = nestedSpots.first,
+          case .array(var nestedStickers)? = nestedObject["stickers"],
+          case .object(var nestedSticker)? = nestedStickers.first else {
+        check(false, "the nested store fixture is built")
+        return
+    }
+    let tree: ProjectJSONValue = .object([
+        "rows": .array([.object(["label": .string("first"), "value": .null])])
+    ])
+    nestedAdjustments["futureTree"] = tree
+    nestedObject["adjustments"] = .object(nestedAdjustments)
+    nestedSpot["futureFeather"] = .double(0.5)
+    nestedSpots[0] = .object(nestedSpot)
+    nestedObject["healSpots"] = .array(nestedSpots)
+    nestedSticker["futureStyle"] = .string("dashed")
+    nestedStickers[0] = .object(nestedSticker)
+    nestedObject["stickers"] = .array(nestedStickers)
+    nestedObject["futureFlag"] = .bool(true)
+    guard let staged = try? jsonEncoder.encode(nestedObject) else {
+        check(false, "the nested store fixture encodes")
+        return
+    }
+
+    let nestedURL = URL(fileURLWithPath: "/portable/nested.retouch")
+    memory.files[nestedURL] = staged
+    guard let readBack = try? store.read(at: nestedURL) else {
+        check(false, "the store reads a nested v4 document")
+        return
+    }
+    var edited = readBack.project
+    edited.adjustments.exposure = 12
+    guard (try? store.write(edited, context: readBack.context, to: nestedURL)) != nil,
+          let savedData = memory.files[nestedURL],
+          let savedObject = try? JSONDecoder().decode([String: ProjectJSONValue].self,
+                                                      from: savedData),
+          case .object(let savedAdjustments)? = savedObject["adjustments"],
+          case .array(let savedSpots)? = savedObject["healSpots"],
+          case .object(let savedSpot)? = savedSpots.first,
+          case .array(let savedStickers)? = savedObject["stickers"],
+          case .object(let savedSticker)? = savedStickers.first else {
+        check(false, "the store writes the nested v4 document")
+        return
+    }
+    check(savedObject["version"] == .int(4), "the store keeps the file v4")
+    check(savedObject["futureFlag"] == .bool(true),
+          "the store keeps a top-level unknown key")
+    check(savedAdjustments["futureTree"] == tree,
+          "the store keeps unknown data nested in a known object")
+    check(savedSpot["futureFeather"] == .double(0.5),
+          "the store keeps unknown data on an array element")
+    check(savedSticker["futureStyle"] == .string("dashed"),
+          "the store keeps unknown data on an identified array element")
+    check(savedAdjustments["exposure"] == .int(12),
+          "the store writes the edit made since the read")
+
+    guard let secondRead = try? store.read(at: nestedURL),
+          (try? store.write(secondRead.project, context: secondRead.context,
+                            to: nestedURL)) != nil,
+          let rewrittenData = memory.files[nestedURL] else {
+        check(false, "the store rewrites the nested v4 document")
+        return
+    }
+    check(rewrittenData == savedData,
+          "an unchanged read-modify-write is byte identical")
+
+    memory.writeFailure = .writeFailed
+    var failing = secondRead.project
+    failing.adjustments.exposure = 99
+    do {
+        _ = try store.write(failing, context: secondRead.context, to: nestedURL)
+        check(false, "a failed nested write is reported")
+    } catch ProjectIOError.writeFailed {
+        check(true, "a failed nested write is reported as a write failure")
+    } catch {
+        check(false, "a failed nested write keeps the port's error domain", "\(error)")
+    }
+    memory.writeFailure = nil
+    check(memory.files[nestedURL] == rewrittenData,
+          "a failed write leaves the nested document and its unknown data untouched")
+}
+nestedStoreChecks()
+
+// The recovery snapshot stores the write context as JSON, so the nested
+// overlay has to survive that encoding unchanged.
+let overlayContext = ProjectWriteContext(
+    version: 4,
+    unknownFields: ["futureFlag": .string("kept")],
+    requiredFeatures: ["portable_geometry"],
+    nestedUnknowns: .object([
+        "adjustments": .object(["futureNested": .value(.string("kept"))]),
+        "healSpots": .array([
+            .init(index: 0, id: nil,
+                  known: .object(["radius": .double(0.02)]),
+                  unknown: .object(["futureFeather": .value(.double(0.5))]))
+        ])
+    ]))
+let overlayData = try? JSONEncoder().encode(overlayContext)
+let overlayReread = overlayData.flatMap {
+    try? JSONDecoder().decode(ProjectWriteContext.self, from: $0)
+}
+check(overlayReread == overlayContext,
+      "the write context round-trips its nested overlay")
+let overlayJSON = overlayData
+    .flatMap { try? JSONDecoder().decode([String: ProjectJSONValue].self, from: $0) }
+check(overlayJSON?["nestedUnknowns"] != nil,
+      "a context with an overlay writes the nested key")
+let legacyContextData = Data("""
+    {"version": 4, "unknownFields": {}, "requiredFeatures": ["portable_geometry"]}
+    """.utf8)
+let legacyContext = try? JSONDecoder().decode(ProjectWriteContext.self,
+                                              from: legacyContextData)
+check(legacyContext?.nestedUnknowns == nil
+      && legacyContext?.requiredFeatures == ["portable_geometry"],
+      "a context written before the overlay decodes with none")
+
+// MARK: - Renderer contract and policy
+
+print("\n[M8] the renderer contract is portable and its policy is exact")
+
+check(ExportFormat.jpeg.fileExtension == "jpg"
+        && ExportFormat.tiff.fileExtension == "tif"
+        && ExportFormat.heic.uniformTypeIdentifier == "public.heic",
+      "formats carry their extension and portable type name")
+check(ExportFormat.jpeg.supportsQuality && ExportFormat.heic.supportsQuality
+        && !ExportFormat.png.supportsQuality && !ExportFormat.tiff.supportsQuality,
+      "only JPEG and HEIC take a quality value")
+check(ExportFormat.png.bitsPerChannel == 16 && ExportFormat.tiff.bitsPerChannel == 16
+        && ExportFormat.jpeg.bitsPerChannel == 8 && ExportFormat.heic.bitsPerChannel == 8,
+      "PNG/TIFF stay 16-bit and JPEG/HEIC stay 8-bit")
+check(ExportFormat.jpeg.flattensAlpha && ExportFormat.heic.flattensAlpha
+        && !ExportFormat.png.flattensAlpha && !ExportFormat.tiff.flattensAlpha,
+      "only the opaque containers flatten transparency")
+
+var blankWatermark = WatermarkSettings()
+check(!blankWatermark.isActive, "an empty watermark is inactive")
+blankWatermark.enabled = true
+check(!blankWatermark.isActive, "an enabled but blank watermark is still inactive")
+blankWatermark.text = "  Studio  "
+check(blankWatermark.isActive, "a non-blank signature is active")
+let decodedWatermark = try! JSONDecoder().decode(WatermarkSettings.self,
+                                                 from: Data("{}".utf8))
+check(decodedWatermark == WatermarkSettings(),
+      "older preference payloads decode to the same defaults")
+
+let emptyAnalysis = AnalysisSettings()
+let overlayAnalysis = AnalysisSettings()
+var overlay = overlayAnalysis
+overlay.isEnabled = true
+overlay.exportMode = .overlayOnly
+
+let baseSource = RenderSourceDescription(pixelSize: StudioSize(width: 800, height: 600),
+                                         photoAspect: 4.0 / 3.0, faceCount: 2)
+let baseRequest = RenderRequest()
+let basePlan = RenderPolicy.plan(baseRequest, source: baseSource)
+check(basePlan.format == .jpeg && basePlan.pixelSize == StudioSize(width: 800, height: 600)
+        && !basePlan.upscales && !basePlan.appliesAnalysis && !basePlan.appliesWatermark,
+      "a plain export keeps the photo size and draws nothing extra")
+check(basePlan.flattensAlpha && basePlan.bitsPerChannel == 8
+        && basePlan.colorSpace == .source && basePlan.carriesSourceMetadata,
+      "a plain JPEG keeps the source profile and 8-bit opaque output")
+
+var linesRequest = baseRequest
+linesRequest.analysis = overlay
+linesRequest.watermark = WatermarkSettings(enabled: true, text: "Studio")
+let linesPlan = RenderPolicy.plan(linesRequest, source: baseSource)
+check(linesPlan.format == .png && !linesPlan.flattensAlpha && linesPlan.bitsPerChannel == 16,
+      "an overlay-only export is transparent 16-bit PNG")
+check(linesPlan.appliesAnalysis && !linesPlan.appliesWatermark
+        && !linesPlan.carriesSourceMetadata,
+      "lines carry callouts, no signature and no source EXIF")
+
+let noFaceSource = RenderSourceDescription(pixelSize: StudioSize(width: 800, height: 600),
+                                           photoAspect: 4.0 / 3.0, faceCount: 0)
+let noFacePlan = RenderPolicy.plan(linesRequest, source: noFaceSource)
+check(noFacePlan.format == .jpeg && !noFacePlan.appliesAnalysis
+        && noFacePlan.appliesWatermark && noFacePlan.carriesSourceMetadata,
+      "without a face the photo keeps its format and can still take a signature")
+
+var upscaleRequest = baseRequest
+upscaleRequest.longEdge = 1600
+upscaleRequest.aiUpscale = true
+let upscalePlan = RenderPolicy.plan(upscaleRequest, source: baseSource)
+check(upscalePlan.upscales && upscalePlan.pixelSize == StudioSize(width: 1600, height: 1200),
+      "a requested edge caps the 4x pass")
+check(upscalePlan.colorSpace == .sRGB,
+      "upscaled pixels are written with the upscaler's working profile")
+check(RenderPolicy.plan(upscaleRequest, source: baseSource).bitsPerChannel == 8,
+      "the output contract reports the encoded depth")
+
+var past4x = upscaleRequest
+past4x.longEdge = 5000
+check(RenderPolicy.plan(past4x, source: baseSource).pixelSize
+        == StudioSize(width: 3200, height: 2400),
+      "past 4x the output stops at the model's factor")
+
+var downscaleRequest = baseRequest
+downscaleRequest.longEdge = 400
+check(RenderPolicy.plan(downscaleRequest, source: baseSource).pixelSize
+        == StudioSize(width: 400, height: 300),
+      "a smaller edge downscales without the upscaler")
+
+check(RenderPolicy.effectiveFormat(chosen: .jpeg, analysis: overlay,
+                                   includeAnalysis: true, faceCount: 1) == .png,
+      "overlay-only forces PNG when a face exists")
+check(RenderPolicy.effectiveFormat(chosen: .jpeg, analysis: overlay,
+                                   includeAnalysis: false, faceCount: 1) == .jpeg,
+      "a batch that draws no callouts keeps the chosen format")
+check(RenderPolicy.effectiveFormat(chosen: .jpeg, analysis: overlay,
+                                   includeAnalysis: true, faceCount: 0) == .jpeg,
+      "without a face the chosen format stays")
+
+check(RenderPolicy.suggestedFileName(imageName: "portrait.jpg", format: .jpeg,
+                                     analysis: AnalysisSettings(), faceCount: 2)
+        == "portrait-retouched.jpg", "a plain export keeps the extension")
+check(RenderPolicy.suggestedFileName(imageName: "", format: .png,
+                                     analysis: AnalysisSettings(), faceCount: 2)
+        == "retouched.png", "an unnamed photo gets a fallback name")
+check(RenderPolicy.suggestedFileName(imageName: "portrait.jpg", format: .jpeg,
+                                     analysis: overlay, faceCount: 2)
+        == "portrait-retouched-analysis-lines.png",
+      "overlay-only names its PNG even when JPEG was chosen")
+check(RenderPolicy.suggestedFileName(imageName: "portrait.jpg", format: .jpeg,
+                                     analysis: overlay, faceCount: 0)
+        == "portrait-retouched.jpg",
+      "a name must not promise analysis the file cannot carry")
+
+check(RenderPolicy.upscaleAvailable(source: StudioSize(width: 800, height: 600),
+                                    longEdge: 1600),
+      "the 4x pass is offered for a small photo")
+check(!RenderPolicy.upscaleAvailable(source: StudioSize(width: 800, height: 600),
+                                     longEdge: 400),
+      "a downscale never offers the upscaler")
+check(!RenderPolicy.upscaleAvailable(source: StudioSize(width: 4000, height: 3000),
+                                     longEdge: 5000),
+      "a photo past the output ceiling cannot upscale")
+
+var fitted = upscaleRequest
+fitted = RenderPolicy.fittingUpscale(fitted, to: StudioSize(width: 2000, height: 1500))
+check(!fitted.aiUpscale, "a file that already reaches the edge skips the pass")
+var unrequested = baseRequest
+unrequested.aiUpscale = false
+check(!RenderPolicy.fittingUpscale(unrequested,
+                                   to: StudioSize(width: 400, height: 300)).aiUpscale,
+      "an unrequested upscale stays off")
+
+var batchBase = baseRequest
+batchBase.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+batchBase.orientation = DocumentOrientation(quarterTurns: 1)
+batchBase.selectedFaceIndex = 1
+batchBase.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 1,
+                            patchFile: "patch.png", alphaFile: "alpha.png",
+                            box: StudioRect(x: 0, y: 0, width: 1, height: 1),
+                            imagePixels: StudioSize(width: 10, height: 10))]
+batchBase.analysis = overlay
+batchBase.analysis.setEndpoint(StudioPoint(x: 0.2, y: 0.3), for: .forehead)
+batchBase.analysis.setAnchor(StudioPoint(x: 0.4, y: 0.5), for: .forehead)
+
+let documentURL = URL(fileURLWithPath: "/batch/document.jpg")
+let own = BatchRenderPolicy.request(batchBase, fileURL: documentURL,
+                                    documentURL: documentURL,
+                                    documentAspect: 1.5, fileAspect: 1.5)
+check(own == batchBase, "the open document keeps its exact request")
+
+let other = BatchRenderPolicy.request(batchBase,
+                                      fileURL: URL(fileURLWithPath: "/batch/other.jpg"),
+                                      documentURL: documentURL,
+                                      documentAspect: 1.5, fileAspect: 1.5)
+check(other.crop == nil && other.aiEdits.isEmpty && other.orientation.isIdentity
+        && other.selectedFaceIndex == nil,
+      "a turned document's frame never leaks to another photo")
+check(other.analysis.endpoints.isEmpty && other.analysis.anchors.isEmpty,
+      "dragged callout ends stay with their photo")
+check(other.adjustments == batchBase.adjustments && other.format == batchBase.format
+        && other.watermark == batchBase.watermark,
+      "the shared look, format and signature travel")
+
+var upright = batchBase
+upright.orientation = .identity
+let sameShape = BatchRenderPolicy.request(upright,
+                                          fileURL: URL(fileURLWithPath: "/batch/other.jpg"),
+                                          documentURL: documentURL,
+                                          documentAspect: 1.5, fileAspect: 1.5)
+check(sameShape.crop == upright.crop,
+      "an unturned document's crop travels to a same-shape file")
+let differentShape = BatchRenderPolicy.request(upright,
+                                               fileURL: URL(fileURLWithPath: "/batch/wide.jpg"),
+                                               documentURL: documentURL,
+                                               documentAspect: 1.5, fileAspect: 2.0)
+check(differentShape.crop == nil, "a different-shape file exports whole")
+check(BatchRenderPolicy.cropApplies(StudioRect(x: 0, y: 0, width: 1, height: 1),
+                                    documentAspect: 1.5, fileAspect: 1.5),
+      "the same aspect keeps the crop")
+check(!BatchRenderPolicy.cropApplies(StudioRect(x: 0, y: 0, width: 1, height: 1),
+                                     documentAspect: 1.5, fileAspect: 1.0),
+      "a different aspect refuses the crop")
+check(!BatchRenderPolicy.cropApplies(nil, documentAspect: 1.5, fileAspect: 1.5),
+      "no crop means nothing to apply")
+
+let folderURL = URL(fileURLWithPath: "/batch/out")
+let inputURL = URL(fileURLWithPath: "/batch/photo.jpg")
+var taken: Set<String> = ["/batch/out/photo-retouched.png"]
+let unique = BatchRenderPolicy.uniqueOutputURL(for: inputURL, in: folderURL,
+                                               format: .png) { taken.contains($0.path) }
+check(unique.lastPathComponent == "photo-retouched-2.png",
+      "a taken batch name gains a counter", unique.lastPathComponent)
+taken.insert("/batch/out/photo-retouched-2.png")
+let third = BatchRenderPolicy.uniqueOutputURL(for: inputURL, in: folderURL,
+                                              format: .tiff) { _ in false }
+check(third.lastPathComponent == "photo-retouched.tif",
+      "a fresh format starts at the plain name")
+
+let progress = RenderProgress(stage: .upscaling, completed: 3, total: 12)
+check(progress.fraction == 0.25, "completed tiles expose a real fraction")
+check(RenderProgress(stage: .rendering).fraction == nil,
+      "an uncountable stage has no fake percentage")
+check(RenderProgress(stage: .upscaling, completed: 20, total: 12).fraction == 1,
+      "a fraction never passes the end")
+
+final class RecordingRenderer: DocumentRenderPipeline {
+    typealias Source = String
+    typealias Output = String
+
+    var renderedRequest: RenderRequest?
+    var renderedSource: String?
+    var writtenRequest: RenderRequest?
+    var writtenSource: String?
+    var writtenOutput: String?
+    var reported: [RenderProgress] = []
+
+    func render(_ request: RenderRequest, source: String,
+                progress: ((RenderProgress) -> Void)?) throws -> String {
+        renderedRequest = request
+        renderedSource = source
+        progress?(RenderProgress(stage: .rendering))
+        return "pixels"
+    }
+
+    func write(_ output: String, request: RenderRequest, source: String,
+               to destination: URL, protecting protectedURL: URL?) throws -> RenderResult {
+        writtenRequest = request
+        writtenSource = source
+        writtenOutput = output
+        return RenderResult(destination: destination,
+                            pixelSize: StudioSize(width: 10, height: 10),
+                            format: request.format,
+                            colorSpace: .source,
+                            colorProfileName: "Test RGB",
+                            carriedSourceMetadata: true)
+    }
+}
+
+let recorder = RecordingRenderer()
+let testDestination = URL(fileURLWithPath: "/renderer/lines.png")
+let testResult = try! recorder.renderAndWrite(linesRequest, source: "decoded",
+                                              to: testDestination)
+check(recorder.renderedRequest == linesRequest && recorder.renderedSource == "decoded",
+      "the port receives the request and the host's source")
+check(recorder.writtenRequest == linesRequest && recorder.writtenSource == "decoded"
+        && recorder.writtenOutput == "pixels",
+      "the write step receives the same request and the rendered output")
+check(testResult.destination == testDestination
+        && testResult.format == linesRequest.format
+        && testResult.colorProfileName == "Test RGB",
+      "the port returns the written result")
+
 print("")
 print(failures.isEmpty
       ? "StudioCore: \(checks) checks passed"

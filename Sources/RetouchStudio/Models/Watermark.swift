@@ -2,34 +2,7 @@ import CoreGraphics
 import CoreImage
 import CoreText
 import Foundation
-
-/// A signature burned into exported copies. It is an output preference, not a
-/// document edit: the editor keeps showing the clean photo, project files stay
-/// small, and the text can be changed for the next export without touching
-/// anything already saved.
-struct WatermarkSettings: Codable, Equatable {
-    enum Position: String, Codable, CaseIterable, Identifiable {
-        case topLeft, topRight, bottomLeft, bottomRight, center
-
-        var id: String { rawValue }
-    }
-
-    var enabled = false
-    var text = ""
-    var position: Position = .bottomRight
-    /// 0.05…1; a faint mark still reads without covering the portrait.
-    var opacity: Double = 0.65
-    /// Cap height as a percentage of the exported photo's short side.
-    var sizePercent: Double = 3.0
-
-    static let disabled = WatermarkSettings()
-
-    /// An empty or blank string would draw a shadow with no text, so it counts
-    /// as off even when the switch is on.
-    var isActive: Bool {
-        enabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-}
+import StudioCore
 
 /// Draws the watermark tile once, at the export's own pixel size, and
 /// composites it over the finished photo. Core Text keeps the work off the main

@@ -1060,7 +1060,7 @@ func exportSnapshot(_ format: ExportFormat, longEdge: CGFloat?,
                     strip: Bool = true) -> ExportSnapshot {
     var snapshot = ExportSnapshot()
     snapshot.format = format
-    snapshot.longEdge = longEdge
+    snapshot.longEdge = longEdge.map { Double($0) }
     snapshot.stripsPrivacyMetadata = strip
     snapshot.includeStamps = true
     snapshot.includeAnalysis = false

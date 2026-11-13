@@ -419,7 +419,7 @@ func testBatchExportPolicy() {
                            box: CGRect(x: 0, y: 0, width: 1, height: 1),
                            imagePixels: CGSize(width: 10, height: 10))]
     base.analysis = analysis
-    base.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    base.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
     base.orientation = DocumentOrientation(quarterTurns: 1)
     base.selectedFaceIndex = 1
     base.format = .png
@@ -431,7 +431,7 @@ func testBatchExportPolicy() {
     base.aiUpscale = true
     base.watermark = WatermarkSettings(enabled: true, text: "Studio")
 
-    let document = BatchExportPolicy.snapshot(
+    let document = BatchRenderPolicy.request(
         base, fileURL: documentURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(document.selectedFaceIndex == 1
@@ -441,7 +441,7 @@ func testBatchExportPolicy() {
             && !document.aiEdits.isEmpty,
           "the open document keeps its own selection, pins and crop")
 
-    let sameAspect = BatchExportPolicy.snapshot(
+    let sameAspect = BatchRenderPolicy.request(
         base, fileURL: otherURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(sameAspect.selectedFaceIndex == nil && sameAspect.analysis.endpoints.isEmpty
@@ -453,7 +453,7 @@ func testBatchExportPolicy() {
 
     var unrotatedBase = base
     unrotatedBase.orientation = .identity
-    let unrotatedSameAspect = BatchExportPolicy.snapshot(
+    let unrotatedSameAspect = BatchRenderPolicy.request(
         unrotatedBase, fileURL: otherURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(unrotatedSameAspect.crop == unrotatedBase.crop,
@@ -469,7 +469,7 @@ func testBatchExportPolicy() {
             && sameAspect.analysis.regions == base.analysis.regions,
           "the analysis style stays shared, only the pins are cleared")
 
-    let differentAspect = BatchExportPolicy.snapshot(
+    let differentAspect = BatchRenderPolicy.request(
         base, fileURL: differentURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 1.0)
     check(differentAspect.crop == nil, "a different-shape file exports whole")
@@ -480,10 +480,10 @@ func testBatchExportPolicy() {
     // The renderer guards an out-of-range index; the policy must not leak it.
     var invalid = base
     invalid.selectedFaceIndex = 99
-    let invalidDocument = BatchExportPolicy.snapshot(
+    let invalidDocument = BatchRenderPolicy.request(
         invalid, fileURL: documentURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
-    let invalidOther = BatchExportPolicy.snapshot(
+    let invalidOther = BatchRenderPolicy.request(
         invalid, fileURL: otherURL, documentURL: documentURL,
         documentAspect: 4.0 / 3.0, fileAspect: 4.0 / 3.0)
     check(invalidDocument.selectedFaceIndex == 99 && invalidOther.selectedFaceIndex == nil,
@@ -1032,7 +1032,7 @@ func testProjectCodecFieldMapping() {
                             box: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4),
                             imagePixels: CGSize(width: 64, height: 64))]
     state.analysis.isEnabled = true
-    state.crop = CGRect(x: 0.05, y: 0.1, width: 0.8, height: 0.7)
+    state.crop = StudioRect(x: 0.05, y: 0.1, width: 0.8, height: 0.7)
     state.orientation = DocumentOrientation(quarterTurns: 1, flipped: true, angle: 2)
     state.selectedFaceIndex = 3
 
@@ -1256,7 +1256,7 @@ private func fullV4Project() -> RetouchProject {
         adjustments: adjustments,
         exportFormat: "heic", exportQuality: 0.83, exportLongEdge: 3000,
         autoRetouchStrength: 66, autoColorStrength: 44,
-        crop: CGRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8),
+        crop: StudioRect(x: 0.1, y: 0.05, width: 0.7, height: 0.8),
         healSpots: [HealSpot(center: CGPoint(x: 0.25, y: 0.35), radius: 0.015)],
         stickers: [Sticker(kind: .sparkle, center: CGPoint(x: 0.6, y: 0.4),
                            size: 0.12, rotation: 12, opacity: 0.8)],
@@ -1513,45 +1513,249 @@ func testProjectV4Capabilities() {
     }
 }
 
-/// Unknown top-level keys are preserved whole, but an unknown key nested inside
-/// a known object is not: that object is decoded into its typed model and
-/// re-encoded. This test pins the limitation so a later change to it has to be
-/// deliberate.
+/// A v4 file keeps unknown data at every depth: inside known objects, inside
+/// the objects of a known array, and inside the arrays and objects nested in
+/// those. The capture is a diff, so a later save keeps the data without letting
+/// it shadow a field this build owns.
 @MainActor
-func testProjectV4NestedUnknownFieldsAreDropped() {
-    print("\n[R4.8] nested unknown fields stay a documented limitation")
+func testProjectV4NestedUnknownFieldsArePreserved() {
+    print("\n[R4.8] unknown data inside known records survives a save")
 
-    let fixture = projectV4Fixture()
-    guard var object = projectJSON(fixture.data),
-          case .object(var adjustments)? = object["adjustments"] else {
-        check(false, "the v4 fixture is JSON with an adjustments object")
+    guard var object = projectJSON(projectV4Fixture().data),
+          case .object(var adjustments)? = object["adjustments"],
+          case .array(var edits)? = object["aiEdits"],
+          case .object(var edit)? = edits.first,
+          case .object(var box)? = edit["box"],
+          case .array(var stickers)? = object["stickers"],
+          case .object(var sticker)? = stickers.first,
+          case .object(var color)? = sticker["color"],
+          case .array(var spots)? = object["healSpots"],
+          case .object(var spot)? = spots.first,
+          case .object(var analysis)? = object["analysis"] else {
+        check(false, "the v4 fixture has the nested records the test needs")
         return
     }
-    adjustments["futureNested"] = .string("dropped")
+
+    // An unknown object field, every JSON scalar kind, and an array of objects
+    // nested inside a known object.
+    let tree: ProjectJSONValue = .object([
+        "rows": .array([
+            .object(["label": .string("first"), "values": .array([.int(1), .null])]),
+            .object(["label": .string("second"), "enabled": .bool(true)])
+        ])
+    ])
+    adjustments["futureText"] = .string("kept")
+    adjustments["futureNull"] = .null
+    adjustments["futureFlagOff"] = .bool(false)
+    adjustments["futureCount"] = .int(42)
+    adjustments["futureRatio"] = .double(0.125)
+    adjustments["futureTree"] = tree
     object["adjustments"] = .object(adjustments)
-    guard let nested = projectJSONData(object),
-          let file = try? ProjectCodec.read(nested) else {
-        check(false, "a v4 file with a nested unknown key reads")
+
+    // Unknown data inside the objects of known arrays, one of them two levels
+    // deep (an AI edit's box, a sticker's colour).
+    let anchor: ProjectJSONValue = .object(["x": .double(0.5), "y": .double(0.25)])
+    box["futureAnchor"] = anchor
+    edit["box"] = .object(box)
+    edits[0] = .object(edit)
+    object["aiEdits"] = .array(edits)
+
+    let channels: ProjectJSONValue = .array([.int(1), .int(2)])
+    color["futureChannel"] = channels
+    sticker["color"] = .object(color)
+    stickers[0] = .object(sticker)
+    object["stickers"] = .array(stickers)
+
+    spot["futureFeather"] = .double(0.5)
+    spots[0] = .object(spot)
+    object["healSpots"] = .array(spots)
+
+    let badge: ProjectJSONValue = .object(["text": .string("new"), "offset": .int(3)])
+    analysis["futureBadge"] = badge
+    object["analysis"] = .object(analysis)
+
+    guard let staged = projectJSONData(object),
+          let file = try? ProjectCodec.read(staged) else {
+        check(false, "a v4 file with nested unknown keys reads")
         return
     }
     check(file.context.unknownFields["futureFlag"] == .string("kept"),
           "the top-level unknown key is still captured")
     check(file.context.unknownFields["adjustments"] == nil,
           "a known container is not treated as an unknown key")
-    guard let saved = try? ProjectCodec.encodeV4(
-            file.project,
-            unknownFields: file.context.unknownFields,
-            requiredFeatures: file.context.requiredFeatures),
+    check(file.context.nestedUnknowns != nil,
+          "the difference inside known records is captured")
+
+    // A known sibling is edited before the save. The unknown data must survive
+    // the edit, and the edit must survive the unknown data.
+    var project = file.project
+    project.adjustments.exposure = 21
+    project.stickers?[0].rotation = 33
+    project.aiEdits?[0].seconds = 9.5
+
+    guard let saved = try? ProjectCodec.encode(project, context: file.context),
           let savedObject = projectJSON(saved),
-          case .object(let savedAdjustments)? = savedObject["adjustments"] else {
-        check(false, "the nested fixture saves")
+          case .object(let savedAdjustments)? = savedObject["adjustments"],
+          case .array(let savedEdits)? = savedObject["aiEdits"],
+          case .object(let savedEdit)? = savedEdits.first,
+          case .object(let savedBox)? = savedEdit["box"],
+          case .array(let savedStickers)? = savedObject["stickers"],
+          case .object(let savedSticker)? = savedStickers.first,
+          case .object(let savedColor)? = savedSticker["color"],
+          case .array(let savedSpots)? = savedObject["healSpots"],
+          case .object(let savedSpot)? = savedSpots.first,
+          case .object(let savedAnalysis)? = savedObject["analysis"] else {
+        check(false, "the v4 document with nested unknown keys saves")
         return
     }
+
     check(savedObject["futureFlag"] == .string("kept"),
           "the top-level unknown key survives the save")
-    check(savedAdjustments["futureNested"] == nil,
-          "the nested unknown key is dropped, as documented")
+    check(savedAdjustments["futureText"] == .string("kept")
+            && savedAdjustments["futureNull"] == .null
+            && savedAdjustments["futureFlagOff"] == .bool(false)
+            && savedAdjustments["futureCount"] == .int(42)
+            && savedAdjustments["futureRatio"] == .double(0.125),
+          "an unknown field of every JSON kind survives inside a known object")
+    check(savedAdjustments["futureTree"] == tree,
+          "an array of objects nested in a known object survives whole")
+    check(savedBox["futureAnchor"] == anchor,
+          "an unknown object inside an array element survives")
+    check(savedColor["futureChannel"] == channels,
+          "an unknown array two objects deep inside an array element survives")
+    check(savedSpot["futureFeather"] == .double(0.5),
+          "an unknown key on an id-less array element survives")
+    check(savedAnalysis["futureBadge"] == badge,
+          "an unknown object inside a known sub-record survives")
+
+    check(savedAdjustments["exposure"] == .int(21),
+          "the edited known sibling is written")
+    check(savedSticker["rotation"] == .int(33),
+          "an edit on the same array element as unknown data is written")
+    check(savedEdit["seconds"] == .double(9.5),
+          "an edit on a nested array element is written")
+    check(savedAdjustments["smooth"] == adjustments["smooth"]
+            && savedObject["crop"] == object["crop"],
+          "untouched known fields are unchanged")
+    check(savedObject["version"] == .int(4), "the save stays v4")
+    check(savedObject["requiredFeatures"] == .array([.string("portable_geometry")]),
+          "the required capability survives the save")
+
+    // Repeated save/load cycles are stable: the captured difference is exactly
+    // what the typed record does not explain, so it cannot grow or drift.
+    guard let again = try? ProjectCodec.read(saved),
+          let resaved = try? ProjectCodec.encode(again.project, context: again.context) else {
+        check(false, "the saved v4 document reads back")
+        return
+    }
+    check(resaved == saved, "a second save of the same document is byte identical")
+    check(again.context.requiredFeatures == ["portable_geometry"],
+          "the second read still carries the required capability")
 }
+
+/// Unknown array data is attached to its record, not to a position: inserting
+/// a neighbour keeps it where it belongs, and a removed record takes its data
+/// with it instead of handing it to a survivor.
+@MainActor
+func testProjectV4UnknownFieldsFollowArrayRecords() {
+    print("\n[R4.8] unknown array data follows its record, not its position")
+
+    guard var object = projectJSON(projectV4Fixture().data),
+          case .array(var stickers)? = object["stickers"],
+          case .object(var sticker)? = stickers.first,
+          case .array(var spots)? = object["healSpots"],
+          spots.count == 2,
+          case .object(var firstSpot)? = spots.first,
+          case .object(var secondSpot) = spots[1],
+          case .array(var edits)? = object["aiEdits"],
+          case .object(var edit)? = edits.first else {
+        check(false, "the v4 fixture has the arrays the test needs")
+        return
+    }
+    sticker["futureStyle"] = .string("dashed")
+    stickers[0] = .object(sticker)
+    object["stickers"] = .array(stickers)
+    firstSpot["futureFeather"] = .double(0.25)
+    spots[0] = .object(firstSpot)
+    secondSpot["futureFeather"] = .double(0.75)
+    spots[1] = .object(secondSpot)
+    object["healSpots"] = .array(spots)
+    edit["futureNote"] = .string("gone with the edit")
+    edits[0] = .object(edit)
+    object["aiEdits"] = .array(edits)
+
+    guard let staged = projectJSONData(object),
+          let file = try? ProjectCodec.read(staged) else {
+        check(false, "the array fixture reads")
+        return
+    }
+
+    var project = file.project
+    // A new sticker is placed before the known one.
+    var leading = project.stickers![0]
+    leading.id = UUID()
+    leading.kind = .star
+    project.stickers = [leading] + project.stickers!
+    // The first healing stamp is removed; the second one keeps its own data.
+    let survivor = project.healSpots![1]
+    project.healSpots = [survivor]
+    // The AI edit is removed entirely.
+    project.aiEdits = []
+
+    guard let saved = try? ProjectCodec.encode(project, context: file.context),
+          let savedObject = projectJSON(saved),
+          case .array(let savedStickers)? = savedObject["stickers"],
+          case .object(let newSticker)? = savedStickers.first,
+          case .object(let knownSticker)? = savedStickers.last,
+          case .array(let savedSpots)? = savedObject["healSpots"],
+          case .object(let savedSpot)? = savedSpots.first else {
+        check(false, "the rearranged document saves")
+        return
+    }
+
+    check(savedStickers.count == 2 && savedStickers.first != savedStickers.last,
+          "both stickers are written")
+    check(newSticker["futureStyle"] == nil,
+          "an inserted record does not inherit its neighbour's unknown data")
+    check(knownSticker["futureStyle"] == .string("dashed"),
+          "the original record keeps its unknown data after the insert")
+    check(savedSpots.count == 1 && savedSpot["futureFeather"] == .double(0.75),
+          "the surviving id-less record keeps its own unknown data")
+    check(savedObject["aiEdits"] == .array([]),
+          "a removed record's unknown data is not resurrected")
+}
+
+/// The v4 overlay is a v4 concern: reading a v3 file captures nothing nested,
+/// so the frozen v3 path stays byte-for-byte what it always was.
+@MainActor
+func testProjectV3NestedCaptureIsAbsent() {
+    print("\n[R4.8] the nested capture never touches the frozen v3 path")
+
+    let fixture = projectV3Fixture()
+    guard var object = projectJSON(fixture.data),
+          case .object(var adjustments)? = object["adjustments"] else {
+        check(false, "the v3 fixture is JSON")
+        return
+    }
+    adjustments["futureNested"] = .string("frozen")
+    object["adjustments"] = .object(adjustments)
+    guard let staged = projectJSONData(object),
+          let file = try? ProjectCodec.read(staged) else {
+        check(false, "a v3 file with a nested extra key reads")
+        return
+    }
+    check(file.context.version == 3 && file.context.nestedUnknowns == nil,
+          "a v3 read captures no nested data")
+    check(!file.context.carriesFileMetadata,
+          "a v3 read with no top-level extra carries no file metadata")
+    guard let saved = try? ProjectCodec.encode(file.project, context: file.context) else {
+        check(false, "the v3 file saves")
+        return
+    }
+    check(saved == fixture.data,
+          "a v3 save stays byte identical to the frozen baseline")
+}
+
 
 @MainActor
 func testProjectV4EditorRoundTrip() async {
@@ -1653,7 +1857,7 @@ func testDocumentRestorationFromProject() {
         exportLongEdge: 2048,
         autoRetouchStrength: 55,
         autoColorStrength: 45,
-        crop: CGRect(x: 0.1, y: 0.2, width: 0.6, height: 0.5),
+        crop: StudioRect(x: 0.1, y: 0.2, width: 0.6, height: 0.5),
         healSpots: [HealSpot(center: CGPoint(x: 0.3, y: 0.4), radius: 0.01)],
         stickers: [Sticker(kind: .heart, center: CGPoint(x: 0.5, y: 0.5), size: 0.1)],
         aiEdits: [AIEdit(preset: "cleanup", prompt: "wall", seed: 1,
@@ -1817,7 +2021,7 @@ func testExportPlannerSnapshot() {
     var analysis = AnalysisSettings()
     analysis.isEnabled = true
     planner.analysis = analysis
-    planner.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    planner.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
     planner.orientation = DocumentOrientation(quarterTurns: 1)
     planner.selectedFaceIndex = 1
     planner.format = .tiff
@@ -1879,7 +2083,7 @@ func testBatchPlannerFilePolicy() {
     analysis.setAnchor(CGPoint(x: 0.5, y: 0.5), for: .lips)
     var base = ExportSnapshot()
     base.adjustments.exposure = 5
-    base.crop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    base.crop = StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
     base.aiEdits = [AIEdit(preset: "p", prompt: "q", seed: 3,
                            patchFile: "patch.png", alphaFile: "alpha.png",
                            box: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
@@ -2737,21 +2941,21 @@ func testExportUpscalePolicy() async {
     // Swin2SR is fixed at 4x and the helper refuses more than 40 MP out, so a
     // full pass is only offered up to 2.5 MP in. Both numbers live here so the
     // sheet can refuse in the same terms before a job is queued.
-    check(ExportUpscale.factor == 4, "the pass is four times the pixels per axis")
-    check(ExportUpscale.canHandle(CGSize(width: 1500, height: 1500)),
+    check(RenderUpscale.factor == 4, "the pass is four times the pixels per axis")
+    check(RenderUpscale.canHandle(StudioSize(width: 1500, height: 1500)),
           "2.25 MP fits the 4x ceiling", "\(6000 * 6000) px out")
-    check(!ExportUpscale.canHandle(CGSize(width: 1600, height: 1600)),
+    check(!RenderUpscale.canHandle(StudioSize(width: 1600, height: 1600)),
           "the first size past 2.5 MP is refused", "\(6400 * 6400) px out")
-    check(ExportUpscale.canHandle(CGSize(width: 400, height: 300)),
+    check(RenderUpscale.canHandle(StudioSize(width: 400, height: 300)),
           "a small photo is accepted")
-    check(!ExportUpscale.canHandle(CGSize(width: 0, height: 300)),
+    check(!RenderUpscale.canHandle(StudioSize(width: 0, height: 300)),
           "an empty size is refused")
 
-    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: 4096) == 4000,
+    check(RenderUpscale.outputLongEdge(sourceLong: 1000, requested: 4096) == 4000,
           "4x wins when the request is above it", "1000 -> 4000")
-    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: 2048) == 2048,
+    check(RenderUpscale.outputLongEdge(sourceLong: 1000, requested: 2048) == 2048,
           "the requested edge wins below 4x", "1000 -> 2048")
-    check(ExportUpscale.outputLongEdge(sourceLong: 1000, requested: nil) == 4000,
+    check(RenderUpscale.outputLongEdge(sourceLong: 1000, requested: nil) == 4000,
           "no request means the full 4x")
 }
 
@@ -3213,7 +3417,7 @@ func recoveryProject(for url: URL, exposure: Double = 0, contrast: Double = 0,
     adjustments.contrast = contrast
     return RetouchProject(imagePath: url.path, adjustments: adjustments,
                           exportFormat: "png", exportQuality: 0.81,
-                          autoRetouchStrength: 63, crop: crop,
+                          autoRetouchStrength: 63, crop: crop.map(StudioRect.init),
                           healSpots: healSpots, orientation: orientation)
 }
 
@@ -4436,7 +4640,7 @@ func testRecoveryV3RoundTripPreservesDocument() async {
     check(working.project.adjustments.exposure == 0.27
             && working.project.adjustments.contrast == 4,
           "the working copy carries the restored edits")
-    check(working.project.crop == crop, "the working copy keeps the crop")
+    check(working.project.crop == StudioRect(crop), "the working copy keeps the crop")
     check(working.project.version == 3, "the working copy is a v3 projection")
     check(working.fileContext == nil, "a v3 document stores no file context")
     check(await waitUntil(10) { !FileManager.default.fileExists(atPath: candidate.path) },
@@ -5993,7 +6197,7 @@ func testDocumentStateExportSnapshot() async {
     check(snapshot.stickers == model.stickers, "stickers travel")
     check(snapshot.aiEdits == model.aiEdits, "AI edits travel")
     check(snapshot.analysis == model.analysis, "analysis settings travel")
-    check(snapshot.crop == model.appliedCrop, "the crop travels")
+    check(snapshot.crop == model.appliedCrop.map(StudioRect.init), "the crop travels")
     check(snapshot.orientation == model.documentOrientation, "the orientation travels")
     check(snapshot.selectedFaceIndex == model.selectedFaceIndex, "the face selection travels")
     check(snapshot.quality == 0.66 && snapshot.longEdge == 2400
@@ -6036,7 +6240,7 @@ func testDocumentStateValueSemantics() {
                            box: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3),
                            imagePixels: CGSize(width: 64, height: 64))]
     edit.analysis.isEnabled = true
-    edit.crop = CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.6)
+    edit.crop = StudioRect(x: 0.1, y: 0.1, width: 0.5, height: 0.6)
     edit.orientation = DocumentOrientation(quarterTurns: 1)
     edit.selectedFaceIndex = 2
 
@@ -6067,8 +6271,8 @@ func testDocumentStateValueSemantics() {
 
     let mutations: [(String, (inout DocumentState) -> Void)] = [
         ("adjustments", { $0.adjustments.smooth += 1 }),
-        ("healSpots", { $0.healSpots.append(HealSpot(center: .zero, radius: 0.01)) }),
-        ("stickers", { $0.stickers.append(Sticker(center: .zero, size: 0.1)) }),
+        ("healSpots", { $0.healSpots.append(HealSpot(center: CGPoint.zero, radius: 0.01)) }),
+        ("stickers", { $0.stickers.append(Sticker(center: StudioPoint.zero, size: 0.1)) }),
         ("aiEdits", { $0.aiEdits.removeAll() }),
         ("analysis", { $0.analysis.isEnabled.toggle() }),
         ("crop", { $0.crop = nil }),
@@ -6199,7 +6403,9 @@ func runAll() async {
     testProjectV4FixtureCrossArchitecture()
     testProjectUnknownFieldsSurvive()
     testProjectV4Capabilities()
-    testProjectV4NestedUnknownFieldsAreDropped()
+    testProjectV4NestedUnknownFieldsArePreserved()
+    testProjectV4UnknownFieldsFollowArrayRecords()
+    testProjectV3NestedCaptureIsAbsent()
     await testProjectV4EditorRoundTrip()
     testDocumentRestorationFromProject()
     testDocumentRestorationDefaultsAndPhoto()

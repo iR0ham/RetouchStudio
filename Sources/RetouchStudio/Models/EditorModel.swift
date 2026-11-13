@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import CoreImage
+import ImageIO
 import SwiftUI
 import StudioCore
 import UniformTypeIdentifiers
@@ -111,6 +112,11 @@ final class EditorModel: ObservableObject {
     /// The version and unknown keys of the file this document came from. A new
     /// photo starts at v3; a v4 project stays v4 across its saves.
     private var projectWriteContext = ProjectWriteContext.v3
+    /// Project bytes and source resolution go through the shared ports; the
+    /// panels, bookmarks and file system stay in this shell.
+    private let projectStore = ProjectStore(bytes: FileProjectByteStore(),
+                                            sources: FileProjectSourceAccess(),
+                                            bookmarks: URLBookmarkStore())
     /// Looks the owner saved from their own sliders, in the order they made them.
     @Published private(set) var userPresets: [UserPreset] = UserPresetStore.load()
     /// One small render per preset, made from the photo that is open.
@@ -316,9 +322,9 @@ final class EditorModel: ObservableObject {
 
     /// Everything one undo step covers. Stamping the healing brush and reframing
     /// with the crop tool are edits exactly like moving a slider, so all of them
-    /// travel through history together. The value lives in `DocumentState.swift`
-    /// and the stacks live in `DocumentSession.swift`; the editor keeps the
-    /// timer, guards and the work of applying a restored state.
+    /// travel through history together. The value lives in StudioCore's
+    /// `DocumentState` and the stacks live in `DocumentSession.swift`; the
+    /// editor keeps the timer, guards and the work of applying a restored state.
     private var session = DocumentSession()
     private var coalesceTask: Task<Void, Never>?
 
@@ -328,7 +334,8 @@ final class EditorModel: ObservableObject {
     private var currentState: DocumentState {
         DocumentState(adjustments: adjustments, healSpots: healSpots,
                       stickers: stickers, aiEdits: aiEdits, analysis: analysis,
-                      crop: appliedCrop, orientation: documentOrientation,
+                      crop: appliedCrop.map(StudioRect.init),
+                      orientation: documentOrientation,
                       selectedFaceIndex: selectedFaceIndex)
     }
 
@@ -389,7 +396,7 @@ final class EditorModel: ObservableObject {
     /// on screen. A crop change also has to re-read the pixels, which happens
     /// off the main actor without touching the history stack.
     private func restore(_ state: DocumentState) {
-        let cropChanged = state.crop != appliedCrop
+        let cropChanged = state.crop != appliedCrop.map(StudioRect.init)
         let orientationChanged = state.orientation != documentOrientation
         let selectionChanged = state.selectedFaceIndex != selectedFaceIndex
         adjustments = state.adjustments
@@ -405,7 +412,7 @@ final class EditorModel: ObservableObject {
         }
         updateCleanState()
         guard cropChanged || orientationChanged else { return }
-        appliedCrop = state.crop
+        appliedCrop = state.crop?.cgRect
         documentOrientation = state.orientation
         cropAspect = .free
         cropDraft = CropGeometry.full
@@ -724,10 +731,11 @@ final class EditorModel: ObservableObject {
     private var isLoadingState = false
     private var sourceColorSpace: CGColorSpace?
     private var sourceMetadata: [CFString: Any] = [:]
+    private var sourceXMP: CGImageMetadata?
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
-    private var exportJob: Task<ExportService.Outcome, Never>?
+    private var exportJob: Task<RenderError?, Never>?
     /// Bumped per export so tile reports that arrive after the job finished
     /// cannot repaint "Saved" as "{n}/{m} upscaling" again.
     private var exportGeneration = 0
@@ -976,7 +984,7 @@ final class EditorModel: ObservableObject {
 
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
-        let crop = project?.crop
+        let crop = project?.crop?.cgRect
         let orientation = project?.orientation ?? .identity
 
         loadTask = Task { [weak self] in
@@ -1017,6 +1025,7 @@ final class EditorModel: ObservableObject {
         masksPreview = result.masksPreview
         sourceColorSpace = result.colorSpace
         sourceMetadata = result.metadata
+        sourceXMP = result.xmp
         faces = result.faces
         faceCount = result.faces.count
         // Each accepted face gets its own palette, so switching the selection
@@ -1076,7 +1085,7 @@ final class EditorModel: ObservableObject {
         if let retouch = restoration.autoRetouchStrength { autoRetouchStrength = retouch }
         if let color = restoration.autoColorStrength { autoColorStrength = color }
         adjustments = restoration.state.adjustments
-        appliedCrop = restoration.state.crop
+        appliedCrop = restoration.state.crop?.cgRect
         documentOrientation = restoration.state.orientation
         // The stamps arrive with the project, so they are installed without the
         // change handling a user stamp needs.
@@ -1413,8 +1422,8 @@ final class EditorModel: ObservableObject {
         let clamped = CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y)))
         let visible = visibleHealSpots
         if let hit = visible.first(where: {
-            HealGeometry.shortSideDistance($0.spot.center, clamped, aspect: workingAspect)
-                <= $0.spot.radius
+            HealGeometry.shortSideDistance($0.spot.center.cgPoint, clamped, aspect: workingAspect)
+                <= CGFloat($0.spot.radius)
         }) {
             healSpots.remove(at: hit.index)
             statusToken = healSpots.isEmpty ? .healCleared : .healStampRemoved
@@ -1793,9 +1802,9 @@ final class EditorModel: ObservableObject {
     /// original photo's, so a crop keeps it attached.
     func moveSticker(_ id: UUID, to point: CGPoint) {
         guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
-        stickers[index].center = ArtGeometry.originalCenter(
+        stickers[index].center = StudioPoint(ArtGeometry.originalCenter(
             CGPoint(x: min(1, max(0, point.x)), y: min(1, max(0, point.y))),
-            crop: appliedCrop)
+            crop: appliedCrop))
     }
 
     func updateSelectedSticker(_ update: (inout Sticker) -> Void) {
@@ -1828,10 +1837,10 @@ final class EditorModel: ObservableObject {
         copy.id = UUID()
         // Offset in the working frame so the copy is visible beside the
         // original instead of sitting exactly under it.
-        let center = ArtGeometry.workingCenter(selected.center, crop: appliedCrop)
+        let center = ArtGeometry.workingCenter(selected.center.cgPoint, crop: appliedCrop)
         let shifted = CGPoint(x: min(0.98, max(0.02, center.x + 0.04)),
                               y: min(0.98, max(0.02, center.y + 0.04)))
-        copy.center = ArtGeometry.originalCenter(shifted, crop: appliedCrop)
+        copy.center = StudioPoint(ArtGeometry.originalCenter(shifted, crop: appliedCrop))
         stickers.append(copy)
         self.selectedSticker = copy.id
         statusToken = .stickerAdded(stickers.count)
@@ -2008,7 +2017,7 @@ final class EditorModel: ObservableObject {
         guard analysis.isEnabled,
               let face = AnalysisRenderer.primaryFace(faces, focus: focusFace) else { return [] }
         return analysis.primaryCallouts.compactMap { region in
-            let point = analysis.anchor(for: region)
+            let point = analysis.anchor(for: region)?.cgPoint
                 ?? AnalysisRenderer.anchor(region, face: face)
             return (region, point)
         }
@@ -2547,8 +2556,9 @@ final class EditorModel: ObservableObject {
         for spot in spots {
             let working = HealSpot(center: spot.center, radius: spot.radius)
             let covered = (existing + addedWorking).contains {
-                HealGeometry.shortSideDistance($0.center, working.center, aspect: workingAspect)
-                    <= max($0.radius, working.radius)
+                HealGeometry.shortSideDistance($0.center.cgPoint, working.center.cgPoint,
+                                               aspect: workingAspect)
+                    <= CGFloat(max($0.radius, working.radius))
             }
             guard !covered else { continue }
             addedWorking.append(working)
@@ -2956,7 +2966,7 @@ final class EditorModel: ObservableObject {
                       stickers: stickers,
                       aiEdits: aiEdits,
                       analysis: analysis,
-                      crop: appliedCrop,
+                      crop: appliedCrop.map(StudioRect.init),
                       orientation: documentOrientation,
                       selectedFaceIndex: selectedFaceIndex,
                       imageName: imageName,
@@ -3056,7 +3066,8 @@ final class EditorModel: ObservableObject {
                                   faces: faces,
                                   photoAspect: sourceAspect,
                                   colorSpace: sourceColorSpace,
-                                  metadata: sourceMetadata)
+                                  metadata: sourceMetadata,
+                                  xmp: sourceXMP)
 
         isExporting = true
         exportGeneration += 1
@@ -3072,10 +3083,22 @@ final class EditorModel: ObservableObject {
                 self.statusToken = .upscaling(done, total)
             }
         }
-        let job = Task.detached(priority: .userInitiated) {
-            ExportService.run(snapshot, source: source, to: url,
-                              protecting: protectedURL,
-                              progress: progressSink)
+        let job = Task.detached(priority: .userInitiated) { () -> RenderError? in
+            let renderer = MacDocumentRenderer()
+            let report: (RenderProgress) -> Void = { event in
+                guard event.stage == .upscaling else { return }
+                progressSink(event.completed, event.total)
+            }
+            do {
+                _ = try renderer.renderAndWrite(snapshot, source: source, to: url,
+                                                protecting: protectedURL,
+                                                progress: report)
+                return nil
+            } catch let error as RenderError {
+                return error
+            } catch {
+                return .renderFailed
+            }
         }
         exportJob = job
         exportTask = Task { [weak self] in
@@ -3088,17 +3111,17 @@ final class EditorModel: ObservableObject {
             // failed or was cancelled.
             self.end(token)
             switch outcome {
-            case .saved:
+            case nil:
                 self.showExportSheet = false
                 self.statusToken = .saved(url.lastPathComponent)
                 // An exported copy is not a saved project: the edits still
                 // live only in this window, so the clean baseline must not move.
-            case .cancelled:
+            case .cancelled?:
                 self.statusToken = .exportCancelled
-            case .failed:
-                self.statusToken = .exportFailed
-            case .refusedSource:
+            case .sourceIsDestination?:
                 self.statusToken = .exportRefusedOriginal
+            default:
+                self.statusToken = .exportFailed
             }
         }
     }
@@ -3136,21 +3159,20 @@ final class EditorModel: ObservableObject {
     /// and by the crash-recovery copy, so the two can never drift apart.
     private func makeProject() -> RetouchProject? {
         guard let imageURL else { return nil }
-        return ProjectCodec.makeProject(ProjectInput(imageURL: imageURL,
-                                                     state: currentState,
-                                                     exportFormat: exportFormat.rawValue,
-                                                     exportQuality: exportQuality,
-                                                     exportLongEdge: exportLongEdge,
-                                                     autoRetouchStrength: autoRetouchStrength,
-                                                     autoColorStrength: autoColorStrength),
-                                        bookmarks: URLBookmarkStore())
+        return projectStore.makeProject(
+            ProjectInput(imageURL: imageURL,
+                         state: currentState,
+                         exportFormat: exportFormat.rawValue,
+                         exportQuality: exportQuality,
+                         exportLongEdge: exportLongEdge,
+                         autoRetouchStrength: autoRetouchStrength,
+                         autoColorStrength: autoColorStrength))
     }
 
     private func writeProject(to url: URL) {
         guard let project = makeProject() else { return }
         do {
-            try ProjectCodec.encode(project, context: projectWriteContext)
-                .write(to: url, options: .atomic)
+            try projectStore.write(project, context: projectWriteContext, to: url)
             projectURL = url
             recents.add(url, isProject: true)
             // The edit is now persisted, so the discard prompt has nothing to
@@ -3183,7 +3205,7 @@ final class EditorModel: ObservableObject {
         guard confirmDiscardIfNeeded() else { return }
         offeredRecovery = true
         do {
-            let file = try ProjectCodec.read(Data(contentsOf: url))
+            let file = try projectStore.read(at: url)
             let project = file.project
             var source = resolveProjectImage(project, projectURL: url)
             if source == nil { source = locatePhoto(for: project) }
@@ -3212,9 +3234,7 @@ final class EditorModel: ObservableObject {
     /// a file sitting next to the project covers a moved folder. `nil` means
     /// the owner has to point at it.
     func resolveProjectImage(_ project: RetouchProject, projectURL: URL?) -> URL? {
-        ProjectSourceResolver(sources: FileProjectSourceAccess(),
-                              bookmarks: URLBookmarkStore())
-            .resolve(project, projectURL: projectURL)
+        projectStore.resolveSource(project, projectURL: projectURL)
     }
 
     private func bookmark(for url: URL) -> Data? {
@@ -3238,8 +3258,7 @@ final class EditorModel: ObservableObject {
     private func rewriteProject(at url: URL) {
         guard let project = makeProject() else { return }
         do {
-            try ProjectCodec.encode(project, context: projectWriteContext)
-                .write(to: url, options: .atomic)
+            try projectStore.write(project, context: projectWriteContext, to: url)
         } catch {
             // The photo still opens; only the next launch will ask again.
         }
@@ -3415,7 +3434,7 @@ final class EditorModel: ObservableObject {
 
         guard let result = processor.load(from: url,
                                           previewMaxDimension: previewMaxDimension,
-                                          crop: fileSnapshot.crop,
+                                          crop: fileSnapshot.crop?.cgRect,
                                           orientation: fileSnapshot.orientation) else {
             return .failed
         }
@@ -3426,9 +3445,16 @@ final class EditorModel: ObservableObject {
                                   faces: result.faces,
                                   photoAspect: fileAspect,
                                   colorSpace: result.colorSpace,
-                                  metadata: result.metadata)
+                                  metadata: result.metadata,
+                                  xmp: result.xmp)
         fileSnapshot = planner.fitUpscale(fileSnapshot, to: result.pixelSize)
-        guard let rendered = try? ExportService.renderFinal(fileSnapshot, source: source) else {
+        let renderer = MacDocumentRenderer()
+        let rendered: RenderedExport
+        do {
+            rendered = try renderer.render(fileSnapshot, source: source, progress: nil)
+        } catch RenderError.cancelled {
+            return .cancelled
+        } catch {
             return .failed
         }
         if Task.isCancelled { return .cancelled }
@@ -3438,15 +3464,21 @@ final class EditorModel: ObservableObject {
         // The hook and the write are the last two steps, so a cancellation that
         // lands here leaves no file at all rather than a truncated one.
         if Task.isCancelled { return .cancelled }
-        let saved = writeResult?(out) ?? ExportService.write(
-            rendered, snapshot: fileSnapshot, to: out,
-            colorSpace: fileSnapshot.aiUpscale
-                ? ExportUpscale.workingColorSpace
-                : result.colorSpace,
-            metadata: result.metadata,
-            protecting: url)
-        // A file that produced no export is a failure, not a skipped crop.
-        guard saved else { return .failed }
+        // The test hook answers only the files it names; `nil` still reaches the
+        // real writer.
+        if let forced = writeResult?(out) {
+            // A file that produced no export is a failure, not a skipped crop.
+            guard forced else { return .failed }
+            return .exported(skippedCrop: skippedCrop)
+        }
+        do {
+            _ = try renderer.write(rendered, request: fileSnapshot,
+                                   source: source, to: out, protecting: url)
+        } catch RenderError.cancelled {
+            return .cancelled
+        } catch {
+            return .failed
+        }
         return .exported(skippedCrop: skippedCrop)
     }
 

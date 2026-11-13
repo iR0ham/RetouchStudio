@@ -1,44 +1,19 @@
 import CoreGraphics
 import CoreImage
 import Foundation
+import StudioCore
 
-/// The frame a photo is shown in: quarter turns, an optional mirror and a
-/// straighten angle. It is baked into the pixels at load time, exactly like the
-/// camera's EXIF orientation, so every later stage — crop, face analysis,
-/// masks, healing coordinates — sees one plain, upright working image.
+/// The frame value itself (`DocumentOrientation`) lives in StudioCore, because
+/// a document carries it on every platform. Applying the turn to pixels and
+/// mapping stored coordinates through it are the host's job, and they stay
+/// here beside Core Graphics and Core Image.
 ///
 /// Because a change of orientation re-renders the source, the editor rewrites
 /// the stored edit coordinates from the old frame into the new one and lets
 /// undo restore both the coordinates and the orientation together.
-struct DocumentOrientation: Codable, Equatable {
-    /// Clockwise quarter turns, normalized to 0…3.
-    var quarterTurns: Int = 0
-    /// Mirror across the vertical centre line, applied after the rotation.
-    var flipped: Bool = false
-    /// Extra clockwise rotation in degrees, used by the straighten slider.
-    var angle: Double = 0
 
-    static let identity = DocumentOrientation()
-    static let maxStraighten: Double = 45
-
-    init() {}
-
-    init(quarterTurns: Int = 0, flipped: Bool = false, angle: Double = 0) {
-        self.quarterTurns = ((quarterTurns % 4) + 4) % 4
-        self.flipped = flipped
-        self.angle = angle
-    }
-
-    var isIdentity: Bool {
-        quarterTurns == 0 && !flipped && abs(angle) < 0.0001
-    }
-
-    /// Total clockwise rotation of the frame, mirror aside. Used when the turn
-    /// has to be applied to a layer rather than to stored coordinates.
-    var rotationDegrees: Double { Double(quarterTurns) * 90 + angle }
-
-    /// Size of the frame after the quarter turns. Straighten keeps the size and
-    /// trims the corners instead.
+extension DocumentOrientation {
+    /// Size of the frame after the quarter turns, in host pixels.
     func outputSize(base: CGSize) -> CGSize {
         quarterTurns % 2 == 0 ? base : CGSize(width: base.height, height: base.width)
     }
@@ -161,56 +136,17 @@ struct DocumentOrientation: Codable, Equatable {
                       height: (maxY - minY) / out.height)
     }
 
-    // MARK: - Composition
-
-    /// `second` applied on top of `first`, in the frame `first` produces.
-    static func compose(_ second: DocumentOrientation, over first: DocumentOrientation)
-        -> DocumentOrientation {
-        if first.flipped {
-            return DocumentOrientation(quarterTurns: first.quarterTurns - second.quarterTurns,
-                                       flipped: !second.flipped,
-                                       angle: first.angle - second.angle)
-        }
-        return DocumentOrientation(quarterTurns: first.quarterTurns + second.quarterTurns,
-                                   flipped: second.flipped,
-                                   angle: first.angle + second.angle)
+    /// The document-value overloads: a stored point, rectangle or short-side
+    /// fraction is portable, so the caller does not convert by hand.
+    func mapPoint(_ point: StudioPoint, base: CGSize) -> StudioPoint {
+        StudioPoint(mapPoint(point.cgPoint, base: base))
     }
 
-    /// The opposite turn, in the same mirrored family.
-    var inverted: DocumentOrientation {
-        // A mirror combined with a rotation is itself a reflection, so it is
-        // its own inverse.
-        flipped ? self : DocumentOrientation(quarterTurns: -quarterTurns, angle: -angle)
+    func mapRect(_ rect: StudioRect, base: CGSize) -> StudioRect {
+        StudioRect(mapRect(rect.cgRect, base: base))
     }
 
-    func rotatedClockwise() -> DocumentOrientation {
-        DocumentOrientation.compose(DocumentOrientation(quarterTurns: 1), over: self)
-    }
-
-    func rotatedCounterClockwise() -> DocumentOrientation {
-        DocumentOrientation.compose(DocumentOrientation(quarterTurns: -1), over: self)
-    }
-
-    func flippedHorizontally() -> DocumentOrientation {
-        DocumentOrientation.compose(DocumentOrientation(flipped: true), over: self)
-    }
-
-    /// Sets the straighten angle while keeping the quarter turns and mirror.
-    /// A mirrored frame reads its angle through the mirror, so the stored
-    /// delta changes sign there.
-    func straightened(to target: Double) -> DocumentOrientation {
-        let delta = flipped ? (angle - target) : (target - angle)
-        return DocumentOrientation.compose(DocumentOrientation(angle: delta), over: self)
-    }
-}
-
-extension DocumentOrientation {
-    /// Old projects predate orientation entirely; every key is optional so
-    /// they open unchanged.
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        quarterTurns = ((try c.decodeIfPresent(Int.self, forKey: .quarterTurns) ?? 0) % 4 + 4) % 4
-        flipped = try c.decodeIfPresent(Bool.self, forKey: .flipped) ?? false
-        angle = try c.decodeIfPresent(Double.self, forKey: .angle) ?? 0
+    func mapShortSideFraction(_ fraction: Double, base: CGSize) -> Double {
+        Double(mapShortSideFraction(CGFloat(fraction), base: base))
     }
 }

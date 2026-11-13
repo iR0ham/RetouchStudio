@@ -2,34 +2,30 @@ import CoreGraphics
 import Foundation
 import StudioCore
 
-/// The shapes the art tool can stamp on a portrait. Each one is drawn
-/// procedurally by `ArtRenderer`, so there is no image asset to ship and every
-/// sticker stays sharp at export size.
-enum StickerKind: String, CaseIterable, Identifiable, Codable {
-    case star, heart, sparkle, flower, butterfly, lightning
+/// The sticker value (`Sticker`, `StickerKind`) lives in StudioCore, because a
+/// document carries it on every platform. The title is localised text, so it
+/// belongs to this app; the drawing lives in `ArtRenderer`.
 
-    var id: String { rawValue }
-
+extension StickerKind {
     var title: String { L10n.current.stickerKindTitle(self) }
 }
 
-/// One placed sticker. Coordinates follow the healing brush exactly: the center
-/// is normalized against the *original* photo with a top-left origin and the
-/// size is a fraction of that photo's short side, so a crop keeps the sticker on
-/// the spot it was placed on and an export scales it with the pixels.
-struct Sticker: Codable, Equatable, Identifiable {
-    var id: UUID = UUID()
-    var kind: StickerKind = .star
-    var center: CGPoint
-    var size: Double            // fraction of the short side
-    var rotation: Double = 0    // degrees, clockwise
-    var opacity: Double = 1     // 0...1
-    var color: MakeupColor = Sticker.defaultColor
-
-    static let defaultColor = MakeupColor(hue: 45, saturation: 0.80, value: 1.0)
-    static let defaultSize: Double = 0.14
+/// Convenience for the canvas, which works in CoreGraphics points. The stored
+/// value stays portable and exact (`CGFloat` is 64-bit on every supported
+/// architecture).
+extension Sticker {
+    init(id: UUID = UUID(), kind: StickerKind = .star, center: CGPoint, size: Double,
+         rotation: Double = 0, opacity: Double = 1,
+         color: MakeupColor = Sticker.defaultColor) {
+        self.init(id: id, kind: kind, center: StudioPoint(center), size: size,
+                  rotation: rotation, opacity: opacity, color: color)
+    }
 }
 
+/// Coordinates follow the healing brush exactly: the center is normalized
+/// against the *original* photo with a top-left origin and the size is a
+/// fraction of that photo's short side, so a crop keeps the sticker on the spot
+/// it was placed on and an export scales it with the pixels.
 enum ArtGeometry {
 
     /// A sticker's size is a fraction of the photo's short *pixel* side, so it
@@ -71,7 +67,7 @@ enum ArtGeometry {
                         aspect: CGFloat = 1) -> [(index: Int, sticker: Sticker)] {
         stickers.enumerated().map { offset, sticker in
             var mapped = sticker
-            mapped.center = workingCenter(sticker.center, crop: crop)
+            mapped.center = StudioPoint(workingCenter(sticker.center.cgPoint, crop: crop))
             mapped.size = workingSize(sticker.size, crop: crop, aspect: aspect)
             return (offset, mapped)
         }

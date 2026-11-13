@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import StudioCore
 
 /// The Quick Edit presets. Each one is a sentence the model understands and a
 /// promise about what may change: only the selected region, only through the

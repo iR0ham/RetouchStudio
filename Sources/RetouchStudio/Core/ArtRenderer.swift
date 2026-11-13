@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import CoreImage
 import Foundation
+import StudioCore
 
 /// Draws the art tool's stickers. Everything is procedural Core Graphics: no
 /// bundled assets, no downloads, and the same path is used for the canvas

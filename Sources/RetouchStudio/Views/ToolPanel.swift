@@ -1,4 +1,5 @@
 import SwiftUI
+import StudioCore
 
 /// The column at the leading edge of the canvas, mirroring the reference's
 /// stacked cards: whatever the current tool needs on the canvas first, then the
