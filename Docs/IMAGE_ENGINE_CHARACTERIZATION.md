@@ -345,5 +345,5 @@ second time. The regression covers a JPEG round trip only; PNG, TIFF and HEIC
 XMP preservation is **NOT VERIFIED**.
 
 These changes do not characterize GPU-versus-CPU rendering, RAW decoding, or
-any Windows/Linux renderer. There is no Windows renderer in this repository
-yet.
+any Windows/Linux renderer. The light Windows renderer in `Windows/` (crop,
+orientation and the nine global adjustments) is not characterized here.

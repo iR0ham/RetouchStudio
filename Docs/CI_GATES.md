@@ -5,15 +5,16 @@ required, strict, and enforced for administrators; force pushes and branch
 deletion are disabled.
 **Actions:** the workflows run `actions/checkout@v7`,
 `actions/upload-artifact@v7` and `actions/download-artifact@v8` on the Node 24
-runtime, so the deprecated Node.js 20 notices are gone. A fourth job,
-`Windows StudioCore`, runs on `windows-2025`. Both workflows were installed on
+runtime, so the deprecated Node.js 20 notices are gone. Two further jobs,
+`Windows StudioCore` and `Windows App`, run on `windows-2025` and are not
+required. Both workflows were installed on
 2026-11-13 after the GitHub token gained the `workflow` scope; the history is
 under [Action runtimes and versions](#action-runtimes-and-versions).
 **Date:** 2026-11-13
 **Workflows:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml),
 [`.github/workflows/release.yml`](../.github/workflows/release.yml)
 
-The repository workflow is named `CI`. It runs four jobs and each job reports a
+The repository workflow is named `CI`. It runs five jobs and each job reports a
 status check under its own name. The first three are the required merge checks:
 
 | Check | Runner | Command |
@@ -22,6 +23,7 @@ status check under its own name. The first three are the required merge checks:
 | `Platform-neutral Conformance` | `ubuntu-24.04` (x64) | `./Tests/Conformance/run-conformance.sh` |
 | `macOS Integration` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` and `RETOUCH_ARCH=arm64 ./Tests/run.sh` |
 | `Windows StudioCore` (not required; green on 2026-11-13) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
+| `Windows App` (not required; green on 2026-11-13) | `windows-2025` (x64) | `pwsh ./Tools/build-windows.ps1` |
 
 ## What each check proves
 
@@ -148,7 +150,7 @@ and types, builds the module and its tests with a native Windows Swift
 toolchain, runs the same `StudioCoreTests`, builds the StudioCore C ABI static
 library and runs the C ABI test. It proves only that the shared module is
 portable — it says nothing about a Windows renderer, UI, installer or
-application, none of which exists yet.
+application.
 
 `windows-core` in `ci.yml` installs Swift 6.4.2 with
 `compnerd/gha-setup-swift@v0.5.1` on `windows-2025`, runs that script, then runs
@@ -161,6 +163,24 @@ recorded under [Verified runs](#verified-runs).
 The Windows gap and the intended implementation are analysed in
 [`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md).
 
+## Windows application job
+
+`windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
+`windows-2025` and runs `Tools/build-windows.ps1`, which builds the
+Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
+`.def` export list, publishes the WPF host self-contained for x64, runs the 55
+headless host checks against the real DLL and the real WIC codec, and starts the
+published app until the loaded window writes its own marker file. On failure it
+uploads the published folder (`windows-app-publish`), so a broken build can be
+inspected. The job is not a required check: it is a light editor, and a required
+Windows context would block `main` on a runner image that is still proving
+itself.
+
+The application lives in `Windows/` and is described in
+[`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
+one operating system, one renderer, no pixel-parity claim: the macOS Core Image
+pipeline is not reproduced stage for stage.
+
 ## Verified runs
 
 Read from the GitHub Actions API, not simulated locally.
@@ -169,6 +189,7 @@ Read from the GitHub Actions API, not simulated locally.
 |---|---|---|---|
 | 2026-11-13 | `eba8075` (PR #13, push and pull request) | `CI` | all four jobs green |
 | 2026-11-13 | `260cb41` (merge of PR #13, push to `main`) | `CI` | all four jobs green; no Node deprecation line in any job log |
+| 2026-11-13 | `28f8462` (PR #14, push and pull request) | `CI` | five jobs green: three required macOS contexts, `Windows StudioCore` and `Windows App` |
 
 PR #13 was merged with a normal merge commit after every required context and
 the non-required `Windows StudioCore` job reported success on the final head.
@@ -210,8 +231,45 @@ fixed on the branch:
    call site.
 
 This proves the shared module, its C ABI and the conformance fixtures work with
-a native Windows Swift toolchain. It does not prove any Windows renderer, UI,
-installer or application; none exists.
+a native Windows Swift toolchain. It says nothing about the host application;
+that is the next job.
+
+### Windows App run (2026-11-13, PR #14)
+
+Run `43439843389` on `28f8462`, job `132239473907` (`windows-2025`), succeeded
+and the log ends with:
+
+```
+-> building studioscore_core.dll
+-> checking the DLL export table
+   all 13 exports present
+-> collecting the Swift runtime
+   copied 142 runtime DLLs
+-> publishing the WPF host (win-x64, self-contained)
+-> running the Windows host tests
+WINDOWS HOST TESTS: PASS (55 checks)
+-> smoke-running the published app
+   the published app loaded its window: 'Retouch Studio' (native handle 262482)
+WINDOWS APP BUILD: PASS
+```
+
+The three required macOS contexts reported success on the same head. What is
+now proven: the StudioCore C ABI links into a real DLL on Windows, the WPF host
+publishes self-contained for x64, its 55 checks pass against the real DLL and
+WIC, and the published executable reaches a loaded window. What is still
+**NOT VERIFIED**: pixel parity with macOS, HEIC, 16-bit output, metadata, an
+installer, a zip release, AI tools and behaviour on a real desktop session.
+
+The first runs of this job found real faults rather than infra noise: a host
+test asserted the wrong undo rule (an uncommitted edit is already undoable in
+`DocumentHistory`); the smoke check polled `MainWindowHandle`, which a hosted
+session does not always expose, and was replaced by a marker written from the
+loaded window; and a WPF binding then threw
+`Cannot find non-neutral culture related to 'en-us'` on first layout because
+`InvariantGlobalization` was on. All three were fixed on the branch. A later
+`Windows StudioCore` execution on the same head failed in the Swift toolchain
+installer with exit code 12006 before any check ran; the job was re-run and is
+recorded above as green.
 
 ## Release pipeline
 
@@ -279,7 +337,9 @@ The macOS jobs prove the module boundary, the conformance fixtures and the
 macOS suites on the runner images named above. They say nothing about rendering
 parity, Vision, AI runtime or UI behavior on any other platform. `Windows
 StudioCore` proves only that `StudioCore` compiles and passes its own tests with
-a Windows toolchain; it is not a Windows application.
+a Windows toolchain. `Windows App` proves that the light editor in `Windows/`
+builds and opens a window on `windows-2025`; it does not prove macOS parity,
+packaging or a shipped Windows product.
 
 Linux is not implemented. It remains on the long-term roadmap and starts only
 after a Windows release candidate is verified; the repository ships no Linux

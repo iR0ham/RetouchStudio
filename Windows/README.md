@@ -98,6 +98,33 @@ choice to revisit if the Windows host grows past a light editor.
 ## Verification
 
 The `Windows App` CI job (`.github/workflows/ci.yml`) runs this build, the host
-tests and the window smoke check on `windows-2025`. See
-[`Docs/CI_GATES.md`](../Docs/CI_GATES.md) for the recorded run; this document
-makes no claim about a commit the job has not covered.
+tests and the window smoke check on `windows-2025`. It first ran green on
+`28f8462` (PR #14) on 2026-11-13; the step log ends with:
+
+```
+-> building studioscore_core.dll
+-> checking the DLL export table
+   all 13 exports present
+-> collecting the Swift runtime
+   copied 142 runtime DLLs
+-> publishing the WPF host (win-x64, self-contained)
+-> running the Windows host tests
+WINDOWS HOST TESTS: PASS (55 checks)
+-> smoke-running the published app
+   the published app loaded its window: 'Retouch Studio' (native handle 262482)
+WINDOWS APP BUILD: PASS
+```
+
+The tests run against the real `studioscore_core.dll` and the real WIC codec:
+v4 project round trips with an unknown key preserved, the shared history rules,
+crop/orientation geometry on real pixels, adjustment response, export-plan
+decisions, encode-decode and source protection. The smoke check starts the
+published, self-contained folder and waits for the loaded window to write its
+own marker, because a hosted CI session does not reliably expose a main-window
+handle. The first runs of this job exposed a wrong assertion about the shared
+undo rule and a missing culture lookup that would have crashed the window on
+first layout; both were fixed on the branch before this run.
+
+What this does not prove: pixel parity with the macOS renderer, HEIC, 16-bit
+output, metadata, packaging, an installer, or anything on a real desktop session.
+The run is also recorded in [`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).

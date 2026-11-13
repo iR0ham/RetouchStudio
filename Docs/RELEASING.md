@@ -184,6 +184,6 @@ and performs no request. When a feed is ready:
 1. Ad-hoc signature, no notarization — Gatekeeper asks once on other Macs.
 2. No clean-machine install has been tested on a second physical Mac.
 3. The current build offers no AI runtime download. A future approved protocol-v2 runtime would be an optional ~390 MB Apple-silicon download (about 1.3 GB unpacked); models add tens of megabytes to several gigabytes on top. Intel has no AI.
-4. Windows: the shared StudioCore module builds and passes its tests on the native `windows-2025` CI runner, but there is no Windows application, renderer, UI or installer in this codebase. Linux is unimplemented and stays on the long-term roadmap after a verified Windows release candidate.
+4. Windows: the shared StudioCore module builds and passes its tests on the native `windows-2025` CI runner, and a light C#/WPF editor in `Windows/` builds and opens its window there, but there is no Windows installer, published artifact, AI support or macOS parity in this codebase. Linux is unimplemented and stays on the long-term roadmap after a verified Windows release candidate.
 5. The worker source lives outside this repository; a build from a fresh clone without it produces a light app whose AI tools report that the runtime is unavailable.
 6. Downloaded models range from tens of megabytes to several gigabytes under Application Support; removing the app and that folder is the documented uninstall.
