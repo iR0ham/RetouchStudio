@@ -84,8 +84,10 @@ internal static class Program
         model.SetAdjustment("exposure", 12.46);
         Check("a slider rounds to one decimal", model.Adjustment("exposure") == 12.5);
         Check("an edit makes the document dirty", session.IsDirty());
-        Check("a dirty document has no undo step yet",
-              !session.HistoryFlags().CanUndo);
+        // StudioCore counts the pending edit as one step back to the last
+        // committed state, so it is already undoable before the commit.
+        Check("an uncommitted edit is already undoable",
+              session.HistoryFlags().CanUndo);
 
         session.Commit();
         Check("a committed edit creates an undo step", session.HistoryFlags().CanUndo);
