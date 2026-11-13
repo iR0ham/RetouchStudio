@@ -109,6 +109,23 @@ The recommended split keeps the shared rules in one place and lets each host
 own pixels, which is exactly the existing macOS seam (`MacDocumentRenderer` is
 the only Core Image implementation of `DocumentRenderPipeline`).
 
+### W2 stack deviation (2026-11-13)
+
+The shell is **C# on WPF**, not WinUI 3. The split above still holds — C#/.NET
+host, StudioCore behind the C ABI — and only the UI framework changed:
+
+- WPF ships inside the .NET SDK. WinUI 3 would add the Windows App SDK
+  bootstrapper, an MSIX or unpackaged-deployment story and a NuGet dependency
+  chain, none of which a free, zipped, unsigned build wants.
+- The host needs a window, a toolbar, a slider panel and an image surface. WPF
+  covers all four without a package manager, and `BitmapSource.Create` accepts
+  the BGRA8 buffer the pipeline already produces.
+- WinUI 3 remains the better choice if the Windows host grows into a
+  macOS-parity editor; that is a UI rewrite, not a core one.
+
+The W2 host lives in `Windows/` and is described in
+[`../Windows/README.md`](../Windows/README.md).
+
 **Do not start by implementing the draft image-engine ABI**
 (`Tests/Conformance/ABI/studioscore_image_engine.h`). It would force a Windows
 Core Image equivalent in Swift. A smaller ABI is enough:

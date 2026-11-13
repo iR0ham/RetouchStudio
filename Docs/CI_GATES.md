@@ -168,6 +168,15 @@ Read from the GitHub Actions API, not simulated locally.
 | Date | Ref | Workflow | Result |
 |---|---|---|---|
 | 2026-11-13 | `eba8075` (PR #13, push and pull request) | `CI` | all four jobs green |
+| 2026-11-13 | `260cb41` (merge of PR #13, push to `main`) | `CI` | all four jobs green; no Node deprecation line in any job log |
+
+PR #13 was merged with a normal merge commit after every required context and
+the non-required `Windows StudioCore` job reported success on the final head.
+The post-merge `main` run `43430686940` had jobs `131903102518` (Windows
+StudioCore), `131903102840` (Platform-neutral Conformance), `131903102866`
+(StudioCore Boundary) and `131903102899` (macOS Integration), all completed with
+`success`. The four logs contained zero `Node.js … is deprecated` lines, which
+is the acceptance criterion stated above.
 
 The `Windows StudioCore` step log on `windows-2025` (Windows Server 2025,
 10.0.26100, Actions Runner 2.338.2) ends with:
