@@ -123,6 +123,55 @@ Release notes should include:
 - the SHA256 of every archive;
 - a link to `PRIVACY_AUDIT.md` for the network claim.
 
+## 6.5 Signed update feed (prepared, not published)
+
+No feed is published for 1.0.0 and the shipped `Info.plist` contains no
+`RSUpdateFeedURL*` key, so the About window reports that no feed is configured
+and performs no request. When a feed is ready:
+
+1. Build the release, then the zip the manifest will name:
+   `ditto -c -k --keepParent "Retouch Studio.app" RetouchStudio-<version>-<arch>.zip`.
+2. Compute the size and SHA-256 of that zip and write one `UpdateArtifact` per
+   platform/architecture (`platform` `macos`, `architecture` `arm64`, `x86_64`
+   or `universal`, `format` `zip`, HTTPS `url`).
+3. Sign the descriptor with the release private key kept outside the repository
+   (`~/.config/retouchstudio/update-signing-key.txt`, base64 of 32 raw bytes,
+   mode 600). The descriptor function and the key check ship in the app, so a
+   signing helper can link `StudioCore` and use the same code path:
+
+   ```swift
+   import CryptoKit
+   import Foundation
+   import StudioCore
+
+   let artifact = UpdateArtifact(platform: "macos", architecture: "arm64",
+                                 url: "https://…/RetouchStudio-1.1.0-arm64.zip",
+                                 size: 12345678, sha256: "<64 hex>",
+                                 signature: "")
+   let release = UpdateRelease(version: "1.1.0", build: 2,
+                               minimumSystemVersion: "14.0",
+                               artifacts: [artifact])
+   let descriptor = UpdatePolicy.descriptor(release: release, artifact: artifact)
+   let raw = Data(base64Encoded: try String(contentsOfFile: "…/update-signing-key.txt",
+                                            encoding: .utf8)
+                   .trimmingCharacters(in: .whitespacesAndNewlines))!
+   let key = try Curve25519.Signing.PrivateKey(rawRepresentation: raw)
+   let signature = try key.signature(for: Data(descriptor.utf8))
+       .base64EncodedString()
+   ```
+
+   Put the signature into the manifest's `signature` field. A manifest whose
+   signature was produced over a different URL, hash, size or version is refused
+   by every client.
+4. Host the manifest at an HTTPS URL no larger than 1 MB and set it in a build's
+   `Info.plist` (`RSUpdateFeedURL` or `RSUpdateFeedURLs`). Changing the feed
+   later needs a new signed build, but no code change.
+5. Test on a second machine: point it at an older build, confirm the About
+   window offers the release, install, relaunch, and confirm the version. Also
+   interrupt the download and quit the app mid-swap to exercise the rollback and
+   journal recovery described in `Docs/UPDATE_SYSTEM.md`. These live checks have
+   **not** been performed yet.
+
 ## 7. Post-publish checks
 
 - Download the DMG from the release page, verify its checksum, mount it, drag the app to Applications and launch it from a different account or folder. Repeat once with the zip.

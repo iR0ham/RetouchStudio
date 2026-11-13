@@ -44,7 +44,7 @@ The screenshots use an AI-generated fictional portrait. No personal photo is inc
 - To run a release build: nothing else. The app is self-contained.
 - To build from source: Xcode Command Line Tools (`xcode-select --install`). Xcode itself is not required; `build.sh` compiles directly with `swiftc`.
 
-Windows and Linux are not supported: the interface is built on SwiftUI/AppKit and the engine on Core Image and Vision, none of which exist off macOS.
+Windows is the planned second platform: the shared `StudioCore` module (document model, project codec, render contract and update policy) is Foundation-only and has a Windows portability runner, but there is no Windows renderer, UI or installer yet, and no native Windows test run has happened. Linux is not a product target; the Linux test script for `StudioCore` is supplementary only.
 
 ## Run a release build
 
@@ -132,7 +132,14 @@ At runtime the app prefers a helper packaged inside the app, then a downloaded p
 - `RuntimeProcessTests.swift` — helper ownership, leases, runtime transactions and process lifecycle.
 - `RuntimeV2Tests.swift` — the protocol-v2 registry, lock identity and recovery ordering.
 
-`RETOUCH_ARCH=x86_64 ./Tests/run.sh` runs the same suites against an x86_64 build (through Rosetta on Apple silicon). The worker has its own Python suite (`unittest`); see `Docs/AI_RUNTIME.md`.
+`RETOUCH_ARCH=x86_64 ./Tests/run.sh` runs the same suites against an x86_64 build (through Rosetta on Apple silicon). Two opt-in harnesses sit beside it:
+
+```bash
+./Tests/run-corpus.sh        # golden image corpus, 376 checks, verifies baselines.json is unchanged
+./Tests/run-benchmarks.sh    # deterministic 12/24/48 MP timings and memory; writes build/benchmarks/latest.json
+```
+
+The worker has its own Python suite (`unittest`); see `Docs/AI_RUNTIME.md`.
 
 ## Privacy
 
@@ -147,15 +154,16 @@ The measured inventory — frameworks, sockets, download consent and the runtime
 ## Project layout
 
 ```
+Sources/StudioCore/     portable Foundation-only core: documents, codec, render contract, update rules
 Sources/RetouchStudio/
   App.swift            app entry point and menus
-  Core/                rendering engines, analysis, export, AI helper client
+  Core/                rendering engines, analysis, export, AI helper client, updater
   Models/              projects, settings, localisation, presets, model manager
   Views/               editor, inspector, tool panels, overlays, settings
 Resources/             Info.plist, app icon, Vazir fonts (OFL)
-Tests/                 engine and model suites plus run.sh harness
+Tests/                 engine, model, runtime and corpus suites, benchmarks, run.sh
 Tools/                 bundle-worker.sh (optional Python runtime), make-dmg.sh, make-runtime.sh
-Docs/                  AI runtime, privacy audit, technical audit, release notes
+Docs/                  AI runtime, privacy audit, technical audit, benchmarks, release notes
 build.sh               compile + assemble + sign + self-test
 ```
 
@@ -169,7 +177,11 @@ build.sh               compile + assemble + sign + self-test
 | [`Docs/TECHNICAL_AUDIT.md`](Docs/TECHNICAL_AUDIT.md) | Engine and UI audit findings |
 | [`Docs/STABILIZATION_PLAN.md`](Docs/STABILIZATION_PLAN.md) | Stabilization scope and acceptance criteria |
 | [`Docs/RELEASING.md`](Docs/RELEASING.md) | Versioning, signing, packaging and publishing checklist |
-| [`Docs/RELEASE_NOTES_1.0.0.md`](Docs/RELEASE_NOTES_1.0.0.md) | Draft release notes for the first public build |
+| [`Docs/UPDATE_SYSTEM.md`](Docs/UPDATE_SYSTEM.md) | Signed manifest, key handling, atomic swap and recovery; no public feed yet |
+| [`Docs/PERFORMANCE_BENCHMARKS.md`](Docs/PERFORMANCE_BENCHMARKS.md) | Measured load, preview, analysis, mask, export, batch and memory numbers |
+| [`Docs/GOLDEN_IMAGE_CORPUS.md`](Docs/GOLDEN_IMAGE_CORPUS.md) | The 12-fixture corpus, its baseline lock and provenance checks |
+| [`Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md`](Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md) | The portable/ macOS boundary and the Windows path |
+| [`Docs/RELEASE_NOTES_1.0.0.md`](Docs/RELEASE_NOTES_1.0.0.md) | Release notes for the first public build |
 
 ## License
 
