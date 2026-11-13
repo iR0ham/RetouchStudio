@@ -44,7 +44,7 @@
 - برای اجرای نسخهٔ آماده: هیچ چیز دیگری لازم نیست. اپ خودکفاست.
 - برای ساخت از سورس: Xcode Command Line Tools (`xcode-select --install`). خود Xcode لازم نیست؛ `build.sh` مستقیماً با `swiftc` کامپایل می‌کند.
 
-ویندوز و لینوکس پشتیبانی نمی‌شوند: رابط بر SwiftUI/AppKit و موتور پردازش بر Core Image و Vision ساخته شده که هیچ‌کدام بیرون از مک وجود ندارند.
+ویندوز سکوی دومِ برنامه است: ماژول مشترک `StudioCore` (مدل سند، کدک پروژه، قرارداد رندر و قواعد به‌روزرسانی) فقط به Foundation وابسته است و اجراکنندهٔ سازگاری ویندوز دارد، اما هنوز رندرر، رابط، نصب‌کننده یا اپلیکیشن ویندوز وجود ندارد و هیچ تست بومی ویندوز اجرا نشده است. لینوکس سکوی محصول نیست؛ اسکریپت تست لینوکس برای `StudioCore` فقط مکمل است.
 
 ## اجرای نسخهٔ آماده
 
@@ -132,7 +132,14 @@ RETOUCH_SKIP_WORKER=1 ./build.sh release             # فقط اپ، بدون د
 - `RuntimeProcessTests.swift` — مالکیت دستیار، lease، تراکنش runtime و چرخهٔ عمر فرایند.
 - `RuntimeV2Tests.swift` — رجیستری protocol-v2، هویت قفل و ترتیب بازیابی.
 
-`RETOUCH_ARCH=x86_64 ./Tests/run.sh` همان مجموعه‌ها را روی بیلد x86_64 (از طریق Rosetta روی Apple silicon) اجرا می‌کند. worker مجموعهٔ پایتونی خودش را دارد (`unittest`)؛ در [`Docs/AI_RUNTIME.md`](Docs/AI_RUNTIME.md) توضیح داده شده است.
+`RETOUCH_ARCH=x86_64 ./Tests/run.sh` همان مجموعه‌ها را روی بیلد x86_64 (از طریق Rosetta روی Apple silicon) اجرا می‌کند. دو هارنس اختیاری هم کنار آن هست:
+
+```bash
+./Tests/run-corpus.sh        # پیکرهٔ طلایی تصویر، ۳۷۶ بررسی، بدون تغییر در baselines.json
+./Tests/run-benchmarks.sh    # زمان و حافظهٔ قطعی روی ۱۲/۲۴/۴۸ مگاپیکسل؛ build/benchmarks/latest.json
+```
+
+worker مجموعهٔ پایتونی خودش را دارد (`unittest`)؛ در [`Docs/AI_RUNTIME.md`](Docs/AI_RUNTIME.md) توضیح داده شده است.
 
 ## حریم خصوصی
 
@@ -147,15 +154,16 @@ RETOUCH_SKIP_WORKER=1 ./build.sh release             # فقط اپ، بدون د
 ## ساختار پروژه
 
 ```
+Sources/StudioCore/     هستهٔ قابل‌حمل و فقط Foundation: سند، کدک، قرارداد رندر، قواعد به‌روزرسانی
 Sources/RetouchStudio/
   App.swift            نقطهٔ ورود و منوهای اپ
-  Core/                موتورهای رندر، تحلیل، خروجی، کلاینت دستیار AI
+  Core/                موتورهای رندر، تحلیل، خروجی، کلاینت دستیار AI، به‌روزرسان
   Models/              پروژه‌ها، تنظیمات، بومی‌سازی، پیش‌تنظیم‌ها، مدیر مدل
   Views/               ویرایشگر، بازرس، پنل ابزارها، لایه‌ها، تنظیمات
 Resources/             Info.plist، آیکن اپ، فونت‌های وزیر (OFL)
-Tests/                 مجموعه‌های موتور و مدل به‌همراه هارنس run.sh
+Tests/                 مجموعه‌های موتور، مدل، runtime و پیکره، بنچمارک‌ها، run.sh
 Tools/                 bundle-worker.sh (runtime اختیاری پایتون)، make-dmg.sh، make-runtime.sh
-Docs/                  runtime هوش مصنوعی، ممیزی حریم خصوصی، ممیزی فنی، یادداشت‌های انتشار
+Docs/                  runtime هوش مصنوعی، ممیزی حریم خصوصی، ممیزی فنی، بنچمارک‌ها، یادداشت‌های انتشار
 build.sh               کامپایل + بسته‌بندی + امضا + خودآزمون
 ```
 
@@ -169,6 +177,10 @@ build.sh               کامپایل + بسته‌بندی + امضا + خود�
 | [`Docs/TECHNICAL_AUDIT.md`](Docs/TECHNICAL_AUDIT.md) | یافته‌های ممیزی موتور و رابط |
 | [`Docs/STABILIZATION_PLAN.md`](Docs/STABILIZATION_PLAN.md) | دامنهٔ پایدارسازی و معیارهای پذیرش |
 | [`Docs/RELEASING.md`](Docs/RELEASING.md) | نسخه‌گذاری، امضا، بسته‌بندی و چک‌لیست انتشار |
+| [`Docs/UPDATE_SYSTEM.md`](Docs/UPDATE_SYSTEM.md) | مانیفست امضاشده، نگهداری کلید، جای‌گزینی اتمیک و بازیابی؛ هنوز فید عمومی ندارد |
+| [`Docs/PERFORMANCE_BENCHMARKS.md`](Docs/PERFORMANCE_BENCHMARKS.md) | اعداد اندازه‌گیری‌شدهٔ بارگذاری، پیش‌نمایش، تحلیل، ماسک، خروجی، دسته‌ای و حافظه |
+| [`Docs/GOLDEN_IMAGE_CORPUS.md`](Docs/GOLDEN_IMAGE_CORPUS.md) | پیکرهٔ ۱۲ فیکسچری، قفل baseline و بررسی اصالت |
+| [`Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md`](Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md) | مرز کد قابل‌حمل/مک و مسیر ویندوز |
 | [`Docs/RELEASE_NOTES_1.0.0.md`](Docs/RELEASE_NOTES_1.0.0.md) | یادداشت‌های انتشار نخستین نسخهٔ عمومی |
 
 ## مجوز

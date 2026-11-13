@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import CoreImage
+import ImageIO
 import SwiftUI
 import StudioCore
 import UniformTypeIdentifiers
@@ -730,6 +731,7 @@ final class EditorModel: ObservableObject {
     private var isLoadingState = false
     private var sourceColorSpace: CGColorSpace?
     private var sourceMetadata: [CFString: Any] = [:]
+    private var sourceXMP: CGImageMetadata?
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -1023,6 +1025,7 @@ final class EditorModel: ObservableObject {
         masksPreview = result.masksPreview
         sourceColorSpace = result.colorSpace
         sourceMetadata = result.metadata
+        sourceXMP = result.xmp
         faces = result.faces
         faceCount = result.faces.count
         // Each accepted face gets its own palette, so switching the selection
@@ -3063,7 +3066,8 @@ final class EditorModel: ObservableObject {
                                   faces: faces,
                                   photoAspect: sourceAspect,
                                   colorSpace: sourceColorSpace,
-                                  metadata: sourceMetadata)
+                                  metadata: sourceMetadata,
+                                  xmp: sourceXMP)
 
         isExporting = true
         exportGeneration += 1
@@ -3441,7 +3445,8 @@ final class EditorModel: ObservableObject {
                                   faces: result.faces,
                                   photoAspect: fileAspect,
                                   colorSpace: result.colorSpace,
-                                  metadata: result.metadata)
+                                  metadata: result.metadata,
+                                  xmp: result.xmp)
         fileSnapshot = planner.fitUpscale(fileSnapshot, to: result.pixelSize)
         let renderer = MacDocumentRenderer()
         let rendered: RenderedExport

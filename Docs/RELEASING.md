@@ -46,7 +46,7 @@ lipo -archs "Retouch Studio.app/Contents/MacOS/RetouchStudio"   # arm64 x86_64
 "Retouch Studio.app/Contents/MacOS/RetouchStudio" --selftest --out /tmp/rs-selftest
 ```
 
-The build runs the self-test natively and, on an Apple-silicon machine with Rosetta, again on the Intel slice (`build/selftest-intel/`). A failure in either stops the build. Use `RETOUCH_ARCH=arm64` or `RETOUCH_ARCH=x86_64` only for a deliberate single-architecture build.
+The build runs the self-test on the executable **inside the bundle** (not the loose `build/bin` copy) natively and, on an Apple-silicon machine with Rosetta, again on the Intel slice (`build/selftest-intel/`). A failure in either stops the build. `build.sh` finishes with `codesign --verify --deep --strict` and `Tools/validate-bundle.sh`, which checks the plist keys, the architecture set, the signature kind and the bundled helper layout; a validation failure stops the build. Use `RETOUCH_ARCH=arm64` or `RETOUCH_ARCH=x86_64` only for a deliberate single-architecture build.
 
 Check the bundle contents:
 
@@ -60,19 +60,25 @@ Model weights must not appear inside the bundle. They belong in `~/Library/Appli
 
 ## 5. Signing and notarization
 
-`build.sh` signs ad-hoc (`codesign --sign -`). That is enough for the build machine and for other Macs where the user approves the first launch, but it is **not** a public, warning-free distribution.
+Without a signing identity, `build.sh` signs ad-hoc (`codesign --force --sign -`). That is enough for the build machine and for other Macs where the user approves the first launch, but it is **not** a public, warning-free distribution. The build no longer treats a failed signature as a warning: `codesign` errors and `codesign --verify --deep --strict` failures stop the build.
 
-A notarized release requires an Apple Developer ID Application certificate and a `notarytool` submission; neither exists in this repository or on the current machine. The future flow is:
+`build.sh` is identity-aware for the future public build:
 
 ```bash
-codesign --force --deep --options runtime --timestamp \
-  --sign "Developer ID Application: <Name> (<TEAMID>)" "Retouch Studio.app"
-ditto -c -k --keepParent "Retouch Studio.app" RetouchStudio.zip
-xcrun notarytool submit RetouchStudio.zip --keychain-profile <profile> --wait
-xcrun stapler staple "Retouch Studio.app"
+RETOUCH_SIGN_IDENTITY="Developer ID Application: <Name> (<TEAMID>)" \
+RETOUCH_ENTITLEMENTS=Resources/RetouchStudio.entitlements \
+  ./build.sh release
 ```
 
-Until then, release notes must state that the build is ad-hoc signed, light (the current build offers no runtime download; a future approved runtime package would be a separate Apple-silicon download), and opened with **right-click → Open** on first launch.
+With an identity it signs Hardened Runtime (`--options runtime --timestamp`), applies the entitlements file (empty today: file access and the bundled helper need no exceptions), signs the nested Mach-O files under `Contents/Resources/Worker` first, then the bundle. `Tools/validate-bundle.sh` reports the resulting signature as ad-hoc or Developer ID.
+
+A notarized release requires an Apple Developer ID Application certificate and a `notarytool` keychain profile; neither exists in this repository or on the current machine, and no credential is stored in the repository. Once they exist, use `Tools/notarize.sh`, which refuses to run without `RETOUCH_NOTARY_PROFILE` and a Developer ID signature:
+
+```bash
+./Tools/notarize.sh "Retouch Studio.app"          # or a .dmg
+```
+
+It submits with `notarytool ... --wait`, staples and validates the result, and runs `spctl --assess`. Until then, release notes must state that the build is ad-hoc signed, light (the current build offers no runtime download; a future approved runtime package would be a separate Apple-silicon download), and opened with **right-click → Open** on first launch.
 
 ## 6. Package and publish
 
@@ -117,6 +123,55 @@ Release notes should include:
 - the SHA256 of every archive;
 - a link to `PRIVACY_AUDIT.md` for the network claim.
 
+## 6.5 Signed update feed (prepared, not published)
+
+No feed is published for 1.0.0 and the shipped `Info.plist` contains no
+`RSUpdateFeedURL*` key, so the About window reports that no feed is configured
+and performs no request. When a feed is ready:
+
+1. Build the release, then the zip the manifest will name:
+   `ditto -c -k --keepParent "Retouch Studio.app" RetouchStudio-<version>-<arch>.zip`.
+2. Compute the size and SHA-256 of that zip and write one `UpdateArtifact` per
+   platform/architecture (`platform` `macos`, `architecture` `arm64`, `x86_64`
+   or `universal`, `format` `zip`, HTTPS `url`).
+3. Sign the descriptor with the release private key kept outside the repository
+   (`~/.config/retouchstudio/update-signing-key.txt`, base64 of 32 raw bytes,
+   mode 600). The descriptor function and the key check ship in the app, so a
+   signing helper can link `StudioCore` and use the same code path:
+
+   ```swift
+   import CryptoKit
+   import Foundation
+   import StudioCore
+
+   let artifact = UpdateArtifact(platform: "macos", architecture: "arm64",
+                                 url: "https://…/RetouchStudio-1.1.0-arm64.zip",
+                                 size: 12345678, sha256: "<64 hex>",
+                                 signature: "")
+   let release = UpdateRelease(version: "1.1.0", build: 2,
+                               minimumSystemVersion: "14.0",
+                               artifacts: [artifact])
+   let descriptor = UpdatePolicy.descriptor(release: release, artifact: artifact)
+   let raw = Data(base64Encoded: try String(contentsOfFile: "…/update-signing-key.txt",
+                                            encoding: .utf8)
+                   .trimmingCharacters(in: .whitespacesAndNewlines))!
+   let key = try Curve25519.Signing.PrivateKey(rawRepresentation: raw)
+   let signature = try key.signature(for: Data(descriptor.utf8))
+       .base64EncodedString()
+   ```
+
+   Put the signature into the manifest's `signature` field. A manifest whose
+   signature was produced over a different URL, hash, size or version is refused
+   by every client.
+4. Host the manifest at an HTTPS URL no larger than 1 MB and set it in a build's
+   `Info.plist` (`RSUpdateFeedURL` or `RSUpdateFeedURLs`). Changing the feed
+   later needs a new signed build, but no code change.
+5. Test on a second machine: point it at an older build, confirm the About
+   window offers the release, install, relaunch, and confirm the version. Also
+   interrupt the download and quit the app mid-swap to exercise the rollback and
+   journal recovery described in `Docs/UPDATE_SYSTEM.md`. These live checks have
+   **not** been performed yet.
+
 ## 7. Post-publish checks
 
 - Download the DMG from the release page, verify its checksum, mount it, drag the app to Applications and launch it from a different account or folder. Repeat once with the zip.
@@ -129,6 +184,6 @@ Release notes should include:
 1. Ad-hoc signature, no notarization — Gatekeeper asks once on other Macs.
 2. No clean-machine install has been tested on a second physical Mac.
 3. The current build offers no AI runtime download. A future approved protocol-v2 runtime would be an optional ~390 MB Apple-silicon download (about 1.3 GB unpacked); models add tens of megabytes to several gigabytes on top. Intel has no AI.
-4. Windows and Linux are not supported by this codebase.
+4. Windows: only the shared StudioCore module has a Windows portability runner (`Tests/run-studiocore-windows.ps1`); there is no Windows application, renderer, UI or installer in this codebase. Linux is not a product target.
 5. The worker source lives outside this repository; a build from a fresh clone without it produces a light app whose AI tools report that the runtime is unavailable.
 6. Downloaded models range from tens of megabytes to several gigabytes under Application Support; removing the app and that folder is the documented uninstall.

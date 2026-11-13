@@ -749,6 +749,17 @@ class L10n {
         "Retouch Studio is a local-first portrait retoucher for macOS. It measures the photo first — skin, eyes, teeth, hair, light and framing — so automatic edits only move what the measurements justify, then puts twelve tools in your hands: skin, healing, reshape, eyes and teeth, makeup, colour and light, looks, crop, body, background, stickers and analysis. Every change is non-destructive: undo it, save the session as a .retouch project, or export at full quality."
     }
     var aboutVersion: String { "Version" }
+    var updateCheck: String { "Check for Updates" }
+    var updateChecking: String { "Checking for updates…" }
+    var updateUpToDate: String { "You have the newest version." }
+    var updateAvailable: String { "Version %@ is available." }
+    var updateIncompatible: String { "This update cannot be installed here: %@" }
+    var updateFailed: String { "The update check failed: %@" }
+    var updateFeedMissing: String { "This build has no update feed configured." }
+    var updateDownloading: String { "Downloading and verifying version %@…" }
+    var updateReady: String { "Version %@ is installed. Relaunch to use it." }
+    var updateInstall: String { "Download & Install" }
+    var updateRelaunch: String { "Relaunch" }
     var aboutDeveloper: String { "Developer" }
     var aboutDeveloperRole: String { "Role" }
     var aboutDeveloperRoleValue: String { "Design and development" }

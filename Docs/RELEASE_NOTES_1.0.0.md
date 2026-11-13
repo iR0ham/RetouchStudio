@@ -67,3 +67,29 @@ MIT. See `LICENSE` in the repository. The bundled Vazir typeface is under the SI
 - **The installer is disabled in the current build.** The runtime-download path added in `c32eb0b` remains in the code, but no official protocol-v2 package has been approved: `AIRuntime.package` is nil, Settings offers no runtime download, and no runtime transfer occurs. The `RetouchStudio-1.0.0-ai-runtime-arm64.zip` asset is a legacy archive; it is not treated as a compatible protocol-v2 package, and its compatibility has not been verified.
 - **The model consent sheet claim needs a correction.** The tagged text says the download sheet "lists every file, its size and its SHA256". Even at `d4e7d58` the sheet built its message from the file count, total size and licence (`ModelManagerView.swift` called `modelsDownloadBody(files:size:license:)`), not a per-file list or SHA256. The current build still shows count, total size and licence; the runtime sheet, when enabled, shows the archive name, size and a 16-character SHA256 prefix.
 - **No binary claim is made here.** This document makes no claim that a published 1.0.0 binary was built from a particular commit, contained the bundled helper, or fetched a runtime. The light-image checksums printed by the later build are not reproduced because this document cannot verify which of them, if any, were published as release assets. `README.md` and `Docs/RELEASING.md` describe the current build and packaging flow.
+
+## Current source state (2026-11-13, `macos-stabilization`)
+
+Additions since the paragraphs above, none of which changes the tagged history:
+
+- **Measured performance and memory.** `Tests/run-benchmarks.sh` records
+  deterministic 12/24/48 MP load, preview, analysis, mask, export and batch
+  timings plus resident and peak memory on this machine; results and the
+  methodology are in `Docs/PERFORMANCE_BENCHMARKS.md`. Numbers are from an Apple
+  M3 / 16 GB / macOS 27.2 host and are not claimed for other hardware.
+- **Vision input fix.** Face analysis now feeds Vision a reused BGRA pixel
+  buffer instead of a `CGImage`, removing a measured ~11 MB retained per
+  analyzed document. Face counts on three real portraits are unchanged.
+- **Signed update checker (off by default).** The About window can check a
+  signed update manifest, verify an Ed25519 signature and SHA-256, download over
+  HTTPS with a size bound, unpack, and swap the bundle atomically with rollback
+  and crash recovery. No feed URL ships in this build, so the button reports
+  that no feed is configured and makes no request. See
+  `Docs/UPDATE_SYSTEM.md`. A live install is **not verified**.
+- **Windows status corrected.** Windows remains unimplemented; only the shared
+  `StudioCore` module has a prepared portability runner, and the CI job for it
+  could not be added because the available token lacks the `workflow` scope. No
+  Windows run is claimed.
+- **Security and compatibility reviews.** `Docs/RELEASE_SECURITY_REVIEW.md`
+  records the update, export, metadata and AI download posture;
+  `Docs/CROSS_PLATFORM_COMPATIBILITY.md` records what is verified per platform.

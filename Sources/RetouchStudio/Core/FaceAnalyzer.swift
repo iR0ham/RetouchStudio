@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreVideo
 import Foundation
 import Vision
 
@@ -458,9 +459,28 @@ enum FaceAnalyzer {
     }
 
     /// Detects faces in an image that has already been oriented upright.
+    ///
+    /// The pixels reach Vision as a `CVPixelBuffer`, not as the decoded
+    /// `CGImage`. On macOS 27 a handler built from a `CGImage` keeps roughly
+    /// one preview-sized surface per call: eight loads of a 24 MP photo grew
+    /// resident memory by about 11 MB each time (measured with
+    /// `RETOUCH_BENCH_MEMORY_PROBE=vision`), while the same requests against a
+    /// pixel buffer stayed flat. The buffer is reused between documents so the
+    /// conversion does not allocate a new raster per face pass.
     static func analyze(_ image: CGImage) -> [FaceGeometry] {
+        // The shared buffer is drawn and read under this lock: batch preflight
+        // can analyze documents off the main thread, and two previews of the
+        // same size must not overwrite each other's pixels mid-request.
+        bufferLock.lock()
+        defer { bufferLock.unlock() }
+
         let request = VNDetectFaceLandmarksRequest()
-        let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
+        let handler: VNImageRequestHandler
+        if let buffer = pixelBuffer(from: image) {
+            handler = VNImageRequestHandler(cvPixelBuffer: buffer, options: [:])
+        } else {
+            handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
+        }
         do {
             try handler.perform([request])
         } catch {
@@ -470,6 +490,46 @@ enum FaceAnalyzer {
         return ordered(results
             .filter { isAcceptable(boundingBox: $0.boundingBox, confidence: $0.confidence) }
             .compactMap { geometry(from: $0) })
+    }
+
+    private static let bufferLock = NSLock()
+    private static var reusableBuffer: CVPixelBuffer?
+
+    /// Draws the image into a BGRA pixel buffer, keeping one buffer alive for
+    /// the next same-sized preview. The caller holds `bufferLock`.
+    private static func pixelBuffer(from image: CGImage) -> CVPixelBuffer? {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return nil }
+
+        let buffer: CVPixelBuffer
+        if let reusable = reusableBuffer,
+           CVPixelBufferGetWidth(reusable) == width,
+           CVPixelBufferGetHeight(reusable) == height {
+            buffer = reusable
+        } else {
+            var created: CVPixelBuffer?
+            let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
+            guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA,
+                                      attributes, &created) == kCVReturnSuccess,
+                  let created else { return nil }
+            reusableBuffer = created
+            buffer = created
+        }
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer),
+              let context = CGContext(data: base, width: width, height: height,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)
+                                          ?? CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return buffer
     }
 
     private static func geometry(from observation: VNFaceObservation) -> FaceGeometry {
