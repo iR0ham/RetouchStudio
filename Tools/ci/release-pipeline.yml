@@ -16,6 +16,13 @@
 #
 # macOS builds are ad-hoc signed. No paid certificate or notarization is used.
 # Every artifact is published with a SHA-256 file.
+#
+# Action runtimes (2026-11-13): actions/checkout@v7, actions/upload-artifact@v7,
+# actions/download-artifact@v8 and compnerd/gha-setup-swift@v0.5.1. The three
+# actions/* majors run on node24 and require Actions Runner 2.327.1 or newer,
+# which GitHub-hosted runners satisfy. The setup action is a composite action
+# and uses the current `swift-version` / `swift-build` inputs, not the
+# deprecated `branch` / `tag` aliases.
 
 name: Release
 
@@ -39,7 +46,7 @@ jobs:
     env:
       RETOUCH_SKIP_WORKER: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the app
         env:
           RETOUCH_ARCH: arm64
@@ -51,7 +58,7 @@ jobs:
       - name: Package DMG
         run: ./Tools/make-dmg.sh
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-arm64
           path: |
@@ -66,7 +73,7 @@ jobs:
     env:
       RETOUCH_SKIP_WORKER: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the Intel slice and self-test it
         env:
           RETOUCH_ARCH: x86_64
@@ -78,7 +85,7 @@ jobs:
       - name: Package DMG
         run: ./Tools/make-dmg.sh
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-x86_64
           path: |
@@ -91,12 +98,13 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the Swift toolchain
-        uses: compnerd/gha-setup-swift@v0.3.0
+        uses: compnerd/gha-setup-swift@v0.5.1
         with:
-          branch: swift-6.1-release
-          tag: swift-6.1-release
+          swift-version: swift-6.4.1-release
+          swift-build: 6.4.1-RELEASE
+          build_arch: amd64
       - name: Build and run the portable core tests
         shell: pwsh
         run: ./Tests/run-studiocore-windows.ps1
@@ -117,12 +125,13 @@ jobs:
     env:
       RETOUCH_SKIP_WORKER: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the Swift toolchain
-        uses: compnerd/gha-setup-swift@v0.3.0
+        uses: compnerd/gha-setup-swift@v0.5.1
         with:
-          branch: swift-6.1-release
-          tag: swift-6.1-release
+          swift-version: swift-6.4.1-release
+          swift-build: 6.4.1-RELEASE
+          build_arch: amd64
       - name: Build the Windows application
         shell: pwsh
         run: ./Tools/build-windows.ps1
@@ -133,7 +142,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { $version = '0.0.0' }
           ./Tools/package-windows.ps1 -AppDir build/windows -Version $version
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-x64
           path: |
@@ -147,9 +156,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
