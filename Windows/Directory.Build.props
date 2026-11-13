@@ -5,7 +5,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Deterministic>true</Deterministic>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- WPF bindings resolve the XML language to a real culture; invariant
+         globalization makes that lookup throw during the first layout. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
     <Company>Retouch Studio</Company>
     <Product>Retouch Studio</Product>
     <Version>1.0.0</Version>
