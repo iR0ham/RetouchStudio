@@ -92,6 +92,8 @@ final class InfoWindows {
 // MARK: - About
 
 struct AboutView: View {
+    @StateObject private var updates = UpdateController()
+
     private var appIcon: NSImage {
         NSApp.applicationIconImage ?? NSImage(named: NSImage.applicationIconName) ?? NSImage()
     }
@@ -151,6 +153,9 @@ struct AboutView: View {
                 .padding(.horizontal, 34)
                 .padding(.top, 16)
 
+            updateSection
+                .padding(.top, 14)
+
             Spacer(minLength: 18)
 
             Button {
@@ -170,6 +175,64 @@ struct AboutView: View {
         .frame(width: 420, height: 640)
         .background(Theme.background)
         .preferredColorScheme(.dark)
+    }
+
+    /// One button and one line: check, then install only what the signed
+    /// manifest and the release key approve. The install is never forced — the
+    /// relaunch is a separate click after the swap succeeded.
+    @ViewBuilder
+    private var updateSection: some View {
+        let s = L10n.current
+        VStack(spacing: 7) {
+            if let status = updateStatus {
+                Text(status)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 34)
+            }
+            if case .readyToRelaunch = updates.phase {
+                updateButton(s.updateRelaunch) { updates.relaunch() }
+            } else if case .available = updates.phase {
+                updateButton(s.updateInstall) { updates.installAvailableUpdate() }
+            } else {
+                updateButton(s.updateCheck) { updates.check() }
+                    .disabled(updates.isBusy)
+            }
+        }
+    }
+
+    private var updateStatus: String? {
+        let s = L10n.current
+        switch updates.phase {
+        case .idle: return nil
+        case .checking: return s.updateChecking
+        case .upToDate: return s.updateUpToDate
+        case .available(let plan):
+            return String(format: s.updateAvailable, plan.release.version)
+        case .incompatible(let reason):
+            return String(format: s.updateIncompatible, reason)
+        case .failed(let message):
+            return String(format: s.updateFailed, message)
+        case .downloading(let version):
+            return String(format: s.updateDownloading, version)
+        case .readyToRelaunch(let version):
+            return String(format: s.updateReady, version)
+        }
+    }
+
+    private func updateButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Font.face(size: 11, weight: .medium))
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 14)
+                .frame(height: 26)
+                .background(Capsule(style: .continuous).fill(Theme.panel))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressableButtonStyle(dip: 0.96))
     }
 
     private func infoRow(_ title: String, _ value: String) -> some View {

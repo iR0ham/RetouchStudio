@@ -1,5 +1,6 @@
 import AppKit
 import CoreImage
+import CryptoKit
 import Foundation
 import StudioCore
 import UniformTypeIdentifiers
@@ -1734,6 +1735,280 @@ if let png = NSBitmapImageRep(cgImage: twoToneFixture(width: 40, height: 30,
     try? FileManager.default.removeItem(at: temporary)
 } else {
     check(false, "backdrop fixture png")
+}
+
+// MARK: - Update system
+
+print("\n[U] signed update manifests, verified files and an atomic swap")
+do {
+    let sha = String(repeating: "a", count: 64)
+    func artifact(platform: String = "macos", architecture: String = "arm64",
+                  url: String = "https://example.com/RetouchStudio.zip",
+                  size: Int = 1234, sha256: String = sha,
+                  signature: String = "c2lnbmF0dXJl") -> UpdateArtifact {
+        UpdateArtifact(platform: platform, architecture: architecture, url: url,
+                       size: size, sha256: sha256, signature: signature)
+    }
+    func release(_ version: String, build: Int, minimum: String? = nil,
+                 artifacts: [UpdateArtifact]) -> UpdateRelease {
+        UpdateRelease(version: version, build: build, minimumSystemVersion: minimum,
+                      artifacts: artifacts)
+    }
+    func evaluate(_ manifest: UpdateManifest, current: String = "1.0.0",
+                  build: Int = 1, platform: String = "macos",
+                  architecture: String = "arm64",
+                  system: String = "14.0") -> UpdateDecision {
+        UpdatePolicy.evaluate(manifest: manifest, currentVersion: current,
+                              currentBuild: build, platform: platform,
+                              architecture: architecture, systemVersion: system)
+    }
+
+    check(SemanticVersion("1.2.3")! > SemanticVersion("1.2.2")!, "versions compare component by component")
+    check(SemanticVersion("2.0.0")! > SemanticVersion("1.9.9")!, "a major bump outranks a minor one")
+    check(SemanticVersion("1.0") == nil && SemanticVersion("1.0.0-beta") == nil,
+          "only three numeric components parse")
+    check(SystemVersion("14.5")! < SystemVersion("14.10")!
+          && SystemVersion("10.0.22631")! > SystemVersion("10.0.19045")!
+          && SystemVersion("14") == nil,
+          "platform versions take two or three numeric components")
+
+    let stable = UpdateManifest(releases: [
+        release("1.0.0", build: 1, artifacts: [artifact()]),
+        release("1.1.0", build: 3, artifacts: [artifact()]),
+        release("1.1.0", build: 2, artifacts: [artifact()])
+    ])
+    if case .available(let plan) = evaluate(stable) {
+        check(plan.release.version == "1.1.0" && plan.release.build == 3,
+              "the newest release wins, and a rebuild outranks the earlier build",
+              "\(plan.release.version) (\(plan.release.build))")
+        check(plan.descriptor.contains("sha256=" + sha) && plan.descriptor.contains("build=3"),
+              "the signed descriptor names the version, build, size, hash and URL")
+    } else {
+        check(false, "a newer signed release is offered")
+    }
+
+    if case .upToDate(let version) = evaluate(stable, current: "1.1.0", build: 3) {
+        check(version == "1.1.0", "the same version and build is up to date")
+    } else {
+        check(false, "the same version and build is up to date")
+    }
+    if case .available = evaluate(stable, current: "1.1.0", build: 2) {
+        check(true, "a newer build of the installed version is an update")
+    } else {
+        check(false, "a newer build of the installed version is an update")
+    }
+    if case .upToDate = evaluate(stable, current: "1.9.0", build: 1) {
+        check(true, "a newer installed version is not downgraded")
+    } else {
+        check(false, "a newer installed version is not downgraded")
+    }
+
+    if case .incompatible(let reasons) = evaluate(UpdateManifest(releases: [
+        release("1.1.0", build: 3, artifacts: [artifact(platform: "windows")])
+    ])) {
+        check(reasons.contains { $0.contains("no macos") },
+              "a release without a host artifact is reported, not skipped",
+              reasons.joined(separator: "; "))
+    } else {
+        check(false, "a release without a host artifact is reported")
+    }
+    if case .available(let universal) = evaluate(UpdateManifest(releases: [
+        release("1.1.0", build: 3, artifacts: [artifact(architecture: "universal")])
+    ]), architecture: "x86_64") {
+        check(universal.artifact.architecture == "universal",
+              "a universal artifact serves both architectures")
+    } else {
+        check(false, "a universal artifact serves both architectures")
+    }
+    if case .incompatible(let reasons) = evaluate(UpdateManifest(releases: [
+        release("1.2.0", build: 1, minimum: "15.0", artifacts: [artifact()])
+    ])) {
+        check(reasons.contains { $0.contains("needs system 15.0") },
+              "a release above the host system is refused with its reason")
+    } else {
+        check(false, "a release above the host system is refused")
+    }
+    for (label, bad) in [
+        ("an HTTP artifact URL", artifact(url: "http://example.com/x.zip")),
+        ("a malformed hash", artifact(sha256: "abc")),
+        ("an empty signature", artifact(signature: "")),
+        ("a zero size", artifact(size: 0)),
+        ("a foreign container", UpdateArtifact(platform: "macos", architecture: "arm64",
+                                               format: "dmg", url: "https://example.com/x.dmg",
+                                               size: 10, sha256: sha, signature: "c2ln"))
+    ] {
+        if case .incompatible = evaluate(UpdateManifest(releases: [
+            release("1.1.0", build: 3, artifacts: [bad])
+        ])) {
+            check(true, "\(label) never becomes an installable plan")
+        } else {
+            check(false, "\(label) never becomes an installable plan")
+        }
+    }
+    if case .incompatible = evaluate(UpdateManifest(schema: 99, releases: [
+        release("2.0.0", build: 1, artifacts: [artifact()])
+    ])) {
+        check(true, "an unknown manifest schema is refused")
+    } else {
+        check(false, "an unknown manifest schema is refused")
+    }
+
+    // Signing uses a throwaway key here; the shipped key only ever verifies.
+    let testKey = Curve25519.Signing.PrivateKey()
+    let publicKey = testKey.publicKey.rawRepresentation.base64EncodedString()
+    let descriptor = UpdatePolicy.descriptor(release: release("1.1.0", build: 3,
+                                                              artifacts: [artifact()]),
+                                             artifact: artifact())
+    let signature = (try? testKey.signature(for: Data(descriptor.utf8)))
+        .map { $0.base64EncodedString() } ?? ""
+    check(UpdateSignature.verify(descriptor: descriptor, signatureBase64: signature,
+                                 publicKeyBase64: publicKey),
+          "a valid Ed25519 signature over the descriptor verifies")
+    check(!UpdateSignature.verify(descriptor: descriptor + "\nurl=https://evil.example/x.zip",
+                                  signatureBase64: signature, publicKeyBase64: publicKey),
+          "changing the signed URL invalidates the signature")
+    check(!UpdateSignature.verify(descriptor: descriptor, signatureBase64: signature,
+                                  publicKeyBase64: "not-a-key"),
+          "an unreadable public key verifies nothing")
+    check(Data(base64Encoded: UpdateSignature.releasePublicKey)?.count == 32,
+          "the shipped release key is a real 32-byte Ed25519 key")
+
+    let updateRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("retouch-updatetests-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: updateRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: updateRoot) }
+
+    // File verification: size first, then the hash.
+    let payload = updateRoot.appendingPathComponent("payload.bin")
+    try Data("update-bytes".utf8).write(to: payload)
+    let digest = (try? AIRuntime.sha256(of: payload)) ?? ""
+    let goodArtifact = artifact(size: 12, sha256: digest)
+    do {
+        try UpdateFileCheck.verify(at: payload, artifact: goodArtifact)
+        check(true, "a file with the signed size and hash passes")
+    } catch {
+        check(false, "a file with the signed size and hash passes", error.localizedDescription)
+    }
+    do {
+        try UpdateFileCheck.verify(at: payload, artifact: artifact(size: 99, sha256: digest))
+        check(false, "a size mismatch is refused")
+    } catch {
+        check(true, "a size mismatch is refused")
+    }
+    do {
+        try UpdateFileCheck.verify(at: payload, artifact: artifact(size: 12, sha256: String(repeating: "b", count: 64)))
+        check(false, "a hash mismatch is refused")
+    } catch {
+        check(true, "a hash mismatch is refused")
+    }
+
+    func makeApp(_ name: String, version: String, bundleID: String,
+                 marker: String) throws -> URL {
+        let app = updateRoot.appendingPathComponent(name)
+        let contents = app.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let info: [String: Any] = ["CFBundleIdentifier": bundleID,
+                                   "CFBundleShortVersionString": version,
+                                   "CFBundleVersion": version]
+        let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+        try Data(marker.utf8).write(to: app.appendingPathComponent("marker.txt"))
+        return app
+    }
+
+    // Atomic swap between two bundles on one volume.
+    let oldApp = try makeApp("Installed.app", version: "1.0.0",
+                             bundleID: "app.retouchstudio.mac", marker: "old")
+    let newApp = try makeApp("Incoming.app", version: "1.1.0",
+                             bundleID: "app.retouchstudio.mac", marker: "new")
+    let journal = updateRoot.appendingPathComponent("journal.json")
+    do {
+        try UpdateInstaller.swap(stagedApp: newApp, over: oldApp, journalURL: journal)
+        let marker = try String(contentsOf: oldApp.appendingPathComponent("marker.txt"), encoding: .utf8)
+        check(marker == "new", "the swap puts the new bundle at the installed path")
+        check(!FileManager.default.fileExists(atPath: journal.path),
+              "a completed swap removes its journal")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: updateRoot.path)
+            .filter { $0.contains(".backup-") }
+        check(leftovers.isEmpty, "a completed swap removes its backup")
+    } catch {
+        check(false, "the swap puts the new bundle at the installed path", error.localizedDescription)
+    }
+    do {
+        let notAnApp = updateRoot.appendingPathComponent("notes.txt")
+        try Data("x".utf8).write(to: notAnApp)
+        try UpdateInstaller.swap(stagedApp: notAnApp, over: oldApp, journalURL: journal)
+        check(false, "a non-application is refused before the installed bundle moves")
+    } catch {
+        let marker = (try? String(contentsOf: oldApp.appendingPathComponent("marker.txt"), encoding: .utf8)) ?? ""
+        check(marker == "new", "a refused swap leaves the installed bundle untouched")
+    }
+
+    // Journal states that a crash can leave behind.
+    func writeJournal(_ value: UpdateJournal, to url: URL) throws {
+        try JSONEncoder().encode(value).write(to: url, options: .atomic)
+    }
+    let crashRoot = updateRoot.appendingPathComponent("crash", isDirectory: true)
+    try FileManager.default.createDirectory(at: crashRoot, withIntermediateDirectories: true)
+
+    let recoveryJournal = crashRoot.appendingPathComponent("journal.json")
+    let installed = try makeApp("crash/Installed.app", version: "1.0.0",
+                                bundleID: "app.retouchstudio.mac", marker: "old")
+    let incoming = try makeApp("crash/Incoming.app", version: "1.1.0",
+                               bundleID: "app.retouchstudio.mac", marker: "new")
+    let backup = crashRoot.appendingPathComponent(".Installed.app.backup-test")
+    try FileManager.default.moveItem(at: installed, to: backup)
+    try writeJournal(UpdateJournal(current: installed.path, staged: incoming.path,
+                                   backup: backup.path), to: recoveryJournal)
+    let completed = try? UpdateInstaller.recover(journalURL: recoveryJournal)
+    let recoveredMarker = (try? String(contentsOf: installed.appendingPathComponent("marker.txt"),
+                                       encoding: .utf8)) ?? ""
+    check(completed == .completed && recoveredMarker == "new",
+          "a crash after the backup rename completes the swap on next launch")
+
+    try? FileManager.default.removeItem(at: installed)
+    let rollbackBackup = crashRoot.appendingPathComponent(".Rollback.app.backup-test")
+    let rollbackApp = try makeApp("crash/Rollback.app", version: "1.0.0",
+                                  bundleID: "app.retouchstudio.mac", marker: "old")
+    try FileManager.default.moveItem(at: rollbackApp, to: rollbackBackup)
+    try writeJournal(UpdateJournal(current: rollbackApp.path,
+                                   staged: crashRoot.appendingPathComponent("gone.zip").path,
+                                   backup: rollbackBackup.path), to: recoveryJournal)
+    let rolledBack = try? UpdateInstaller.recover(journalURL: recoveryJournal)
+    let rollbackMarker = (try? String(contentsOf: rollbackApp.appendingPathComponent("marker.txt"),
+                                      encoding: .utf8)) ?? ""
+    check(rolledBack == .rolledBack && rollbackMarker == "old",
+          "a crash before the new bundle arrives restores the old one")
+
+    try? FileManager.default.removeItem(at: recoveryJournal)
+    check((try? UpdateInstaller.recover(journalURL: recoveryJournal)) == UpdateRecovery.none,
+          "no journal means nothing to recover")
+
+    // Unpack a real zip through ditto and check the payload identity.
+    let sourceApp = try makeApp("Packaging/Retouch Studio.app", version: "1.1.0",
+                                bundleID: "app.retouchstudio.mac", marker: "packaged")
+    let archive = updateRoot.appendingPathComponent("release.zip")
+    let pack = Process()
+    pack.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+    pack.arguments = ["-c", "-k", "--keepParent", sourceApp.path, archive.path]
+    try? pack.run()
+    pack.waitUntilExit()
+    let workspace = updateRoot.appendingPathComponent("unpacked", isDirectory: true)
+    if let unpacked = try? UpdateInstaller.unpack(archive: archive, into: workspace,
+                                                  expectedVersion: "1.1.0",
+                                                  bundleIdentifier: "app.retouchstudio.mac") {
+        check(unpacked.pathExtension == "app", "the verified archive yields its application")
+    } else {
+        check(false, "the verified archive yields its application")
+    }
+    do {
+        _ = try UpdateInstaller.unpack(archive: archive, into: workspace,
+                                       expectedVersion: "9.9.9",
+                                       bundleIdentifier: "app.retouchstudio.mac")
+        check(false, "an archive whose version differs from the manifest is refused")
+    } catch {
+        check(true, "an archive whose version differs from the manifest is refused")
+    }
 }
 
 print("\n" + String(repeating: "-", count: 60))

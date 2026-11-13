@@ -766,6 +766,17 @@ final class PersianL10n: L10n {
         "Retouch Studio یک برنامهٔ رتوش پرترهٔ محلی برای مک است. اول عکس را می‌سنجد — پوست، چشم‌ها، دندان‌ها، مو، نور و کادر — تا ویرایش خودکار فقط همان چیزی را تغییر دهد که اندازه‌گیری‌ها توجیه می‌کنند؛ بعد دوازده ابزار در اختیارتان می‌گذارد: پوست، درمان، اصلاح فرم، چشم و دندان، آرایش، رنگ و نور، ظاهرها، برش، بدن، پس‌زمینه، برچسب‌ها و تحلیل. هر تغییری غیرمخرب است: می‌توانید آن را برگردانید، نشست را به‌صورت پروژهٔ .retouch ذخیره کنید یا با کیفیت کامل خروجی بگیرید."
     }
     override var aboutVersion: String { "نسخه" }
+    override var updateCheck: String { "بررسی به‌روزرسانی" }
+    override var updateChecking: String { "در حال بررسی به‌روزرسانی…" }
+    override var updateUpToDate: String { "نسخهٔ شما جدیدترین نسخه است." }
+    override var updateAvailable: String { "نسخهٔ %@ آماده است." }
+    override var updateIncompatible: String { "این به‌روزرسانی روی این سیستم نصب نمی‌شود: %@" }
+    override var updateFailed: String { "بررسی به‌روزرسانی انجام نشد: %@" }
+    override var updateFeedMissing: String { "برای این نسخه هیچ منبع به‌روزرسانی تنظیم نشده است." }
+    override var updateDownloading: String { "در حال دانلود و بررسی نسخهٔ %@…" }
+    override var updateReady: String { "نسخهٔ %@ نصب شد. برای استفاده دوباره برنامه را باز کنید." }
+    override var updateInstall: String { "دانلود و نصب" }
+    override var updateRelaunch: String { "بازگشایی دوباره" }
     override var aboutDeveloper: String { "توسعه‌دهنده" }
     override var aboutDeveloperRole: String { "نقش" }
     override var aboutDeveloperRoleValue: String { "طراحی و توسعه" }
