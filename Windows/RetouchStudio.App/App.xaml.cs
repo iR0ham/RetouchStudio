@@ -36,6 +36,13 @@ public partial class App : Application
 
     private static void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        if (Environment.GetEnvironmentVariable("RETOUCHSTUDIO_NO_DIALOG") == "1")
+        {
+            Console.Error.WriteLine(e.Exception.ToString());
+            e.Handled = true;
+            Environment.Exit(2);
+            return;
+        }
         MessageBox.Show(e.Exception.Message, "Retouch Studio",
                         MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;

@@ -153,21 +153,29 @@ if (-not $SkipTests) {
 }
 
 # 6. A real window from the published exe is the only proof that the GUI, the
-#    XAML and the native core all start together. The app exits with code 1 and
-#    a message when the DLL fails to load, so a window handle is the signal.
+#    XAML and the native core all start together. A hosted runner session does
+#    not always report MainWindowHandle, so the window writes a marker from its
+#    Loaded handler; a window handle is still reported when the session has one.
 if (-not $SkipGuiSmoke -and -not $SkipPublish) {
     $exe = Join-Path $appDir 'RetouchStudio.exe'
     if (-not (Test-Path $exe)) {
         throw "$exe was not published"
     }
     Step 'smoke-running the published app'
+    $temp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+    $marker = Join-Path $temp 'retouchstudio-smoke.txt'
+    $stdout = Join-Path $temp 'retouchstudio-smoke.out'
+    $stderr = Join-Path $temp 'retouchstudio-smoke.err'
+    Remove-Item $marker, $stdout, $stderr -ErrorAction SilentlyContinue
     # A modal error dialog would itself be a window, so the failure path prints
     # to stderr instead of showing one during the smoke run.
     $env:RETOUCHSTUDIO_NO_DIALOG = '1'
-    $process = Start-Process -FilePath $exe -PassThru
-    $windowed = $false
+    $env:RETOUCHSTUDIO_SMOKE = $marker
+    $process = Start-Process -FilePath $exe -PassThru `
+        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $title = $null
     $exitCode = $null
-    $title = ''
+    $handle = 0
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         Start-Sleep -Milliseconds 500
         $process.Refresh()
@@ -175,23 +183,24 @@ if (-not $SkipGuiSmoke -and -not $SkipPublish) {
             $exitCode = $process.ExitCode
             break
         }
-        if ($process.MainWindowHandle -ne 0 -and $process.MainWindowTitle) {
-            $windowed = $true
-            $title = $process.MainWindowTitle
+        $handle = $process.MainWindowHandle
+        if (Test-Path $marker) {
+            $title = (Get-Content $marker -Raw).Trim()
             break
         }
     }
     if (-not $process.HasExited) {
         Stop-Process -Id $process.Id -Force
     }
-    Remove-Item Env:RETOUCHSTUDIO_NO_DIALOG -ErrorAction SilentlyContinue
-    if (-not $windowed) {
+    Remove-Item Env:RETOUCHSTUDIO_NO_DIALOG, Env:RETOUCHSTUDIO_SMOKE -ErrorAction SilentlyContinue
+    if ($null -eq $title) {
+        $errors = if (Test-Path $stderr) { (Get-Content $stderr -Raw).Trim() } else { '' }
         if ($null -ne $exitCode) {
-            throw "the app exited with $exitCode before opening a window"
+            throw "the app exited with $exitCode before loading a window. stderr: $errors"
         }
-        throw 'the app ran but never opened a window'
+        throw "the app ran but its window never loaded (handle $handle). stderr: $errors"
     }
-    Write-Host "   the published app opened its window: $title"
+    Write-Host "   the published app loaded its window: '$title' (native handle $handle)"
 }
 
 Write-Host 'WINDOWS APP BUILD: PASS'

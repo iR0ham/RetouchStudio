@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -25,6 +26,14 @@ public partial class MainWindow : Window
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
         TryApplyDarkTitleBar();
+
+        // A hosted CI session does not always expose a main-window handle, so
+        // the smoke run asks the loaded window to write its own marker.
+        var marker = Environment.GetEnvironmentVariable("RETOUCHSTUDIO_SMOKE");
+        if (!string.IsNullOrEmpty(marker))
+        {
+            File.WriteAllText(marker, Title);
+        }
     }
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
