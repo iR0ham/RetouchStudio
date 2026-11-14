@@ -169,7 +169,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
 `windows-2025` and runs `Tools/build-windows.ps1`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 55
+`.def` export list, publishes the WPF host self-contained for x64, runs the 69
 headless host checks against the real DLL and the real WIC codec, and starts the
 published app until the loaded window writes its own marker file. On failure it
 uploads the published folder (`windows-app-publish`), so a broken build can be
@@ -191,6 +191,8 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-13 | `eba8075` (PR #13, push and pull request) | `CI` | all four jobs green |
 | 2026-11-13 | `260cb41` (merge of PR #13, push to `main`) | `CI` | all four jobs green; no Node deprecation line in any job log |
 | 2026-11-13 | `28f8462` (PR #14, push and pull request) | `CI` | five jobs green: three required macOS contexts, `Windows StudioCore` and `Windows App` |
+| 2026-11-14 | `d0673d8` (PR #15, push and pull request) | `CI` run 43534410772 | five jobs green; `Windows App` reports `PASS (69 checks)` including the interchange gate |
+| 2026-11-14 | `2c50802` (PR #15, documentation only) | `CI` run 43535723386 | five jobs green on the PR head |
 
 PR #13 was merged with a normal merge commit after every required context and
 the non-required `Windows StudioCore` job reported success on the final head.
@@ -271,6 +273,27 @@ loaded window; and a WPF binding then threw
 `Windows StudioCore` execution on the same head failed in the Swift toolchain
 installer with exit code 12006 before any check ran; the job was re-run and is
 recorded above as green.
+
+### Windows App run (2026-11-14, PR #15)
+
+Run `43534410772` on `d0673d8`, all five jobs succeeded. The `Windows App` step
+log ends with:
+
+```
+-> running the Windows host tests
+WINDOWS HOST TESTS: PASS (69 checks)
+```
+
+The 14 new checks open the shared macOS fixtures
+(`Tests/Fixtures/ProjectV3/project-v3-full.retouch` and
+`ProjectV4/project-v4-full.retouch`), save them back, and compare the parsed
+JSON with the fixture (key order and whitespace are not part of the portable
+contract, so this is structural equality, not byte identity), prove the unknown
+top-level key and required feature survive, and prove a v3 save stays v3 with
+unkeyed geometry. The unknown key is asserted on the save after a
+reopen: the C ABI returns the typed record and carries unknown top-level keys
+in the write context, so checking the reopened record was a wrong assertion and
+failed the first run of this job before it was corrected in `d0673d8`.
 
 ## Release pipeline
 
