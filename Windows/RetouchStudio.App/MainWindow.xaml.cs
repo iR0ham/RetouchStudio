@@ -617,6 +617,8 @@ public partial class MainWindow : Window
         }
     }
 
+    private void CancelBatch_Click(object sender, RoutedEventArgs e) => _vm.CancelBatch();
+
     private void Undo_Click(object sender, RoutedEventArgs e) => _vm.Undo();
 
     private void Redo_Click(object sender, RoutedEventArgs e) => _vm.Redo();
