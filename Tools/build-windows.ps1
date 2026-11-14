@@ -8,6 +8,7 @@
 #
 #   pwsh -File Tools/build-windows.ps1
 #   pwsh -File Tools/build-windows.ps1 -SkipGuiSmoke     # no interactive desktop
+#   pwsh -File Tools/build-windows.ps1 -SkipUiSmoke      # no UI automation
 #   pwsh -File Tools/build-windows.ps1 -SkipPackage      # no zip or MSI artifact
 #   pwsh -File Tools/build-windows.ps1 -PackageVersion 1.2.3
 #   pwsh -File Tools/build-windows.ps1 -RequireMsi        # CI: no silent skip
@@ -22,6 +23,7 @@ param(
     [string]$Configuration = 'Release',
     [switch]$SkipTests,
     [switch]$SkipGuiSmoke,
+    [switch]$SkipUiSmoke,
     [switch]$SkipPublish,
     [switch]$SkipPackage,
     [switch]$RequireMsi,
@@ -221,6 +223,22 @@ function Invoke-GuiSmoke([string]$Exe, [string]$Label) {
 if (-not $SkipGuiSmoke -and -not $SkipPublish) {
     Step 'smoke-running the published app'
     Invoke-GuiSmoke (Join-Path $appDir 'RetouchStudio.exe') 'published'
+}
+
+# 6b. A window proves the app starts; it does not prove a click reaches the
+#     renderer. An automation client drives the published exe through its own
+#     Open and Export dialogs, moves the Exposure slider and decodes the file
+#     it wrote. An isolated recovery folder keeps a stale copy off the screen.
+if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
+    Step 'driving the published app through Windows UI Automation'
+    $uiTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+    $uiOutput = Join-Path $uiTemp 'retouchstudio-ui-export.jpg'
+    & dotnet run --project (Join-Path $root 'Windows/RetouchStudio.UiTests/RetouchStudio.UiTests.csproj') `
+        -c $Configuration -- `
+        (Join-Path $appDir 'RetouchStudio.exe') `
+        (Join-Path $root 'Tests/Corpus/Fixtures/F01_portrait_srgb_8.png') `
+        $uiOutput
+    Assert-ExitCode 'UI host tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted
