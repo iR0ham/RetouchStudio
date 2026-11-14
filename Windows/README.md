@@ -68,13 +68,19 @@ folder into one zip plus a SHA-256 file.
   analysis callouts, watermark or poster export.
 - No freeform crop; the presets are the whole crop UI.
 - 8-bit output only. A 16-bit source is reduced at decode, and a PNG or TIFF
-  plan still writes 8-bit pixels even though the plan says 16.
+  plan still writes 8-bit pixels even though the plan says 16. WIC itself is
+  not the limit: the headless probe on `windows-2025` decodes the 16-bit P3
+  fixture into `Rgba16` and writes PNG and TIFF files whose headers say 16 bits
+  per sample; the blocking piece is this host's 8-bit pixel buffer and
+  pipeline.
 - No XMP and no IPTC: the Windows metadata API exposes neither, and its EXIF
   writer keeps only the two measured keys, so a kept export carries the camera
   model and ISO only. PNG carries no EXIF either, because the API does not map
   EXIF onto PNG chunks.
 - No HEIC write (the HEIF codec is an optional system component) and no HEIC
-  read path beyond whatever WIC happens to install.
+  read path beyond whatever WIC happens to install. The `windows-2025` runner
+  has no HEIF decoder, so the probe on the corpus HEIC export fails with
+  `0x88982F8B`.
 - No recovery store, updater, installer or signing. Packaging is a zip.
 - No macOS pixel parity claim. The sliders move in the documented direction and
   the output is deterministic; the macOS Core Image pipeline is a different
