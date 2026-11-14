@@ -149,6 +149,12 @@ replaces the old one through the same `UpgradeCode`.
 - Document order: crop in normalized photo coordinates, then orientation
   (mirror, quarter turns, straighten), then the nine global adjustments. The
   crop is stored against the photo, exactly as the shared model says.
+- The crop and the two lossless orientation remaps are compared against source
+  indices written in the test, not against the helper that produced them: a
+  0.1/0.1/0.8/0.7 crop of a 256x192 frame must render the 205x134 box at
+  (26, 19) pixel for pixel, a flip must mirror across its row, and a quarter
+  turn must read `(y, H-1-x)` of the source. A transpose or an off-by-one fails
+  there even when the arithmetic still looks plausible.
 - Straighten rotates clockwise for a positive angle, keeps the canvas size and
   samples with clamped edges. The macOS renderer's sign and framing are not
   claimed to match.
