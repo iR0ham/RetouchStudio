@@ -72,7 +72,9 @@ try {
         (Join-Path $root 'Windows/installer/Product.wxs'),
         $files
     )
-    & $candle -nologo -arch x64 -dAppDir=$app -dProductVersion=$msiVersion -out (Join-Path $obj '') $sources
+    $defines = @(('-dAppDir=' + $app), ('-dProductVersion=' + $msiVersion))
+    Write-Host "   candle $($defines -join ' ')"
+    & $candle -nologo -arch x64 $defines -out (Join-Path $obj '') $sources
     if ($LASTEXITCODE -ne 0) { Write-Error "candle failed with exit code $LASTEXITCODE" }
 
     $objects = Get-ChildItem -Path $obj -Filter '*.wixobj' | ForEach-Object { $_.FullName }

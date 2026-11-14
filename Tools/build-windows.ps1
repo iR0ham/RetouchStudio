@@ -264,7 +264,14 @@ function Find-Wix([string]$requested) {
     return $null
 }
 
-function Invoke-InstallProof([string]$Msi, [string]$Label) {
+function Get-InstalledProduct {
+    $uninstall = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    Get-ItemProperty $uninstall -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -eq 'Retouch Studio' } |
+        Select-Object -First 1
+}
+
+function Invoke-InstallProof([string]$Msi, [string]$Label, [string]$ExpectedVersion) {
     $installDir = Join-Path $env:ProgramFiles 'Retouch Studio'
     $installedExe = Join-Path $installDir 'RetouchStudio.exe'
     $shortcutDir = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Retouch Studio'
@@ -290,7 +297,14 @@ function Invoke-InstallProof([string]$Msi, [string]$Label) {
     if (-not (Test-Path $shortcut -PathType Leaf)) {
         throw "the MSI did not create $shortcut; see $installLog"
     }
-    Write-Host "   installed $installedExe"
+    $product = Get-InstalledProduct
+    if ($null -eq $product) {
+        throw 'the MSI did not register Retouch Studio in Programs and Features'
+    }
+    if ($ExpectedVersion -and $product.DisplayVersion -ne $ExpectedVersion) {
+        throw "the installed product reports version '$($product.DisplayVersion)', not '$ExpectedVersion'"
+    }
+    Write-Host "   installed $installedExe as $($product.DisplayVersion)"
 
     Invoke-GuiSmoke $installedExe $Label
 
@@ -309,7 +323,10 @@ function Invoke-InstallProof([string]$Msi, [string]$Label) {
     if (Test-Path $shortcut) {
         throw "the uninstall left $shortcut behind; see $uninstallLog"
     }
-    Write-Host '   uninstalled; the install folder and the shortcut are gone'
+    if ($null -ne (Get-InstalledProduct)) {
+        throw "the uninstall left Retouch Studio in Programs and Features; see $uninstallLog"
+    }
+    Write-Host '   uninstalled; the folder, the shortcut and the entry are gone'
 }
 
 if (-not $SkipPackage -and -not $SkipPublish) {
@@ -341,7 +358,10 @@ if (-not $SkipPackage -and -not $SkipPublish) {
 
         if (-not $SkipGuiSmoke) {
             Step 'installing and uninstalling the MSI'
-            Invoke-InstallProof $msi 'installed'
+            $expected = if ($PackageVersion -match '^(\d+)\.(\d+)\.(\d+)') {
+                "$($matches[1]).$($matches[2]).$($matches[3]).0"
+            } else { '' }
+            Invoke-InstallProof $msi 'installed' $expected
         }
     }
 }
