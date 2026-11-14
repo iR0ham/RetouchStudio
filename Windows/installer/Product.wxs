@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer: a per-machine MSI for the self-contained publish
+  folder. The file list is harvested from the publish output by
+  Tools/package-windows-msi.ps1, so the installer always contains exactly what
+  was built; this file only owns the directory layout, the Start menu shortcut
+  and the upgrade rule.
+
+  Unsigned by design: signing needs a code-signing certificate this project does
+  not have. A package that is not signed is still installable and is what CI
+  proves; no paid certificate is involved.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Retouch Studio"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="iR0ham"
+           UpgradeCode="{B1E9F3C4-5A7D-4E2B-9C61-8F0D2A47B5E9}">
+    <Package Id="*"
+             InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Description="Retouch Studio photo editor" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Retouch Studio is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Retouch Studio" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Retouch Studio" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <!--
+        A shortcut needs a keypath that is not the shortcut itself, so the
+        component keys on a per-user marker. Uninstalling removes the folder.
+      -->
+      <Component Id="ApplicationShortcut" Guid="{2A7C41D9-6B3E-4F58-A0D2-7C9E51B8F364}">
+        <Shortcut Id="ApplicationStartMenuShortcut"
+                  Name="Retouch Studio"
+                  Description="Retouch Studio photo editor"
+                  Target="[INSTALLFOLDER]RetouchStudio.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Retouch Studio" Name="installed"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="Retouch Studio" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="ApplicationShortcut" />
+    </Feature>
+  </Product>
+</Wix>

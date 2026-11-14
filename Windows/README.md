@@ -32,10 +32,28 @@ Requires a Swift toolchain for Windows (`swiftc.exe` with its `clang.exe` and
 4. publishes the app self-contained to `build/windows/app` (x64; Intel and AMD
    run the same binary),
 5. runs the headless host tests, and
-6. starts the published exe and waits for it to open a window.
+6. starts the published exe and waits for it to open a window,
+7. turns the publish folder into a zip, and
+8. with WiX Toolset v3 present, builds an MSI, installs it silently, starts the
+   installed copy and uninstalls it again.
 
 `Tools/package-windows.ps1 -AppDir build/windows/app -Version 1.0.0` turns that
 folder into one zip plus a SHA-256 file.
+`Tools/package-windows-msi.ps1 -AppDir build/windows/app -Version 1.0.0` builds
+the installer from `Windows/installer/Product.wxs`; it is skipped, not faked,
+when WiX is absent, and CI passes `-RequireMsi` so the skip cannot happen there.
+
+## Install
+
+The MSI is per-machine: it installs to `Program Files\Retouch Studio`, adds a
+Start menu shortcut, and upgrades a previous version through a fixed
+`UpgradeCode`. The file list is harvested from the publish output, so the
+installer contains exactly what was built. `msiexec /i` with `/qn` installs and
+`msiexec /x` uninstalls without any prompt. The package is unsigned, because
+signing needs a code-signing certificate this project does not have.
+
+There is no updater and no auto-update feed: a new version is a new MSI that
+replaces the old one through the same `UpgradeCode`.
 
 ## What it does
 
@@ -83,7 +101,8 @@ folder into one zip plus a SHA-256 file.
   read path beyond whatever WIC happens to install. The `windows-2025` runner
   has no HEIF decoder, so the probe on the corpus HEIC export fails with
   `0x88982F8B`.
-- No recovery store, updater, installer or signing. Packaging is a zip.
+- No recovery store, updater or signing. Distribution is a zip plus an unsigned
+  MSI; both are built from the same publish folder.
 - No macOS pixel parity claim. Exposure, blacks, whites, contrast and saturation
   now use the shared scales: against the macOS reference PNGs the host measures
   MAE 0.01 for exposure +40 and 0.007 for blacks +60, while clarity +55 still
@@ -173,6 +192,35 @@ of drift on tone and colour, two on clarity, because the 8-bit blur truncates
 on every pass while the 16-bit blur does not.
 
 What this does not prove: pixel parity with the macOS renderer, HEIC, XMP or
-IPTC metadata, packaging, an installer, a 16-bit preview or editing path, or
+IPTC metadata, signing, an updater, a 16-bit preview or editing path, or
 anything on a real desktop session. The run is also recorded in
 [`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).
+
+### Installer run (2026-11-14, PR #22)
+
+CI run 43561151628 on `2488ae4` built the MSI from the published folder and
+proved the installation path, not just the package:
+
+```
+   RetouchStudio-0.0.0-ci-windows-x64.msi (398086490 bytes), sha256 221b5c53…
+-> installing and uninstalling the MSI
+   installed C:\Program Files\Retouch Studio\RetouchStudio.exe as 0.0.0.0
+   the installed app loaded its window: 'Retouch Studio' (native handle 393252)
+   uninstalled; the folder, the shortcut and the entry are gone
+WINDOWS APP BUILD: PASS
+```
+
+So the per-machine MSI installs silently into Program Files, registers in
+Programs and Features with the package version, creates the Start menu
+shortcut, and the installed copy starts into a loaded window; the uninstall
+removes the files, the shortcut and the entry.
+
+The first run of this step failed at `candle`, which received the literal text
+`$msiVersion` as `Product/@Version`. The defines are now built by string
+concatenation, and the log prints the exact defines `candle` receives
+(`-dAppDir=… -dProductVersion=0.0.0.0`), so the next regression of that kind is
+visible in one line.
+
+Not proven by this run: code signing, an updater, a clean install on a machine
+that already has an older version (the `MajorUpgrade` rule is declared but has
+not been exercised), and anything on a real desktop session.
