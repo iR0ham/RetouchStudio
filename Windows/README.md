@@ -66,8 +66,10 @@ replaces the old one through the same `UpgradeCode`.
   blacks, whites, saturation, vibrance, warmth, clarity, vignette. Undo, redo and
   the dirty flag are the shared `DocumentHistory`, not a host copy.
 - Orientation: mirror, clockwise quarter turns and a straighten angle.
-- Centred crop presets (square, 4:5, 3:2, 16:9) written as the same normalized
-  crop record in photo coordinates that macOS reads.
+- Crop presets (square, 4:5, 3:2, 16:9) and a custom crop: "Custom…" opens an
+  overlay on the uncropped photo, four corner handles resize the frame, Apply
+  writes it and Cancel leaves the document alone. Every crop is the same
+  normalized record in photo coordinates that macOS reads.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan
@@ -93,11 +95,12 @@ replaces the old one through the same `UpgradeCode`.
 
 - No AI tools, skin/makeup/scene engines, healing, stickers, presets,
   analysis callouts, watermark or poster export.
-- No freeform crop; the presets are the whole crop UI.
-- No 16-bit preview or editing path. The preview and the JPEG export work in
-  the 8-bit buffer, so a 16-bit source is reduced for display. Only a PNG or
-  TIFF export keeps 16-bit samples, and only through the exported document;
-  the sliders and the on-screen image are 8-bit.
+- The custom crop overlay's drag wiring is not exercised by CI: the headless
+  checks cover the placement and drag arithmetic (`CropGeometry`), and the
+  smoke run proves the window loads, but no automated check moves a handle.
+- No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
+  16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
+  encoder is 8-bit.
 - No XMP and no IPTC: the Windows metadata API exposes neither, and its EXIF
   writer keeps only the two measured keys, so a kept export carries the camera
   model and ISO only. The 16-bit PNG writer does carry those two keys; an

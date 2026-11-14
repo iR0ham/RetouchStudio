@@ -2,8 +2,10 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using Microsoft.Win32;
+using RetouchStudio.Core.Project;
 
 namespace RetouchStudio.App;
 
@@ -17,10 +19,22 @@ public partial class MainWindow : Window
 
     private readonly EditorViewModel _vm = new();
 
+    // The crop overlay remembers the frame being dragged until Apply. The
+    // preview underneath is rendered without a crop while the overlay is open.
+    private CropValue _pendingCrop = new(0, 0, 1, 1);
+    private bool _cropMode;
+
     public MainWindow()
     {
         InitializeComponent();
         DataContext = _vm;
+        _vm.PropertyChanged += (_, args) =>
+        {
+            if (_cropMode && args.PropertyName == nameof(EditorViewModel.Preview))
+            {
+                UpdateCropOverlay();
+            }
+        };
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -78,6 +92,10 @@ public partial class MainWindow : Window
                 _vm.Undo();
                 e.Handled = true;
                 break;
+            case Key.Escape when _cropMode:
+                EndCrop();
+                e.Handled = true;
+                break;
         }
     }
 
@@ -87,6 +105,7 @@ public partial class MainWindow : Window
         {
             return;
         }
+        EndCrop();
         var dialog = new OpenFileDialog
         {
             Title = "Open Photo",
@@ -112,6 +131,7 @@ public partial class MainWindow : Window
         {
             return;
         }
+        EndCrop();
         var dialog = new OpenFileDialog
         {
             Title = "Open Project",
@@ -263,8 +283,136 @@ public partial class MainWindow : Window
     {
         if (sender is Button { Tag: string preset })
         {
+            EndCrop();
             _vm.ApplyCrop(preset);
         }
+    }
+
+    /// <summary>
+    /// Opens the crop overlay on the uncropped picture. Until Apply, the
+    /// document keeps its old crop; the overlay holds the new frame.
+    /// </summary>
+    private void CropCustom_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.HasDocument || _cropMode)
+        {
+            return;
+        }
+        _cropMode = true;
+        _pendingCrop = _vm.CurrentCrop ?? new CropValue(0, 0, 1, 1);
+        _vm.IsCropping = true;
+        CropOverlay.Visibility = Visibility.Visible;
+        CropBar.Visibility = Visibility.Visible;
+        PreviewHost.SizeChanged += PreviewHost_SizeChanged;
+        UpdateCropOverlay();
+    }
+
+    private void CropApply_Click(object sender, RoutedEventArgs e)
+    {
+        var crop = _pendingCrop;
+        EndCrop();
+        _vm.ApplyCustomCrop(crop);
+    }
+
+    private void CropCancel_Click(object sender, RoutedEventArgs e) => EndCrop();
+
+    private void EndCrop()
+    {
+        if (!_cropMode)
+        {
+            return;
+        }
+        _cropMode = false;
+        PreviewHost.SizeChanged -= PreviewHost_SizeChanged;
+        CropOverlay.Visibility = Visibility.Collapsed;
+        CropBar.Visibility = Visibility.Collapsed;
+        _vm.IsCropping = false;
+    }
+
+    private void PreviewHost_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_cropMode)
+        {
+            UpdateCropOverlay();
+        }
+    }
+
+    private void CropHandle_Drag(object sender, DragDeltaEventArgs e)
+    {
+        if (sender is not Thumb { Tag: string corner }
+            || !Enum.TryParse<CropCorner>(corner, out var parsed))
+        {
+            return;
+        }
+        var fit = CurrentImageRect();
+        if (fit.Width <= 0 || fit.Height <= 0)
+        {
+            return;
+        }
+        _pendingCrop = CropGeometry.Resize(_pendingCrop, parsed,
+                                           e.HorizontalChange / fit.Width,
+                                           e.VerticalChange / fit.Height);
+        UpdateCropOverlay();
+    }
+
+    /// <summary>Where the shown bitmap sits inside the overlay's canvas.</summary>
+    private DisplayRect CurrentImageRect()
+    {
+        var bitmap = _vm.Preview;
+        if (bitmap is null)
+        {
+            return default;
+        }
+        var origin = PreviewImage.TranslatePoint(new Point(0, 0), PreviewHost);
+        var fit = CropGeometry.Fit(bitmap.PixelWidth, bitmap.PixelHeight,
+                                   PreviewImage.ActualWidth, PreviewImage.ActualHeight);
+        return fit with { X = fit.X + origin.X, Y = fit.Y + origin.Y };
+    }
+
+    private void UpdateCropOverlay()
+    {
+        var fit = CurrentImageRect();
+        if (fit.Width <= 0 || fit.Height <= 0)
+        {
+            return;
+        }
+        var x = fit.X + _pendingCrop.X * fit.Width;
+        var y = fit.Y + _pendingCrop.Y * fit.Height;
+        var width = _pendingCrop.Width * fit.Width;
+        var height = _pendingCrop.Height * fit.Height;
+
+        CropFrame.Width = width;
+        CropFrame.Height = height;
+        Canvas.SetLeft(CropFrame, x);
+        Canvas.SetTop(CropFrame, y);
+
+        var canvasWidth = PreviewHost.ActualWidth;
+        var canvasHeight = PreviewHost.ActualHeight;
+        Place(CropShadeTop, 0, 0, canvasWidth, y);
+        Place(CropShadeBottom, 0, y + height, canvasWidth,
+              Math.Max(0, canvasHeight - y - height));
+        Place(CropShadeLeft, 0, y, x, height);
+        Place(CropShadeRight, x + width, y, Math.Max(0, canvasWidth - x - width), height);
+
+        Centre(CropTopLeft, x, y);
+        Centre(CropTopRight, x + width, y);
+        Centre(CropBottomLeft, x, y + height);
+        Centre(CropBottomRight, x + width, y + height);
+    }
+
+    private static void Place(FrameworkElement element, double x, double y,
+                              double width, double height)
+    {
+        element.Width = Math.Max(0, width);
+        element.Height = Math.Max(0, height);
+        Canvas.SetLeft(element, x);
+        Canvas.SetTop(element, y);
+    }
+
+    private static void Centre(FrameworkElement element, double x, double y)
+    {
+        Canvas.SetLeft(element, x - element.Width / 2);
+        Canvas.SetTop(element, y - element.Height / 2);
     }
 
     private void LongEdge_Changed(object sender, SelectionChangedEventArgs e)

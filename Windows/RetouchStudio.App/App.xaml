@@ -65,5 +65,20 @@
       <Setter Property="FontSize" Value="12" />
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
+
+    <Style x:Key="CropHandle" TargetType="Thumb">
+      <Setter Property="Width" Value="14" />
+      <Setter Property="Height" Value="14" />
+      <Setter Property="Cursor" Value="SizeAll" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border Background="{StaticResource AccentBrush}"
+                    BorderBrush="#101214" BorderThickness="2"
+                    CornerRadius="2" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Application.Resources>
 </Application>
