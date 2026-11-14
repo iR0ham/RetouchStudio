@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Runtime.CompilerServices;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -108,6 +109,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private int _exportLongEdge;
     private bool _keepSourceMetadata;
     private string _cropLabel = "Original";
+    private bool _isCropping;
 
     public EditorViewModel()
     {
@@ -294,6 +296,40 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         get => _cropLabel;
         private set => Set(ref _cropLabel, value);
+    }
+
+    /// <summary>
+    /// While the crop overlay is open the preview shows the whole photo, so the
+    /// frame the owner drags and the picture under it share coordinates.
+    /// </summary>
+    public bool IsCropping
+    {
+        get => _isCropping;
+        set
+        {
+            if (_isCropping == value)
+            {
+                return;
+            }
+            _isCropping = value;
+            Raise(nameof(IsCropping));
+            ScheduleRender();
+        }
+    }
+
+    public CropValue? CurrentCrop => _session?.Document.Crop;
+
+    /// <summary>Writes a crop the owner drew; the preview returns to it.</summary>
+    public void ApplyCustomCrop(CropValue crop)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+        _session.Document.Crop = CropGeometry.Clamp(crop);
+        CropLabel = "Custom";
+        ScheduleCommit();
+        ScheduleRender();
     }
 
     public async Task OpenImageAsync(string imagePath)
@@ -641,7 +677,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             return;
         }
         var token = ++_renderToken;
-        var document = _session.Document;
+        var document = _isCropping ? WithoutCrop(_session.Document) : _session.Document;
 
         var bitmap = await Task.Run(() =>
         {
@@ -661,6 +697,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         var width = source?.Width ?? source16!.Width;
         var height = source?.Height ?? source16!.Height;
         DimensionText = $"{width}×{height} preview";
+    }
+
+    /// <summary>A copy of the document without its crop, for the overlay.</summary>
+    private static DocumentModel WithoutCrop(DocumentModel document)
+    {
+        var copy = new DocumentModel((JsonObject)document.Root.DeepClone());
+        copy.Crop = null;
+        return copy;
     }
 
     private void LoadFromDocument()

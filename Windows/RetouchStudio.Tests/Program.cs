@@ -31,6 +31,7 @@ internal static class Program
             DocumentAndHistory(root);
             UnknownFieldPreservation(root);
             Geometry(root);
+            CropGestures();
             Pixels();
             Adjustments();
             Codec(root);
@@ -193,6 +194,41 @@ internal static class Program
         Check("the export long edge is stored", model.ExportLongEdge == 2048);
         model.ExportLongEdge = null;
         Check("a null long edge leaves no key", model.Root["exportLongEdge"] is null);
+    }
+
+    /// <summary>
+    /// The crop overlay's arithmetic: where the displayed photo sits, and what
+    /// each drag does. The drag rules keep the frame inside the photo and keep
+    /// the two sides from crossing.
+    /// </summary>
+    private static void CropGestures()
+    {
+        var wide = CropGeometry.Fit(800, 400, 800, 600);
+        Check("a wide photo letterboxes in the preview box",
+              wide.X == 0 && Math.Abs(wide.Y - 100) < 1e-9
+              && wide.Width == 800 && wide.Height == 400);
+        var tall = CropGeometry.Fit(400, 800, 800, 600);
+        Check("a tall photo pillarboxes in the preview box",
+              Math.Abs(tall.X - 250) < 1e-9 && tall.Y == 0
+              && tall.Width == 300 && tall.Height == 600);
+        Check("an empty box has no image rect", CropGeometry.Fit(0, 0, 0, 0).Width == 0);
+
+        var start = new CropValue(0.2, 0.2, 0.6, 0.6);
+        var grown = CropGeometry.Resize(start, CropCorner.BottomRight, 0.1, 0.1);
+        Check("dragging the bottom-right corner grows the crop",
+              Near(grown, 0.2, 0.2, 0.7, 0.7));
+        var outward = CropGeometry.Resize(start, CropCorner.TopLeft, -5, -5);
+        Check("a corner cannot leave the photo", Near(outward, 0, 0, 0.8, 0.8));
+        var crossed = CropGeometry.Resize(start, CropCorner.TopLeft, 5, 0);
+        Check("a corner cannot cross its opposite edge",
+              Math.Abs(crossed.X - 0.75) < 1e-9
+              && Math.Abs(crossed.Width - CropGeometry.MinimumSide) < 1e-9);
+        var moved = CropGeometry.Move(start, 0.5, -0.5);
+        Check("moving the crop keeps its size and stays inside",
+              Near(moved, 0.4, 0, 0.6, 0.6));
+        var clamped = CropGeometry.Clamp(new CropValue(-1, 2, 5, 0));
+        Check("an arbitrary crop is brought inside",
+              Near(clamped, 0, 0.95, 1, CropGeometry.MinimumSide));
     }
 
     private static void Pixels()
@@ -1073,6 +1109,11 @@ internal static class Program
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
 
     /// <summary>Largest per-channel difference between two 8-bit buffers.</summary>
+    private static bool Near(CropValue value, double x, double y, double width, double height) =>
+        Math.Abs(value.X - x) < 1e-9 && Math.Abs(value.Y - y) < 1e-9
+        && Math.Abs(value.Width - width) < 1e-9
+        && Math.Abs(value.Height - height) < 1e-9;
+
     private static int PixelDelta(PixelBuffer first, PixelBuffer second)
     {
         var max = 0;
