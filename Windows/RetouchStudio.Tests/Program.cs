@@ -1484,7 +1484,7 @@ internal static class Program
             document.Crop = iteration % 3 == 0
                 ? new CropValue(0.1, 0.1, 0.8, 0.7)
                 : null;
-            document.Orientation = iteration % 4 switch
+            document.Orientation = (iteration % 4) switch
             {
                 1 => OrientationValue.Identity.WithQuarterTurn(1),
                 3 => OrientationValue.Identity.WithFlip(),
