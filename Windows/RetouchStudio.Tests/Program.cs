@@ -1573,6 +1573,21 @@ internal static class Program
         var plain = ExportRunner.RenderDocument(small, Prepare(2));
         Check("an uncropped, unturned stress document keeps the photo size",
               plain.Width == small.Width && plain.Height == small.Height);
+
+        // A long session at preview size: each of these renders allocates
+        // buffers of tens of megabytes that must be collectable, so a host
+        // that retained them would show up as heap growth well past the
+        // ceiling. The measurement is a full collection on both sides.
+        var heapBefore = GC.GetTotalMemory(forceFullCollection: true);
+        for (var iteration = 40; iteration < 60; iteration++)
+        {
+            ExportRunner.RenderDocument(previewSource, Prepare(iteration));
+        }
+        var heapAfter = GC.GetTotalMemory(forceFullCollection: true);
+        var growth = (heapAfter - heapBefore) / 1048576.0;
+        Console.WriteLine($"  stress heap growth {growth:0.0} MB over twenty " +
+                          $"preview renders");
+        Check("twenty photo-sized renders keep the managed heap flat", growth < 150);
     }
 
     /// <summary>

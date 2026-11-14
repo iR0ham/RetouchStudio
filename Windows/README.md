@@ -334,6 +334,18 @@ digs a step edge at +100, while negative clarity softens the same edge. The
 bound, because the 8-bit pass writes the pre-clarity picture as bytes before
 the detail is added.
 
+### Long-session heap (2026-11-14, PR #45)
+
+The render path is stateless — every preview is a fresh `PixelBuffer` — but
+nothing measured that before. The headless suite now runs twenty more
+photo-sized preview renders after the forty-document stress loop, takes
+`GC.GetTotalMemory(forceFullCollection: true)` on both sides, and gates the
+difference at 150 MB. CI run
+[43612517678](https://github.com/iR0ham/RetouchStudio/actions/runs/43612517678)
+on `6a80ba1` printed `stress heap growth -0.0 MB over twenty preview renders`
+with `PASS (170 checks)`. That is a leak signal for the managed heap, not a
+working-set measurement, and twenty renders are not a long session.
+
 ### Installer run (2026-11-14, PR #22)
 
 CI run 43561151628 on `2488ae4` built the MSI from the published folder and
