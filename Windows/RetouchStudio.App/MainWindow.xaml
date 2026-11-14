@@ -30,6 +30,11 @@
         <Button Content="Rotate Left" Style="{StaticResource ToolButton}" Click="RotateLeft_Click" />
         <Button Content="Rotate Right" Style="{StaticResource ToolButton}" Click="RotateRight_Click" />
         <Button Content="Flip" Style="{StaticResource ToolButton}" Click="Flip_Click" />
+        <Border Width="1" Background="{StaticResource LineBrush}" Margin="6,2,12,2" />
+        <ToggleButton x:Name="CompareToggle" Content="Compare" IsChecked="True"
+                      Style="{StaticResource ToolToggle}" Click="CompareToggle_Click"
+                      IsEnabled="{Binding HasDocument}"
+                      ToolTip="Show the untouched photo left of the split" />
       </StackPanel>
     </Border>
 
@@ -85,15 +90,31 @@
               </Style>
             </TextBlock.Style>
           </TextBlock>
-          <Image x:Name="PreviewImage" Source="{Binding Preview}" Stretch="Uniform" Margin="18"
-                 RenderTransformOrigin="0.5,0.5">
-            <Image.RenderTransform>
+          <Grid x:Name="PhotoPlane" Margin="18" RenderTransformOrigin="0.5,0.5">
+            <Grid.RenderTransform>
               <TransformGroup>
                 <ScaleTransform x:Name="PreviewScale" />
                 <TranslateTransform x:Name="PreviewPan" />
               </TransformGroup>
-            </Image.RenderTransform>
-          </Image>
+            </Grid.RenderTransform>
+            <Image x:Name="PreviewImage" Source="{Binding Preview}" Stretch="Uniform" />
+            <Image x:Name="PreviewOriginal" Source="{Binding OriginalPreview}"
+                   Stretch="Uniform" IsHitTestVisible="False" Visibility="Collapsed" />
+          </Grid>
+          <Canvas x:Name="CompareOverlay" Visibility="Collapsed">
+            <Line x:Name="CompareLine" Stroke="#E6F4F7F9" StrokeThickness="1"
+                  IsHitTestVisible="False" />
+            <Border x:Name="CompareBeforeBadge" Background="#CC0B0D0F" CornerRadius="3"
+                    Padding="5,2" IsHitTestVisible="False">
+              <TextBlock Text="BEFORE" Foreground="{StaticResource MutedBrush}" FontSize="9" />
+            </Border>
+            <Border x:Name="CompareAfterBadge" Background="#CC0B0D0F" CornerRadius="3"
+                    Padding="5,2" IsHitTestVisible="False">
+              <TextBlock Text="AFTER" Foreground="{StaticResource AccentBrush}" FontSize="9" />
+            </Border>
+            <Thumb x:Name="CompareThumb" Style="{StaticResource CompareHandle}"
+                   DragDelta="CompareThumb_Drag" />
+          </Canvas>
           <Border x:Name="ZoomDock" Background="#B30B0D0F" CornerRadius="5"
                   BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
                   Padding="2" HorizontalAlignment="Right" VerticalAlignment="Bottom"

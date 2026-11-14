@@ -53,6 +53,7 @@ internal static class Program
             GeometryRenderParity();
             Histogram();
             CanvasZoom();
+            CompareSplitChecks();
         }
         catch (Exception error)
         {
@@ -2040,6 +2041,26 @@ internal static class Program
         }
         Check("zoom out floors at fit",
               Near(stepped.Zoom, 1) && Near(stepped.PanX, 0) && Near(stepped.PanY, 0));
+    }
+
+    /// <summary>
+    /// The before/after split: a drag is the pointer delta over the displayed
+    /// width, added to where the split already was, and it cannot leave the
+    /// photo — the same rule macOS applies.
+    /// </summary>
+    private static void CompareSplitChecks()
+    {
+        Check("the split starts at 45% of the displayed photo",
+              Near(CompareSplit.DefaultFraction, 0.45));
+
+        Check("a split drag is measured against the displayed width",
+              Near(CompareSplit.Move(0.45, 250, 1000), 0.7)
+              && Near(CompareSplit.Move(0.45, -450, 1000), 0)
+              && Near(CompareSplit.Move(0.9, 500, 1000), 1));
+
+        Check("a split on a zero-width photo keeps its fraction",
+              Near(CompareSplit.Move(0.6, 100, 0), 0.6)
+              && Near(CompareSplit.Clamp(-2), 0) && Near(CompareSplit.Clamp(3), 1));
     }
 
     private static void Put(PixelBuffer buffer, int x, int y,

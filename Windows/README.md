@@ -87,11 +87,16 @@ before upload, so a release carries one installer version, not two.
   coordinates that macOS reads, and a turn or a mirror moves the stored crop
   with the frame, as macOS does, so a crop chosen before the turn keeps the
   same region of the photo.
-- Compare: holding Space shows the photo as the decoder delivered it — EXIF
-  rotation applied, no crop, no turn, no adjustments — and releasing it returns
-  to the edit, the way the macOS canvas peeks with the space bar. The original
-  is rendered once per open at preview size, so the peek does not wait on a
-  render, and the window drops it when focus is lost so it cannot stick.
+- Compare: a split at 45% of the displayed photo shows the untouched photo on
+  the left and the edit on the right, with BEFORE and AFTER tags; the divider's
+  round handle drags to any point of the frame, and the Compare button in the
+  top bar turns the split off. The untouched side is the photo as the decoder
+  delivered it — EXIF rotation applied, no crop, no turn, no adjustments — and
+  it is rendered once per open at preview size, so neither the split nor the
+  peek waits on a render. Holding Space shows that same original over the whole
+  frame and releasing returns to the edit, the way the macOS canvas peeks with
+  the space bar; the window drops the peek when focus is lost so it cannot
+  stick.
 - A live histogram of the rendered preview in the colour panel: 64 bins per
   channel plus Rec.709 luma, normalized to the tallest bin, redrawn with every
   preview update. macOS bins an 80 px copy of the preview; Windows bins the
@@ -138,8 +143,10 @@ before upload, so a release carries one installer version, not two.
   anchoring and pan clamps are checked headlessly, but no automated check spins
   a wheel or drags the photo. There are no pinch or touch gestures — WPF would
   turn them into pans — so zoom is the wheel, the dock and the shortcuts.
-- Compare is a whole-frame peek only: the macOS split handle that wipes
-  between original and edit is not part of this host.
+- The compare split's drag is not driven by CI either: `CompareSplit`'s fraction
+  arithmetic is checked headlessly, and the divider is drawn by the window, but
+  no automated check drags the handle. The split position is not remembered
+  between sessions, and macOS keeps it in settings.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
   16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
   encoder is 8-bit.
