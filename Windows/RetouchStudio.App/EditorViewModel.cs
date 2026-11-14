@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Runtime.CompilerServices;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -98,6 +99,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private bool _commitPending;
     private bool _loading;
     private BitmapSource? _preview;
+    private PointCollection? _histogramRed;
+    private PointCollection? _histogramGreen;
+    private PointCollection? _histogramBlue;
+    private PointCollection? _histogramLuma;
     private string _status = "Open a photo to begin.";
     private string _dimensionText = "";
     private bool _canUndo;
@@ -140,6 +145,35 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         get => _preview;
         private set => Set(ref _preview, value);
+    }
+
+    /// <summary>
+    /// The live histogram of the rendered preview, one normalized curve per
+    /// channel plus luma, in a 256-wide 100-high drawing space the panel
+    /// stretches to its own width.
+    /// </summary>
+    public PointCollection? HistogramRed
+    {
+        get => _histogramRed;
+        private set => Set(ref _histogramRed, value);
+    }
+
+    public PointCollection? HistogramGreen
+    {
+        get => _histogramGreen;
+        private set => Set(ref _histogramGreen, value);
+    }
+
+    public PointCollection? HistogramBlue
+    {
+        get => _histogramBlue;
+        private set => Set(ref _histogramBlue, value);
+    }
+
+    public PointCollection? HistogramLuma
+    {
+        get => _histogramLuma;
+        private set => Set(ref _histogramLuma, value);
     }
 
     public string Status
@@ -638,6 +672,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _sourceWidth = 0;
         _sourceHeight = 0;
         Preview = null;
+        SetHistogram(HistogramBins.Empty);
         DimensionText = "";
         Raise(nameof(HasDocument));
         Raise(nameof(Title));
@@ -693,21 +728,20 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         var token = ++_renderToken;
         var document = _isCropping ? WithoutCrop(_session.Document) : _session.Document;
 
-        var bitmap = await Task.Run(() =>
+        var rendered = await Task.Run(() =>
         {
-            if (source16 is not null)
-            {
-                return ToBitmap(
-                    ExportRunner.RenderDocument16(source16, document).ToBgra8());
-            }
-            return ToBitmap(ExportRunner.RenderDocument(source!, document));
+            var buffer = source16 is not null
+                ? ExportRunner.RenderDocument16(source16, document).ToBgra8()
+                : ExportRunner.RenderDocument(source!, document);
+            return (Bitmap: ToBitmap(buffer), Bins: HistogramSampler.Sample(buffer));
         });
 
         if (token != _renderToken)
         {
             return;
         }
-        Preview = bitmap;
+        Preview = rendered.Bitmap;
+        SetHistogram(rendered.Bins);
         var width = source?.Width ?? source16!.Width;
         var height = source?.Height ?? source16!.Height;
         DimensionText = $"{width}×{height} preview";
@@ -762,6 +796,42 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         CanRedo = canRedo;
         IsDirty = _session.IsDirty();
         Raise(nameof(Title));
+    }
+
+    /// <summary>
+    /// Turns the sampled bins into curves for the panel. The drawing space is
+    /// fixed at 256 wide by 100 high so the view only has to stretch it.
+    /// </summary>
+    private void SetHistogram(HistogramBins bins)
+    {
+        if (bins.IsEmpty)
+        {
+            HistogramRed = null;
+            HistogramGreen = null;
+            HistogramBlue = null;
+            HistogramLuma = null;
+            return;
+        }
+        HistogramRed = Curve(bins.Red);
+        HistogramGreen = Curve(bins.Green);
+        HistogramBlue = Curve(bins.Blue);
+        HistogramLuma = Curve(bins.Luma);
+    }
+
+    private static PointCollection? Curve(double[] values)
+    {
+        if (values.Length < 2)
+        {
+            return null;
+        }
+        var step = 256.0 / (values.Length - 1);
+        var points = new PointCollection(values.Length);
+        for (var index = 0; index < values.Length; index++)
+        {
+            points.Add(new Point(index * step, 100 - values[index] * 100));
+        }
+        points.Freeze();
+        return points;
     }
 
     private static BitmapSource ToBitmap(PixelBuffer buffer)
