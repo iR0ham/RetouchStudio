@@ -19,7 +19,9 @@ and its documentation head by run 43577351736, merged as `5ce61ca`, with
 post-merge `main` green in run 43578692160. PR #29 (colour-managed P3 decode) is
 verified by run
 [43582087464](https://github.com/iR0ham/RetouchStudio/actions/runs/43582087464)
-(attempt 2; attempt 1 was cancelled at the job timeout during toolchain setup).
+(attempt 2; attempt 1 was cancelled at the job timeout during toolchain setup)
+and its documentation head by run 43586982825, merged as `413363f`, with
+post-merge `main` green in run 43588258162.
 The original audit ran on `1d32842` (CI run 43531081160, also green).
 **Updated:** 2026-11-14.
 
@@ -177,6 +179,8 @@ must not claim them.
 | 2026-11-14 | `cb9937d` | CI run 43577351736 (PR #27 documentation head) | five jobs green on the exact merge head; merged with a merge commit as `5ce61ca` |
 | 2026-11-14 | `5ce61ca` | CI run 43578692160 (post-merge `main`) | all five jobs green |
 | 2026-11-14 | `c66cf38` | CI run 43582087464 (attempt 2), Windows App job | `WINDOWS HOST TESTS: PASS (124 checks)`; a Display P3 photo decodes colour-managed to sRGB — four in-gamut points within one level of ColorSync, the saturated cyan within 8 levels (rendering-intent difference) and more than 10 levels from the raw P3 numbers; the 16-bit path agrees within four levels (attempt 1 was cancelled at the 45-minute job timeout while installing the Swift toolchain; nothing failed) |
+| 2026-11-14 | `1adafa0` | CI run 43586982825 (PR #29 documentation head) | five jobs green on the exact merge head; merged with a merge commit as `413363f` |
+| 2026-11-14 | `413363f` | CI run 43588258162 (post-merge `main`) | all five jobs green |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
