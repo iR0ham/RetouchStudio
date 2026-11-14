@@ -5,8 +5,12 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# A tag builds and publishes. A manual dispatch builds the same artifacts and
+# uploads them to the run, but never creates a release, so the whole path can
+# be exercised without minting a version.
+
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,7 +19,6 @@ concurrency:
 jobs:
   macos-arm64:
     name: macOS arm64
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -27,8 +30,11 @@ jobs:
           RETOUCH_ARCH: arm64
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ -z "$VERSION" ]; then VERSION="0.0.0"; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-ci"
+          fi
           RETOUCH_VERSION="$VERSION" RETOUCH_BUILD="$GITHUB_RUN_NUMBER" ./build.sh release
       - name: Package DMG
         run: ./Tools/make-dmg.sh
@@ -43,7 +49,6 @@ jobs:
 
   macos-x86_64:
     name: macOS x86_64
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -55,8 +60,11 @@ jobs:
           RETOUCH_ARCH: x86_64
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ -z "$VERSION" ]; then VERSION="0.0.0"; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-ci"
+          fi
           RETOUCH_VERSION="$VERSION" RETOUCH_BUILD="$GITHUB_RUN_NUMBER" ./build.sh release
       - name: Package DMG
         run: ./Tools/make-dmg.sh
@@ -91,17 +99,16 @@ jobs:
           PYTHON: python
         run: ./Tests/Conformance/run-conformance.sh
 
-  # Enable this job only after a real Windows application exists under
-  # Windows/ and Tools/build-windows.ps1 has produced a runnable light editor.
-  # `hashFiles` is not available in a job-level `if` (the workspace is not
-  # checked out yet), so the gate is an explicit repository variable:
-  # set `WINDOWS_APP_READY=true` once those paths exist. Until then the job is
-  # skipped, so a green run never implies a Windows product.
+  # The application ships when the product owner declares it ready by setting
+  # the repository variable WINDOWS_APP_READY=true. `hashFiles` cannot gate a
+  # job before checkout, so the gate is explicit. The job builds and tests the
+  # same host the CI `Windows App` job proves, including the MSI install,
+  # upgrade and uninstall, and uploads the zip and MSI with their checksums.
   windows-app:
     name: Windows x64 application
     runs-on: windows-2025
     timeout-minutes: 60
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_APP_READY == 'true' }}
+    if: ${{ vars.WINDOWS_APP_READY == 'true' }}
     env:
       RETOUCH_SKIP_WORKER: '1'
     steps:
@@ -116,31 +123,41 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - name: Build the Windows application
-        shell: pwsh
-        run: ./Tools/build-windows.ps1
-      - name: Package and checksum
+      - name: Build, test, package and smoke-run the Windows application
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          if ([string]::IsNullOrWhiteSpace($version)) { $version = '0.0.0' }
-          ./Tools/package-windows.ps1 -AppDir build/windows/app -Version $version
-      - name: Upload artifact
+          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:GITHUB_REF_NAME -replace '^v', ''
+          } else { '0.0.0-ci' }
+          ./Tools/build-windows.ps1 -RequireMsi -PackageVersion $version
+      - name: Upload the published host on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-app-publish
+          path: build/windows/app/**
+          if-no-files-found: ignore
+      - name: Upload the zip, the MSI and their checksums
         uses: actions/upload-artifact@v7
         with:
           name: windows-x64
           path: |
-            dist/RetouchStudio-*-windows-x64.zip
-            dist/RetouchStudio-*-windows-x64.zip.sha256
+            build/windows/dist/*.zip
+            build/windows/dist/*.zip.sha256
+            build/windows/dist/*.msi
+            build/windows/dist/*.msi.sha256
           if-no-files-found: error
 
   release:
     name: Publish GitHub Release
     # A manual dispatch must never publish anything; only a version tag does.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos-arm64, macos-x86_64, windows-core]
+    # Windows is a product platform, so a release waits for its package too.
+    needs: [macos-arm64, macos-x86_64, windows-core, windows-app]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - name: Download artifacts
