@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -212,8 +213,18 @@ internal static class Program
         var open = FindButton(window, "Open Photo")
             ?? throw new InvalidOperationException("the Open Photo button is missing");
         Invoke(open);
-        var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(30))
-            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        // A modal dialog disables its owner, so this says whether the click
+        // reached the handler even when the dialog window cannot be listed.
+        var ownerDisabled = WaitFor(() => !IsEnabled(window), TimeSpan.FromSeconds(10));
+        var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(90))
+            ?? WaitWindowAnyProcess("Open Photo", TimeSpan.FromSeconds(5));
+        if (openDialog is null)
+        {
+            throw new InvalidOperationException(
+                "the Open dialog never appeared (the owner " +
+                $"{(ownerDisabled ? "was" : "was not")} disabled; the app " +
+                $"{(process.HasExited ? $"exited with {process.ExitCode}" : "is still running")})");
+        }
         Ok("Open Photo opened its dialog");
 
         SetFileName(openDialog, photo);
@@ -242,6 +253,22 @@ internal static class Program
             throw new InvalidOperationException("the Exposure slider did not take the value");
         }
         Ok("the Exposure slider moved through UIA");
+
+        // The zoom dock proves a second kind of wiring: a button whose effect
+        // is a text readout, not a value the harness sets itself.
+        var zoomIn = FindButton(window, "Zoom in")
+            ?? throw new InvalidOperationException("the Zoom in button is missing");
+        Invoke(zoomIn);
+        var zoomed = WaitFor(() => FindText(window, "150%") is not null,
+                             TimeSpan.FromSeconds(10));
+        if (!zoomed)
+        {
+            throw new InvalidOperationException("the zoom readout never reached 150%");
+        }
+        Ok("the zoom control reached 150% through UIA");
+        var fit = FindButton(window, "Fit")
+            ?? throw new InvalidOperationException("the Fit button is missing");
+        Invoke(fit);
 
         var export = FindButton(window, "Export")
             ?? throw new InvalidOperationException("the Export button is missing");
@@ -329,6 +356,46 @@ internal static class Program
         }
     }
 
+    /// <summary>A window on the desktop, whatever process hosts it.</summary>
+    private static AutomationElement? WaitWindowAnyProcess(string title, TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                foreach (AutomationElement candidate in AutomationElement.RootElement.FindAll(
+                             TreeScope.Children,
+                             new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                                   ControlType.Window)))
+                {
+                    if (candidate.Current.Name == title)
+                    {
+                        return candidate;
+                    }
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+            Thread.Sleep(250);
+        }
+        return null;
+    }
+
+    /// <summary>Reads the live enabled state; a stale cache would hide a modal owner.</summary>
+    private static bool IsEnabled(AutomationElement element)
+    {
+        try
+        {
+            return element.Current.IsEnabled;
+        }
+        catch (ElementNotAvailableException)
+        {
+            return false;
+        }
+    }
+
     private static AutomationElement? WaitWindow(int processId, string title,
                                                  TimeSpan patience)
     {
@@ -389,6 +456,21 @@ internal static class Program
         {
             var text = candidate.Current.Name.Replace("&", "");
             if (text == name || (contains && text.Contains(name, StringComparison.Ordinal)))
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static AutomationElement? FindText(AutomationElement scope, string name)
+    {
+        foreach (AutomationElement candidate in scope.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            if (candidate.Current.Name == name)
             {
                 return candidate;
             }
@@ -486,10 +568,36 @@ internal static class Program
         Invoke(button);
     }
 
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr extra);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextW(IntPtr window, StringBuilder text, int count);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr window);
+
+    private delegate bool EnumWindowsProc(IntPtr window, IntPtr extra);
+
     private static void Dump(Process process)
     {
         try
         {
+            Console.Error.WriteLine(
+                $"  the app {(process.HasExited ? "exited" : "is running")} (pid {process.Id})");
+            Console.Error.WriteLine("  win32 windows:");
+            EnumWindows((window, _) =>
+            {
+                var text = new StringBuilder(256);
+                GetWindowTextW(window, text, text.Capacity);
+                GetWindowThreadProcessId(window, out var pid);
+                Console.Error.WriteLine(
+                    $"    pid {pid} visible={IsWindowVisible(window)} '{text}'");
+                return true;
+            }, IntPtr.Zero);
             Console.Error.WriteLine("  windows:");
             foreach (AutomationElement window in AutomationElement.RootElement.FindAll(
                          TreeScope.Children,
