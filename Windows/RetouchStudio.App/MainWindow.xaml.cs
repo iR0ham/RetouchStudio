@@ -203,6 +203,50 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void BatchExport_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.HasDocument)
+        {
+            return;
+        }
+        var photos = new OpenFileDialog
+        {
+            Title = "Batch Export",
+            Filter = "Images|*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp|All files|*.*",
+            Multiselect = true,
+            CheckFileExists = true,
+        };
+        if (photos.ShowDialog(this) != true || photos.FileNames.Length == 0)
+        {
+            return;
+        }
+        var folder = new OpenFolderDialog
+        {
+            Title = "Export the selection to",
+        };
+        if (folder.ShowDialog(this) != true)
+        {
+            return;
+        }
+        try
+        {
+            var results = await _vm.BatchExportAsync(photos.FileNames, folder.FolderName);
+            var failed = results.Where(item => item.Error is not null).ToList();
+            if (failed.Count > 0)
+            {
+                var lines = string.Join("\n", failed.Select(
+                    item => $"{Path.GetFileName(item.Source)}: {item.Error}"));
+                MessageBox.Show(this,
+                    $"Exported {results.Count - failed.Count} of {results.Count}.\n\n{lines}",
+                    "Batch Export", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        catch (Exception error)
+        {
+            Report("The photos could not be exported", error);
+        }
+    }
+
     private void Undo_Click(object sender, RoutedEventArgs e) => _vm.Undo();
 
     private void Redo_Click(object sender, RoutedEventArgs e) => _vm.Redo();

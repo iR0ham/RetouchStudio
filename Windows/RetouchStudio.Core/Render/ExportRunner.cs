@@ -66,6 +66,24 @@ public static class ExportRunner
         {
             throw new InvalidOperationException("the document has no photo");
         }
+        return await ExportSourceAsync(document, codec, sourcePath, destination,
+                                       format, quality, longEdge, stripPrivacyMetadata);
+    }
+
+    /// <summary>
+    /// One export from an explicit source, for a document whose edits apply to a
+    /// photo other than the opened one. A batch uses this so every file takes
+    /// the same path as a single export.
+    /// </summary>
+    public static async Task<ExportPlan> ExportSourceAsync(DocumentModel document,
+                                                           Imaging.IImageCodec codec,
+                                                           string sourcePath,
+                                                           string destination,
+                                                           string format,
+                                                           double quality,
+                                                           int longEdge,
+                                                           bool stripPrivacyMetadata = true)
+    {
         if (SameFile(sourcePath, destination))
         {
             throw new InvalidOperationException(

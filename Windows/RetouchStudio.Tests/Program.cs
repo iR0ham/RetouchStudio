@@ -37,6 +37,7 @@ internal static class Program
             Export(root);
             Corpus(root);
             BitDepth(root);
+            BatchExport(root);
             AdjustmentEvidence();
             FormatProbes(root);
             Metadata(root);
@@ -830,6 +831,89 @@ internal static class Program
         Check("clarity at both depths stays inside the 8-bit blur's truncation",
               sharpDrift <= 3);
     }
+
+    /// <summary>
+    /// A batch must produce exactly what the single-file export produces, for
+    /// every source, without touching the sources and without overwriting a
+    /// file it did not create. One unreadable file must not stop the others.
+    /// </summary>
+    private static void BatchExport(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var fixtures = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures");
+        var sourcesDir = Path.Combine(root, "batch-src");
+        var destination = Path.Combine(root, "batch-out");
+        Directory.CreateDirectory(sourcesDir);
+        var names = new[] { "one.png", "two.png", "three.png" };
+        var origins = new[]
+        {
+            Path.Combine(fixtures, "F01_portrait_srgb_8.png"),
+            Path.Combine(fixtures, "F05_gradient_sky.png"),
+            Path.Combine(fixtures, "F11_p3_16bit.png"),
+        };
+        var sources = new List<string>();
+        for (var index = 0; index < origins.Length; index++)
+        {
+            var copy = Path.Combine(sourcesDir, names[index]);
+            File.Copy(origins[index], copy);
+            sources.Add(copy);
+        }
+        var before = sources.Select(Sha256).ToArray();
+
+        using var session = ProjectSession.Create(origins[0]);
+        session.Document.SetAdjustment("exposure", 40);
+
+        var batch = BatchExporter.ExportAsync(session.Document, codec,
+            new BatchExportRequest(sources, destination, "png", 1.0, 0, true))
+            .GetAwaiter().GetResult();
+        Check("a batch reports one result per source", batch.Count == sources.Count);
+        Check("a batch exports every file",
+              batch.All(item => item.Destination is not null && item.Error is null));
+        Check("a batch names the results after the sources",
+              batch.Select(item => Path.GetFileName(item.Destination!)).SequenceEqual(
+                  new[] { "one-retouched.png", "two-retouched.png", "three-retouched.png" }));
+        Check("a batch writes 16-bit PNGs",
+              batch.All(item => TryPngDepth(File.ReadAllBytes(item.Destination!), out var depth)
+                                && depth == 16));
+        Check("a batch leaves the sources untouched",
+              sources.Select(Sha256).SequenceEqual(before));
+
+        var oneOff = Path.Combine(root, "batch-single.png");
+        ExportRunner.ExportSourceAsync(session.Document, codec, sources[2], oneOff,
+                                       "png", 1.0, 0)
+                    .GetAwaiter().GetResult();
+        var fromBatch = codec.Decode16Async(batch[2].Destination!).GetAwaiter().GetResult();
+        var fromSingle = codec.Decode16Async(oneOff).GetAwaiter().GetResult();
+        Check("a batch renders exactly like the single export",
+              fromBatch.Width == fromSingle.Width && fromBatch.Height == fromSingle.Height
+              && fromBatch.Pixels.AsSpan().SequenceEqual(fromSingle.Pixels));
+
+        var collisionDir = Path.Combine(root, "batch-collision");
+        Directory.CreateDirectory(collisionDir);
+        var existing = Path.Combine(collisionDir, "one-retouched.png");
+        var sentinel = new byte[] { 1, 2, 3 };
+        File.WriteAllBytes(existing, sentinel);
+        var collision = BatchExporter.ExportAsync(session.Document, codec,
+            new BatchExportRequest(new[] { sources[0] }, collisionDir, "png", 1.0, 0, true))
+            .GetAwaiter().GetResult();
+        Check("a batch never overwrites a file it did not create",
+              collision[0].Destination is not null
+              && Path.GetFileName(collision[0].Destination) == "one-retouched-2.png"
+              && File.ReadAllBytes(existing).SequenceEqual(sentinel));
+
+        var mixed = BatchExporter.ExportAsync(session.Document, codec,
+            new BatchExportRequest(
+                new[] { Path.Combine(sourcesDir, "missing.png"), sources[1] },
+                Path.Combine(root, "batch-mixed"), "jpeg", 0.9, 0, true))
+            .GetAwaiter().GetResult();
+        Check("a batch reports a file it cannot read and exports the rest",
+              mixed[0].Destination is null && mixed[0].Error is not null
+              && mixed[1].Destination is not null && mixed[1].Error is null
+              && File.Exists(mixed[1].Destination));
+    }
+
+    private static string Sha256(string path) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
 
     /// <summary>Largest difference between an 8-bit buffer and its promotion.</summary>
     private static int MaxDelta(PixelBuffer narrow, PixelBuffer16 wide)

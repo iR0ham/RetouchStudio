@@ -18,6 +18,7 @@
         <Button Content="Open Project" Style="{StaticResource ToolButton}" Click="OpenProject_Click" />
         <Button Content="Save Project" Style="{StaticResource ToolButton}" Click="Save_Click" />
         <Button Content="Export" Style="{StaticResource ToolButton}" Click="Export_Click" />
+        <Button Content="Batch Export…" Style="{StaticResource ToolButton}" Click="BatchExport_Click" />
         <Border Width="1" Background="{StaticResource LineBrush}" Margin="6,2,12,2" />
         <Button Content="Undo" Style="{StaticResource ToolButton}" Click="Undo_Click"
                 IsEnabled="{Binding CanUndo}" />
