@@ -170,7 +170,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-2025` — the Swift installer download is cached by the setup action —
 and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 155
+`.def` export list, publishes the WPF host self-contained for x64, runs the 169
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
@@ -225,10 +225,11 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `dd7177f` (PR #34, unsupported-edit guard) | `CI` run 43599860760 | five jobs green; `Windows App` reports `PASS (146 checks)`; both interchange fixtures name the six unrenderable edits, empty lists and disabled tools name none, one sticker warns |
 | 2026-11-14 | `dd14310` (merge of PR #34) | `CI` run 43600764519, `main` | all five jobs green |
 | 2026-11-14 | `1c3bae1` (PR #36 head, merged as `3fa6883`) | `CI` run 43600876917 | five jobs green; `Windows App` reports `PASS (152 checks)`; the perf lines print again (median 1056 ms, export 1368 ms), meeting the budgets on a second runner |
-| 2026-11-14 | `0ab9a4d` (Release dry run, `workflow_dispatch`) | `Release` run 43598113385 | both macOS slices and `Windows StudioCore` succeed; `Windows x64 application` succeeds with the MSI install, upgrade and uninstall; publish is skipped because the ref is not a tag; the four artifacts and their checksums were re-verified locally |
-| 2026-11-14 | `1c3bae1` (PR #36 head, merged as `3fa6883`) | `CI` run 43600876917 | five jobs green; `Windows App` reports `PASS (152 checks)`; the perf lines print again (median 1056 ms, export 1368 ms), meeting the budgets on a second runner |
 | 2026-11-14 | `0ab9a4d` (`workflow_dispatch` of `Release`) | `Release` run 43598113385 | four build jobs green, publish skipped by design: both per-arch DMGs and the Windows zip and MSI built and uploaded; artifacts re-verified locally (`shasum -c` OK, `hdiutil verify` valid, ad-hoc signature valid, Gatekeeper rejection expected without notarization); the run exposed the `$CONFIG` multibyte fault in `build.sh` and the leftover upgrade MSI |
 | 2026-11-14 | `d57aa78` (merge of PR #32) | `CI` run 43599028784, `main` | all five jobs green |
+| 2026-11-14 | `07c7713` (PR #38 head, merged as `b6b72cb`) | `CI` run 43603560807 | five jobs green; `Windows App` reports `PASS (156 checks)`; a crop renders the 205x134 box at (26, 19) of the photo, a flip mirrors each row and a quarter turn reads the clockwise source, against indices written in the test |
+| 2026-11-14 | `b6b72cb` (merge of PR #38) | `CI` run 43604723334, `main` | all five jobs green on the merged tree |
+| 2026-11-14 | `d233a3d` (PR #37 head, merged as `32912ba`) | `CI` run 43604785315 | five jobs green; the export long edge is chosen in the dialog and reaches the plan |
 
 
 PR #13 was merged with a normal merge commit after every required context and

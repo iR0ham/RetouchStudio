@@ -75,11 +75,16 @@ before upload, so a release carries one installer version, not two.
 - Nine global sliders in the same -100…100 range as macOS: exposure, contrast,
   blacks, whites, saturation, vibrance, warmth, clarity, vignette. Undo, redo and
   the dirty flag are the shared `DocumentHistory`, not a host copy.
-- Orientation: mirror, clockwise quarter turns and a straighten angle.
+- Orientation: clockwise quarter turns, then a straighten angle, then a
+  mirror, the order macOS composes. A straighten zooms just enough that the
+  turned photo still covers the frame instead of stretching edge pixels into
+  the corners, using the same cover scale macOS computes.
 - Crop presets (square, 4:5, 3:2, 16:9) and a custom crop: "Custom…" opens an
   overlay on the uncropped photo, four corner handles resize the frame, Apply
   writes it and Cancel leaves the document alone. Every crop is the same
-  normalized record in photo coordinates that macOS reads.
+  normalized record in upright-frame coordinates that macOS reads, and a turn
+  or a mirror moves the stored crop with the frame, as macOS does, so a crop
+  chosen before the turn keeps the same region of the photo.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan
@@ -151,18 +156,34 @@ before upload, so a release carries one installer version, not two.
   and colour space. Both pipelines use the same formulas and order; a headless
   check renders one image through both and requires them to agree within one
   8-bit level, which is the only difference rounding may introduce.
-- Document order: crop in normalized photo coordinates, then orientation
-  (mirror, quarter turns, straighten), then the nine global adjustments. The
-  crop is stored against the photo, exactly as the shared model says.
+- Document order: orientation (quarter turns, straighten in the turned frame,
+  mirror), then the crop, then the nine global adjustments. The orientation is
+  baked in first, so the crop — like the one macOS stores — describes the
+  upright frame the owner sees; `ImageProcessor.load` on macOS states and does
+  the same. A headless
+  check turns a photo a quarter clockwise and crops the frame's left half,
+  which must be the photo's bottom half, so the order cannot drift back.
+  Another check turns and then mirrors, in both depths, and requires each
+  pixel at (x, y) to be the photo's (y, x) — the composition macOS produces;
+  a third requires every corner of a 20-degree straighten to come from inside
+  the photo rather than from a stretched edge pixel.
+- The crop presets (square, 4:5, 3:2, 16:9) name the aspect of the finished
+  frame, so an odd quarter turn changes only the frame's aspect, never the
+  preset's meaning: 16:9 on a quarter-turned 4:3 photo is a full-width band of
+  the turned frame. While the crop overlay is open the preview shows the
+  upright frame without its crop, so the rectangle the owner drags and the
+  stored crop share one coordinate system.
 - The crop and the two lossless orientation remaps are compared against source
   indices written in the test, not against the helper that produced them: a
   0.1/0.1/0.8/0.7 crop of a 256x192 frame must render the 205x134 box at
   (26, 19) pixel for pixel, a flip must mirror across its row, and a quarter
   turn must read `(y, H-1-x)` of the source. A transpose or an off-by-one fails
   there even when the arithmetic still looks plausible.
-- Straighten rotates clockwise for a positive angle, keeps the canvas size and
-  samples with clamped edges. The macOS renderer's sign and framing are not
-  claimed to match.
+- Straighten rotates clockwise for a positive angle and keeps the canvas size;
+  the cover scale and the position of the rotation in the turn/straighten/
+  mirror order are the same formulas macOS uses (`Models/Orientation.swift`),
+  so both hosts frame the photo the same way. Pixel-for-pixel agreement with
+  Core Image is not claimed: the resampling kernel differs.
 - Preview renders the decoded photo resized to a 1600-pixel long edge; export
   re-renders from the full-size decode.
 - A crop or a turn changes the frame's aspect, so the plan's pixel size

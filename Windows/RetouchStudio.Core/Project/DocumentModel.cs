@@ -4,7 +4,8 @@ using System.Text.Json.Nodes;
 
 namespace RetouchStudio.Core.Project;
 
-/// <summary>A crop in normalized photo coordinates, top-left origin.</summary>
+/// <summary>A crop in normalized upright-frame coordinates, top-left origin —
+/// the record macOS stores against the oriented frame.</summary>
 public readonly record struct CropValue(double X, double Y, double Width, double Height);
 
 /// <summary>

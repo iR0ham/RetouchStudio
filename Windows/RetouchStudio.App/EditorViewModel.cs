@@ -473,8 +473,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             return;
         }
-        _session.Document.Orientation =
-            _session.Document.Orientation.WithQuarterTurn(quarterTurns);
+        var document = _session.Document;
+        document.Orientation = document.Orientation.WithQuarterTurn(quarterTurns);
+        if (document.Crop is { } crop)
+        {
+            var turned = CropGeometry.Rotate(crop, quarterTurns);
+            document.Crop = CropGeometry.IsFull(turned) ? null : turned;
+            CropLabel = document.Crop is null ? "Original" : "Custom";
+        }
         ScheduleCommit();
         ScheduleRender();
     }
@@ -485,7 +491,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             return;
         }
-        _session.Document.Orientation = _session.Document.Orientation.WithFlip();
+        var document = _session.Document;
+        document.Orientation = document.Orientation.WithFlip();
+        if (document.Crop is { } crop)
+        {
+            document.Crop = CropGeometry.Mirror(crop);
+            CropLabel = "Custom";
+        }
         ScheduleCommit();
         ScheduleRender();
     }
@@ -493,7 +505,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>
     /// A centred crop at a fixed aspect. Freeform crop handles are not part of
     /// this host yet; the presets cover the common portrait and print ratios and
-    /// write the same normalized crop record the macOS app reads.
+    /// write the same normalized frame crop the macOS app reads. The preset
+    /// names the finished frame's aspect, so where the frame is turned its
+    /// aspect is the turned one.
     /// </summary>
     public void ApplyCrop(string preset)
     {
@@ -502,37 +516,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             return;
         }
         var document = _session.Document;
-        if (preset == "original")
-        {
-            document.Crop = null;
-            CropLabel = "Original";
-        }
-        else
-        {
-            var aspect = preset switch
-            {
-                "square" => 1.0,
-                "4:5" => 4.0 / 5.0,
-                "3:2" => 3.0 / 2.0,
-                "16:9" => 16.0 / 9.0,
-                _ => 1.0,
-            };
-            var photoAspect = document.Orientation.QuarterTurns % 2 == 0
-                ? _sourceWidth / (double)_sourceHeight
-                : _sourceHeight / (double)_sourceWidth;
-            double width = 1;
-            double height = 1;
-            if (aspect > photoAspect)
-            {
-                height = photoAspect / aspect;
-            }
-            else
-            {
-                width = aspect / photoAspect;
-            }
-            document.Crop = new CropValue((1 - width) / 2, (1 - height) / 2, width, height);
-            CropLabel = preset;
-        }
+        var crop = CropGeometry.Preset(preset, _sourceWidth, _sourceHeight,
+                                       document.Orientation.QuarterTurns);
+        document.Crop = crop;
+        CropLabel = crop is null ? "Original" : preset;
         ScheduleCommit();
         ScheduleRender();
     }
@@ -726,7 +713,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         DimensionText = $"{width}×{height} preview";
     }
 
-    /// <summary>A copy of the document without its crop, for the overlay.</summary>
+    /// <summary>
+    /// A copy of the document without its crop: the overlay drags a rectangle
+    /// over the upright, uncropped frame the owner sees, exactly as macOS does,
+    /// and the finished frame returns when the crop is applied.
+    /// </summary>
     private static DocumentModel WithoutCrop(DocumentModel document)
     {
         var copy = new DocumentModel((JsonObject)document.Root.DeepClone());

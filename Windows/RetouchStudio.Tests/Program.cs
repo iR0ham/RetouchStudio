@@ -47,6 +47,8 @@ internal static class Program
             Interchange(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard();
+            CropPresets();
+            OrientationComposition();
             GeometryRenderParity();
         }
         catch (Exception error)
@@ -224,14 +226,14 @@ internal static class Program
         Check("a corner cannot leave the photo", Near(outward, 0, 0, 0.8, 0.8));
         var crossed = CropGeometry.Resize(start, CropCorner.TopLeft, 5, 0);
         Check("a corner cannot cross its opposite edge",
-              Math.Abs(crossed.X - 0.75) < 1e-9
+              Math.Abs(crossed.X - (0.8 - CropGeometry.MinimumSide)) < 1e-9
               && Math.Abs(crossed.Width - CropGeometry.MinimumSide) < 1e-9);
         var moved = CropGeometry.Move(start, 0.5, -0.5);
         Check("moving the crop keeps its size and stays inside",
               Near(moved, 0.4, 0, 0.6, 0.6));
         var clamped = CropGeometry.Clamp(new CropValue(-1, 2, 5, 0));
         Check("an arbitrary crop is brought inside",
-              Near(clamped, 0, 0.95, 1, CropGeometry.MinimumSide));
+              Near(clamped, 0, 1 - CropGeometry.MinimumSide, 1, CropGeometry.MinimumSide));
     }
 
     private static void Pixels()
@@ -265,7 +267,7 @@ internal static class Program
               Get(flipped, 0, 0).R == 200 && Get(flipped, 1, 0).R == 17);
 
         var oriented = pair.ApplyOrientation(new OrientationValue(0, true, 0));
-        Check("apply-orientation mirrors first", Get(oriented, 0, 0).R == 200);
+        Check("apply-orientation mirrors an unturned frame", Get(oriented, 0, 0).R == 200);
 
         var wide = new PixelBuffer(8, 4);
         var resized = wide.ResizeLongEdge(4);
@@ -890,22 +892,22 @@ internal static class Program
             Check("the 16-bit source carries precision 8 bits cannot hold",
                   CountOffGrid(p3) > 0);
 
-            // A crop is stored against the photo, so it runs before the turn.
-            // The crop is deliberately not square: a swapped order would give
-            // the same pixel count but a different frame, and only this shape
-            // catches it.
+            // The turn is baked in first and the crop names the upright frame,
+            // as macOS ImageProcessor.load does. The crop is deliberately not
+            // square so a reversed order changes the frame, and the expected
+            // pixels are built in the documented order.
             session.Document.Crop = new CropValue(0.25, 0.1, 0.5, 0.4);
             session.Document.Orientation = session.Document.Orientation.WithQuarterTurn(1);
             var cropped = Path.Combine(root, "depth-16-crop-turn.png");
             ExportRunner.ExportAsync(session, codec, cropped, "png", 1.0, 0)
                         .GetAwaiter().GetResult();
             var croppedBack = codec.Decode16Async(cropped).GetAwaiter().GetResult();
-            var expected = p3.Crop(session.Document.Crop!.Value)
-                             .ApplyOrientation(session.Document.Orientation);
-            Check("a 16-bit export crops in photo coordinates before the turn",
-                  croppedBack.Width == 205 && croppedBack.Height == 256
-                  && croppedBack.Width == expected.Width
-                  && croppedBack.Height == expected.Height);
+            var expected = p3.ApplyOrientation(session.Document.Orientation)
+                             .Crop(session.Document.Crop!.Value);
+            Check("a 16-bit export crops the upright frame after the turn",
+                  croppedBack.Width == expected.Width
+                  && croppedBack.Height == expected.Height
+                  && croppedBack.Width == 256 && croppedBack.Height == 205);
             Check("a cropped 16-bit export keeps every sample",
                   croppedBack.Pixels.AsSpan().SequenceEqual(expected.Pixels));
         }
@@ -1614,6 +1616,207 @@ internal static class Program
     }
 
     /// <summary>
+    /// A preset names the aspect of the finished frame, and the crop lives in
+    /// that upright frame: the orientation is baked in first, as macOS does.
+    /// The arithmetic is checked against literal fractions, two cases are
+    /// rendered end to end, and one proves the order — after a quarter turn the
+    /// frame's left half must be the photo's bottom half.
+    /// </summary>
+    private static void CropPresets()
+    {
+        var square = CropGeometry.Preset("square", 4000, 3000, 0);
+        Check("a square preset crops three quarters of the width",
+              square is { } s && Near(s.Width, 0.75) && Near(s.Height, 1)
+              && Near(s.X, 0.125) && Near(s.Y, 0));
+
+        var wide = CropGeometry.Preset("16:9", 4000, 3000, 0);
+        Check("a 16:9 preset keeps the full width and crops the height",
+              wide is { } w && Near(w.Width, 1) && Near(w.Height, 0.75)
+              && Near(w.Y, 0.125));
+
+        var widePortrait = CropGeometry.Preset("16:9", 2250, 4000, 0);
+        var widePortraitTurned = CropGeometry.Preset("16:9", 2250, 4000, 1);
+        Check("a 16:9 preset bands a 9:16 photo but crops nothing once turned",
+              widePortrait is { } wp && Near(wp.Width, 1)
+              && Near(wp.Height, 0.31640625) && Near(wp.Y, 0.341796875)
+              && widePortraitTurned is { } wpt && Near(wpt.Width, 1)
+              && Near(wpt.Height, 1) && Near(wpt.X, 0) && Near(wpt.Y, 0));
+
+        Check("the original preset has no crop",
+              CropGeometry.Preset("original", 4000, 3000, 0) is null);
+
+        var source = new PixelBuffer(256, 192);
+        var document = new DocumentModel(new JsonObject())
+        {
+            Crop = CropGeometry.Preset("16:9", 256, 192, 1),
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1),
+        };
+        var rendered = ExportRunner.RenderDocument(source, document);
+        Check("a 16:9 preset plus a quarter turn exports a 16:9 frame",
+              rendered.Width == 192 && rendered.Height == 108);
+
+        var photo = new PixelBuffer(256, 192);
+        for (var y = 0; y < photo.Height; y++)
+        {
+            for (var x = 0; x < photo.Width; x++)
+            {
+                Put(photo, x, y, (byte)x, (byte)y, (byte)((x * 7 + y * 13) % 256));
+            }
+        }
+        var half = new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1),
+            Crop = new CropValue(0, 0, 0.5, 1),
+        };
+        var leftHalf = ExportRunner.RenderDocument(photo, half);
+        var orderMatches = leftHalf.Width == 96 && leftHalf.Height == 256;
+        for (var y = 0; orderMatches && y < 256; y++)
+        {
+            for (var x = 0; orderMatches && x < 96; x++)
+            {
+                orderMatches = Matches(leftHalf, x, y, photo, y, 191 - x);
+            }
+        }
+        Check("a crop takes the upright frame's left half after a quarter turn",
+              orderMatches);
+
+        var deep = new PixelBuffer16(256, 192);
+        for (var y = 0; y < deep.Height; y++)
+        {
+            for (var x = 0; x < deep.Width; x++)
+            {
+                var offset = (y * deep.Width + x) * 4;
+                deep.Pixels[offset] = (ushort)((x * 7 + y * 13) % 256 * 257);
+                deep.Pixels[offset + 1] = (ushort)(y * 257);
+                deep.Pixels[offset + 2] = (ushort)(x * 257);
+                deep.Pixels[offset + 3] = 65535;
+            }
+        }
+        var deepHalf = ExportRunner.RenderDocument16(deep, half);
+        var deepMatches = deepHalf.Width == 96 && deepHalf.Height == 256;
+        for (var y = 0; y < 256 && deepMatches; y++)
+        {
+            for (var x = 0; x < 96 && deepMatches; x++)
+            {
+                var ai = (y * deepHalf.Width + x) * 4;
+                var bi = ((191 - x) * deep.Width + y) * 4;
+                for (var channel = 0; channel < 4 && deepMatches; channel++)
+                {
+                    deepMatches = deepHalf.Pixels[ai + channel] == deep.Pixels[bi + channel];
+                }
+            }
+        }
+        Check("the 16-bit export turns and crops the same frame", deepMatches);
+
+        var leftWindow = new CropValue(0, 0, 0.5, 1);
+        var promoted = CropGeometry.Rotate(leftWindow, 1);
+        Check("a quarter turn moves the crop to the frame's top half",
+              Near(promoted.X, 0) && Near(promoted.Y, 0)
+              && Near(promoted.Width, 1) && Near(promoted.Height, 0.5));
+
+        var roundTrip = CropGeometry.Rotate(new CropValue(0.1, 0.2, 0.3, 0.4), 4);
+        Check("four turns leave the crop where it was",
+              Near(roundTrip.X, 0.1) && Near(roundTrip.Y, 0.2)
+              && Near(roundTrip.Width, 0.3) && Near(roundTrip.Height, 0.4));
+
+        var mirrored = CropGeometry.Mirror(leftWindow);
+        Check("a mirror moves the crop to the other side",
+              Near(mirrored.X, 0.5) && Near(mirrored.Y, 0)
+              && Near(mirrored.Width, 0.5) && Near(mirrored.Height, 1)
+              && CropGeometry.IsFull(CropGeometry.Mirror(CropGeometry.Rotate(
+                     new CropValue(0, 0, 1, 1), 1))));
+
+        var follow = new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1),
+            Crop = CropGeometry.Rotate(leftWindow, 1),
+        };
+        var followed = ExportRunner.RenderDocument(photo, follow);
+        var follows = followed.Width == 192 && followed.Height == 128;
+        for (var y = 0; y < 128 && follows; y++)
+        {
+            for (var x = 0; x < 192 && follows; x++)
+            {
+                follows = Matches(followed, x, y, photo, y, 191 - x);
+            }
+        }
+        Check("a crop chosen before a turn keeps the same photo region", follows);
+    }
+
+    private static void OrientationComposition()
+    {
+        var photo = new PixelBuffer(256, 192);
+        var deep = new PixelBuffer16(256, 192);
+        for (var y = 0; y < photo.Height; y++)
+        {
+            for (var x = 0; x < photo.Width; x++)
+            {
+                Put(photo, x, y, (byte)x, (byte)y, (byte)((x * 7 + y * 13) % 256));
+                var offset = (y * deep.Width + x) * 4;
+                deep.Pixels[offset] = (ushort)((x * 7 + y * 13) % 256 * 257);
+                deep.Pixels[offset + 1] = (ushort)(y * 257);
+                deep.Pixels[offset + 2] = (ushort)(x * 257);
+                deep.Pixels[offset + 3] = 65535;
+            }
+        }
+        var document = new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1).WithFlip(),
+        };
+        var mirrored = ExportRunner.RenderDocument(photo, document);
+        var mirrored16 = ExportRunner.RenderDocument16(deep, document);
+        var compositionMatches = mirrored.Width == 192 && mirrored.Height == 256
+                                 && mirrored16.Width == 192 && mirrored16.Height == 256;
+        for (var y = 0; y < 256 && compositionMatches; y++)
+        {
+            for (var x = 0; x < 192 && compositionMatches; x++)
+            {
+                compositionMatches = Matches(mirrored, x, y, photo, y, x);
+                var ai = (y * 192 + x) * 4;
+                var bi = (x * 256 + y) * 4;
+                for (var channel = 0; channel < 4 && compositionMatches; channel++)
+                {
+                    compositionMatches = mirrored16.Pixels[ai + channel] == deep.Pixels[bi + channel];
+                }
+            }
+        }
+        Check("a mirror follows the quarter turn in both depths", compositionMatches);
+
+        var framed = new PixelBuffer(400, 400);
+        for (var y = 0; y < 400; y++)
+        {
+            for (var x = 0; x < 400; x++)
+            {
+                Put(framed, x, y, (byte)(x / 2), (byte)(y / 2), 0);
+            }
+        }
+        var straight = ExportRunner.RenderDocument(framed, new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithAngle(20),
+        });
+        // Without the cover scale every corner samples the clamped edge, which
+        // is the corner pixel itself; with it every corner is resampled from
+        // inside the photo, so none of them can equal its source corner.
+        var corners = new[] { (0, 0), (399, 0), (0, 399), (399, 399) };
+        var covered = straight.Width == 400 && straight.Height == 400;
+        foreach (var (x, y) in corners)
+        {
+            covered &= Get(straight, x, y) != Get(framed, x, y);
+        }
+        Check("a straighten covers every corner from inside the photo", covered);
+    }
+
+    private static bool Matches(PixelBuffer a, int ax, int ay, PixelBuffer b, int bx, int by)
+    {
+        var ai = (ay * a.Width + ax) * 4;
+        var bi = (by * b.Width + bx) * 4;
+        return a.Pixels[ai] == b.Pixels[bi]
+               && a.Pixels[ai + 1] == b.Pixels[bi + 1]
+               && a.Pixels[ai + 2] == b.Pixels[bi + 2]
+               && a.Pixels[ai + 3] == b.Pixels[bi + 3];
+    }
+
+    /// <summary>
     /// Crop and orientation are pure pixel remaps, so each result is compared
     /// against an index written in this test rather than against the helper
     /// that produced it: a transpose, a mirrored turn or an off-by-one shows
@@ -1647,7 +1850,7 @@ internal static class Program
         {
             for (var x = 0; x < cropped.Width; x++)
             {
-                cropMatches = Same(cropped, x, y, plain, 26 + x, 19 + y);
+                cropMatches = Matches(cropped, x, y, plain, 26 + x, 19 + y);
             }
         }
         Check("every crop pixel is the photo pixel at that offset", cropMatches);
@@ -1661,7 +1864,7 @@ internal static class Program
         {
             for (var x = 0; x < source.Width; x++)
             {
-                flipMatches = Same(flipped, x, y, plain, source.Width - 1 - x, y);
+                flipMatches = Matches(flipped, x, y, plain, source.Width - 1 - x, y);
             }
         }
         Check("a horizontal flip mirrors each pixel across its row", flipMatches);
@@ -1675,21 +1878,14 @@ internal static class Program
         {
             for (var x = 0; x < turned.Width; x++)
             {
-                turnMatches = Same(turned, x, y, plain, y, source.Height - 1 - x);
+                turnMatches = Matches(turned, x, y, plain, y, source.Height - 1 - x);
             }
         }
         Check("a quarter turn maps each output pixel to its clockwise source", turnMatches);
     }
 
-    private static bool Same(PixelBuffer a, int ax, int ay, PixelBuffer b, int bx, int by)
-    {
-        var ai = (ay * a.Width + ax) * 4;
-        var bi = (by * b.Width + bx) * 4;
-        return a.Pixels[ai] == b.Pixels[bi]
-               && a.Pixels[ai + 1] == b.Pixels[bi + 1]
-               && a.Pixels[ai + 2] == b.Pixels[bi + 2]
-               && a.Pixels[ai + 3] == b.Pixels[bi + 3];
-    }
+    private static bool Near(double value, double expected) =>
+        Math.Abs(value - expected) < 1e-9;
 
     /// <summary>
     /// The checkout that holds the shared fixtures. `build-windows.ps1` runs the
