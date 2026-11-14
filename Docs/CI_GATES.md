@@ -170,7 +170,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-2025` — the Swift installer download is cached by the setup action —
 and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 152
+`.def` export list, publishes the WPF host self-contained for x64, runs the 155
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
