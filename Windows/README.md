@@ -80,11 +80,13 @@ before upload, so a release carries one installer version, not two.
   turned photo still covers the frame instead of stretching edge pixels into
   the corners, using the same cover scale macOS computes.
 - Crop presets (square, 4:5, 3:2, 16:9) and a custom crop: "Custom…" opens an
-  overlay on the uncropped photo, four corner handles resize the frame, Apply
-  writes it and Cancel leaves the document alone. Every crop is the same
-  normalized record in upright-frame coordinates that macOS reads, and a turn
-  or a mirror moves the stored crop with the frame, as macOS does, so a crop
-  chosen before the turn keeps the same region of the photo.
+  overlay on the uncropped photo with thirds guides, four corner handles resize
+  the frame, dragging inside it slides the crop, and a live badge reads the
+  frame's pixel size in the upright frame; Apply writes it and Cancel leaves the
+  document alone. Every crop is the same normalized record in upright-frame
+  coordinates that macOS reads, and a turn or a mirror moves the stored crop
+  with the frame, as macOS does, so a crop chosen before the turn keeps the
+  same region of the photo.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan
@@ -111,8 +113,9 @@ before upload, so a release carries one installer version, not two.
 - No AI tools, skin/makeup/scene engines, healing, stickers, presets,
   analysis callouts, watermark or poster export.
 - The custom crop overlay's drag wiring is not exercised by CI: the headless
-  checks cover the placement and drag arithmetic (`CropGeometry`), and the
-  smoke run proves the window loads, but no automated check moves a handle.
+  checks cover the placement, resize, slide and readout arithmetic
+  (`CropGeometry`), and the smoke run proves the window loads, but no automated
+  check moves a handle or drags the frame.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
   16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
   encoder is 8-bit.

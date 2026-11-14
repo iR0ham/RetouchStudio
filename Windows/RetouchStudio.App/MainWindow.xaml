@@ -72,14 +72,29 @@
             <Rectangle x:Name="CropShadeRight" Fill="#8C0B0D0F" IsHitTestVisible="False" />
             <Rectangle x:Name="CropFrame" Stroke="{StaticResource AccentBrush}"
                        StrokeThickness="1.5" StrokeDashArray="5 3" IsHitTestVisible="False" />
+            <Line x:Name="CropThirdV1" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Line x:Name="CropThirdV2" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Line x:Name="CropThirdH1" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Line x:Name="CropThirdH2" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Thumb x:Name="CropBody" Style="{StaticResource CropBody}"
+                   DragDelta="CropBody_Drag" />
+            <Border x:Name="CropBadge" Background="#CC0B0D0F" CornerRadius="3"
+                    Padding="7,3" IsHitTestVisible="False">
+              <TextBlock x:Name="CropBadgeText" Foreground="{StaticResource TextBrush}"
+                         FontSize="10" />
+            </Border>
             <Thumb x:Name="CropTopLeft" Tag="TopLeft" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNWSE" DragDelta="CropHandle_Drag" />
             <Thumb x:Name="CropTopRight" Tag="TopRight" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNESW" DragDelta="CropHandle_Drag" />
             <Thumb x:Name="CropBottomLeft" Tag="BottomLeft" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNESW" DragDelta="CropHandle_Drag" />
             <Thumb x:Name="CropBottomRight" Tag="BottomRight" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNWSE" DragDelta="CropHandle_Drag" />
           </Canvas>
           <StackPanel x:Name="CropBar" Visibility="Collapsed" Orientation="Horizontal"
                       HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,14">

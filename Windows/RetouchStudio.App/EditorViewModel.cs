@@ -345,6 +345,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public CropValue? CurrentCrop => _session?.Document.Crop;
 
+    /// <summary>Pixel size of a draft crop, for the overlay's live readout.</summary>
+    public string CropPixelText(CropValue crop)
+    {
+        var size = CropGeometry.PixelSize(crop, _sourceWidth, _sourceHeight,
+                             _session?.Document.Orientation.QuarterTurns ?? 0);
+        return $"{size.Width:N0} × {size.Height:N0}";
+    }
+
     /// <summary>Writes a crop the owner drew; the preview returns to it.</summary>
     public void ApplyCustomCrop(CropValue crop)
     {
@@ -503,11 +511,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// A centred crop at a fixed aspect. Freeform crop handles are not part of
-    /// this host yet; the presets cover the common portrait and print ratios and
-    /// write the same normalized frame crop the macOS app reads. The preset
-    /// names the finished frame's aspect, so where the frame is turned its
-    /// aspect is the turned one.
+    /// A centred crop at a fixed aspect; the freeform overlay is separate. The
+    /// preset covers the common portrait and print ratios and writes the same
+    /// normalized frame crop the macOS app reads. The preset names the finished
+    /// frame's aspect, so where the frame is turned its aspect is the turned one.
     /// </summary>
     public void ApplyCrop(string preset)
     {
