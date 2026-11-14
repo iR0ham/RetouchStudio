@@ -52,7 +52,7 @@ internal static class Program
             Interchange(root);
             Recovery(root);
             PerformanceAndStress(root);
-            UnsupportedEditGuard();
+            UnsupportedEditGuard(root);
             CropPresets();
             OrientationComposition();
             GeometryRenderParity();
@@ -1163,6 +1163,64 @@ internal static class Program
         Check("a batch cancelled before it starts writes nothing",
               preCancelled.Count == 0
               && !Directory.EnumerateFiles(preCancelledDir).Any());
+
+        // A person can press Cancel while a file is being rendered, so the
+        // token is raised from inside the first file's pipeline rather than
+        // between files. The file in flight is still finished and readable.
+        var midDir = Path.Combine(root, "batch-midrender");
+        using var midToken = new CancellationTokenSource();
+        var midCodec = new CancelDuringFirstDecode(codec, midToken);
+        var mid = BatchExporter.ExportAsync(session.Document, midCodec,
+            new BatchExportRequest(sources, midDir, "png", 1.0, 0, true),
+            null, midToken.Token).GetAwaiter().GetResult();
+        Check("cancelling while a file is being rendered finishes that file",
+              midCodec.Triggered && mid.Count == 1 && mid[0].Error is null
+              && mid[0].Destination is not null && File.Exists(mid[0].Destination));
+        Check("a mid-render cancel leaves a complete file",
+              mid[0].Destination is not null
+              && TryPngDepth(File.ReadAllBytes(mid[0].Destination), out var midDepth)
+              && midDepth == 16);
+        Check("a mid-render cancel starts no later file",
+              !File.Exists(Path.Combine(midDir, "two-retouched.png")));
+    }
+
+    /// <summary>Cancels its batch from inside the first file's pipeline.</summary>
+    private sealed class CancelDuringFirstDecode(IImageCodec inner,
+                                                 CancellationTokenSource source)
+        : IImageCodec
+    {
+        public bool Triggered { get; private set; }
+
+        public Task<ImageSize> ReadSizeAsync(string path) => inner.ReadSizeAsync(path);
+
+        public Task<int> ReadBitDepthAsync(string path) => inner.ReadBitDepthAsync(path);
+
+        public Task<PixelBuffer> DecodeAsync(string path) => inner.DecodeAsync(path);
+
+        public async Task<PixelBuffer16> Decode16Async(string path)
+        {
+            var buffer = await inner.Decode16Async(path);
+            if (!Triggered)
+            {
+                Triggered = true;
+                source.Cancel();
+            }
+            return buffer;
+        }
+
+        public Task<ImageMetadata> ReadMetadataAsync(string path) =>
+            inner.ReadMetadataAsync(path);
+
+        public Task EncodeAsync(PixelBuffer image, string path, string format,
+                                double quality, ImageMetadata? metadata = null,
+                                bool stripPrivacyMetadata = true) =>
+            inner.EncodeAsync(image, path, format, quality, metadata,
+                              stripPrivacyMetadata);
+
+        public Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                  ImageMetadata? metadata = null,
+                                  bool stripPrivacyMetadata = true) =>
+            inner.Encode16Async(image, path, format, metadata, stripPrivacyMetadata);
     }
 
     /// <summary>Cancels its batch as soon as the first file has been reported.</summary>
@@ -2480,9 +2538,10 @@ internal static class Program
     /// <summary>
     /// The host keeps macOS-only edits in the project file but cannot draw
     /// them, so it has to name them before an export writes pixels that lack
-    /// them. The shared fixtures carry every kind; a new document carries none.
+    /// them. The shared fixtures carry every kind; a new document carries none,
+    /// even though its file writes the auto-retouch settings macOS also writes.
     /// </summary>
-    private static void UnsupportedEditGuard()
+    private static void UnsupportedEditGuard(string root)
     {
         var repo = RepoRoot();
         using (var session = ProjectSession.Open(Path.Combine(
@@ -2490,16 +2549,23 @@ internal static class Program
         {
             var edits = session.Document.UnsupportedEdits;
             Check("a macOS project names every edit this host cannot render",
-                  edits.Count == 6
+                  edits.Count == 4
                   && edits.Contains("heal spots") && edits.Contains("stickers")
-                  && edits.Contains("AI patches") && edits.Contains("analysis callouts")
-                  && edits.Contains("automatic retouch") && edits.Contains("automatic colour"));
+                  && edits.Contains("AI patches") && edits.Contains("analysis callouts"));
         }
         using (var session = ProjectSession.Open(Path.Combine(
                    repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch")))
         {
             Check("a v3 project is checked the same way",
-                  session.Document.UnsupportedEdits.Count == 6);
+                  session.Document.UnsupportedEdits.Count == 4);
+        }
+
+        using (var session = ProjectSession.Create(Path.Combine(root, "fresh.png")))
+        {
+            Check("a new document names nothing, though its file carries the " +
+                  "auto-retouch settings", session.Document.UnsupportedEdits.Count == 0);
+            Check("the template still writes the settings macOS expects",
+                  session.Document.Root["autoRetouchStrength"] is not null);
         }
 
         var empty = new DocumentModel(new JsonObject());
@@ -2509,9 +2575,9 @@ internal static class Program
         empty.Root["stickers"] = new JsonArray();
         empty.Root["aiEdits"] = new JsonArray();
         empty.Root["analysis"] = new JsonObject { ["isEnabled"] = false };
-        empty.Root["autoRetouchStrength"] = 0;
-        empty.Root["autoColorStrength"] = 0;
-        Check("empty lists and disabled tools are not edits", empty.UnsupportedEdits.Count == 0);
+        empty.Root["autoRetouchStrength"] = 70;
+        empty.Root["autoColorStrength"] = 100;
+        Check("the auto-retouch settings are not edits", empty.UnsupportedEdits.Count == 0);
 
         empty.Root["stickers"] = new JsonArray(new JsonObject { ["kind"] = "heart" });
         Check("one sticker is enough to warn", empty.UnsupportedEdits.Count == 1

@@ -18,9 +18,15 @@ tests and documentation of one milestone share a single PR; routine changes and
 documentation-only changes do not get their own PR. Rows below keep their old
 evidence links, which remain valid history.
 
-**Current integration state:** `develop` folds the W4 metadata workstream —
+**Current integration state:** the W4 metadata workstream — crash recovery,
 batch cancellation, EXIF/XMP carry, the sRGB export declaration and the
-crop/turn/resize read-back checks — pending full-matrix validation.
+crop/turn/resize read-back checks — is merged into `main` as `4e31596` (PR #54)
+after five green checks on `91dde65` (run 43632188008). The UI-automation
+workstream landed on `windows/ui-automation` (`bb06e28`, green run
+43647604771) and is merged into `develop` as `7af20f2`: the Windows harness now
+drives the golden path (window → Open Photo dialog → Exposure slider → 150%
+zoom → Export dialog → typed path → decoded JPEG) and the launch recovery
+prompt. The next milestone PR carries that work plus these documents.
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
@@ -57,11 +63,11 @@ crop/turn/resize read-back checks — pending full-matrix validation.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; UI wiring NOT VERIFIED | CI does not drive the crop overlay drag, sliders by pointer, or dialogs | interactive harness is outside current CI; keep the limitation explicit |
-| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); UI wiring NOT VERIFIED | divider drag and pointer wiring not driven by CI | as WP-1 |
+| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, Exposure slider, zoom buttons, Export dialog writing a decoded JPEG) in run 43647604771 | CI does not drive the crop overlay drag, pointer slider drags, or the other eight sliders; the Save/Open Project dialogs are not driven | extend the harness per interaction |
+| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771) | divider drag, pointer zoom/pan and the peek modifier are not driven by CI | as WP-1 |
 | WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI | as WP-1 |
-| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure) | progress/cancel UI NOT VERIFIED; cancellation during a running batch is not exercised | UI harness |
-| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless (save/reopen, undo, candidate recovery with injected failures) | the recovery prompt is a MessageBox; its UI wiring is not driven by CI | none |
+| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure) | progress/cancel UI NOT VERIFIED; cancellation during a running batch is not exercised | the UI harness now exists; add a batch scenario |
+| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless; the launch recovery prompt is driven through UIA — the seeded copy is restored with its unsaved Exposure value (run 43647604771) | Save/Open Project dialogs, the undo button and the unsupported-edit prompt are not driven through UIA | none |
 | WP-6 | AI edits on Windows | NOT APPLICABLE until a runtime exists | blocked with W5 | W5 |
 
 ## WS-4 — W5 AI runtime
@@ -80,7 +86,7 @@ crop/turn/resize read-back checks — pending full-matrix validation.
 | R-1 | Windows preview/export performance | MEASURED (median 721 ms preview, 1189 ms 16-bit export, run 43618132157) | environment-specific; no universal claim | none |
 | R-2 | Windows start-up to first window | MEASURED, recorded not gated | plain numbers per run; noise expected | none |
 | R-3 | Managed heap across twenty renders | MEASURED flat, gated at 150 MB | longer sessions NOT VERIFIED | none |
-| R-4 | Native working-set / decoder buffers | MEASUREMENT EXISTS ONLY ON THE UNPUSHED LOCAL BRANCH `windows/memory-perf` (`3e00182`) | review and integrate under a workstream, or re-implement | workstream decision |
+| R-4 | Native working-set / decoder buffers | MEASURED on CI (`64b4008`, line in run 43631106819): 300 MB working set, 328 MB peak after sixty renders | decoder-buffer accounting by format is not split out; the `windows/memory-perf` branch is superseded | none |
 | R-5 | Interrupted saves, disk full, crash during processing, shutdown recovery | TESTED on Windows for the crash path | write, remove, quarantine and lift failures are injected rather than produced by the OS; disk-full and shutdown ordering are not exercised | none |
 | R-6 | Cancellation races in export/batch | PARTIAL | per-file failure isolation tested; cancellation mid-render not exercised | UI/harness |
 

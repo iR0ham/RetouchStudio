@@ -234,14 +234,11 @@ public sealed class DocumentModel
             {
                 found.Add("analysis callouts");
             }
-            if ((ReadDouble("autoRetouchStrength") ?? 0) > 0)
-            {
-                found.Add("automatic retouch");
-            }
-            if ((ReadDouble("autoColorStrength") ?? 0) > 0)
-            {
-                found.Add("automatic colour");
-            }
+            // autoRetouchStrength and autoColorStrength are the settings for
+            // those tools, not edits: the settings ride every project file
+            // macOS writes, while an applied Smart Analyze result is merged
+            // into the normal adjustments. Treating them as edits warned on
+            // every new document, so they are deliberately absent here.
             return found;
         }
     }
