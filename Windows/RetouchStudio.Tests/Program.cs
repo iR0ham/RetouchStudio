@@ -698,6 +698,11 @@ internal static class Program
                       .GetAwaiter().GetResult();
         Check("a 16-bit P3 PNG decodes to the 8-bit host format",
               p3.Width == 512 && p3.Height == 512);
+        foreach (var (x, y) in new[] { (100, 100), (256, 256), (200, 300), (400, 120), (350, 400) })
+        {
+            var sample = Get(p3, x, y);
+            Console.WriteLine($"  probe P3 ({x},{y}): {sample.R} {sample.G} {sample.B}");
+        }
 
         var sourcePath = Path.Combine(fixtures, "F01_portrait_srgb_8.png");
         var source = codec.DecodeAsync(sourcePath).GetAwaiter().GetResult();
