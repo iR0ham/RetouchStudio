@@ -2549,15 +2549,17 @@ internal static class Program
         {
             var edits = session.Document.UnsupportedEdits;
             Check("a macOS project names every edit this host cannot render",
-                  edits.Count == 4
+                  edits.Count == 8
                   && edits.Contains("heal spots") && edits.Contains("stickers")
-                  && edits.Contains("AI patches") && edits.Contains("analysis callouts"));
+                  && edits.Contains("AI patches") && edits.Contains("analysis callouts")
+                  && edits.Contains("skin retouching") && edits.Contains("face reshaping")
+                  && edits.Contains("a look") && edits.Contains("film grain"));
         }
         using (var session = ProjectSession.Open(Path.Combine(
                    repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch")))
         {
             Check("a v3 project is checked the same way",
-                  session.Document.UnsupportedEdits.Count == 4);
+                  session.Document.UnsupportedEdits.Count == 8);
         }
 
         using (var session = ProjectSession.Create(Path.Combine(root, "fresh.png")))
@@ -2582,6 +2584,52 @@ internal static class Program
         empty.Root["stickers"] = new JsonArray(new JsonObject { ["kind"] = "heart" });
         Check("one sticker is enough to warn", empty.UnsupportedEdits.Count == 1
               && empty.UnsupportedEdits[0] == "stickers");
+
+        var retouched = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["smooth"] = 30,
+                ["lookID"] = "kodachrome",
+                ["backgroundImageAmount"] = 100,
+            },
+        });
+        Check("a skin amount and a look are named",
+              retouched.UnsupportedEdits.Count == 2
+              && retouched.UnsupportedEdits.Contains("skin retouching")
+              && retouched.UnsupportedEdits.Contains("a look"));
+        Check("the background blend amount alone changes nothing",
+              !retouched.UnsupportedEdits.Contains("background adjustments"));
+
+        var replaced = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject { ["backgroundRemove"] = true },
+        });
+        Check("a removed background is named",
+              replaced.UnsupportedEdits.Count == 1
+              && replaced.UnsupportedEdits[0] == "background adjustments");
+
+        var graded = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["hslSaturation"] = new JsonArray(0, 0, 12, 0),
+            },
+        });
+        Check("one HSL band amount is named",
+              graded.UnsupportedEdits.Count == 1
+              && graded.UnsupportedEdits[0] == "HSL colour");
+
+        var renderable = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["exposure"] = 20, ["contrast"] = 10, ["clarity"] = 15,
+                ["texturePreserve"] = 70,
+            },
+        });
+        Check("the nine renderable sliders are not edits",
+              renderable.UnsupportedEdits.Count == 0);
     }
 
     /// <summary>
