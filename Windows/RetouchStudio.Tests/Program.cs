@@ -392,7 +392,8 @@ internal static class Program
         }
         catch (Exception error)
         {
-            Console.WriteLine($"  probe HEIC decode: unavailable ({error.Message})");
+            Console.WriteLine($"  probe HEIC decode: unavailable " +
+                              $"(0x{error.HResult:X8} {error.Message})");
         }
     }
 
@@ -444,26 +445,81 @@ internal static class Program
 
     private static string Depth(string path)
     {
-        var file = StorageFile.GetFileFromPathAsync(Path.GetFullPath(path))
-                              .AsTask().GetAwaiter().GetResult();
-        using var stream = file.OpenAsync(FileAccessMode.Read)
-                               .AsTask().GetAwaiter().GetResult();
-        var decoder = BitmapDecoder.CreateAsync(stream).AsTask().GetAwaiter().GetResult();
-        var properties = decoder.BitmapProperties
-            .GetPropertiesAsync(new[] { "System.Image.BitDepth" })
-            .AsTask().GetAwaiter().GetResult();
-        if (properties.TryGetValue("System.Image.BitDepth", out var typed)
-            && typed.Value is not null)
+        var bytes = File.ReadAllBytes(path);
+        if (TryPngDepth(bytes, out var png))
         {
-            return $"kept ({Convert.ToInt32(typed.Value)} bits stored)";
+            return $"kept ({png} bits stored, PNG IHDR)";
         }
-        var data = decoder.GetPixelDataAsync(
-            BitmapPixelFormat.Rgba16, BitmapAlphaMode.Straight, new BitmapTransform(),
-            ExifOrientationMode.RespectExifOrientation,
-            ColorManagementMode.DoNotColorManage).AsTask().GetAwaiter().GetResult();
-        var bytes = data.DetachPixelData();
-        return $"unknown (BitDepth property absent; Rgba16 decode {bytes.Length} bytes " +
-               $"for {decoder.PixelWidth}x{decoder.PixelHeight})";
+        if (TryTiffDepth(bytes, out var tiff))
+        {
+            return $"kept ({tiff} bits stored, TIFF BitsPerSample)";
+        }
+        return "unknown (no readable depth marker)";
+    }
+
+    private static bool TryPngDepth(byte[] bytes, out int depth)
+    {
+        depth = 0;
+        if (bytes.Length < 26
+            || bytes[0] != 0x89 || bytes[1] != 0x50 || bytes[2] != 0x4E || bytes[3] != 0x47
+            || bytes[12] != 'I' || bytes[13] != 'H' || bytes[14] != 'D' || bytes[15] != 'R')
+        {
+            return false;
+        }
+        depth = bytes[24];
+        return true;
+    }
+
+    private static bool TryTiffDepth(byte[] bytes, out int depth)
+    {
+        depth = 0;
+        if (bytes.Length < 8)
+        {
+            return false;
+        }
+        var little = bytes[0] == 'I' && bytes[1] == 'I';
+        var big = bytes[0] == 'M' && bytes[1] == 'M';
+        if (!little && !big)
+        {
+            return false;
+        }
+
+        int U16(int offset) => little
+            ? bytes[offset] | (bytes[offset + 1] << 8)
+            : (bytes[offset] << 8) | bytes[offset + 1];
+        long U32(int offset) => little
+            ? (uint)(bytes[offset] | (bytes[offset + 1] << 8)
+                   | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24))
+            : (uint)((bytes[offset] << 24) | (bytes[offset + 1] << 16)
+                   | (bytes[offset + 2] << 8) | bytes[offset + 3]);
+
+        var ifd = U32(4);
+        if (ifd + 2 > bytes.Length)
+        {
+            return false;
+        }
+        var count = U16((int)ifd);
+        for (var index = 0; index < count; index++)
+        {
+            var entry = (int)ifd + 2 + index * 12;
+            if (entry + 12 > bytes.Length)
+            {
+                return false;
+            }
+            if (U16(entry) != 0x0102) // BitsPerSample
+            {
+                continue;
+            }
+            var values = U32(entry + 4);
+            var valueAt = values * 2 <= 4 ? entry + 8 : (int)U32(entry + 8);
+            if (valueAt + 1 >= bytes.Length)
+            {
+                return false;
+            }
+            depth = U16(valueAt);
+            return true;
+        }
+        return false;
     }
 
     private static string Size(string path)
