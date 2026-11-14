@@ -19,8 +19,17 @@ public readonly record struct DisplayRect(double X, double Y, double Width, doub
 /// </summary>
 public static class CropGeometry
 {
-    /// <summary>The smallest crop side, in normalized photo units.</summary>
-    public const double MinimumSide = 0.05;
+    /// <summary>
+    /// The smallest crop side, in normalized photo units — the same 3% macOS
+    /// enforces, so a crop storeable there is reachable here.
+    /// </summary>
+    public const double MinimumSide = 0.03;
+
+    /// <summary>
+    /// How close to the whole frame a crop must be to count as none, matching
+    /// the tolerance macOS uses to drop a turned-full crop.
+    /// </summary>
+    public const double FullTolerance = 0.0005;
 
     /// <summary>
     /// The rectangle a uniformly scaled photo occupies inside a box, centred
@@ -141,8 +150,8 @@ public static class CropGeometry
 
     /// <summary>Whether the crop covers the whole frame, bar float noise.</summary>
     public static bool IsFull(CropValue crop) =>
-        crop.X <= 1e-9 && crop.Y <= 1e-9
-        && crop.Width >= 1 - 1e-9 && crop.Height >= 1 - 1e-9;
+        crop.X <= FullTolerance && crop.Y <= FullTolerance
+        && crop.Width >= 1 - FullTolerance && crop.Height >= 1 - FullTolerance;
 
     /// <summary>
     /// Brings an arbitrary rectangle inside the photo with both sides at least

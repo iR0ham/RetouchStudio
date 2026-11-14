@@ -225,14 +225,14 @@ internal static class Program
         Check("a corner cannot leave the photo", Near(outward, 0, 0, 0.8, 0.8));
         var crossed = CropGeometry.Resize(start, CropCorner.TopLeft, 5, 0);
         Check("a corner cannot cross its opposite edge",
-              Math.Abs(crossed.X - 0.75) < 1e-9
+              Math.Abs(crossed.X - (0.8 - CropGeometry.MinimumSide)) < 1e-9
               && Math.Abs(crossed.Width - CropGeometry.MinimumSide) < 1e-9);
         var moved = CropGeometry.Move(start, 0.5, -0.5);
         Check("moving the crop keeps its size and stays inside",
               Near(moved, 0.4, 0, 0.6, 0.6));
         var clamped = CropGeometry.Clamp(new CropValue(-1, 2, 5, 0));
         Check("an arbitrary crop is brought inside",
-              Near(clamped, 0, 0.95, 1, CropGeometry.MinimumSide));
+              Near(clamped, 0, 1 - CropGeometry.MinimumSide, 1, CropGeometry.MinimumSide));
     }
 
     private static void Pixels()
