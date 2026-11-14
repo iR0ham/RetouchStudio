@@ -1,14 +1,15 @@
 # Master product completion status
 
-**Basis:** `main` at PR #20 (`1d2673c`, merged 2026-11-14). PR #21 (16-bit
+**Basis:** `main` at `42a3b65` (merge of PR #24, 2026-11-14). PR #21 (16-bit
 export) is verified by CI run
 [43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311)
 and merged as `18d4e46`; PR #22 (Windows MSI) is verified by run
 [43561151628](https://github.com/iR0ham/RetouchStudio/actions/runs/43561151628)
 and merged as `950636d`; PR #23 (in-place MSI upgrade) by run
-[43563787267](https://github.com/iR0ham/RetouchStudio/actions/runs/43563787267).
-PR #24 (Windows batch export) is verified by run
-[43566124482](https://github.com/iR0ham/RetouchStudio/actions/runs/43566124482).
+[43563787267](https://github.com/iR0ham/RetouchStudio/actions/runs/43563787267),
+merged as `1199210`; PR #24 (Windows batch export) by run
+[43566124482](https://github.com/iR0ham/RetouchStudio/actions/runs/43566124482)
+and its documentation head by run 43567380416.
 The original audit ran on `1d32842` (CI run 43531081160, also green).
 **Updated:** 2026-11-14.
 
@@ -157,6 +158,9 @@ must not claim them.
 | 2026-11-14 | `2488ae4` | CI run 43561151628, Windows App job | MSI 398 086 490 bytes, msi version 0.0.0.0; silent install registered in Programs and Features; the installed copy in `Program Files\Retouch Studio` loaded a window; uninstall left no folder, shortcut or entry |
 | 2026-11-14 | `657781b` | CI run 43563787267, Windows App job | 0.0.1.0 installed over an installed 0.0.0.0; one Programs and Features entry with the new version; the upgraded copy loaded a window; the final uninstall left nothing behind |
 | 2026-11-14 | `49c3798` | CI run 43566124482, Windows App job | `WINDOWS HOST TESTS: PASS (116 checks)`; a three-file batch exports one result per source as 16-bit PNG, leaves the sources byte-identical, decodes sample-exactly like a single export of the same file, writes `one-retouched-2.png` instead of overwriting a pre-existing `one-retouched.png`, and reports a missing input while the next file still exports; MSI install/upgrade/uninstall path unchanged |
+| 2026-11-14 | `93ad90a` | CI run 43567380416 (PR #24 documentation head) | five jobs green on the exact merge head; merged with a merge commit as `42a3b65` |
+| 2026-11-14 | `1199210` | CI run 43565828542 (post-merge `main`) | all five jobs green |
+| 2026-11-14 | `42a3b65` | CI run 43568795622 (post-merge `main`) | all five jobs green |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
