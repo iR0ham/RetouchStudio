@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Nodes;
 using RetouchStudio.Core.Imaging;
@@ -45,6 +46,7 @@ internal static class Program
             AdjustmentEvidence();
             FormatProbes(root);
             Metadata(root);
+            Colour(root);
             Interchange(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard();
@@ -1395,6 +1397,248 @@ internal static class Program
 
     private static string Text(ImageMetadata metadata, string key) =>
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
+
+    /// <summary>
+    /// A diagnostic, not a gate: prints the colour space each container
+    /// declares for an export the shipping writer produced. Every pixel on this
+    /// host is converted to sRGB at decode, so an undeclared file is read back
+    /// as sRGB by convention rather than by contract, and a wide-gamut source
+    /// cannot be represented. The measurement decides what the writer must
+    /// declare; nothing is asserted until the numbers are recorded.
+    /// </summary>
+    private static void Colour(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(16, 12);
+        for (var y = 0; y < 12; y++)
+        {
+            for (var x = 0; x < 16; x++)
+            {
+                Put(image, x, y, r: (byte)(x * 15), g: (byte)(y * 20), b: (byte)(255 - x * 12));
+            }
+        }
+
+        var source = Path.Combine(root, "colour-source.jpg");
+        codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
+        Console.WriteLine($"  colour source JPEG: {DescribeColourProfile(source)}");
+
+        using var session = ProjectSession.Create(source);
+        var writes = new[]
+        {
+            (Name: "colour-export.jpg", Format: "jpeg", Quality: 0.9),
+            (Name: "colour-export.png", Format: "png", Quality: 1.0),
+            (Name: "colour-export.tiff", Format: "tiff", Quality: 1.0),
+        };
+        foreach (var write in writes)
+        {
+            var path = Path.Combine(root, write.Name);
+            ExportRunner.ExportAsync(session, codec, path, write.Format, write.Quality, 0)
+                         .GetAwaiter().GetResult();
+            Console.WriteLine($"  colour exported {write.Format.ToUpperInvariant()}: " +
+                              DescribeColourProfile(path));
+        }
+    }
+
+    private static string DescribeColourProfile(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        byte[]? profile;
+        try
+        {
+            profile = bytes.Length > 8 && bytes[0] == 0xFF && bytes[1] == 0xD8
+                ? JpegColourProfile(bytes)
+                : bytes.Length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50
+                    ? PngColourProfile(bytes)
+                    : TiffColourProfile(bytes);
+        }
+        catch (Exception error)
+        {
+            return $"unreadable ({error.Message})";
+        }
+        if (profile is null)
+        {
+            return "no embedded profile (readers assume sRGB)";
+        }
+        if (profile.Length < 132)
+        {
+            return $"embedded profile too short ({profile.Length} bytes)";
+        }
+        var space = Encoding.ASCII.GetString(profile, 16, 4).TrimEnd('\0', ' ');
+        var profileClass = Encoding.ASCII.GetString(profile, 12, 4).TrimEnd('\0', ' ');
+        var description = IccDescription(profile) ?? "unnamed";
+        return "embedded " + space + " " + profileClass + " profile, \"" +
+               description + "\", " + profile.Length + " bytes";
+    }
+
+    private static byte[]? JpegColourProfile(byte[] bytes)
+    {
+        var segments = new SortedDictionary<byte, byte[]>();
+        var at = 2;
+        while (at + 4 <= bytes.Length && bytes[at] == 0xFF)
+        {
+            var marker = bytes[at + 1];
+            if (marker == 0xDA || marker == 0xD9)
+            {
+                break;
+            }
+            if (marker is >= 0xD0 and <= 0xD8)
+            {
+                at += 2;
+                continue;
+            }
+            var length = (bytes[at + 2] << 8) | bytes[at + 3];
+            if (length < 2 || at + 2 + length > bytes.Length)
+            {
+                break;
+            }
+            if (marker == 0xE2 && length >= 16)
+            {
+                var payload = at + 4;
+                // "ICC_PROFILE\0" then the segment number and the segment count.
+                if (Encoding.ASCII.GetString(bytes, payload, 11) == "ICC_PROFILE"
+                    && bytes[payload + 11] == 0)
+                {
+                    segments[bytes[payload + 12]] = bytes[(payload + 14)..(at + 2 + length)];
+                }
+            }
+            at += 2 + length;
+        }
+        return segments.Count == 0 ? null : segments.Values.SelectMany(part => part).ToArray();
+    }
+
+    private static byte[]? PngColourProfile(byte[] bytes)
+    {
+        var at = 8;
+        while (at + 12 <= bytes.Length)
+        {
+            var length = (bytes[at] << 24) | (bytes[at + 1] << 16)
+                       | (bytes[at + 2] << 8) | bytes[at + 3];
+            if (length < 0 || at + 12 + length > bytes.Length)
+            {
+                return null;
+            }
+            var type = Encoding.ASCII.GetString(bytes, at + 4, 4);
+            if (type == "iCCP")
+            {
+                var data = new ReadOnlySpan<byte>(bytes, at + 8, length);
+                var zero = data.IndexOf((byte)0);
+                if (zero < 0 || zero + 2 > data.Length)
+                {
+                    return null;
+                }
+                // A profile name, a compression method byte, then the profile.
+                using var compressed = new MemoryStream(data[(zero + 2)..].ToArray());
+                using var zlib = new ZLibStream(compressed, CompressionMode.Decompress);
+                using var plain = new MemoryStream();
+                zlib.CopyTo(plain);
+                return plain.ToArray();
+            }
+            if (type == "IEND")
+            {
+                break;
+            }
+            at += 12 + length;
+        }
+        return null;
+    }
+
+    private static byte[]? TiffColourProfile(byte[] bytes)
+    {
+        if (bytes.Length < 8)
+        {
+            return null;
+        }
+        var little = bytes[0] == 0x49;
+        var offset = (int)ColourTiffU32(bytes, 4, little);
+        if (offset < 8 || offset + 2 > bytes.Length)
+        {
+            return null;
+        }
+        var count = ColourTiffU16(bytes, offset, little);
+        for (var i = 0; i < count; i++)
+        {
+            var entry = offset + 2 + i * 12;
+            if (entry + 12 > bytes.Length)
+            {
+                return null;
+            }
+            if (ColourTiffU16(bytes, entry, little) != 34675)
+            {
+                continue;
+            }
+            var length = (int)ColourTiffU32(bytes, entry + 4, little);
+            if (length < 0 || length > bytes.Length)
+            {
+                return null;
+            }
+            var start = length <= 4 ? entry + 8 : (int)ColourTiffU32(bytes, entry + 8, little);
+            if (start + length > bytes.Length)
+            {
+                return null;
+            }
+            return bytes[start..(start + length)];
+        }
+        return null;
+    }
+
+    private static ushort ColourTiffU16(byte[] bytes, int at, bool little) =>
+        little
+            ? (ushort)(bytes[at] | (bytes[at + 1] << 8))
+            : (ushort)((bytes[at] << 8) | bytes[at + 1]);
+
+    private static uint ColourTiffU32(byte[] bytes, int at, bool little) =>
+        little
+            ? (uint)bytes[at] | ((uint)bytes[at + 1] << 8)
+              | ((uint)bytes[at + 2] << 16) | ((uint)bytes[at + 3] << 24)
+            : ((uint)bytes[at] << 24) | ((uint)bytes[at + 1] << 16)
+              | ((uint)bytes[at + 2] << 8) | bytes[at + 3];
+
+    /// <summary>
+    /// The human description of an ICC profile, from a v2 `desc` tag or a v4
+    /// `mluc` tag. A profile without a readable description still counts as
+    /// embedded; the header fields carry the colour space either way.
+    /// </summary>
+    private static string? IccDescription(byte[] profile)
+    {
+        var count = (int)ColourTiffU32(profile, 128, little: false);
+        if (count < 0 || count > 64 || 132 + count * 12 > profile.Length)
+        {
+            return null;
+        }
+        for (var i = 0; i < count; i++)
+        {
+            var entry = 132 + i * 12;
+            var signature = Encoding.ASCII.GetString(profile, entry, 4);
+            var offset = (int)ColourTiffU32(profile, entry + 4, little: false);
+            if (offset < 0 || offset + 12 > profile.Length)
+            {
+                continue;
+            }
+            if (signature == "desc")
+            {
+                var length = (int)ColourTiffU32(profile, offset + 8, little: false);
+                if (length > 0 && length <= 256 && offset + 12 + length <= profile.Length)
+                {
+                    return Encoding.ASCII.GetString(profile, offset + 12, length).TrimEnd('\0');
+                }
+            }
+            if (signature == "mluc")
+            {
+                var records = (int)ColourTiffU32(profile, offset + 8, little: false);
+                if (records < 1 || records > 8 || offset + 28 > profile.Length)
+                {
+                    continue;
+                }
+                var length = (int)ColourTiffU32(profile, offset + 20, little: false);
+                var start = offset + (int)ColourTiffU32(profile, offset + 24, little: false);
+                if (length > 0 && length <= 512 && start + length <= profile.Length)
+                {
+                    return Encoding.BigEndianUnicode.GetString(profile, start, length).TrimEnd('\0');
+                }
+            }
+        }
+        return null;
+    }
 
     /// <summary>
     /// The interchange gate: a project written on macOS opens, edits and saves
