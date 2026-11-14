@@ -46,8 +46,11 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Heal stamps, stickers, watermarks | values | yes | ABSENT | corpus references | VERIFIED macOS |
 | AI edits (composite, patch lifecycle) | values | yes, needs worker | ABSENT | engine/model suites | VERIFIED macOS; worker source outside repo |
 | Export JPEG/PNG | contract | 8-bit | 8-bit | host checks, corpus | VERIFIED per host |
-| Export TIFF | contract | 16-bit | 8-bit via WIC | plan check only | macOS VERIFIED; Windows IMPLEMENTED, not pixel-tested |
+| Export TIFF | contract | 16-bit | 8-bit pixels in a TIFF | host checks | macOS VERIFIED; Windows TESTED 8-bit, 16-bit write probed |
 | Export HEIC | contract | 8-bit, alpha flattened | explicit refusal | corpus `F01_export_256.heic` | macOS VERIFIED; Windows ABSENT by design |
+| Orientation and alpha on load | — | EXIF baked, premultiplied compare | EXIF baked, straight alpha, white flatten for JPEG | corpus checks F10/F09 | Windows TESTED, no-op export pixel-identical |
+| 16-bit pixels | — | PNG/TIFF source and output | 8-bit core; WIC stores 16-bit PNG/TIFF (probe, run 43549524897) | format probe on `windows-2025` | macOS VERIFIED; Windows BLOCKED by the 8-bit pipeline, not the codec |
+| HEIC decode | — | ImageIO | no decoder on `windows-2025` (probe fails `0x88982F8B`) | format probe, run 43549524897 | macOS VERIFIED; Windows NOT AVAILABLE on CI |
 | Metadata keep/strip | — | EXIF/TIFF/IPTC/GPS + XMP | camera model + ISO when kept; resolution always; no XMP/IPTC | Windows host tests, run 43545230075 | macOS VERIFIED; Windows TESTED (measured allowlist) |
 | ICC handling | — | source profile carried to render/write | always sRGB | corpus F11 P3 | macOS VERIFIED; Windows simplified to sRGB |
 | Batch export | planner | yes | ABSENT | planner suite | VERIFIED macOS |
@@ -65,8 +68,8 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 |---|---|---|---|
 | 0 | Baseline and gap analysis | VERIFIED | This document; `main` `1d32842`; run 43531081160 |
 | 1 | Shared core and portable project architecture | VERIFIED | StudioCore boundary suite, conformance gate, R2–R4.8 docs |
-| 2 | W3 face analysis and masking | macOS VERIFIED; Windows NOT STARTED | Vision landmarks and masks exist and are tested on macOS; the Windows host has no face path |
-| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows is 8-bit sRGB, metadata keep/strip tested with a measured two-key allowlist; cross-host pixel comparison NOT VERIFIED |
+| 2 | W3 face analysis and masking | macOS VERIFIED; Windows BLOCKED | Vision landmarks and masks exist and are tested on macOS; the Windows host has no face path, and its only in-box detector returns boxes without landmarks, so a distributable landmark model must be chosen |
+| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows is 8-bit sRGB with tested metadata keep/strip, upright orientation, alpha and an exact no-op; WIC's 16-bit storage and missing HEIF decoder are measured; cross-host pixel comparison NOT VERIFIED |
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
@@ -109,6 +112,14 @@ or corresponding host tests. The shared v4 schema can already carry
 Windows face path must consume the same records rather than invent a second
 format.
 
+**Windows options, assessed 2026-11-14:** `Windows.Media.FaceAnalysis` detects
+and tracks faces as boxes and exposes no landmarks. Masks need landmark
+regions, so a box-only detector would be the fake feature this plan forbids.
+The only route to real Windows landmarks is a distributable landmark model
+(for example ONNX) with approved weights; none is in the repository and no
+download is approved. W3 on Windows is therefore BLOCKED on an owner decision
+about the detector and its weights, not on missing code structure.
+
 **Not implemented anywhere:** dense 3D face mesh, learned semantic
 segmentation, per-face identities, and standalone mask layers. The product
 must not claim them.
@@ -126,6 +137,9 @@ must not claim them.
 | 2026-11-14 | `a43bdeb` | PR #15 checks, all five jobs | success; merged with a merge commit as `223063c` |
 | 2026-11-14 | `e36fd94` | PR #16 checks, all five jobs | success; merged with a merge commit as `de96fd6` |
 | 2026-11-14 | `c32d344` | CI run 43545230075, Windows App job | `WINDOWS HOST TESTS: PASS (79 checks)`; probe: only camera model and ISO survive, GPS/date/make/exposure/aperture/flash/white-balance/comment dropped, `DateTaken` throws |
+| 2026-11-14 | `44a2869` | PR #17 checks, all five jobs | success; merged with a merge commit as `9278d65` |
+| 2026-11-14 | `0afcce5` | CI run 43547671904, Windows App job | `WINDOWS HOST TESTS: PASS (86 checks)`; F10 upright 480x720 at luma 115.442 / sd 61.798 against macOS 115.746 / 61.530, identical on the next run; F01 no-op export pixel-identical; merged as `27028d1` |
+| 2026-11-14 | `432e443` | CI run 43549524897, Windows App job | probe: F11 decodes as Rgba16 (512x512, 2 097 152 bytes); 16-bit PNG and TIFF encode store 16 bits (IHDR, TIFF `BitsPerSample`); HEIC decode unavailable `0x88982F8B` |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -142,21 +156,19 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 | Model weights not in the repository | AI feature verification | owner-approved download |
 | Worker source lives outside this repository | helper builds from a fresh clone | keep the external checkout or publish the source |
 | No physical Windows machine | interactive Windows verification | CI-only evidence remains the standard |
+| No approved face landmark model | W3 on Windows | owner-approved, distributable model and weights |
 | WIC exposes no XMP/IPTC write path | metadata parity | a separate XMP packet writer, if the owner wants it |
 | WinRT metadata writer drops most EXIF keys | metadata parity | an EXIF rewrite outside WIC, if the owner wants it |
+| No HEIF decoder on `windows-2025` | HEIC read on CI | install the HEIF extension or accept the measured gap |
+| Windows core pipeline is 8-bit | 16-bit exports | a 16-bit pixel buffer and pipeline, a scoped project of its own |
 
 ## 7. Next actions
 
-1. W4 metadata is in review as PR #17: keep-only-resolution by default, an
-   opt-in per-export "Keep camera metadata", and a metadata allowlist limited
-   to the keys the Windows probe proves survive a round trip.
-2. W3 on Windows: implement face detection behind a platform interface, feed
-   the same normalized records into the v4 document, and prove save/reopen.
-   This needs a parity-level decision (Vision-equivalent detector vs. a
-   bundled model), which is a product decision, not a code detail.
-3. W4 parity: define tolerances, then measure macOS vs. Windows on the
-   existing corpus before claiming any parity. 16-bit, ICC and HEIC remain
-   Windows gaps until implemented and tested.
-4. W5: only after an approved runtime package exists.
-5. W6: installer, then updater, each with a clean-install proof on CI.
-6. Notarization stays BLOCKED until credentials exist; never simulate it.
+1. W4 remaining: a 16-bit pipeline (WIC storage is proved), ICC preservation,
+   HEIC read on CI (no decoder), batch export, and the adjustment cases measured
+   against the macOS references. None of these is claimed until tested.
+2. W3 on Windows is BLOCKED on an approved, distributable landmark model.
+   The in-box detector gives boxes only, which cannot drive masks.
+3. W5: only after an approved runtime package exists.
+4. W6: installer, then updater, each with a clean-install proof on CI.
+5. Notarization stays BLOCKED until credentials exist; never simulate it.

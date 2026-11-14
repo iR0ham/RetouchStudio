@@ -5,6 +5,8 @@ using RetouchStudio.Core.Interop;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Core.Render;
 using RetouchStudio.Imaging;
+using Windows.Graphics.Imaging;
+using Windows.Storage;
 
 namespace RetouchStudio.Tests;
 
@@ -34,6 +36,7 @@ internal static class Program
             Codec(root);
             Export(root);
             Corpus(root);
+            FormatProbes(root);
             Metadata(root);
             Interchange(root);
         }
@@ -339,6 +342,194 @@ internal static class Program
         {
             Pass("the export refuses to overwrite the opened photo");
         }
+    }
+
+    /// <summary>
+    /// Diagnostics, not gates: asks WIC whether it can hold 16-bit pixels and
+    /// whether this machine has a HEIF decoder. The host ships 8-bit output, so
+    /// the answer decides what a future implementation may claim, and no
+    /// capability is asserted here beyond the file being readable.
+    /// </summary>
+    private static void FormatProbes(string root)
+    {
+        var repo = RepoRoot();
+        var fixtures = Path.Combine(repo, "Tests/Corpus/Fixtures");
+        var exports = Path.Combine(repo, "Tests/Corpus/Exports");
+
+        try
+        {
+            var hex = Decode16(Path.Combine(fixtures, "F11_p3_16bit.png"));
+            Console.WriteLine($"  probe Rgba16 decode: kept ({hex})");
+        }
+        catch (Exception error)
+        {
+            Console.WriteLine($"  probe Rgba16 decode: failed ({error.Message})");
+        }
+
+        foreach (var (name, encoder) in new[]
+                 {
+                     ("png", BitmapEncoder.PngEncoderId),
+                     ("tiff", BitmapEncoder.TiffEncoderId),
+                 })
+        {
+            try
+            {
+                var path = Path.Combine(root, "probe-16bit." + name);
+                Encode16(path, encoder);
+                var depth = Depth(path);
+                Console.WriteLine($"  probe 16-bit {name} encode: {depth}");
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine($"  probe 16-bit {name} encode: failed ({error.Message})");
+            }
+        }
+
+        try
+        {
+            var size = Size(Path.Combine(exports, "F01_export_256.heic"));
+            Console.WriteLine($"  probe HEIC decode: kept ({size})");
+        }
+        catch (Exception error)
+        {
+            Console.WriteLine($"  probe HEIC decode: unavailable " +
+                              $"(0x{error.HResult:X8} {error.Message})");
+        }
+    }
+
+    private static string Decode16(string path)
+    {
+        var file = StorageFile.GetFileFromPathAsync(Path.GetFullPath(path))
+                              .AsTask().GetAwaiter().GetResult();
+        using var stream = file.OpenAsync(FileAccessMode.Read)
+                               .AsTask().GetAwaiter().GetResult();
+        var decoder = BitmapDecoder.CreateAsync(stream).AsTask().GetAwaiter().GetResult();
+        var data = decoder.GetPixelDataAsync(
+            BitmapPixelFormat.Rgba16, BitmapAlphaMode.Straight, new BitmapTransform(),
+            ExifOrientationMode.RespectExifOrientation,
+            ColorManagementMode.ColorManageToSRgb).AsTask().GetAwaiter().GetResult();
+        var pixels = data.DetachPixelData();
+        return $"{decoder.OrientedPixelWidth}x{decoder.OrientedPixelHeight} " +
+               $"{pixels.Length} bytes";
+    }
+
+    private static void Encode16(string path, Guid encoderId)
+    {
+        var folder = StorageFolder.GetFolderFromPathAsync(Path.GetDirectoryName(path))
+                                 .AsTask().GetAwaiter().GetResult();
+        var file = folder.CreateFileAsync(Path.GetFileName(path),
+                                          CreationCollisionOption.ReplaceExisting)
+                         .AsTask().GetAwaiter().GetResult();
+        using var stream = file.OpenAsync(FileAccessMode.ReadWrite)
+                               .AsTask().GetAwaiter().GetResult();
+        var encoder = BitmapEncoder.CreateAsync(encoderId, stream)
+                                   .AsTask().GetAwaiter().GetResult();
+
+        const int width = 8;
+        const int height = 6;
+        var pixels = new ushort[width * height * 4];
+        for (var index = 0; index < width * height; index++)
+        {
+            pixels[index * 4] = 1000;
+            pixels[index * 4 + 1] = 2000;
+            pixels[index * 4 + 2] = 3000;
+            pixels[index * 4 + 3] = 65535;
+        }
+        var bytes = new byte[pixels.Length * 2];
+        Buffer.BlockCopy(pixels, 0, bytes, 0, bytes.Length);
+
+        encoder.SetPixelData(BitmapPixelFormat.Rgba16, BitmapAlphaMode.Straight,
+                             width, height, 96, 96, bytes);
+        encoder.FlushAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    private static string Depth(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        if (TryPngDepth(bytes, out var png))
+        {
+            return $"kept ({png} bits stored, PNG IHDR)";
+        }
+        if (TryTiffDepth(bytes, out var tiff))
+        {
+            return $"kept ({tiff} bits stored, TIFF BitsPerSample)";
+        }
+        return "unknown (no readable depth marker)";
+    }
+
+    private static bool TryPngDepth(byte[] bytes, out int depth)
+    {
+        depth = 0;
+        if (bytes.Length < 26
+            || bytes[0] != 0x89 || bytes[1] != 0x50 || bytes[2] != 0x4E || bytes[3] != 0x47
+            || bytes[12] != 'I' || bytes[13] != 'H' || bytes[14] != 'D' || bytes[15] != 'R')
+        {
+            return false;
+        }
+        depth = bytes[24];
+        return true;
+    }
+
+    private static bool TryTiffDepth(byte[] bytes, out int depth)
+    {
+        depth = 0;
+        if (bytes.Length < 8)
+        {
+            return false;
+        }
+        var little = bytes[0] == 'I' && bytes[1] == 'I';
+        var big = bytes[0] == 'M' && bytes[1] == 'M';
+        if (!little && !big)
+        {
+            return false;
+        }
+
+        int U16(int offset) => little
+            ? bytes[offset] | (bytes[offset + 1] << 8)
+            : (bytes[offset] << 8) | bytes[offset + 1];
+        long U32(int offset) => little
+            ? (uint)(bytes[offset] | (bytes[offset + 1] << 8)
+                   | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24))
+            : (uint)((bytes[offset] << 24) | (bytes[offset + 1] << 16)
+                   | (bytes[offset + 2] << 8) | bytes[offset + 3]);
+
+        var ifd = U32(4);
+        if (ifd + 2 > bytes.Length)
+        {
+            return false;
+        }
+        var count = U16((int)ifd);
+        for (var index = 0; index < count; index++)
+        {
+            var entry = (int)ifd + 2 + index * 12;
+            if (entry + 12 > bytes.Length)
+            {
+                return false;
+            }
+            if (U16(entry) != 0x0102) // BitsPerSample
+            {
+                continue;
+            }
+            var values = U32(entry + 4);
+            var valueAt = values * 2 <= 4 ? entry + 8 : (int)U32(entry + 8);
+            if (valueAt + 1 >= bytes.Length)
+            {
+                return false;
+            }
+            depth = U16(valueAt);
+            return true;
+        }
+        return false;
+    }
+
+    private static string Size(string path)
+    {
+        var file = StorageFile.GetFileFromPathAsync(Path.GetFullPath(path))
+                              .AsTask().GetAwaiter().GetResult();
+        using var stream = file.OpenAsync(FileAccessMode.Read)
+                               .AsTask().GetAwaiter().GetResult();
+        var decoder = BitmapDecoder.CreateAsync(stream).AsTask().GetAwaiter().GetResult();
+        return $"{decoder.PixelWidth}x{decoder.PixelHeight}";
     }
 
     /// <summary>

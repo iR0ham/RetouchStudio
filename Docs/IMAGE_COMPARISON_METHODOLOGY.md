@@ -216,3 +216,27 @@ A verdict of "compatible" must cite the exact rule used. Until §4.4 is replaced
 - It does not establish that Rosetta results represent an Intel Mac.
 - It does not establish that pixel equality implies visual equality for vector, text or analysis overlays; those need review.
 - It does not authorize changing the engine to make a comparison pass.
+
+---
+
+## 9. First Windows observations (2026-11-14)
+
+Measured on the `windows-2025` CI runner through the shipping WIC codec. These
+are **observations, not approved tolerances**; no gate is derived from them.
+
+| Check | Windows result | macOS reference |
+|---|---|---|
+| F10 (EXIF orientation 6) decoded size | 480x720 upright | 480x720 upright |
+| F10 Rec.709 luma mean / sd | 115.442 / 61.798 (identical on the next run) | 115.746 / 61.530 |
+| F01 zero-adjustment export | pixel-identical to its own decode | exact on the capture host |
+| F09 cutout alpha | clear pixels stay clear in PNG, flatten to white for JPEG | premultiplied compare |
+| F11 16-bit P3 decode | `Rgba16`, 512x512, 2 097 152 bytes | 16-bit P3 |
+
+Comparable cases stop there: the Windows host implements the nine global
+adjustments and geometry only, so masked, vector, analysis and watermark cases
+from this corpus have no Windows counterpart yet. The adjustment cases
+(`G01`, `G04`, `G09`) still have to be rendered and measured before any
+statement about their parity.
+
+The F10 luma difference (0.304) is recorded, not interpreted: it may come from
+decoder differences, colour management or dithering. It is not a pass rule.
