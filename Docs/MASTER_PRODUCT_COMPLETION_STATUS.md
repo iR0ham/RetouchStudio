@@ -4,7 +4,11 @@
 export) is verified by CI run
 [43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311)
 and merged as `18d4e46`; PR #22 (Windows MSI) is verified by run
-[43561151628](https://github.com/iR0ham/RetouchStudio/actions/runs/43561151628).
+[43561151628](https://github.com/iR0ham/RetouchStudio/actions/runs/43561151628)
+and merged as `950636d`; PR #23 (in-place MSI upgrade) by run
+[43563787267](https://github.com/iR0ham/RetouchStudio/actions/runs/43563787267).
+PR #24 (Windows batch export) is verified by run
+[43566124482](https://github.com/iR0ham/RetouchStudio/actions/runs/43566124482).
 The original audit ran on `1d32842` (CI run 43531081160, also green).
 **Updated:** 2026-11-14.
 
@@ -56,7 +60,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | HEIC decode | — | ImageIO | no decoder on `windows-2025` (probe fails `0x88982F8B`) | format probe, run 43549524897 | macOS VERIFIED; Windows NOT AVAILABLE on CI |
 | Metadata keep/strip | — | EXIF/TIFF/IPTC/GPS + XMP | camera model + ISO when kept in JPEG, TIFF and 16-bit PNG; resolution always; no XMP/IPTC | Windows host tests, runs 43545230075, 43557855311 | macOS VERIFIED; Windows TESTED (measured allowlist) |
 | ICC handling | — | source profile carried to render/write | always sRGB | corpus F11 P3 | macOS VERIFIED; Windows simplified to sRGB |
-| Batch export | planner | yes | ABSENT | planner suite | VERIFIED macOS |
+| Batch export | planner | yes | several sources rendered with one document through the single-export path, 16-bit PNG | host checks, run 43566124482 | macOS VERIFIED; Windows TESTED (output sample-exact against a single export, collision-safe names, per-file failure isolation; the WPF dialogs are not driven by CI) |
 | AI runtime install | `AIRuntime` | disabled (`package == nil`) | ABSENT | runtime v2 suites | BLOCKED — no approved package |
 | Signed update feed | `UpdatePolicy` | prepared, no feed shipped | ABSENT | update tests | IMPLEMENTED, not published |
 | macOS packaging + DMG | — | per-arch, ad-hoc signed | — | `Tools/make-dmg.sh` | VERIFIED locally; clean-machine install NOT VERIFIED |
@@ -73,11 +77,11 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 0 | Baseline and gap analysis | VERIFIED | This document; `main` `1d32842`; run 43531081160 |
 | 1 | Shared core and portable project architecture | VERIFIED | StudioCore boundary suite, conformance gate, R2–R4.8 docs |
 | 2 | W3 face analysis and masking | macOS VERIFIED; Windows BLOCKED | Vision landmarks and masks exist and are tested on macOS; the Windows host has no face path, and its only in-box detector returns boxes without landmarks, so a distributable landmark model must be chosen |
-| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows exports 16-bit PNG/TIFF sample-exactly (run 43557855311) but previews and JPEG exports in 8-bit sRGB, with tested metadata keep/strip, upright orientation, alpha, an exact no-op and exposure/levels that match the macOS references (MAE 0.01 / 0.007); clarity and vignette still differ (MAE 5.8 / 5.2); ICC preservation and HEIC read are absent, the missing HEIF decoder measured; full cross-host parity NOT VERIFIED |
+| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows exports 16-bit PNG/TIFF sample-exactly (run 43557855311) but previews and JPEG exports in 8-bit sRGB, with tested metadata keep/strip, upright orientation, alpha, an exact no-op and exposure/levels that match the macOS references (MAE 0.01 / 0.007); clarity and vignette still differ (MAE 5.8 / 5.2); Windows batch export shares the single-export path and its output is sample-exact against one-off exports (run 43566124482); ICC preservation and HEIC read are absent, the missing HEIF decoder measured; full cross-host parity NOT VERIFIED |
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
-| 7 | Windows product completion | PARTIAL | Light native editor builds, runs 108 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export and an MSI that installs into `Program Files` and uninstalls cleanly on CI; no updater, face analysis, AI or batch |
+| 7 | Windows product completion | PARTIAL | Light native editor builds, runs 116 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export, batch export through the same path as a single export, and an MSI that installs into `Program Files` and uninstalls cleanly on CI; no updater, face analysis or AI |
 | 8 | Cross-platform project interchange | VERIFIED | macOS v3 and v4 fixtures open on Windows, round-trip with structurally identical JSON, keep the unknown key and required feature, and a v3 save stays v3 (CI run 43534410772) |
 | 9 | Distribution, installers, updates | PARTIAL | macOS DMGs exist; Windows ships a zip and an unsigned per-machine MSI whose silent install, start from `Program Files`, in-place upgrade and clean uninstall are proved on CI (runs 43561151628, 43563787267); no updater, no update feed, no signing |
 | 10 | CI/CD and release engineering | VERIFIED (CI) / NOT VERIFIED (release) | Five jobs green; the dormant release `windows-app` job has never executed |
@@ -152,6 +156,7 @@ must not claim them.
 | 2026-11-14 | `18d4e46` | CI run 43560222549 (post-merge `main`) | all five jobs green |
 | 2026-11-14 | `2488ae4` | CI run 43561151628, Windows App job | MSI 398 086 490 bytes, msi version 0.0.0.0; silent install registered in Programs and Features; the installed copy in `Program Files\Retouch Studio` loaded a window; uninstall left no folder, shortcut or entry |
 | 2026-11-14 | `657781b` | CI run 43563787267, Windows App job | 0.0.1.0 installed over an installed 0.0.0.0; one Programs and Features entry with the new version; the upgraded copy loaded a window; the final uninstall left nothing behind |
+| 2026-11-14 | `49c3798` | CI run 43566124482, Windows App job | `WINDOWS HOST TESTS: PASS (116 checks)`; a three-file batch exports one result per source as 16-bit PNG, leaves the sources byte-identical, decodes sample-exactly like a single export of the same file, writes `one-retouched-2.png` instead of overwriting a pre-existing `one-retouched.png`, and reports a missing input while the next file still exports; MSI install/upgrade/uninstall path unchanged |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -176,9 +181,9 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 
 ## 7. Next actions
 
-1. W4 remaining: ICC preservation, HEIC read on CI (no decoder), batch export,
-   a 16-bit preview, and closer clarity/vignette parity with the macOS
-   references. None of these is claimed until tested.
+1. W4 remaining: ICC preservation, HEIC read on CI (no decoder), a 16-bit
+   preview, and closer clarity/vignette parity with the macOS references. None
+   of these is claimed until tested.
 2. W3 on Windows is BLOCKED on an approved, distributable landmark model.
    The in-box detector gives boxes only, which cannot drive masks.
 3. W5: only after an approved runtime package exists.

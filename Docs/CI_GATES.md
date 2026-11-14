@@ -169,7 +169,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
 `windows-2025` and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 108
+`.def` export list, publishes the WPF host self-contained for x64, runs the 116
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
@@ -204,6 +204,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `20d3a8c` (PR #21, Windows 16-bit export) | `CI` run 43557855311 | five jobs green; `Windows App` reports `PASS (108 checks)`, including 16-bit PNG/TIFF depth read from the file headers and sample-exact round trips |
 | 2026-11-14 | `2488ae4` (PR #22, Windows MSI) | `CI` run 43561151628 | five jobs green; `Windows App` builds a 398 MB MSI, installs it silently to `Program Files\Retouch Studio`, starts the installed copy into a loaded window, and uninstalls with the folder, shortcut and Programs-and-Features entry gone |
 | 2026-11-14 | `657781b` (PR #23, MSI upgrade) | `CI` run 43563787267 | five jobs green; `Windows App` installs 0.0.1.0 over an installed 0.0.0.0, leaving one entry with the new version, an upgraded copy that loads a window, and a clean uninstall |
+| 2026-11-14 | `49c3798` (PR #24, Windows batch export) | `CI` run 43566124482 | five jobs green; `Windows App` reports `PASS (116 checks)`, including a three-file batch whose output decodes sample-exactly like a single export, collision-safe names, untouched sources and per-file failure isolation |
 
 PR #13 was merged with a normal merge commit after every required context and
 the non-required `Windows StudioCore` job reported success on the final head.

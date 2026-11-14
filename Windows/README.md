@@ -202,6 +202,20 @@ IPTC metadata, signing, an updater, a 16-bit preview or editing path, or
 anything on a real desktop session. The run is also recorded in
 [`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).
 
+### Batch export (2026-11-14, PR #24)
+
+The batch landed with `49c3798` and reports `PASS (116 checks)` on CI run
+[43566124482](https://github.com/iR0ham/RetouchStudio/actions/runs/43566124482).
+Eight of the new checks drive a three-file batch through the real codec: one
+result per source, every file exported, the names derived from the sources,
+each written PNG's own header saying 16 bits, the sources byte-identical
+afterwards, a batch output decoding sample-exactly like a single export of the
+same file, a pre-existing `one-retouched.png` left untouched while the batch
+writes `one-retouched-2.png`, and a missing input reported as an error while
+the next file still exports. The WPF host exposes the run as a "Batch Export…"
+button; the GUI smoke only proves that adding the button did not stop the
+window loading, not that a person clicked through the dialogs.
+
 ### Installer run (2026-11-14, PR #22)
 
 CI run 43561151628 on `2488ae4` built the MSI from the published folder and
