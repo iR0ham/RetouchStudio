@@ -310,8 +310,6 @@ public sealed class DocumentModel
         }
     }
 
-    private JsonObject? Adjustments => _root["adjustments"] as JsonObject;
-
     private double Amount(string key) =>
         Adjustments is { } adjustments ? ReadDouble(adjustments, key) ?? 0 : 0;
 
