@@ -1163,6 +1163,64 @@ internal static class Program
         Check("a batch cancelled before it starts writes nothing",
               preCancelled.Count == 0
               && !Directory.EnumerateFiles(preCancelledDir).Any());
+
+        // A person can press Cancel while a file is being rendered, so the
+        // token is raised from inside the first file's pipeline rather than
+        // between files. The file in flight is still finished and readable.
+        var midDir = Path.Combine(root, "batch-midrender");
+        using var midToken = new CancellationTokenSource();
+        var midCodec = new CancelDuringFirstDecode(codec, midToken);
+        var mid = BatchExporter.ExportAsync(session.Document, midCodec,
+            new BatchExportRequest(sources, midDir, "png", 1.0, 0, true),
+            null, midToken.Token).GetAwaiter().GetResult();
+        Check("cancelling while a file is being rendered finishes that file",
+              midCodec.Triggered && mid.Count == 1 && mid[0].Error is null
+              && mid[0].Destination is not null && File.Exists(mid[0].Destination));
+        Check("a mid-render cancel leaves a complete file",
+              mid[0].Destination is not null
+              && TryPngDepth(File.ReadAllBytes(mid[0].Destination), out var midDepth)
+              && midDepth == 16);
+        Check("a mid-render cancel starts no later file",
+              !File.Exists(Path.Combine(midDir, "two-retouched.png")));
+    }
+
+    /// <summary>Cancels its batch from inside the first file's pipeline.</summary>
+    private sealed class CancelDuringFirstDecode(IImageCodec inner,
+                                                 CancellationTokenSource source)
+        : IImageCodec
+    {
+        public bool Triggered { get; private set; }
+
+        public Task<ImageSize> ReadSizeAsync(string path) => inner.ReadSizeAsync(path);
+
+        public Task<int> ReadBitDepthAsync(string path) => inner.ReadBitDepthAsync(path);
+
+        public Task<PixelBuffer> DecodeAsync(string path) => inner.DecodeAsync(path);
+
+        public async Task<PixelBuffer16> Decode16Async(string path)
+        {
+            var buffer = await inner.Decode16Async(path);
+            if (!Triggered)
+            {
+                Triggered = true;
+                source.Cancel();
+            }
+            return buffer;
+        }
+
+        public Task<ImageMetadata> ReadMetadataAsync(string path) =>
+            inner.ReadMetadataAsync(path);
+
+        public Task EncodeAsync(PixelBuffer image, string path, string format,
+                                double quality, ImageMetadata? metadata = null,
+                                bool stripPrivacyMetadata = true) =>
+            inner.EncodeAsync(image, path, format, quality, metadata,
+                              stripPrivacyMetadata);
+
+        public Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                  ImageMetadata? metadata = null,
+                                  bool stripPrivacyMetadata = true) =>
+            inner.Encode16Async(image, path, format, metadata, stripPrivacyMetadata);
     }
 
     /// <summary>Cancels its batch as soon as the first file has been reported.</summary>

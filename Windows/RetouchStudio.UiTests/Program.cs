@@ -328,6 +328,22 @@ internal static class Program
                 new PropertyCondition(AutomationElement.AutomationIdProperty, "1148")));
         if (edit is null)
         {
+            // The label carries the colon in some builds and not in others.
+            foreach (AutomationElement candidate in dialog.FindAll(
+                         TreeScope.Descendants,
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.Edit)))
+            {
+                if (candidate.Current.Name.StartsWith("File name",
+                                                     StringComparison.OrdinalIgnoreCase))
+                {
+                    edit = candidate;
+                    break;
+                }
+            }
+        }
+        if (edit is null)
+        {
             edit = dialog.FindFirst(
                 TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty,
