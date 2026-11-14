@@ -18,9 +18,12 @@ tests and documentation of one milestone share a single PR; routine changes and
 documentation-only changes do not get their own PR. Rows below keep their old
 evidence links, which remain valid history.
 
-**Current integration state:** `develop` folds the W4 metadata workstream —
+**Current integration state:** the W4 metadata workstream — crash recovery,
 batch cancellation, EXIF/XMP carry, the sRGB export declaration and the
-crop/turn/resize read-back checks — pending full-matrix validation.
+crop/turn/resize read-back checks — is merged into `main` as `4e31596` (PR #54)
+after five green checks on `91dde65` (run 43632188008). `develop` continues from
+`91dde65`; the next milestone is the UI-automation workstream (WP-1/WP-4
+wiring).
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
@@ -80,7 +83,7 @@ crop/turn/resize read-back checks — pending full-matrix validation.
 | R-1 | Windows preview/export performance | MEASURED (median 721 ms preview, 1189 ms 16-bit export, run 43618132157) | environment-specific; no universal claim | none |
 | R-2 | Windows start-up to first window | MEASURED, recorded not gated | plain numbers per run; noise expected | none |
 | R-3 | Managed heap across twenty renders | MEASURED flat, gated at 150 MB | longer sessions NOT VERIFIED | none |
-| R-4 | Native working-set / decoder buffers | MEASUREMENT EXISTS ONLY ON THE UNPUSHED LOCAL BRANCH `windows/memory-perf` (`3e00182`) | review and integrate under a workstream, or re-implement | workstream decision |
+| R-4 | Native working-set / decoder buffers | MEASURED on CI (`64b4008`, line in run 43631106819): 300 MB working set, 328 MB peak after sixty renders | decoder-buffer accounting by format is not split out; the `windows/memory-perf` branch is superseded | none |
 | R-5 | Interrupted saves, disk full, crash during processing, shutdown recovery | TESTED on Windows for the crash path | write, remove, quarantine and lift failures are injected rather than produced by the OS; disk-full and shutdown ordering are not exercised | none |
 | R-6 | Cancellation races in export/batch | PARTIAL | per-file failure isolation tested; cancellation mid-render not exercised | UI/harness |
 
