@@ -91,7 +91,7 @@ public sealed class WindowsImageCodec : IImageCodec
                 $"{width}x{height} 16-bit image");
         }
         var samples = new ushort[width * height * 4];
-        Buffer.BlockCopy(pixels, 0, samples, 0, pixels.Length);
+        System.Buffer.BlockCopy(pixels, 0, samples, 0, pixels.Length);
         return new PixelBuffer16(width, height, samples);
     }
 
@@ -200,7 +200,7 @@ public sealed class WindowsImageCodec : IImageCodec
 
         var encoder = await BitmapEncoder.CreateAsync(container, stream);
         var bytes = new byte[image.Pixels.Length * 2];
-        Buffer.BlockCopy(image.Pixels, 0, bytes, 0, bytes.Length);
+        System.Buffer.BlockCopy(image.Pixels, 0, bytes, 0, bytes.Length);
         encoder.SetPixelData(
             BitmapPixelFormat.Rgba16,
             BitmapAlphaMode.Straight,
