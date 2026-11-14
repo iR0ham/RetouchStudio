@@ -1,6 +1,11 @@
 # Master product completion status
 
-**Basis:** `main` at `4a034cd` (merge of PR #48, 2026-11-14). PR #47 (parallel
+**Basis:** `main` at `be9a46d` (merge of PR #49, 2026-11-14). PR #49 (five
+required checks; duplicate post-merge matrices removed) is verified by run
+[43623366599](https://github.com/iR0ham/RetouchStudio/actions/runs/43623366599)
+on head `675ae0a` and merged as `be9a46d`; no post-merge `main` run was created,
+which is the change's own behaviour and leaves no tree unvalidated (the
+`pull_request` run checked out `refs/pull/49/merge`). PR #47 (parallel
 adjustment pass) is verified by run
 [43619500646](https://github.com/iR0ham/RetouchStudio/actions/runs/43619500646)
 on head `49a028d` and merged as `f58b336`; post-merge `main` is green in run
@@ -225,6 +230,7 @@ must not claim them.
 | 2026-11-14 | `f58b336` | CI run 43620792640 (post-merge `main`, PR #47) | all five jobs green on the merged tree |
 | 2026-11-14 | `e4bc466` | CI run 43620925118 (PR #48 head, merged as `4a034cd`) | five jobs green after `main` was merged into the branch; the run that gated the #48 merge |
 | 2026-11-14 | `4a034cd` | CI run 43622071155 (post-merge `main`, PR #48) | all five jobs green on the merged tree; `Windows StudioCore` and `Windows App` now required contexts |
+| 2026-11-14 | `675ae0a` | CI run 43623366599 (PR #49 head, merged as `be9a46d`) | five jobs green; the first merge gated by all five required contexts, Windows included; no post-merge `main` matrix was created, as designed |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral

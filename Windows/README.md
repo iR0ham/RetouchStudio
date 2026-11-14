@@ -125,12 +125,14 @@ before upload, so a release carries one installer version, not two.
   crop/orientation/adjustment order on the 16-bit buffer and writes 16-bit
   samples; JPEG stays 8-bit.
 - Metadata policy: an export keeps only the resolution by default. With
-  "Keep camera metadata" on, JPEG, TIFF and 16-bit PNG carry the two keys the
-  headless probe proved the Windows writer keeps — camera model and ISO. The
-  rest of the EXIF block (make, capture date, exposure, aperture, flash, white
-  balance, GPS, comment) is silently dropped by that writer, so it is not
-  promised. The pixels are upright, so the orientation tag and the source pixel
-  dimensions are never copied.
+  "Keep camera metadata" on, JPEG and 16-bit PNG carry the source EXIF block
+  and XMP packet at the container level: the TIFF block is patched so the
+  orientation reads upright, the pixel dimensions name the exported frame and
+  the camera's thumbnail IFD is unlinked; the XMP packet's
+  `tiff:Orientation` is set to 1. TIFF keeps the two keys the WinRT metadata
+  writer proved it keeps — camera model and ISO — plus the resolution. A
+  malformed source block is skipped, never guessed at, so it cannot corrupt the
+  export.
 - Exports never overwrite the opened photo.
 - Batch export: pick several photos, choose a folder, and each one is rendered
   with the open document's edits through the same `ExportRunner` path a single
@@ -167,11 +169,9 @@ before upload, so a release carries one installer version, not two.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
   16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
   encoder is 8-bit.
-- No XMP and no IPTC: the Windows metadata API exposes neither, and its EXIF
-  writer keeps only the two measured keys, so a kept export carries the camera
-  model and ISO only. The 16-bit PNG writer does carry those two keys; an
-  8-bit PNG export dropped them in earlier runs, and this host no longer writes
-  one.
+- No IPTC: a kept JPEG or PNG carries the source EXIF block and XMP packet,
+  but not an IPTC block. A kept TIFF keeps only the measured WinRT allowlist
+  (camera model and ISO), because the WinRT TIFF writer drops the rest.
 - No HEIC write (the HEIF codec is an optional system component) and no HEIC
   read path beyond whatever WIC happens to install. The `windows-2025` runner
   has no HEIF decoder, so the probe on the corpus HEIC export fails with
@@ -305,9 +305,9 @@ on every pass while the 16-bit blur did not. (The clarity pass changed on
 2026-11-14; the 8-bit path now quantises the pre-clarity picture, and the same
 comparison measures three levels. See the clarity parity section.)
 
-What this does not prove: pixel parity with the macOS renderer, HEIC, XMP or
-IPTC metadata, signing, an updater, a 16-bit preview or editing path, or
-anything on a real desktop session. The run is also recorded in
+What this does not prove: pixel parity with the macOS renderer, HEIC, IPTC
+metadata, signing, an updater, a 16-bit preview or editing path, or anything on
+a real desktop session. The run is also recorded in
 [`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).
 
 ### Batch export (2026-11-14, PR #24)

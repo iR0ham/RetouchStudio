@@ -45,6 +45,7 @@ internal static class Program
             AdjustmentEvidence();
             FormatProbes(root);
             Metadata(root);
+            Carry(root);
             Interchange(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard();
@@ -1438,6 +1439,294 @@ internal static class Program
 
     private static string Text(ImageMetadata metadata, string key) =>
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
+
+    /// <summary>
+    /// Metadata the WinRT writer cannot express: the source EXIF block and XMP
+    /// packet are carried at the container level, the orientation is made
+    /// upright, the frame dimensions are replaced and the thumbnail is unlinked.
+    /// The decoder is asked to read the carried model back, so the block is
+    /// proved to be real EXIF, not only bytes the host wrote and re-read.
+    /// </summary>
+    private static void Carry(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(8, 6);
+        for (var y = 0; y < 6; y++)
+        {
+            for (var x = 0; x < 8; x++)
+            {
+                Put(image, x, y, r: 40, g: 60, b: 80);
+            }
+        }
+
+        var exif = BuildExif(orientation: 6, width: 8, height: 6);
+        var xmp = Encoding.UTF8.GetBytes(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF>"
+            + "<rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+            + "xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" "
+            + "dc:title=\"Carry test\" tiff:Orientation=\"6\"/>"
+            + "</rdf:RDF></x:xmpmeta>");
+
+        var source = Path.Combine(root, "carry-source.jpg");
+        codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
+        MetadataCarry.WriteJpeg(source, exif, xmp);
+
+        var sourceRead = codec.ReadMetadataAsync(source).GetAwaiter().GetResult();
+        Check("the Windows decoder reads a carried EXIF block",
+              Text(sourceRead, "System.Photo.CameraModel") == "RS-Carry");
+        Check("the carried XMP packet is readable",
+              sourceRead.Xmp is { } sourceXmp
+              && Encoding.UTF8.GetString(sourceXmp).Contains("Carry test"));
+
+        using var session = ProjectSession.Create(source);
+        var kept = Path.Combine(root, "carry-kept.jpg");
+        ExportRunner.ExportAsync(session, codec, kept, "jpeg", 0.9, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var keptExif = MetadataCarry.ReadExif(kept);
+        var keptSize = codec.ReadSizeAsync(kept).GetAwaiter().GetResult();
+        Check("a kept export carries the source EXIF block", keptExif is not null);
+        Check("the carried EXIF is upright", TiffNumber(keptExif, 0x0112) == 1);
+        Check("the carried EXIF names the exported frame",
+              TiffNumber(keptExif, 0xA002) == keptSize.Width
+              && TiffNumber(keptExif, 0xA003) == keptSize.Height);
+        Check("the carried EXIF keeps the model",
+              TiffText(keptExif, 0x0110) == "RS-Carry");
+        Check("the carried EXIF keeps the capture date",
+              TiffText(keptExif, 0x0132) == "2024:05:17 10:30:00");
+        var keptRead = codec.ReadMetadataAsync(kept).GetAwaiter().GetResult();
+        Check("the Windows decoder reads the carried model in the export",
+              Text(keptRead, "System.Photo.CameraModel") == "RS-Carry");
+        var keptXmp = MetadataCarry.ReadXmp(kept);
+        Check("the carried XMP keeps the title",
+              keptXmp is not null
+              && Encoding.UTF8.GetString(keptXmp).Contains("Carry test"));
+        Check("the carried XMP is upright",
+              keptXmp is not null
+              && Encoding.UTF8.GetString(keptXmp).Contains("tiff:Orientation=\"1\""));
+
+        var stripped = Path.Combine(root, "carry-stripped.jpg");
+        ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
+                             .GetAwaiter().GetResult();
+        Check("stripping leaves no carried EXIF", MetadataCarry.ReadExif(stripped) is null);
+        Check("stripping leaves no XMP", MetadataCarry.ReadXmp(stripped) is null);
+
+        var png = Path.Combine(root, "carry-kept.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var pngExif = MetadataCarry.ReadExif(png);
+        Check("a kept 16-bit PNG carries the EXIF block", pngExif is not null);
+        Check("the PNG EXIF is upright", TiffNumber(pngExif, 0x0112) == 1);
+        Check("the PNG carries the XMP packet", MetadataCarry.ReadXmp(png) is not null);
+
+        var broken = Path.Combine(root, "carry-broken.jpg");
+        codec.EncodeAsync(image, broken, "jpeg", 0.95).GetAwaiter().GetResult();
+        MetadataCarry.WriteJpeg(
+            broken,
+            new byte[] { (byte)'I', (byte)'I', 42, 0, 0xFF, 0xFF, 0xFF, 0x7F },
+            null);
+        using var brokenSession = ProjectSession.Create(broken);
+        var brokenOut = Path.Combine(root, "carry-broken-out.jpg");
+        ExportRunner.ExportAsync(brokenSession, codec, brokenOut, "jpeg", 0.9, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var brokenSize = codec.ReadSizeAsync(brokenOut).GetAwaiter().GetResult();
+        Check("an invalid EXIF block is skipped without failing the export",
+              brokenSize.Width == 8 && brokenSize.Height == 6);
+    }
+
+    private static byte[] BuildExif(ushort orientation, int width, int height)
+    {
+        var make = Encoding.ASCII.GetBytes("Retouch\0");
+        var model = Encoding.ASCII.GetBytes("RS-Carry\0");
+        var date = Encoding.ASCII.GetBytes("2024:05:17 10:30:00\0");
+        const int ifd0 = 8;
+        const int entries = 5;
+        var dataOffset = ifd0 + 2 + 12 * entries + 4;
+        var makeOffset = dataOffset;
+        var modelOffset = makeOffset + make.Length;
+        var dateOffset = modelOffset + model.Length;
+        var exifOffset = dateOffset + date.Length;
+        if ((exifOffset & 1) != 0)
+        {
+            exifOffset++;
+        }
+        var tiff = new byte[exifOffset + 2 + 12 * 3 + 4];
+        tiff[0] = (byte)'I';
+        tiff[1] = (byte)'I';
+        WriteTiffU16(tiff, 2, 42, little: true);
+        WriteTiffU32(tiff, 4, ifd0, little: true);
+        WriteTiffU16(tiff, ifd0, entries, little: true);
+        var at = ifd0 + 2;
+        TiffEntry(tiff, at, 0x010F, 2, (uint)make.Length, (uint)makeOffset);
+        at += 12;
+        TiffEntry(tiff, at, 0x0110, 2, (uint)model.Length, (uint)modelOffset);
+        at += 12;
+        TiffEntry(tiff, at, 0x0112, 3, 1, orientation);
+        at += 12;
+        TiffEntry(tiff, at, 0x0132, 2, (uint)date.Length, (uint)dateOffset);
+        at += 12;
+        TiffEntry(tiff, at, 0x8769, 4, 1, (uint)exifOffset);
+        make.CopyTo(tiff, makeOffset);
+        model.CopyTo(tiff, modelOffset);
+        date.CopyTo(tiff, dateOffset);
+        WriteTiffU16(tiff, exifOffset, 3, little: true);
+        var exifEntry = exifOffset + 2;
+        TiffEntry(tiff, exifEntry, 0xA001, 3, 1, 1);
+        exifEntry += 12;
+        TiffEntry(tiff, exifEntry, 0xA002, 4, 1, (uint)width);
+        exifEntry += 12;
+        TiffEntry(tiff, exifEntry, 0xA003, 4, 1, (uint)height);
+        return tiff;
+    }
+
+    private static void TiffEntry(byte[] tiff, int at, ushort tag, ushort type,
+                                  uint count, uint value)
+    {
+        WriteTiffU16(tiff, at, tag, little: true);
+        WriteTiffU16(tiff, at + 2, type, little: true);
+        WriteTiffU32(tiff, at + 4, count, little: true);
+        WriteTiffU32(tiff, at + 8, value, little: true);
+    }
+
+    private static long? TiffNumber(byte[]? tiff, ushort tag)
+    {
+        if (tiff is null
+            || !FindTiffEntry(tiff, tag, out var type, out _, out var entry, out var little))
+        {
+            return null;
+        }
+        return type switch
+        {
+            3 => (long)ReadTiffU16(tiff, entry + 8, little),
+            4 => (long)ReadTiffU32(tiff, entry + 8, little),
+            _ => (long?)null,
+        };
+    }
+
+    private static string? TiffText(byte[]? tiff, ushort tag)
+    {
+        if (tiff is null
+            || !FindTiffEntry(tiff, tag, out var type, out var count, out var entry, out var little)
+            || type != 2 || count == 0 || count > 256)
+        {
+            return null;
+        }
+        var start = count <= 4
+            ? (long)(entry + 8)
+            : ReadTiffU32(tiff, entry + 8, little);
+        if (start > int.MaxValue || start + count > tiff.Length)
+        {
+            return null;
+        }
+        return Encoding.ASCII.GetString(tiff, (int)start, (int)count).TrimEnd('\0');
+    }
+
+    private static bool FindTiffEntry(byte[] tiff, ushort wanted, out ushort type,
+                                      out uint count, out int entry, out bool little)
+    {
+        type = 0;
+        count = 0;
+        entry = -1;
+        little = tiff.Length > 1 && tiff[0] == (byte)'I';
+        if (tiff.Length < 8 || ReadTiffU16(tiff, 2, little) != 42)
+        {
+            return false;
+        }
+        var ifd = ReadTiffU32(tiff, 4, little);
+        for (var pass = 0; pass < 2; pass++)
+        {
+            if (ifd > int.MaxValue || (long)ifd + 2 > tiff.Length)
+            {
+                return false;
+            }
+            var at = (int)ifd;
+            var total = ReadTiffU16(tiff, at, little);
+            if (total > 4096 || (long)at + 2 + 12L * total > tiff.Length)
+            {
+                return false;
+            }
+            uint? sub = null;
+            for (var index = 0; index < total; index++)
+            {
+                var candidate = at + 2 + 12 * index;
+                var tag = ReadTiffU16(tiff, candidate, little);
+                if (tag == wanted)
+                {
+                    type = ReadTiffU16(tiff, candidate + 2, little);
+                    count = ReadTiffU32(tiff, candidate + 4, little);
+                    entry = candidate;
+                    return true;
+                }
+                if (tag == 0x8769
+                    && ReadTiffU16(tiff, candidate + 2, little) == 4
+                    && ReadTiffU32(tiff, candidate + 4, little) >= 1)
+                {
+                    sub = ReadTiffU32(tiff, candidate + 8, little);
+                }
+            }
+            if (sub is not { } next)
+            {
+                return false;
+            }
+            ifd = next;
+        }
+        return false;
+    }
+
+    private static ushort ReadTiffU16(byte[] bytes, int offset, bool little)
+    {
+        if (offset < 0 || offset + 2 > bytes.Length)
+        {
+            return 0;
+        }
+        return little
+            ? (ushort)(bytes[offset] | (bytes[offset + 1] << 8))
+            : (ushort)((bytes[offset] << 8) | bytes[offset + 1]);
+    }
+
+    private static uint ReadTiffU32(byte[] bytes, int offset, bool little)
+    {
+        if (offset < 0 || offset + 4 > bytes.Length)
+        {
+            return 0;
+        }
+        return little
+            ? (uint)bytes[offset] | ((uint)bytes[offset + 1] << 8)
+              | ((uint)bytes[offset + 2] << 16) | ((uint)bytes[offset + 3] << 24)
+            : ((uint)bytes[offset] << 24) | ((uint)bytes[offset + 1] << 16)
+              | ((uint)bytes[offset + 2] << 8) | bytes[offset + 3];
+    }
+
+    private static void WriteTiffU16(byte[] bytes, int offset, ushort value, bool little)
+    {
+        if (little)
+        {
+            bytes[offset] = (byte)value;
+            bytes[offset + 1] = (byte)(value >> 8);
+        }
+        else
+        {
+            bytes[offset] = (byte)(value >> 8);
+            bytes[offset + 1] = (byte)value;
+        }
+    }
+
+    private static void WriteTiffU32(byte[] bytes, int offset, uint value, bool little)
+    {
+        if (little)
+        {
+            bytes[offset] = (byte)value;
+            bytes[offset + 1] = (byte)(value >> 8);
+            bytes[offset + 2] = (byte)(value >> 16);
+            bytes[offset + 3] = (byte)(value >> 24);
+        }
+        else
+        {
+            bytes[offset] = (byte)(value >> 24);
+            bytes[offset + 1] = (byte)(value >> 16);
+            bytes[offset + 2] = (byte)(value >> 8);
+            bytes[offset + 3] = (byte)value;
+        }
+    }
 
     /// <summary>
     /// The interchange gate: a project written on macOS opens, edits and saves
