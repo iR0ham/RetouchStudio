@@ -169,7 +169,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
 `windows-2025` and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 122
+`.def` export list, publishes the WPF host self-contained for x64, runs the 124
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
@@ -213,6 +213,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `528c597` (PR #27, Windows clarity parity) | `CI` run 43576450870 | five jobs green; `Windows App` reports `PASS (122 checks)`; `G09_CLARITY_UP: mae 0.06` (was 5.8) now gated at one level; positive clarity leaves a flat field untouched and a step edge gains contrast, negative clarity softens it; `G11_VIGNETTE` unchanged at 0.473 |
 | 2026-11-14 | `cb9937d` (PR #27, documentation head) | `CI` run 43577351736 | five jobs green on the exact head; merged as `5ce61ca` |
 | 2026-11-14 | `5ce61ca` (merge of PR #27) | `CI` run 43578692160, `main` | all five jobs green |
+| 2026-11-14 | `c66cf38` (PR #29, colour-managed P3 decode) | `CI` run 43582087464, attempt 2 | five jobs green; `Windows App` reports `PASS (124 checks)`; a Display P3 photo decodes to sRGB within one level of ColorSync at four in-gamut points, and the 16-bit path agrees within four; attempt 1 was cancelled at the 45-minute job timeout while installing the Swift toolchain, with no failing step |
 
 
 PR #13 was merged with a normal merge commit after every required context and

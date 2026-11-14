@@ -699,6 +699,41 @@ internal static class Program
         Check("a 16-bit P3 PNG decodes to the 8-bit host format",
               p3.Width == 512 && p3.Height == 512);
 
+        // ColorSync on macOS converts the file's Display P3 profile to sRGB and
+        // reads these points as the values below; the file's own P3 values are
+        // 187/59/63, 13/242/242, 208/226/207 and 30/148/181. A decoder that
+        // ignored the profile would land on that second set, more than ten
+        // levels away, so this proves the conversion rather than rounding.
+        // A fifth point at (200,300) is a saturated cyan where WIC and
+        // ColorSync pick different rendering intents (26 vs 18 in red); it is
+        // left out rather than given a special bound.
+        var p3Points = new (int X, int Y, byte R, byte G, byte B)[]
+        {
+            (100, 100, 203, 43, 57),
+            (256, 256, 0, 247, 244),
+            (400, 120, 204, 227, 205),
+            (350, 400, 0, 150, 185),
+        };
+        var managed = p3Points.All(point =>
+        {
+            var sample = Get(p3, point.X, point.Y);
+            return Math.Abs(sample.R - point.R) <= 3
+                && Math.Abs(sample.G - point.G) <= 3
+                && Math.Abs(sample.B - point.B) <= 3;
+        });
+        Check("a Display P3 photo is colour-managed to sRGB on decode", managed);
+
+        var p3Wide = codec.Decode16Async(Path.Combine(fixtures, "F11_p3_16bit.png"))
+                          .GetAwaiter().GetResult();
+        var wideManaged = p3Points.All(point =>
+        {
+            var offset = (point.Y * p3Wide.Width + point.X) * 4;
+            return Math.Abs(p3Wide.Pixels[offset] / 257.0 - point.R) <= 4
+                && Math.Abs(p3Wide.Pixels[offset + 1] / 257.0 - point.G) <= 4
+                && Math.Abs(p3Wide.Pixels[offset + 2] / 257.0 - point.B) <= 4;
+        });
+        Check("the 16-bit export path is colour-managed the same way", wideManaged);
+
         var sourcePath = Path.Combine(fixtures, "F01_portrait_srgb_8.png");
         var source = codec.DecodeAsync(sourcePath).GetAwaiter().GetResult();
         using (var session = ProjectSession.Create(sourcePath))
