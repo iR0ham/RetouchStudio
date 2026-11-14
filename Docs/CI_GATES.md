@@ -214,6 +214,8 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `cb9937d` (PR #27, documentation head) | `CI` run 43577351736 | five jobs green on the exact head; merged as `5ce61ca` |
 | 2026-11-14 | `5ce61ca` (merge of PR #27) | `CI` run 43578692160, `main` | all five jobs green |
 | 2026-11-14 | `c66cf38` (PR #29, colour-managed P3 decode) | `CI` run 43582087464, attempt 2 | five jobs green; `Windows App` reports `PASS (124 checks)`; a Display P3 photo decodes to sRGB within one level of ColorSync at four in-gamut points, and the 16-bit path agrees within four; attempt 1 was cancelled at the 45-minute job timeout while installing the Swift toolchain, with no failing step |
+| 2026-11-14 | `1adafa0` (PR #29, documentation head) | `CI` run 43586982825 | five jobs green on the exact head; merged as `413363f` |
+| 2026-11-14 | `413363f` (merge of PR #29) | `CI` run 43588258162, `main` | all five jobs green |
 
 
 PR #13 was merged with a normal merge commit after every required context and
