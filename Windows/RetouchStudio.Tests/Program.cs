@@ -1706,6 +1706,40 @@ internal static class Program
             }
         }
         Check("the 16-bit export turns and crops the same frame", deepMatches);
+
+        var leftHalf = new CropValue(0, 0, 0.5, 1);
+        var promoted = CropGeometry.Rotate(leftHalf, 1);
+        Check("a quarter turn moves the crop to the frame's top half",
+              Near(promoted.X, 0) && Near(promoted.Y, 0)
+              && Near(promoted.Width, 1) && Near(promoted.Height, 0.5));
+
+        var roundTrip = CropGeometry.Rotate(new CropValue(0.1, 0.2, 0.3, 0.4), 4);
+        Check("four turns leave the crop where it was",
+              Near(roundTrip.X, 0.1) && Near(roundTrip.Y, 0.2)
+              && Near(roundTrip.Width, 0.3) && Near(roundTrip.Height, 0.4));
+
+        var mirrored = CropGeometry.Mirror(leftHalf);
+        Check("a mirror moves the crop to the other side",
+              Near(mirrored.X, 0.5) && Near(mirrored.Y, 0)
+              && Near(mirrored.Width, 0.5) && Near(mirrored.Height, 1)
+              && CropGeometry.IsFull(CropGeometry.Mirror(CropGeometry.Rotate(
+                     new CropValue(0, 0, 1, 1), 1))));
+
+        var follow = new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1),
+            Crop = CropGeometry.Rotate(leftHalf, 1),
+        };
+        var followed = ExportRunner.RenderDocument(photo, follow);
+        var follows = followed.Width == 192 && followed.Height == 128;
+        for (var y = 0; y < 128 && follows; y++)
+        {
+            for (var x = 0; x < 192 && follows; x++)
+            {
+                follows = Matches(followed, x, y, photo, y, 191 - x);
+            }
+        }
+        Check("a crop chosen before a turn keeps the same photo region", follows);
     }
 
     private static void OrientationComposition()

@@ -447,8 +447,14 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             return;
         }
-        _session.Document.Orientation =
-            _session.Document.Orientation.WithQuarterTurn(quarterTurns);
+        var document = _session.Document;
+        document.Orientation = document.Orientation.WithQuarterTurn(quarterTurns);
+        if (document.Crop is { } crop)
+        {
+            var turned = CropGeometry.Rotate(crop, quarterTurns);
+            document.Crop = CropGeometry.IsFull(turned) ? null : turned;
+            CropLabel = document.Crop is null ? "Original" : "Custom";
+        }
         ScheduleCommit();
         ScheduleRender();
     }
@@ -459,7 +465,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             return;
         }
-        _session.Document.Orientation = _session.Document.Orientation.WithFlip();
+        var document = _session.Document;
+        document.Orientation = document.Orientation.WithFlip();
+        if (document.Crop is { } crop)
+        {
+            document.Crop = CropGeometry.Mirror(crop);
+            CropLabel = "Custom";
+        }
         ScheduleCommit();
         ScheduleRender();
     }

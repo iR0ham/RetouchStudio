@@ -82,7 +82,9 @@ before upload, so a release carries one installer version, not two.
 - Crop presets (square, 4:5, 3:2, 16:9) and a custom crop: "Custom…" opens an
   overlay on the uncropped photo, four corner handles resize the frame, Apply
   writes it and Cancel leaves the document alone. Every crop is the same
-  normalized record in upright-frame coordinates that macOS reads.
+  normalized record in upright-frame coordinates that macOS reads, and a turn
+  or a mirror moves the stored crop with the frame, as macOS does, so a crop
+  chosen before the turn keeps the same region of the photo.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan

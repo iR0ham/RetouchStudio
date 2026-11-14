@@ -119,6 +119,32 @@ public static class CropGeometry
     }
 
     /// <summary>
+    /// The crop the owner keeps after the frame turns: the same region of the
+    /// photo, expressed in the new frame. macOS rewrites the stored crop the
+    /// same way when the orientation changes, so the frame does not jump under
+    /// a crop that was chosen before the turn.
+    /// </summary>
+    public static CropValue Rotate(CropValue crop, int quarterTurns)
+    {
+        var result = crop;
+        for (var turn = 0; turn < ((quarterTurns % 4) + 4) % 4; turn++)
+        {
+            result = new CropValue(1 - result.Y - result.Height, result.X,
+                                   result.Height, result.Width);
+        }
+        return result;
+    }
+
+    /// <summary>The crop after the frame mirrors; its region does not move.</summary>
+    public static CropValue Mirror(CropValue crop) =>
+        new(1 - crop.X - crop.Width, crop.Y, crop.Width, crop.Height);
+
+    /// <summary>Whether the crop covers the whole frame, bar float noise.</summary>
+    public static bool IsFull(CropValue crop) =>
+        crop.X <= 1e-9 && crop.Y <= 1e-9
+        && crop.Width >= 1 - 1e-9 && crop.Height >= 1 - 1e-9;
+
+    /// <summary>
     /// Brings an arbitrary rectangle inside the photo with both sides at least
     /// <see cref="MinimumSide"/> long, for a value that did not come from a
     /// drag.
