@@ -97,7 +97,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 7 | Windows product completion | PARTIAL | Light native editor builds, runs 116 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export, batch export through the same path as a single export, and an MSI that installs into `Program Files` and uninstalls cleanly on CI; no updater, face analysis or AI |
 | 8 | Cross-platform project interchange | VERIFIED | macOS v3 and v4 fixtures open on Windows, round-trip with structurally identical JSON, keep the unknown key and required feature, and a v3 save stays v3 (CI run 43534410772) |
 | 9 | Distribution, installers, updates | PARTIAL | macOS DMGs exist; Windows ships a zip and an unsigned per-machine MSI whose silent install, start from `Program Files`, in-place upgrade and clean uninstall are proved on CI (runs 43561151628, 43563787267); no updater, no update feed, no signing |
-| 10 | CI/CD and release engineering | VERIFIED (CI) / NOT VERIFIED (release) | Five jobs green; the dormant release `windows-app` job has never executed |
+| 10 | CI/CD and release engineering | VERIFIED (CI) / release DRY RUN VERIFIED | Five jobs green; a `workflow_dispatch` of `release.yml` built and uploaded both per-arch DMGs with checksums and the Windows zip and MSI (install, in-place upgrade, uninstall) on run 43598113385 without publishing; a tag publishing a release is NOT VERIFIED |
 | 11 | Documentation and product definition | IN PROGRESS | This record plus the existing Windows, CI, release and StudioCore documents |
 
 ## 4. W3 gap analysis (face analysis and masks)
