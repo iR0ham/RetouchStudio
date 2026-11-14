@@ -281,8 +281,21 @@ internal static class Program
         }
         Ok($"Export opened its window '{caption}'");
 
-        SetFileName(saveDialog, output);
+        var saveEdit = SetFileName(saveDialog, output);
+        var typed = WaitFor(() => ReadValue(saveEdit) == output, TimeSpan.FromSeconds(10));
+        if (!typed)
+        {
+            throw new InvalidOperationException(
+                $"the file-name box holds '{ReadValue(saveEdit)}' instead of '{output}'");
+        }
         PressDefaultButton(saveDialog, "Save", "Open");
+        var dismissed = WaitFor(() => !IsWindowVisible(dialogHandle),
+                                TimeSpan.FromSeconds(30));
+        if (!dismissed)
+        {
+            throw new InvalidOperationException(
+                "the Export dialog stayed open after Save; " + DescribeWindow(saveDialog));
+        }
         var wrote = WaitFor(
             () => File.Exists(output) && new FileInfo(output).Length > 1024,
             TimeSpan.FromMinutes(2));
@@ -290,7 +303,10 @@ internal static class Program
         {
             throw new InvalidOperationException(
                 "the export never wrote a file; the app's windows are " +
-                DescribeAppWindows(process.Id));
+                DescribeAppWindows(process.Id) + "; the status says " +
+                DescribeTexts(window) + "; recent files are " +
+                RecentFiles(Path.GetDirectoryName(output)) + " and " +
+                RecentFiles(AppDirectory(process)));
         }
         Ok($"the export wrote {new FileInfo(output).Length} bytes");
 
@@ -565,11 +581,62 @@ internal static class Program
     /// standard dialog marks as 1148; any edit is the fallback for a dialog
     /// that does not carry that id.
     /// </summary>
-    private static void SetFileName(AutomationElement dialog, string path)
+    private static AutomationElement SetFileName(AutomationElement dialog, string path)
     {
         var edit = FindFirstEdit(dialog)
             ?? throw new InvalidOperationException("the dialog has no file-name box");
         ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).SetValue(path);
+        return edit;
+    }
+
+    private static string ReadValue(AutomationElement edit) =>
+        ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
+
+    /// <summary>Every non-empty text the window shows, for a failure report.</summary>
+    private static string DescribeTexts(AutomationElement window)
+    {
+        var texts = new List<string>();
+        foreach (AutomationElement item in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var name = item.Current.Name;
+            if (name.Length is > 0 and < 160)
+            {
+                texts.Add(name);
+            }
+        }
+        return texts.Count == 0 ? "nothing" : string.Join(" | ", texts);
+    }
+
+    private static string AppDirectory(Process process)
+    {
+        try
+        {
+            return Path.GetDirectoryName(process.MainModule?.FileName ?? "") ?? "";
+        }
+        catch (InvalidOperationException)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>Files written to the folder in the last five minutes.</summary>
+    private static string RecentFiles(string? directory)
+    {
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+        {
+            return $"no folder at '{directory}'";
+        }
+        var since = DateTime.UtcNow.AddMinutes(-5);
+        var files = new DirectoryInfo(directory).GetFiles()
+            .Where(file => file.LastWriteTimeUtc >= since)
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .Select(file => $"'{file.Name}' ({file.Length} bytes at " +
+                            $"{file.LastWriteTimeUtc:HH:mm:ss}Z)")
+            .ToList();
+        return files.Count == 0 ? "none" : string.Join(", ", files);
     }
 
     /// <summary>The file-name box of a standard dialog, found by id, label, then order.</summary>
