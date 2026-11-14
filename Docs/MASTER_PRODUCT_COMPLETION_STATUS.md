@@ -9,7 +9,9 @@ and merged as `950636d`; PR #23 (in-place MSI upgrade) by run
 [43563787267](https://github.com/iR0ham/RetouchStudio/actions/runs/43563787267),
 merged as `1199210`; PR #24 (Windows batch export) by run
 [43566124482](https://github.com/iR0ham/RetouchStudio/actions/runs/43566124482)
-and its documentation head by run 43567380416.
+and its documentation head by run 43567380416. PR #26 (vignette parity) is
+verified by run
+[43573329343](https://github.com/iR0ham/RetouchStudio/actions/runs/43573329343).
 The original audit ran on `1d32842` (CI run 43531081160, also green).
 **Updated:** 2026-11-14.
 
@@ -45,7 +47,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Nested unknown fields | capture/apply | yes | via C ABI | R4.8 tests | VERIFIED (top-level and modelled records; unmodelled nested records are dropped by design) |
 | Cross-platform project interchange | codec | macOS fixtures | opens the same fixtures, saves structurally identical JSON | 14 host checks, CI run 43534410772 | VERIFIED |
 | Undo/redo, 100-step history | `DocumentHistory` | yes | yes | StudioCore suite, 55 host checks | VERIFIED |
-| Nine global adjustments | `Adjustments` | full engine | 9-slider pipeline | host checks; G-case metrics vs macOS references | VERIFIED per host; exposure/levels aligned (MAE 0.01 / 0.007), clarity and vignette still differ (MAE 5.8 / 5.2); cross-host parity NOT VERIFIED |
+| Nine global adjustments | `Adjustments` | full engine | 9-slider pipeline | host checks; G-case metrics vs macOS references | VERIFIED per host; exposure/levels aligned (MAE 0.01 / 0.007), vignette aligned (MAE 0.47, gated at 1), clarity still differs (MAE 5.8); negative vignette is a no-op on both hosts; cross-host parity NOT VERIFIED |
 | Crop, quarter turns, mirror, straighten | values + policy | full freeform | 4 aspect presets, turns, mirror, straighten | host checks | VERIFIED (unit); Windows UI is preset-only |
 | Face detection, landmarks, multi-face, confidence | — | Vision, biggest-first | ABSENT | engine suite, `--selftest` | VERIFIED macOS |
 | Face line mesh | — | ~76 Vision points + forehead/cheek rows, drawn as a web | ABSENT | self-check draws-mesh probe | VERIFIED macOS; no dense/3D mesh exists |
@@ -78,7 +80,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 0 | Baseline and gap analysis | VERIFIED | This document; `main` `1d32842`; run 43531081160 |
 | 1 | Shared core and portable project architecture | VERIFIED | StudioCore boundary suite, conformance gate, R2–R4.8 docs |
 | 2 | W3 face analysis and masking | macOS VERIFIED; Windows BLOCKED | Vision landmarks and masks exist and are tested on macOS; the Windows host has no face path, and its only in-box detector returns boxes without landmarks, so a distributable landmark model must be chosen |
-| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows exports 16-bit PNG/TIFF sample-exactly (run 43557855311) but previews and JPEG exports in 8-bit sRGB, with tested metadata keep/strip, upright orientation, alpha, an exact no-op and exposure/levels that match the macOS references (MAE 0.01 / 0.007); clarity and vignette still differ (MAE 5.8 / 5.2); Windows batch export shares the single-export path and its output is sample-exact against one-off exports (run 43566124482); ICC preservation and HEIC read are absent, the missing HEIF decoder measured; full cross-host parity NOT VERIFIED |
+| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows exports 16-bit PNG/TIFF sample-exactly (run 43557855311) but previews and JPEG exports in 8-bit sRGB, with tested metadata keep/strip, upright orientation, alpha, an exact no-op and exposure/levels that match the macOS references (MAE 0.01 / 0.007); the vignette follows CIVignette's measured shape in linear light and lands at MAE 0.47, gated at one level (run 43573329343); clarity still differs (MAE 5.8); Windows batch export shares the single-export path and its output is sample-exact against one-off exports (run 43566124482); ICC preservation and HEIC read are absent, the missing HEIF decoder measured; full cross-host parity NOT VERIFIED |
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
@@ -161,6 +163,7 @@ must not claim them.
 | 2026-11-14 | `93ad90a` | CI run 43567380416 (PR #24 documentation head) | five jobs green on the exact merge head; merged with a merge commit as `42a3b65` |
 | 2026-11-14 | `1199210` | CI run 43565828542 (post-merge `main`) | all five jobs green |
 | 2026-11-14 | `42a3b65` | CI run 43568795622 (post-merge `main`) | all five jobs green |
+| 2026-11-14 | `04defe0` | CI run 43573329343, Windows App job | `WINDOWS HOST TESTS: PASS (118 checks)`; `G11_VIGNETTE: mae 0.473` (was 5.2), rmse 0.688, luma delta −0.4, now gated at one level; a negative vignette leaves every pixel unchanged; the committed oracle reproduces `G11_VIGNETTE.png` byte-for-byte (SHA-256 `af9bebfd…`) |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -186,8 +189,8 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 ## 7. Next actions
 
 1. W4 remaining: ICC preservation, HEIC read on CI (no decoder), a 16-bit
-   preview, and closer clarity/vignette parity with the macOS references. None
-   of these is claimed until tested.
+   preview, and closer clarity parity with the macOS references (the vignette
+   is now at MAE 0.47). None of these is claimed until tested.
 2. W3 on Windows is BLOCKED on an approved, distributable landmark model.
    The in-box detector gives boxes only, which cannot drive masks.
 3. W5: only after an approved runtime package exists.

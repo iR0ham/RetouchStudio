@@ -25,10 +25,14 @@ public readonly record struct GlobalAdjustments(
         document.Adjustment("clarity"),
         document.Adjustment("vignette"));
 
+    /// <summary>
+    /// True when the pass cannot change a pixel. A negative vignette counts
+    /// here because, as on macOS, only a positive vignette is applied.
+    /// </summary>
     public bool IsIdentity =>
         Exposure == 0 && Contrast == 0 && Blacks == 0 && Whites == 0 &&
         Saturation == 0 && Vibrance == 0 && Warmth == 0 && Clarity == 0 &&
-        Vignette == 0;
+        Vignette <= 0;
 }
 
 /// <summary>
@@ -38,9 +42,12 @@ public readonly record struct GlobalAdjustments(
 /// warmth, saturation, vibrance, clarity and vignette run per pixel.
 ///
 /// Parity with the macOS Core Image pipeline is not claimed: this host works in
-/// display-referred sRGB and leaves precision at 8 bits. The contract it does
-/// keep is behavioural — identity means no change, each slider moves in the
-/// documented direction, and the output is deterministic.
+/// display-referred sRGB and leaves precision at 8 bits. The vignette follows
+/// CIVignette's measured behaviour — linear-light multiply, falloff in
+/// short-side units, intensity as the exponent — because that one is cheap to
+/// match. The contract the rest keeps is behavioural — identity means no
+/// change, each slider moves in the documented direction, and the output is
+/// deterministic.
 /// </summary>
 public static class AdjustmentPipeline
 {
@@ -71,14 +78,15 @@ public static class AdjustmentPipeline
         var vibranceAmount = adjustments.Vibrance / 100.0;
         var warmthAmount = adjustments.Warmth / 100.0;
         var clarityAmount = adjustments.Clarity / 100.0 * 0.75;
-        var vignetteAmount = adjustments.Vignette / 100.0;
+        // macOS applies CIVignette only above zero; a negative value there is a
+        // no-op, and this host follows that instead of inventing a brightening.
+        var vignetteExponent = 1.4 * adjustments.Vignette / 100.0;
         var centreX = (width - 1) / 2.0;
         var centreY = (height - 1) / 2.0;
-        var maxRadius = Math.Sqrt(centreX * centreX + centreY * centreY);
+        var shortSide = Math.Min(width, height);
 
         for (var y = 0; y < height; y++)
         {
-            var dy = (y - centreY) / maxRadius;
             for (var x = 0; x < width; x++)
             {
                 var offset = (y * width + x) * 4;
@@ -154,15 +162,21 @@ public static class AdjustmentPipeline
                     blue += delta;
                 }
 
-                if (vignetteAmount != 0)
+                if (vignetteExponent > 0)
                 {
-                    var dx = (x - centreX) / maxRadius;
-                    var radius = Math.Sqrt(dx * dx + dy * dy);
-                    var falloff = SmoothStep(0.35, 1.0, radius);
-                    var multiplier = 1 - vignetteAmount * falloff;
-                    red *= multiplier;
-                    green *= multiplier;
-                    blue *= multiplier;
+                    var dx = x - centreX;
+                    var dyPixel = y - centreY;
+                    var distance = Math.Sqrt(dx * dx + dyPixel * dyPixel) / shortSide;
+                    // CIVignette multiplies in linear light and raises the
+                    // falloff to the intensity, so a stronger slider darkens
+                    // more than linearly. Both were measured from the filter's
+                    // own output; the distance is in short-side units, which
+                    // made the falloff identical at 512, 720 and 1024 pixels.
+                    var falloff = SmoothStep(0.03, 1.03, distance);
+                    var multiplier = Math.Pow(1 - falloff, vignetteExponent);
+                    red = FromLinear(ToLinear(Clamp01(red)) * multiplier);
+                    green = FromLinear(ToLinear(Clamp01(green)) * multiplier);
+                    blue = FromLinear(ToLinear(Clamp01(blue)) * multiplier);
                 }
 
                 targetPixels[offset] = ToByte(blue);
