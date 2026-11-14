@@ -47,6 +47,7 @@ internal static class Program
             Interchange(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard();
+            CropPresets();
         }
         catch (Exception error)
         {
@@ -889,22 +890,22 @@ internal static class Program
             Check("the 16-bit source carries precision 8 bits cannot hold",
                   CountOffGrid(p3) > 0);
 
-            // A crop is stored against the photo, so it runs before the turn.
-            // The crop is deliberately not square: a swapped order would give
-            // the same pixel count but a different frame, and only this shape
-            // catches it.
+            // The turn is baked in first and the crop names the upright frame,
+            // as macOS ImageProcessor.load does. The crop is deliberately not
+            // square so a reversed order changes the frame, and the expected
+            // pixels are built in the documented order.
             session.Document.Crop = new CropValue(0.25, 0.1, 0.5, 0.4);
             session.Document.Orientation = session.Document.Orientation.WithQuarterTurn(1);
             var cropped = Path.Combine(root, "depth-16-crop-turn.png");
             ExportRunner.ExportAsync(session, codec, cropped, "png", 1.0, 0)
                         .GetAwaiter().GetResult();
             var croppedBack = codec.Decode16Async(cropped).GetAwaiter().GetResult();
-            var expected = p3.Crop(session.Document.Crop!.Value)
-                             .ApplyOrientation(session.Document.Orientation);
-            Check("a 16-bit export crops in photo coordinates before the turn",
-                  croppedBack.Width == 205 && croppedBack.Height == 256
-                  && croppedBack.Width == expected.Width
-                  && croppedBack.Height == expected.Height);
+            var expected = p3.ApplyOrientation(session.Document.Orientation)
+                             .Crop(session.Document.Crop!.Value);
+            Check("a 16-bit export crops the upright frame after the turn",
+                  croppedBack.Width == expected.Width
+                  && croppedBack.Height == expected.Height
+                  && croppedBack.Width == 256 && croppedBack.Height == 205);
             Check("a cropped 16-bit export keeps every sample",
                   croppedBack.Pixels.AsSpan().SequenceEqual(expected.Pixels));
         }
@@ -1611,6 +1612,85 @@ internal static class Program
         Check("one sticker is enough to warn", empty.UnsupportedEdits.Count == 1
               && empty.UnsupportedEdits[0] == "stickers");
     }
+
+    /// <summary>
+    /// A preset names the aspect of the finished frame, and the crop lives in
+    /// that upright frame: the orientation is baked in first, as macOS does.
+    /// The arithmetic is checked against literal fractions, two cases are
+    /// rendered end to end, and one proves the order — after a quarter turn the
+    /// frame's left half must be the photo's bottom half.
+    /// </summary>
+    private static void CropPresets()
+    {
+        var square = CropGeometry.Preset("square", 4000, 3000, 0);
+        Check("a square preset crops three quarters of the width",
+              square is { } s && Near(s.Width, 0.75) && Near(s.Height, 1)
+              && Near(s.X, 0.125) && Near(s.Y, 0));
+
+        var wide = CropGeometry.Preset("16:9", 4000, 3000, 0);
+        Check("a 16:9 preset keeps the full width and crops the height",
+              wide is { } w && Near(w.Width, 1) && Near(w.Height, 0.75)
+              && Near(w.Y, 0.125));
+
+        var widePortrait = CropGeometry.Preset("16:9", 2250, 4000, 0);
+        var widePortraitTurned = CropGeometry.Preset("16:9", 2250, 4000, 1);
+        Check("a 16:9 preset bands a 9:16 photo but crops nothing once turned",
+              widePortrait is { } wp && Near(wp.Width, 1)
+              && Near(wp.Height, 0.31640625) && Near(wp.Y, 0.341796875)
+              && widePortraitTurned is { } wpt && Near(wpt.Width, 1)
+              && Near(wpt.Height, 1) && Near(wpt.X, 0) && Near(wpt.Y, 0));
+
+        Check("the original preset has no crop",
+              CropGeometry.Preset("original", 4000, 3000, 0) is null);
+
+        var source = new PixelBuffer(256, 192);
+        var document = new DocumentModel(new JsonObject())
+        {
+            Crop = CropGeometry.Preset("16:9", 256, 192, 1),
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1),
+        };
+        var rendered = ExportRunner.RenderDocument(source, document);
+        Check("a 16:9 preset plus a quarter turn exports a 16:9 frame",
+              rendered.Width == 192 && rendered.Height == 108);
+
+        var photo = new PixelBuffer(256, 192);
+        for (var y = 0; y < photo.Height; y++)
+        {
+            for (var x = 0; x < photo.Width; x++)
+            {
+                Put(photo, x, y, (byte)x, (byte)y, (byte)((x * 7 + y * 13) % 256));
+            }
+        }
+        var half = new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1),
+            Crop = new CropValue(0, 0, 0.5, 1),
+        };
+        var leftHalf = ExportRunner.RenderDocument(photo, half);
+        var orderMatches = leftHalf.Width == 96 && leftHalf.Height == 256;
+        for (var y = 0; orderMatches && y < 256; y++)
+        {
+            for (var x = 0; orderMatches && x < 96; x++)
+            {
+                orderMatches = Matches(leftHalf, x, y, photo, y, 191 - x);
+            }
+        }
+        Check("a crop takes the upright frame's left half after a quarter turn",
+              orderMatches);
+    }
+
+    private static bool Matches(PixelBuffer a, int ax, int ay, PixelBuffer b, int bx, int by)
+    {
+        var ai = (ay * a.Width + ax) * 4;
+        var bi = (by * b.Width + bx) * 4;
+        return a.Pixels[ai] == b.Pixels[bi]
+               && a.Pixels[ai + 1] == b.Pixels[bi + 1]
+               && a.Pixels[ai + 2] == b.Pixels[bi + 2]
+               && a.Pixels[ai + 3] == b.Pixels[bi + 3];
+    }
+
+    private static bool Near(double value, double expected) =>
+        Math.Abs(value - expected) < 1e-9;
 
     /// <summary>
     /// The checkout that holds the shared fixtures. `build-windows.ps1` runs the

@@ -35,7 +35,8 @@ public sealed class PixelBuffer
     public byte[] Pixels { get; }
 
     /// <summary>
-    /// Cuts a crop in normalized photo coordinates. A crop that would be empty
+    /// Cuts a crop in normalized coordinates of this buffer — the upright frame
+    /// in the render path, where the orientation is applied first. A crop that would be empty
     /// or off the image is refused instead of silently replaced, so a bad
     /// document cannot produce a surprising export.
     /// </summary>

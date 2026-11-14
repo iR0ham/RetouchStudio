@@ -10,43 +10,44 @@ namespace RetouchStudio.Core.Render;
 public static class ExportRunner
 {
     /// <summary>
-    /// Crop in normalized photo coordinates, then the document orientation,
-    /// then the global adjustments. This is the shared model's order: the crop
-    /// is stored against the photo, not against the rotated frame.
+    /// The document orientation, then the crop, then the global adjustments.
+    /// This is the shared model's order: the orientation is baked in first, so
+    /// the crop describes the upright frame the owner sees (macOS
+    /// <c>ImageProcessor.load</c> does the same and states it).
     /// </summary>
     public static Imaging.PixelBuffer RenderDocument(Imaging.PixelBuffer source,
                                                      DocumentModel document)
     {
         var image = source;
-        if (document.Crop is { } crop)
-        {
-            image = image.Crop(crop);
-        }
         var orientation = document.Orientation;
         if (!orientation.IsIdentity)
         {
             image = image.ApplyOrientation(orientation);
+        }
+        if (document.Crop is { } crop)
+        {
+            image = image.Crop(crop);
         }
         return Imaging.AdjustmentPipeline.Apply(
             image, Imaging.GlobalAdjustments.FromDocument(document));
     }
 
     /// <summary>
-    /// The same order on the 16-bit export buffer: crop, orientation, then the
-    /// global adjustments.
+    /// The same order on the 16-bit export buffer: orientation, then crop, then
+    /// the global adjustments.
     /// </summary>
     public static Imaging.PixelBuffer16 RenderDocument16(Imaging.PixelBuffer16 source,
                                                          DocumentModel document)
     {
         var image = source;
-        if (document.Crop is { } crop)
-        {
-            image = image.Crop(crop);
-        }
         var orientation = document.Orientation;
         if (!orientation.IsIdentity)
         {
             image = image.ApplyOrientation(orientation);
+        }
+        if (document.Crop is { } crop)
+        {
+            image = image.Crop(crop);
         }
         return Imaging.AdjustmentPipeline16.Apply(
             image, Imaging.GlobalAdjustments.FromDocument(document));

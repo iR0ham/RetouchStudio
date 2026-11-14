@@ -74,7 +74,7 @@ replaces the old one through the same `UpgradeCode`.
 - Crop presets (square, 4:5, 3:2, 16:9) and a custom crop: "Custom…" opens an
   overlay on the uncropped photo, four corner handles resize the frame, Apply
   writes it and Cancel leaves the document alone. Every crop is the same
-  normalized record in photo coordinates that macOS reads.
+  normalized record in upright-frame coordinates that macOS reads.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan
@@ -146,9 +146,18 @@ replaces the old one through the same `UpgradeCode`.
   and colour space. Both pipelines use the same formulas and order; a headless
   check renders one image through both and requires them to agree within one
   8-bit level, which is the only difference rounding may introduce.
-- Document order: crop in normalized photo coordinates, then orientation
-  (mirror, quarter turns, straighten), then the nine global adjustments. The
-  crop is stored against the photo, exactly as the shared model says.
+- Document order: orientation (mirror, quarter turns, straighten), then the
+  crop, then the nine global adjustments. The orientation is baked in first, so
+  the crop — like the one macOS stores — describes the upright frame the owner
+  sees; `ImageProcessor.load` on macOS states and does the same. A headless
+  check turns a photo a quarter clockwise and crops the frame's left half,
+  which must be the photo's bottom half, so the order cannot drift back.
+- The crop presets (square, 4:5, 3:2, 16:9) name the aspect of the finished
+  frame, so an odd quarter turn changes only the frame's aspect, never the
+  preset's meaning: 16:9 on a quarter-turned 4:3 photo is a full-width band of
+  the turned frame. While the crop overlay is open the preview shows the
+  upright frame without its crop, so the rectangle the owner drags and the
+  stored crop share one coordinate system.
 - Straighten rotates clockwise for a positive angle, keeps the canvas size and
   samples with clamped edges. The macOS renderer's sign and framing are not
   claimed to match.

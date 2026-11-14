@@ -83,6 +83,42 @@ public static class CropGeometry
     }
 
     /// <summary>
+    /// The centred crop that makes the finished frame a preset aspect. The crop
+    /// is applied to the upright frame (the orientation is baked in first), so
+    /// the frame's aspect is the photo's, swapped on an odd quarter turn.
+    /// Returns <c>null</c> for the "original" preset, which has no crop.
+    /// </summary>
+    public static CropValue? Preset(string preset, int sourceWidth, int sourceHeight,
+                                    int quarterTurns)
+    {
+        if (preset == "original" || sourceWidth <= 0 || sourceHeight <= 0)
+        {
+            return null;
+        }
+        var aspect = preset switch
+        {
+            "4:5" => 4.0 / 5.0,
+            "3:2" => 3.0 / 2.0,
+            "16:9" => 16.0 / 9.0,
+            _ => 1.0,
+        };
+        var turned = ((quarterTurns % 4) + 4) % 4 % 2 != 0;
+        var photoAspect = sourceWidth / (double)sourceHeight;
+        var frameAspect = turned ? 1 / photoAspect : photoAspect;
+        double width = 1;
+        double height = 1;
+        if (aspect > frameAspect)
+        {
+            height = frameAspect / aspect;
+        }
+        else
+        {
+            width = aspect / frameAspect;
+        }
+        return new CropValue((1 - width) / 2, (1 - height) / 2, width, height);
+    }
+
+    /// <summary>
     /// Brings an arbitrary rectangle inside the photo with both sides at least
     /// <see cref="MinimumSide"/> long, for a value that did not come from a
     /// drag.
