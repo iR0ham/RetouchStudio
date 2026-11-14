@@ -1591,6 +1591,16 @@ internal static class Program
         Console.WriteLine($"  stress heap growth {growth:0.0} MB over twenty " +
                           $"preview renders");
         Check("twenty photo-sized renders keep the managed heap flat", growth < 150);
+
+        // The managed heap says nothing about the decoder's native buffers, so
+        // the process totals are printed next to it. They are recorded, not
+        // gated: the runner's own baseline and the JIT move them run to run,
+        // and a ceiling tight enough to catch a leak would fail on noise.
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        Console.WriteLine($"  memory working set {process.WorkingSet64 / 1048576.0:0} MB, " +
+                          $"peak {process.PeakWorkingSet64 / 1048576.0:0} MB " +
+                          $"after sixty renders");
     }
 
     /// <summary>
