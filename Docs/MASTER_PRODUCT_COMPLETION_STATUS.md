@@ -58,7 +58,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Cross-platform project interchange | codec | macOS fixtures | opens the same fixtures, saves structurally identical JSON | 14 host checks, CI run 43534410772 | VERIFIED |
 | Undo/redo, 100-step history | `DocumentHistory` | yes | yes | StudioCore suite, 55 host checks | VERIFIED |
 | Nine global adjustments | `Adjustments` | full engine | 9-slider pipeline | host checks; G-case metrics vs macOS references | VERIFIED per host; exposure/levels aligned (MAE 0.01 / 0.007), vignette aligned (MAE 0.47, gated at 1), clarity aligned (MAE 0.06, gated at 1); negative vignette is a no-op on both hosts and negative clarity blurs instead of inverting; cross-host parity NOT VERIFIED |
-| Crop, quarter turns, mirror, straighten | values + policy | full freeform | 4 aspect presets, turns, mirror, straighten | host checks | VERIFIED (unit); Windows UI is preset-only |
+| Crop, quarter turns, mirror, straighten | values + policy | full freeform | 4 presets and a freeform overlay (corner handles, Apply/Cancel), turns, mirror, straighten | host checks of the crop arithmetic; window smoke run | VERIFIED (unit); Windows overlay IMPLEMENTED, drag wiring NOT VERIFIED by CI |
 | Face detection, landmarks, multi-face, confidence | — | Vision, biggest-first | ABSENT | engine suite, `--selftest` | VERIFIED macOS |
 | Face line mesh | — | ~76 Vision points + forehead/cheek rows, drawn as a web | ABSENT | self-check draws-mesh probe | VERIFIED macOS; no dense/3D mesh exists |
 | Semantic segmentation of skin/regions | — | geometric regions + YCbCr/luma gates | ABSENT | engine suite | VERIFIED macOS; not a learned segmentation model |
@@ -94,7 +94,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
-| 7 | Windows product completion | PARTIAL | Light native editor builds, runs 116 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export, batch export through the same path as a single export, and an MSI that installs into `Program Files` and uninstalls cleanly on CI; no updater, face analysis or AI |
+| 7 | Windows product completion | PARTIAL | Light native editor builds, runs 141 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export, a 16-bit preview, a freeform crop overlay, batch export through the same path as a single export, and an MSI that installs into `Program Files` and uninstalls cleanly on CI; no updater, face analysis or AI; interactive Windows behaviour NOT VERIFIED (CI-only) |
 | 8 | Cross-platform project interchange | VERIFIED | macOS v3 and v4 fixtures open on Windows, round-trip with structurally identical JSON, keep the unknown key and required feature, and a v3 save stays v3 (CI run 43534410772) |
 | 9 | Distribution, installers, updates | PARTIAL | macOS DMGs exist; Windows ships a zip and an unsigned per-machine MSI whose silent install, start from `Program Files`, in-place upgrade and clean uninstall are proved on CI (runs 43561151628, 43563787267); no updater, no update feed, no signing |
 | 10 | CI/CD and release engineering | VERIFIED (CI) / release DRY RUN VERIFIED | Five jobs green; a `workflow_dispatch` of `release.yml` built and uploaded both per-arch DMGs with checksums and the Windows zip and MSI (install, in-place upgrade, uninstall) on run 43598113385 without publishing; a tag publishing a release is NOT VERIFIED |
@@ -182,6 +182,8 @@ must not claim them.
 | 2026-11-14 | `1adafa0` | CI run 43586982825 (PR #29 documentation head) | five jobs green on the exact merge head; merged with a merge commit as `413363f` |
 | 2026-11-14 | `413363f` | CI run 43588258162 (post-merge `main`) | all five jobs green |
 | 2026-11-14 | `48b8b75` | CI run 43593470894, Windows App job | `WINDOWS HOST TESTS: PASS (131 checks)`; the depth probe reads PNG IHDR and TIFF BitsPerSample (16-bit fixture 16, 8-bit PNG 8, JPEG 8, an exported 16-bit TIFF 16); the 16-bit preview matches the 8-bit preview within one level at rest and 8 levels under a strong adjustment set, gated at 10; an exact-level reduction check pins the BGRA order |
+| 2026-11-14 | `6307c09` | CI run 43596432866, all five jobs | success; `Windows App` `PASS (139 checks)`; the crop box fit/resize/move/clamp arithmetic is tested in photo coordinates; merged as `cf3acf9` (PR #33); the overlay drag wiring is not driven by CI |
+| 2026-11-14 | `249f4c1` | CI run 43596513201, all five jobs | success; `Windows App` `PASS (133 checks)`; the Swift installer is cached and the job budget raised to 60 minutes (PR #32) |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -218,3 +220,26 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 4. W6: the Windows MSI exists and CI proves install, start, in-place upgrade
    and uninstall; what remains is an updater, which needs a signed feed first.
 5. Notarization stays BLOCKED until credentials exist; never simulate it.
+
+## 8. Execution rules (owner directive, 2026-11-14)
+
+These govern how this plan is carried out; they supersede any habit of idling
+on CI.
+
+1. CI never blocks the workstream. While a run is in flight, the next
+   independent task starts; status checks are quick reads (30–60 s), never
+   multi-minute sleeps.
+2. Documentation rides in the active workstream. No documentation-only pull
+   requests are opened just to record a merge; the record is updated in the
+   workstream's own changes before its final validation run.
+3. No CI run is started for documentation-only or intermediate commits when an
+   existing run already validates the change. CI is the hard gate at the merge
+   boundary, and required checks are never bypassed.
+4. A prioritized queue of independent tasks is kept; when a task waits on an
+   external process, the queue moves.
+5. Slow jobs are fixed, not endured: the Windows Swift toolchain download now
+   runs with the setup action's cache enabled and the app job has a 60-minute
+   budget, after one run was cancelled at the old 45-minute timeout during
+   installation.
+6. Green checks are a checkpoint, not a stopping point; implementation
+   continues automatically.
