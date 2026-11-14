@@ -194,6 +194,9 @@ must not claim them.
 | 2026-11-14 | `07c7713` | CI run 43603560807 (PR #38 head, merged as `b6b72cb`) | five jobs green; `Windows App` `PASS (156 checks)`; a 0.1/0.1/0.8/0.7 crop of a 256x192 photo renders the 205x134 box at (26, 19) pixel for pixel, a flip mirrors each row and a quarter turn reads the clockwise source, against indices written in the test |
 | 2026-11-14 | `b6b72cb` | CI run 43604723334 (post-merge `main`, PR #38) | all five jobs green |
 | 2026-11-14 | `d233a3d` | CI run 43604785315 (PR #37 head, merged as `32912ba`) | five jobs green; `Windows App` `PASS (156 checks)`; the export dialog's long edge reaches the plan |
+| 2026-11-14 | `32912ba` | CI run 43605954063 (post-merge `main`, PR #37) | all five jobs green |
+| 2026-11-14 | `1bf843e` | CI run 43606194309 (PR #39 head, merged as `a5e65eb`) | five jobs green; `Windows App` `PASS (169 checks)`; a crop renders the upright frame's left half after a quarter turn in 8 and 16 bits, a turn-then-mirror maps (x, y) to the photo's (y, x), every corner of a 20-degree straighten comes from inside the photo, `CropGeometry.Rotate`/`Mirror` keep a chosen region through turns and a mirror, and the 16:9 preset on a quarter-turned 4:3 photo is full width |
+| 2026-11-14 | `a5e65eb` | CI run 43607538778 (post-merge `main`, PR #39) | all five jobs green |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -216,6 +219,7 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 | No HEIF decoder on `windows-2025` | HEIC read on CI | install the HEIF extension or accept the measured gap |
 | Windows output is always sRGB, with wide-gamut colours clipped at decode | ICC preservation and wide-gamut rendering | carry the source profile into the render and write, a scoped project of its own |
 | Branch protection on `main` requires only `StudioCore Boundary`, `Platform-neutral Conformance` and `macOS Integration` | a Windows regression can merge while `Windows App` or `Windows StudioCore` is red or still running | owner decision: add the Windows contexts to the required set (changing protection needs owner approval) |
+| The golden corpus may not be regenerated without owner approval | pixel-level straighten/crop agreement between hosts | owner-approved fixture and reference images added to `Tests/Corpus`, so a Windows straighten can be compared to the macOS render rather than to the shared formulas |
 
 ## 7. Next actions
 
