@@ -12,28 +12,22 @@ namespace RetouchStudio.Imaging;
 /// EXIF orientation and converts to sRGB, so the document's own orientation is
 /// the only rotation the pipeline adds.
 ///
-/// Encoding writes 8-bit files. It carries the camera, capture, GPS and comment
-/// keys below when privacy stripping is off and the container supports EXIF
-/// (JPEG and TIFF); with stripping on, only the resolution the pixels were
-/// written with travels. XMP is not exposed by the Windows metadata API and is
-/// never written.
+/// Encoding writes 8-bit files. It carries the measured keys below when
+/// privacy stripping is off and the container supports EXIF (JPEG and TIFF);
+/// with stripping on, only the resolution the pixels were written with travels.
+/// XMP is not exposed by the Windows metadata API and is never written.
 /// </summary>
 public sealed class WindowsImageCodec : IImageCodec
 {
-    // The allowlist, not a denylist: identity and location keys are copied only
-    // when the caller asked for them, and anything unknown is dropped.
+    // Only keys the headless probe on windows-2025 proved a JPEG and a TIFF
+    // actually keep. The WinRT metadata writer silently drops several EXIF
+    // keys (Make, exposure time, aperture) and throws on DateTaken, so a wider
+    // list would promise a round trip that does not happen. Each new key is
+    // added only after the probe prints "kept" for it.
     private static readonly string[] CarriedProperties =
     {
-        "System.Photo.CameraManufacturer", "System.Photo.CameraModel",
-        "System.Photo.DateTaken", "System.Photo.ExposureTime",
-        "System.Photo.FNumber", "System.Photo.FocalLength",
-        "System.Photo.FocalLengthInFilm", "System.Photo.IsoSpeed",
-        "System.Photo.ExposureBias", "System.Photo.Flash",
-        "System.Photo.MeteringMode", "System.Photo.LightSource",
-        "System.Photo.WhiteBalance", "System.Photo.DigitalZoom",
-        "System.GPS.Latitude", "System.GPS.Longitude", "System.GPS.Altitude",
-        "System.GPS.LatitudeRef", "System.GPS.LongitudeRef",
-        "System.GPS.AltitudeRef", "System.Comment",
+        "System.Photo.CameraModel",
+        "System.Photo.IsoSpeed",
     };
 
     public async Task<PixelBuffer> DecodeAsync(string path)

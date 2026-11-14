@@ -432,7 +432,14 @@ internal static class Program
             ("System.Photo.ExposureTime", 0.008),
             ("System.Photo.FNumber", 2.8),
             ("System.Photo.IsoSpeed", (ushort)400),
+            ("System.Photo.Flash", (ushort)16),
+            ("System.Photo.WhiteBalance", (ushort)1),
             ("System.GPS.LatitudeRef", "N"),
+            ("System.GPS.LongitudeRef", "E"),
+            ("System.GPS.Latitude", new[] { 35.0, 41.0, 12.0 }),
+            ("System.GPS.Longitude", new[] { 51.0, 25.0, 3.0 }),
+            ("System.GPS.Altitude", 1200.0),
+            ("System.Comment", "Retouch Studio probe"),
         };
         foreach (var (key, value) in probes)
         {
