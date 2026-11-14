@@ -233,12 +233,18 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     Step 'driving the published app through Windows UI Automation'
     $uiTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
     $uiOutput = Join-Path $uiTemp 'retouchstudio-ui-export.jpg'
-    & dotnet run --project (Join-Path $root 'Windows/RetouchStudio.UiTests/RetouchStudio.UiTests.csproj') `
-        -c $Configuration -- `
-        (Join-Path $appDir 'RetouchStudio.exe') `
-        (Join-Path $root 'Tests/Corpus/Fixtures/F01_portrait_srgb_8.png') `
-        $uiOutput
+    $uiProject = Join-Path $root 'Windows/RetouchStudio.UiTests/RetouchStudio.UiTests.csproj'
+    $uiApp = Join-Path $appDir 'RetouchStudio.exe'
+    $uiPhoto = Join-Path $root 'Tests/Corpus/Fixtures/F01_portrait_srgb_8.png'
+    & dotnet run --project $uiProject -c $Configuration -- $uiApp $uiPhoto $uiOutput
     Assert-ExitCode 'UI host tests'
+
+    # The launch prompt for an unsaved copy is a message box no headless test
+    # can answer, so a copy is seeded and the prompt is driven the same way.
+    $uiRecoveryOutput = Join-Path $uiTemp 'retouchstudio-ui-recovery.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiRecoveryOutput recovery
+    Assert-ExitCode 'UI recovery tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted

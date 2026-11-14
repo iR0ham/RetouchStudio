@@ -1,5 +1,10 @@
 using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Text.Json.Nodes;
+using System.Threading;
 using System.Windows.Automation;
+using RetouchStudio.Core.Project;
 using RetouchStudio.Imaging;
 
 namespace RetouchStudio.UiTests;
@@ -12,10 +17,12 @@ namespace RetouchStudio.UiTests;
 /// slider, export through the Save dialog, and read the written file back with
 /// the real codec.
 ///
-///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
+///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt; [golden|recovery]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
-/// machine cannot put a prompt in front of the window under test.
+/// machine cannot put a prompt in front of the window under test. The recovery
+/// scenario is the exception: it seeds one copy there on purpose and answers
+/// the prompt the host shows for it.
 /// </summary>
 internal static class Program
 {
@@ -23,10 +30,17 @@ internal static class Program
 
     private static int Main(string[] args)
     {
-        if (args.Length != 3)
+        if (args.Length is < 3 or > 4)
         {
             Console.Error.WriteLine(
-                "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg>");
+                "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
+                "[golden|recovery]");
+            return 2;
+        }
+        var mode = args.Length == 4 ? args[3] : "golden";
+        if (mode is not ("golden" or "recovery"))
+        {
+            Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
         }
         var app = Path.GetFullPath(args[0]);
@@ -47,6 +61,10 @@ internal static class Program
             File.Delete(output);
         }
         var recovery = Directory.CreateTempSubdirectory("retouchstudio-ui-recovery-");
+        if (mode == "recovery")
+        {
+            SeedRecovery(recovery.FullName, photo);
+        }
 
         var start = new ProcessStartInfo(app)
         {
@@ -62,7 +80,14 @@ internal static class Program
             ?? throw new InvalidOperationException("the app did not start");
         try
         {
-            Run(process, photo, output);
+            if (mode == "recovery")
+            {
+                RunRecovery(process, photo);
+            }
+            else
+            {
+                Run(process, photo, output);
+            }
             return 0;
         }
         catch (Exception error)
@@ -91,6 +116,90 @@ internal static class Program
             {
             }
         }
+    }
+
+    /// <summary>
+    /// Leaves one unsaved document in the recovery folder, as a crash would.
+    /// The photo's identity is recorded, so the host offers the copy instead of
+    /// quarantining it as foreign.
+    /// </summary>
+    private static void SeedRecovery(string directory, string photo)
+    {
+        var document = new JsonObject
+        {
+            ["version"] = 4,
+            ["imagePath"] = photo,
+            ["exportFormat"] = "jpeg",
+            ["exportQuality"] = 0.92,
+            ["adjustments"] = new JsonObject { ["exposure"] = 60 },
+        };
+        var project = Encoding.UTF8.GetBytes(document.ToJsonString());
+        var snapshot = RecoverySnapshot.Capture(
+            project, Encoding.UTF8.GetBytes("""{"version":4}"""), photo,
+            DateTimeOffset.UtcNow);
+        if (!new RecoveryStore(directory).WriteWorking(snapshot, out _))
+        {
+            throw new InvalidOperationException(
+                "the seeded recovery copy was not written");
+        }
+    }
+
+    /// <summary>
+    /// The host offers the unsaved copy on launch. Restoring it must open the
+    /// photo with the stored slider value; a headless test can reach the store
+    /// but not the message box or the restore the person sees.
+    /// </summary>
+    private static void RunRecovery(Process process, string photo)
+    {
+        var prompt = WaitWindow(process.Id, "Recover unsaved changes", StartUpPatience)
+            ?? throw new InvalidOperationException("the recovery prompt never appeared");
+        Ok("the seeded unsaved copy raised the recovery prompt");
+        var yes = FindButton(prompt, "Yes")
+            ?? throw new InvalidOperationException("the recovery prompt has no Yes button");
+        Invoke(yes);
+
+        var window = WaitWindow(process.Id, "Retouch Studio", TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var photoName = Path.GetFileName(photo);
+        var opened = WaitFor(
+            () => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+            TimeSpan.FromSeconds(90));
+        if (!opened)
+        {
+            throw new InvalidOperationException(
+                $"the recovery did not open the photo; the title is '{window.Current.Name}'");
+        }
+        Ok($"the recovered document opened: '{window.Current.Name}'");
+
+        var slider = FindSlider(window, "Exposure")
+            ?? throw new InvalidOperationException("the Exposure slider is missing");
+        var restored = WaitFor(
+            () => slider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var pattern)
+                  && pattern is RangeValuePattern range
+                  && Math.Abs(range.Current.Value - 60) < 0.5,
+            TimeSpan.FromSeconds(10));
+        if (!restored)
+        {
+            throw new InvalidOperationException("the restored Exposure value is not 60");
+        }
+        Ok("the restored document kept the unsaved Exposure value");
+
+        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
+        close.Close();
+        if (!process.WaitForExit(30_000))
+        {
+            DismissClosePrompt(process.Id);
+            if (!process.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the app did not close");
+            }
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"the app exited with {process.ExitCode}");
+        }
+        Ok("the app closed cleanly after a recovery");
+        Console.WriteLine("UI HOST TESTS: PASS");
     }
 
     private static void Run(Process process, string photo, string output)

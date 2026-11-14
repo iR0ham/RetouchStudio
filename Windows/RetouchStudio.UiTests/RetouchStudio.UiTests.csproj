@@ -11,6 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../RetouchStudio.Core/RetouchStudio.Core.csproj" />
     <ProjectReference Include="../RetouchStudio.Imaging/RetouchStudio.Imaging.csproj" />
   </ItemGroup>
 
