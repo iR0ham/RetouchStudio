@@ -33,6 +33,7 @@ internal static class Program
             Adjustments();
             Codec(root);
             Export(root);
+            Corpus(root);
             Metadata(root);
             Interchange(root);
         }
@@ -346,6 +347,117 @@ internal static class Program
     /// carries no EXIF on this host because the Windows metadata API does not
     /// map EXIF onto PNG chunks.
     /// </summary>
+    /// <summary>
+    /// The shared corpus on the load path: orientation is baked upright, a
+    /// no-op export is pixel-identical, alpha survives a PNG export and is
+    /// flattened onto white for a JPEG. The luma line is evidence for the
+    /// cross-platform record, not a gate: no numeric tolerance is approved.
+    /// </summary>
+    private static void Corpus(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var fixtures = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures");
+
+        var turned = codec.DecodeAsync(Path.Combine(fixtures, "F10_exif_orient6.jpg"))
+                          .GetAwaiter().GetResult();
+        Check("an orientation-6 JPEG decodes upright",
+              turned.Width == 480 && turned.Height == 720);
+        var (luma, spread) = Luma(turned);
+        Console.WriteLine($"  load F10 luma {luma:0.###} sd {spread:0.###} " +
+                          "(macOS 115.746 / 61.530)");
+
+        var p3 = codec.DecodeAsync(Path.Combine(fixtures, "F11_p3_16bit.png"))
+                      .GetAwaiter().GetResult();
+        Check("a 16-bit P3 PNG decodes to the 8-bit host format",
+              p3.Width == 512 && p3.Height == 512);
+
+        var sourcePath = Path.Combine(fixtures, "F01_portrait_srgb_8.png");
+        var source = codec.DecodeAsync(sourcePath).GetAwaiter().GetResult();
+        using (var session = ProjectSession.Create(sourcePath))
+        {
+            var noop = Path.Combine(root, "corpus-noop.png");
+            var plan = ExportRunner.ExportAsync(session, codec, noop, "png", 1.0, 0)
+                                   .GetAwaiter().GetResult();
+            var roundTrip = codec.DecodeAsync(noop).GetAwaiter().GetResult();
+            Check("a zero-adjustment export is pixel-identical",
+                  plan.BitsPerChannel == 16
+                  && roundTrip.Width == source.Width && roundTrip.Height == source.Height
+                  && roundTrip.Pixels.AsSpan().SequenceEqual(source.Pixels));
+        }
+
+        var cutoutPath = Path.Combine(fixtures, "F09_alpha_cutout.png");
+        var cutout = codec.DecodeAsync(cutoutPath).GetAwaiter().GetResult();
+        var clear = FindClear(cutout);
+        Check("a transparent source keeps clear and solid pixels",
+              clear is not null && FindSolid(cutout) is not null);
+
+        using (var session = ProjectSession.Create(cutoutPath))
+        {
+            var png = Path.Combine(root, "corpus-cutout.png");
+            var pngPlan = ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                                     .GetAwaiter().GetResult();
+            var pngBack = codec.DecodeAsync(png).GetAwaiter().GetResult();
+            Check("a PNG export keeps the alpha channel",
+                  !pngPlan.FlattensAlpha && clear is { } point
+                  && Get(pngBack, point.X, point.Y).A == 0);
+
+            var jpeg = Path.Combine(root, "corpus-cutout.jpg");
+            var jpegPlan = ExportRunner.ExportAsync(session, codec, jpeg, "jpeg", 0.92, 0)
+                                      .GetAwaiter().GetResult();
+            var jpegBack = codec.DecodeAsync(jpeg).GetAwaiter().GetResult();
+            var corner = clear is { } spot ? Get(jpegBack, spot.X, spot.Y) : default;
+            // A clear pixel may sit next to an opaque edge, so the JPEG ringing
+            // is allowed a few levels above pure white.
+            Check("a JPEG export flattens clear pixels onto white",
+                  jpegPlan.FlattensAlpha && jpegPlan.BitsPerChannel == 8
+                  && corner.A == 255 && corner.R >= 245 && corner.G >= 245
+                  && corner.B >= 245);
+        }
+    }
+
+    private static (int X, int Y)? FindClear(PixelBuffer buffer)
+    {
+        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        {
+            if (buffer.Pixels[offset + 3] == 0)
+            {
+                var pixel = offset / 4;
+                return (pixel % buffer.Width, pixel / buffer.Width);
+            }
+        }
+        return null;
+    }
+
+    private static (int X, int Y)? FindSolid(PixelBuffer buffer)
+    {
+        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        {
+            if (buffer.Pixels[offset + 3] == 255)
+            {
+                var pixel = offset / 4;
+                return (pixel % buffer.Width, pixel / buffer.Width);
+            }
+        }
+        return null;
+    }
+
+    private static (double Mean, double StdDev) Luma(PixelBuffer buffer)
+    {
+        var count = buffer.Pixels.Length / 4;
+        double sum = 0;
+        double squares = 0;
+        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        {
+            var luma = 0.2126 * buffer.Pixels[offset + 2]
+                     + 0.7152 * buffer.Pixels[offset + 1]
+                     + 0.0722 * buffer.Pixels[offset];
+            sum += luma;
+            squares += luma * luma;
+        }
+        var mean = sum / count;
+        return (mean, Math.Sqrt(Math.Max(0, squares / count - mean * mean)));
+    }
+
     private static void Metadata(string root)
     {
         var codec = new WindowsImageCodec();
