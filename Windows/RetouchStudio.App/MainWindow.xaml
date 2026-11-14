@@ -8,7 +8,9 @@
         FontFamily="Segoe UI"
         Loaded="Window_Loaded"
         Closing="Window_Closing"
-        PreviewKeyDown="Window_PreviewKeyDown">
+        PreviewKeyDown="Window_PreviewKeyDown"
+        PreviewKeyUp="Window_PreviewKeyUp"
+        Deactivated="Window_Deactivated">
   <DockPanel>
     <Border DockPanel.Dock="Top" Background="{StaticResource PanelBrush}"
             BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1"
@@ -37,6 +39,9 @@
       <DockPanel>
         <TextBlock DockPanel.Dock="Right" Text="{Binding DimensionText}"
                    Foreground="{StaticResource MutedBrush}" FontSize="11" />
+        <TextBlock DockPanel.Dock="Right" Text="·  hold Space to compare  ·"
+                   Foreground="{StaticResource MutedBrush}" FontSize="11"
+                   Margin="0,0,10,0" />
         <TextBlock Text="{Binding Status}" Foreground="{StaticResource TextBrush}"
                    FontSize="11" TextTrimming="CharacterEllipsis" />
       </DockPanel>

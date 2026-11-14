@@ -98,6 +98,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private bool _commitPending;
     private bool _loading;
     private BitmapSource? _preview;
+    private BitmapSource? _originalPreview;
+    private bool _isPeekingOriginal;
     private string _status = "Open a photo to begin.";
     private string _dimensionText = "";
     private bool _canUndo;
@@ -136,11 +138,39 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public ObservableCollection<AdjustmentItem> Adjustments { get; }
 
-    public BitmapSource? Preview
+    /// <summary>
+    /// The bitmap on the canvas: the edited preview, or the untouched photo
+    /// while the owner holds the compare key.
+    /// </summary>
+    public BitmapSource? Preview =>
+        _isPeekingOriginal && _originalPreview is not null ? _originalPreview : _preview;
+
+    /// <summary>
+    /// Hold-to-compare, as the macOS canvas does with the space bar. The
+    /// original is the photo as decoded — no crop, no turn, no adjustments.
+    /// </summary>
+    public bool IsPeekingOriginal
     {
-        get => _preview;
-        private set => Set(ref _preview, value);
+        get => _isPeekingOriginal;
+        set
+        {
+            if (_isPeekingOriginal == value)
+            {
+                return;
+            }
+            if (value && _originalPreview is null)
+            {
+                return;
+            }
+            _isPeekingOriginal = value;
+            Raise(nameof(Preview));
+            Raise(nameof(IsPeekingOriginal));
+        }
     }
+
+    /// <summary>Whether a compare peek is available right now.</summary>
+    public bool CanPeekOriginal =>
+        _session is not null && _originalPreview is not null && !_isCropping;
 
     public string Status
     {
@@ -338,7 +368,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
                 return;
             }
             _isCropping = value;
+            if (value)
+            {
+                _isPeekingOriginal = false;
+            }
             Raise(nameof(IsCropping));
+            Raise(nameof(Preview));
+            Raise(nameof(CanPeekOriginal));
             ScheduleRender();
         }
     }
@@ -630,6 +666,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
 
         await RenderPreviewAsync();
+        await RenderOriginalPreviewAsync();
         RefreshState();
     }
 
@@ -644,7 +681,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _previewSource16 = null;
         _sourceWidth = 0;
         _sourceHeight = 0;
-        Preview = null;
+        Set(ref _preview, null, nameof(Preview));
+        _originalPreview = null;
+        _isPeekingOriginal = false;
         DimensionText = "";
         Raise(nameof(HasDocument));
         Raise(nameof(Title));
@@ -714,7 +753,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             return;
         }
-        Preview = bitmap;
+        Set(ref _preview, bitmap, nameof(Preview));
         var width = source?.Width ?? source16!.Width;
         var height = source?.Height ?? source16!.Height;
         DimensionText = $"{width}×{height} preview";
@@ -769,6 +808,38 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         CanRedo = canRedo;
         IsDirty = _session.IsDirty();
         Raise(nameof(Title));
+    }
+
+    /// <summary>
+    /// Renders the compare original once per open: the preview-sized source
+    /// with no orientation, crop or adjustment, which is the photo as the
+    /// decoder delivered it (EXIF rotation baked in).
+    /// </summary>
+    private async Task RenderOriginalPreviewAsync()
+    {
+        var source = _previewSource;
+        var source16 = _previewSource16;
+        var session = _session;
+        if (session is null || (source is null && source16 is null))
+        {
+            _originalPreview = null;
+            return;
+        }
+        var plain = new DocumentModel(new JsonObject());
+        var bitmap = await Task.Run(() =>
+        {
+            if (source16 is not null)
+            {
+                return ToBitmap(ExportRunner.RenderDocument16(source16, plain).ToBgra8());
+            }
+            return ToBitmap(ExportRunner.RenderDocument(source!, plain));
+        });
+        if (!ReferenceEquals(_session, session))
+        {
+            return;
+        }
+        _originalPreview = bitmap;
+        Raise(nameof(CanPeekOriginal));
     }
 
     private static BitmapSource ToBitmap(PixelBuffer buffer)
