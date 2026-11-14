@@ -180,13 +180,18 @@ function Invoke-GuiSmoke([string]$Exe, [string]$Label) {
     # to stderr instead of showing one during the smoke run.
     $env:RETOUCHSTUDIO_NO_DIALOG = '1'
     $env:RETOUCHSTUDIO_SMOKE = $marker
+    # The clock runs from process start to the window's Loaded marker, so the
+    # line reports a real start-up time on this runner. It is recorded, not
+    # gated: a hosted runner's first window is too noisy for a budget.
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
     $process = Start-Process -FilePath $Exe -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $title = $null
     $exitCode = $null
     $handle = 0
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        Start-Sleep -Milliseconds 500
+    $loadedMs = -1
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        Start-Sleep -Milliseconds 100
         $process.Refresh()
         if ($process.HasExited) {
             $exitCode = $process.ExitCode
@@ -195,6 +200,7 @@ function Invoke-GuiSmoke([string]$Exe, [string]$Label) {
         $handle = $process.MainWindowHandle
         if (Test-Path $marker) {
             $title = (Get-Content $marker -Raw).Trim()
+            $loadedMs = $watch.ElapsedMilliseconds
             break
         }
     }
@@ -209,7 +215,7 @@ function Invoke-GuiSmoke([string]$Exe, [string]$Label) {
         }
         throw "the app ran but its window never loaded (handle $handle). stderr: $errors"
     }
-    Write-Host "   the $Label app loaded its window: '$title' (native handle $handle)"
+    Write-Host "   the $Label app loaded its window in $loadedMs ms: '$title' (native handle $handle)"
 }
 
 if (-not $SkipGuiSmoke -and -not $SkipPublish) {
