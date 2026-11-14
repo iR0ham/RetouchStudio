@@ -9,6 +9,7 @@
 #   pwsh -File Tools/build-windows.ps1 -SkipGuiSmoke     # no interactive desktop
 #   pwsh -File Tools/build-windows.ps1 -SkipPackage      # no zip or MSI artifact
 #   pwsh -File Tools/build-windows.ps1 -PackageVersion 1.2.3
+#   pwsh -File Tools/build-windows.ps1 -RequireMsi        # CI: no silent skip
 #
 # Requires a Swift toolchain for Windows (swiftc.exe plus its clang.exe and lld)
 # and the .NET 10 SDK, both on PATH. The MSI needs WiX Toolset v3, which the CI
@@ -22,6 +23,7 @@ param(
     [switch]$SkipGuiSmoke,
     [switch]$SkipPublish,
     [switch]$SkipPackage,
+    [switch]$RequireMsi,
     [string]$PackageVersion = '0.0.0-ci'
 )
 
@@ -313,6 +315,9 @@ function Invoke-InstallProof([string]$Msi, [string]$Label) {
 if (-not $SkipPackage -and -not $SkipPublish) {
     $wix = Find-Wix ''
     if (-not $wix) {
+        if ($RequireMsi) {
+            throw 'WiX Toolset v3 was not found and -RequireMsi was passed'
+        }
         Write-Host '   WiX Toolset v3 not found: the MSI installer is not built'
     }
     else {

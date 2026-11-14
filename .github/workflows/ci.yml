@@ -226,7 +226,7 @@ jobs:
 
       - name: Build, test and smoke-run the Windows host
         shell: pwsh
-        run: ./Tools/build-windows.ps1
+        run: ./Tools/build-windows.ps1 -RequireMsi
 
       - name: Upload the packaged zip and MSI
         uses: actions/upload-artifact@v7
