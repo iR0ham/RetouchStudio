@@ -70,7 +70,7 @@ public static class AdjustmentPipeline
         var saturationFactor = 1 + 0.6 * adjustments.Saturation / 100.0;
         var vibranceAmount = adjustments.Vibrance / 100.0;
         var warmthAmount = adjustments.Warmth / 100.0;
-        var clarityAmount = adjustments.Clarity / 100.0 * 1.5;
+        var clarityAmount = adjustments.Clarity / 100.0 * 0.75;
         var vignetteAmount = adjustments.Vignette / 100.0;
         var centreX = (width - 1) / 2.0;
         var centreY = (height - 1) / 2.0;
@@ -198,12 +198,23 @@ public static class AdjustmentPipeline
     }
 
     /// <summary>
-    /// A separable box blur used only by clarity. The radius scales with the
-    /// photo so the effect reads the same at any resolution.
+    /// Three box passes approximate a Gaussian of the radius the shared unsharp
+    /// mask uses (0.4% of the short side), and the radius scales with the photo
+    /// so the effect reads the same at any resolution.
     /// </summary>
     private static byte[] BoxBlur(byte[] source, int width, int height)
     {
-        var radius = Math.Max(2, Math.Min(width, height) / 300);
+        var radius = Math.Max(1, (int)Math.Round(Math.Min(width, height) * 0.004));
+        var current = source;
+        for (var pass = 0; pass < 3; pass++)
+        {
+            current = BlurPass(current, width, height, radius);
+        }
+        return current;
+    }
+
+    private static byte[] BlurPass(byte[] source, int width, int height, int radius)
+    {
         var horizontal = new byte[source.Length];
         for (var y = 0; y < height; y++)
         {
