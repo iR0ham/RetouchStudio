@@ -2323,9 +2323,10 @@ internal static class Program
         discardStore.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at.AddMinutes(1)), out _);
         var discardB = discardStore.PrepareForLaunch();
         Check("discarding one copy leaves the other",
-              discardStore.Discard(discardB[0])
+              discardA[0].Path == discardB[0].Path
+              && discardStore.Discard(discardB[0])
               && !File.Exists(discardB[0].Path)
-              && File.Exists(discardA[0].Path));
+              && File.Exists(discardB[1].Path));
 
         var missingCandidate = new RecoveryStore.Candidate(
             Path.Combine(root, "never-written.retouch"), snapshot);

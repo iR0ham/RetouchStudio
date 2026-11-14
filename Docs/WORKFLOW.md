@@ -61,7 +61,10 @@ run is in flight, the next independent task continues.
   Platform-neutral Conformance, macOS Integration, Windows StudioCore, Windows
   App) exactly once on the exact head that will be reviewed or merged.
 - Avoid redundant runs: do not re-dispatch for an unchanged head, and do not
-  update a PR just to restart checks.
+  update a PR just to restart checks. A ref's concurrency group queues a second
+  dispatch behind the one in flight, so check for a running matrix on the same
+  ref before dispatching; a run on a head that is already superseded delays the
+  milestone instead of validating it.
 - Evidence discipline is unchanged: only run IDs, measured log lines and
   read-back files count. A required test is never weakened, skipped or bypassed
   to make a run green, and branch protection is never circumvented.

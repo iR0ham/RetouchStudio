@@ -153,6 +153,18 @@ public sealed class WindowsImageCodec : IImageCodec
             ? (uint)bytes[0] | ((uint)bytes[1] << 8) | ((uint)bytes[2] << 16) | ((uint)bytes[3] << 24)
             : ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | (uint)bytes[3];
 
+    /// <summary>
+    /// WIC converts from the file's embedded profile to sRGB. A file this host
+    /// wrote already holds sRGB pixels, and converting them again would only add
+    /// rounding, so its own profile is recognised and the conversion skipped.
+    /// Any other profile, or none, still converts.
+    /// </summary>
+    private static ColorManagementMode ColourModeFor(string path) =>
+        MetadataCarry.TryReadIcc(Path.GetFullPath(path), out var declared)
+        && declared.AsSpan().SequenceEqual(SrgbProfile.Bytes)
+            ? ColorManagementMode.DoNotColorManage
+            : ColorManagementMode.ColorManageToSRgb;
+
     public async Task<PixelBuffer> DecodeAsync(string path)
     {
         var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
@@ -164,7 +176,7 @@ public sealed class WindowsImageCodec : IImageCodec
             BitmapAlphaMode.Straight,
             new BitmapTransform(),
             ExifOrientationMode.RespectExifOrientation,
-            ColorManagementMode.ColorManageToSRgb);
+            ColourModeFor(path));
         var pixels = data.DetachPixelData();
 
         // OrientedPixelWidth/Height are the size after EXIF orientation, which
@@ -192,7 +204,7 @@ public sealed class WindowsImageCodec : IImageCodec
             BitmapAlphaMode.Straight,
             new BitmapTransform(),
             ExifOrientationMode.RespectExifOrientation,
-            ColorManagementMode.ColorManageToSRgb);
+            ColourModeFor(path));
         var pixels = data.DetachPixelData();
 
         var width = checked((int)decoder.OrientedPixelWidth);

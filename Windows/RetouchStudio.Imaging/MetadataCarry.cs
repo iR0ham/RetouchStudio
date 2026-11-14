@@ -522,6 +522,161 @@ public static class MetadataCarry
         }
     }
 
+    /// <summary>
+    /// The ICC profile the container declares, or false when it declares none
+    /// or the profile cannot be read whole. The decoder uses this to recognise
+    /// files this host wrote: their pixels are already sRGB, so converting them
+    /// again would only add rounding.
+    /// </summary>
+    public static bool TryReadIcc(string path, out byte[] profile)
+    {
+        profile = Array.Empty<byte>();
+        try
+        {
+            // The profile sits before the image data, so only the head of the
+            // file is read; a 26-megapixel export is not loaded twice.
+            using var stream = File.OpenRead(Path.GetFullPath(path));
+            var head = new byte[MaxIccBytes + (1 << 16)];
+            var read = 0;
+            int got;
+            while (read < head.Length
+                   && (got = stream.Read(head, read, head.Length - read)) > 0)
+            {
+                read += got;
+            }
+            var file = read == head.Length ? head : head.AsSpan(0, read).ToArray();
+            var declared = IsJpeg(file) ? ReadJpegIcc(file)
+                         : IsPng(file) ? ReadPngIcc(file)
+                         : null;
+            if (declared is null)
+            {
+                return false;
+            }
+            profile = declared;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static byte[]? ReadJpegIcc(byte[] file)
+    {
+        var parts = new SortedDictionary<int, byte[]>();
+        var expected = -1;
+        var index = 2;
+        while (index + 4 <= file.Length)
+        {
+            if (file[index] != 0xFF)
+            {
+                return null;
+            }
+            var marker = file[index + 1];
+            if (marker is 0xDA or 0xD9)
+            {
+                break;
+            }
+            var length = (file[index + 2] << 8) | file[index + 3];
+            if (length < 2 || index + 2 + length > file.Length)
+            {
+                return null;
+            }
+            if (marker == 0xE2
+                && StartsWith(file, index + 4, length - 2, IccSignature))
+            {
+                var payload = index + 4 + IccSignature.Length;
+                var available = length - 2 - IccSignature.Length;
+                if (available < 2)
+                {
+                    return null;
+                }
+                int sequence = file[payload];
+                int count = file[payload + 1];
+                if (sequence == 0 || count == 0 || count > 255)
+                {
+                    return null;
+                }
+                if (expected < 0)
+                {
+                    expected = count;
+                }
+                else if (expected != count)
+                {
+                    return null;
+                }
+                parts[sequence] = file.AsSpan(payload + 2, available - 2).ToArray();
+            }
+            index += 2 + length;
+        }
+        if (expected <= 0 || parts.Count != expected)
+        {
+            return null;
+        }
+        var total = 0;
+        foreach (var part in parts.Values)
+        {
+            total += part.Length;
+        }
+        if (total <= 0 || total > MaxIccBytes)
+        {
+            return null;
+        }
+        var profile = new byte[total];
+        var at = 0;
+        for (var i = 1; i <= expected; i++)
+        {
+            if (!parts.TryGetValue(i, out var part))
+            {
+                return null;
+            }
+            part.CopyTo(profile, at);
+            at += part.Length;
+        }
+        return profile;
+    }
+
+    private static byte[]? ReadPngIcc(byte[] file)
+    {
+        var chunk = ReadPngChunk(file, "iCCP", MaxIccBytes);
+        if (chunk is null)
+        {
+            return null;
+        }
+        var zero = chunk.AsSpan().IndexOf((byte)0);
+        if (zero <= 0 || zero + 2 > chunk.Length || chunk[zero + 1] != 0)
+        {
+            return null;
+        }
+        var compressed = chunk.AsSpan(zero + 2).ToArray();
+        return compressed.Length == 0 ? null : ZlibDecompress(compressed, MaxIccBytes);
+    }
+
+    private static byte[]? ZlibDecompress(byte[] input, int maximum)
+    {
+        try
+        {
+            using var source = new MemoryStream(input, writable: false);
+            using var zlib = new ZLibStream(source, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            var buffer = new byte[8192];
+            int read;
+            while ((read = zlib.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (output.Length + read > maximum)
+                {
+                    return null;
+                }
+                output.Write(buffer, 0, read);
+            }
+            return output.ToArray();
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
     private static byte[] ZlibCompress(byte[] input)
     {
         using var output = new MemoryStream();
