@@ -417,22 +417,35 @@ internal static class Program
 
     private static (int X, int Y)? FindClear(PixelBuffer buffer)
     {
-        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        // Prefer a clear pixel two pixels inside the transparent region, so the
+        // JPEG ringing check is not sampling the one-pixel edge.
+        (int X, int Y)? first = null;
+        for (var y = 2; y < buffer.Height - 2; y++)
         {
-            if (buffer.Pixels[offset + 3] == 0)
+            for (var x = 2; x < buffer.Width - 2; x++)
             {
-                var pixel = offset / 4;
-                return (pixel % buffer.Width, pixel / buffer.Width);
+                if (Get(buffer, x, y).A != 0)
+                {
+                    continue;
+                }
+                first ??= (x, y);
+                if (Get(buffer, x - 2, y).A == 0 && Get(buffer, x + 2, y).A == 0
+                    && Get(buffer, x, y - 2).A == 0 && Get(buffer, x, y + 2).A == 0)
+                {
+                    return (x, y);
+                }
             }
         }
-        return null;
+        return first;
     }
 
     private static (int X, int Y)? FindSolid(PixelBuffer buffer)
     {
+        // The cutout fixture tops out at alpha 253, so a fully opaque 255 would
+        // never match; anything near opaque is a solid pixel.
         for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
         {
-            if (buffer.Pixels[offset + 3] == 255)
+            if (buffer.Pixels[offset + 3] >= 250)
             {
                 var pixel = offset / 4;
                 return (pixel % buffer.Width, pixel / buffer.Width);
