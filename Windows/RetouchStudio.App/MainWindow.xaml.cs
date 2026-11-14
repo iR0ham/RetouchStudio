@@ -408,8 +408,49 @@ public partial class MainWindow : Window
         UpdateCompareOverlay();
     }
 
-    private async void OpenPhoto_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// A file dragged onto the canvas opens the way the dialogs do: a project
+    /// (.retouch) as a project, anything else as a photo. Only the first file
+    /// of a multi-file drag is opened; the batch dialog is for many at once.
+    /// </summary>
+    private void PreviewHost_DragOver(object sender, DragEventArgs e)
     {
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private async void PreviewHost_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files
+            || !_vm.CanClose())
+        {
+            return;
+        }
+        EndCrop();
+        var path = files[0];
+        var isProject = string.Equals(Path.GetExtension(path), "." + ProjectExtension,
+                                      StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            if (isProject)
+            {
+                await _vm.OpenProjectAsync(path);
+            }
+            else
+            {
+                await _vm.OpenImageAsync(path);
+            }
+        }
+        catch (Exception error)
+        {
+            Report(isProject ? "The project could not be opened"
+                             : "The photo could not be opened", error);
+        }
+    }
+
+    private async void OpenPhoto_Click(object sender, RoutedEventArgs e)    {
         if (!_vm.CanClose())
         {
             return;

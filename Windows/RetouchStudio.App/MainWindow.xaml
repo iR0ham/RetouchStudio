@@ -71,12 +71,13 @@
 
       <Border Grid.Column="0" Background="#0E1012" Margin="10" CornerRadius="6">
         <Grid x:Name="PreviewHost" ClipToBounds="True" Background="Transparent"
+              AllowDrop="True" DragOver="PreviewHost_DragOver" Drop="PreviewHost_Drop"
               MouseLeftButtonDown="PreviewHost_MouseLeftButtonDown"
               MouseMove="PreviewHost_MouseMove"
               MouseLeftButtonUp="PreviewHost_MouseLeftButtonUp"
               MouseWheel="PreviewHost_MouseWheel"
               LostMouseCapture="PreviewHost_LostMouseCapture">
-          <TextBlock Text="Open a photo, or a project made on either platform."
+          <TextBlock Text="Drop a photo or project here, or open one from the top bar."
                      Foreground="{StaticResource MutedBrush}" FontSize="13"
                      HorizontalAlignment="Center" VerticalAlignment="Center">
             <TextBlock.Style>

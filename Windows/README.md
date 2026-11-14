@@ -72,6 +72,9 @@ before upload, so a release carries one installer version, not two.
   open and save unchanged, the status bar names them, and an export or batch
   export asks before writing a photo that lacks them, so an export is never
   silently missing work the project holds.
+- Drag and drop: dropping a photo or a `.retouch` project anywhere on the
+  canvas opens it with the same unsaved-work check as the Open buttons. A drop
+  of several files opens the first; batch export is the path for many at once.
 - Nine global sliders in the same -100…100 range as macOS: exposure, contrast,
   blacks, whites, saturation, vibrance, warmth, clarity, vignette. Undo, redo and
   the dirty flag are the shared `DocumentHistory`, not a host copy.
@@ -147,6 +150,8 @@ before upload, so a release carries one installer version, not two.
   arithmetic is checked headlessly, and the divider is drawn by the window, but
   no automated check drags the handle. The split position is not remembered
   between sessions, and macOS keeps it in settings.
+- No drag-out of the app, no recent-files list and no settings window; the
+  drop-in open is the only drag gesture, and no automated check performs it.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
   16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
   encoder is 8-bit.
