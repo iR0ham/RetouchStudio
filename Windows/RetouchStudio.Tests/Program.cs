@@ -52,7 +52,7 @@ internal static class Program
             Interchange(root);
             Recovery(root);
             PerformanceAndStress(root);
-            UnsupportedEditGuard();
+            UnsupportedEditGuard(root);
             CropPresets();
             OrientationComposition();
             GeometryRenderParity();
@@ -2538,9 +2538,10 @@ internal static class Program
     /// <summary>
     /// The host keeps macOS-only edits in the project file but cannot draw
     /// them, so it has to name them before an export writes pixels that lack
-    /// them. The shared fixtures carry every kind; a new document carries none.
+    /// them. The shared fixtures carry every kind; a new document carries none,
+    /// even though its file writes the auto-retouch settings macOS also writes.
     /// </summary>
-    private static void UnsupportedEditGuard()
+    private static void UnsupportedEditGuard(string root)
     {
         var repo = RepoRoot();
         using (var session = ProjectSession.Open(Path.Combine(
@@ -2548,16 +2549,23 @@ internal static class Program
         {
             var edits = session.Document.UnsupportedEdits;
             Check("a macOS project names every edit this host cannot render",
-                  edits.Count == 6
+                  edits.Count == 4
                   && edits.Contains("heal spots") && edits.Contains("stickers")
-                  && edits.Contains("AI patches") && edits.Contains("analysis callouts")
-                  && edits.Contains("automatic retouch") && edits.Contains("automatic colour"));
+                  && edits.Contains("AI patches") && edits.Contains("analysis callouts"));
         }
         using (var session = ProjectSession.Open(Path.Combine(
                    repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch")))
         {
             Check("a v3 project is checked the same way",
-                  session.Document.UnsupportedEdits.Count == 6);
+                  session.Document.UnsupportedEdits.Count == 4);
+        }
+
+        using (var session = ProjectSession.Create(Path.Combine(root, "fresh.png")))
+        {
+            Check("a new document names nothing, though its file carries the " +
+                  "auto-retouch settings", session.Document.UnsupportedEdits.Count == 0);
+            Check("the template still writes the settings macOS expects",
+                  session.Document.Root["autoRetouchStrength"] is not null);
         }
 
         var empty = new DocumentModel(new JsonObject());
@@ -2567,9 +2575,9 @@ internal static class Program
         empty.Root["stickers"] = new JsonArray();
         empty.Root["aiEdits"] = new JsonArray();
         empty.Root["analysis"] = new JsonObject { ["isEnabled"] = false };
-        empty.Root["autoRetouchStrength"] = 0;
-        empty.Root["autoColorStrength"] = 0;
-        Check("empty lists and disabled tools are not edits", empty.UnsupportedEdits.Count == 0);
+        empty.Root["autoRetouchStrength"] = 70;
+        empty.Root["autoColorStrength"] = 100;
+        Check("the auto-retouch settings are not edits", empty.UnsupportedEdits.Count == 0);
 
         empty.Root["stickers"] = new JsonArray(new JsonObject { ["kind"] = "heart" });
         Check("one sticker is enough to warn", empty.UnsupportedEdits.Count == 1
