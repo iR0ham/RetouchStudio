@@ -97,7 +97,9 @@ public partial class MainWindow : Window
                 EndCrop();
                 e.Handled = true;
                 break;
-            case Key.Space when _vm.CanPeekOriginal:
+            case Key.Space when _vm.HasDocument:
+                // Handled even while the original is still rendering, so the
+                // key cannot fall through and click a focused button.
                 _vm.IsPeekingOriginal = true;
                 e.Handled = true;
                 break;

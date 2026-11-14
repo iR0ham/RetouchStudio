@@ -41,7 +41,18 @@
                    Foreground="{StaticResource MutedBrush}" FontSize="11" />
         <TextBlock DockPanel.Dock="Right" Text="·  hold Space to compare  ·"
                    Foreground="{StaticResource MutedBrush}" FontSize="11"
-                   Margin="0,0,10,0" />
+                   Margin="0,0,10,0">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Setter Property="Visibility" Value="Collapsed" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding HasDocument}" Value="True">
+                  <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
         <TextBlock Text="{Binding Status}" Foreground="{StaticResource TextBrush}"
                    FontSize="11" TextTrimming="CharacterEllipsis" />
       </DockPanel>
