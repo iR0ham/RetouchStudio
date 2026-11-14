@@ -1,17 +1,20 @@
 # Builds the Windows host end to end on a native Windows machine: the StudioCore
 # C ABI as studioscore_core.dll, a self-contained x64 publish of the WPF app,
 # the headless host tests against the real DLL and Windows Imaging Component,
-# a GUI liveness check that the published exe opens a window, and the same check
-# from the extracted release zip.
+# a GUI liveness check that the published exe opens a window, the same check
+# from the extracted release zip, and, when WiX Toolset v3 is installed, an MSI
+# that is silently installed, started from Program Files and uninstalled again.
 #
 #   pwsh -File Tools/build-windows.ps1
 #   pwsh -File Tools/build-windows.ps1 -SkipGuiSmoke     # no interactive desktop
-#   pwsh -File Tools/build-windows.ps1 -SkipPackage      # no zip artifact
+#   pwsh -File Tools/build-windows.ps1 -SkipPackage      # no zip or MSI artifact
 #   pwsh -File Tools/build-windows.ps1 -PackageVersion 1.2.3
 #
 # Requires a Swift toolchain for Windows (swiftc.exe plus its clang.exe and lld)
-# and the .NET 10 SDK, both on PATH. Intel and AMD machines run the same x64
-# build; there is no vendor-specific artifact.
+# and the .NET 10 SDK, both on PATH. The MSI needs WiX Toolset v3, which the CI
+# image has; without it the installer step is skipped and everything else runs.
+# Intel and AMD machines run the same x64 build; there is no vendor-specific
+# artifact.
 
 param(
     [string]$Configuration = 'Release',
@@ -239,6 +242,103 @@ if (-not $SkipPackage -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     Remove-Item $extracted -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $extracted
     Invoke-GuiSmoke (Join-Path $extracted 'RetouchStudio.exe') 'packaged'
+}
+
+# 8. The MSI is the artifact a user runs, so it is not merely built: it is
+#    installed silently, the installed copy is started from Program Files, and
+#    it is uninstalled again. WiX v3 is not on every developer machine, so the
+#    MSI is skipped when the toolset is absent; the CI image has it and proves
+#    the whole path.
+function Find-Wix([string]$requested) {
+    $candidates = @($requested, $env:WIX,
+        (Join-Path ${env:ProgramFiles(x86)} 'WiX Toolset v3.14'),
+        (Join-Path $env:ProgramFiles 'WiX Toolset v3.14'),
+        (Join-Path ${env:ProgramFiles(x86)} 'WiX Toolset v3.11'),
+        (Join-Path $env:ProgramFiles 'WiX Toolset v3.11'))
+    foreach ($candidate in $candidates) {
+        if (-not $candidate) { continue }
+        if (Test-Path (Join-Path $candidate 'bin\candle.exe')) { return (Resolve-Path $candidate).Path }
+    }
+    return $null
+}
+
+function Invoke-InstallProof([string]$Msi, [string]$Label) {
+    $installDir = Join-Path $env:ProgramFiles 'Retouch Studio'
+    $installedExe = Join-Path $installDir 'RetouchStudio.exe'
+    $shortcutDir = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Retouch Studio'
+    $shortcut = Join-Path $shortcutDir 'Retouch Studio.lnk'
+    if (Test-Path $installDir) {
+        throw "$installDir already exists; the install proof needs a clean machine state"
+    }
+
+    $temp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+    $installLog = Join-Path $temp 'retouchstudio-msi-install.log'
+    $uninstallLog = Join-Path $temp 'retouchstudio-msi-uninstall.log'
+    Remove-Item $installLog, $uninstallLog -ErrorAction SilentlyContinue
+
+    $msiexec = Join-Path $env:WINDIR 'System32\msiexec.exe'
+    $install = Start-Process $msiexec -PassThru -Wait -ArgumentList @(
+        '/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$installLog`"")
+    if ($install.ExitCode -notin 0, 3010, 1641) {
+        throw "msiexec /i exited with $($install.ExitCode); see $installLog"
+    }
+    if (-not (Test-Path $installedExe -PathType Leaf)) {
+        throw "the MSI did not install $installedExe; see $installLog"
+    }
+    if (-not (Test-Path $shortcut -PathType Leaf)) {
+        throw "the MSI did not create $shortcut; see $installLog"
+    }
+    Write-Host "   installed $installedExe"
+
+    Invoke-GuiSmoke $installedExe $Label
+
+    $uninstall = Start-Process $msiexec -PassThru -Wait -ArgumentList @(
+        '/x', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$uninstallLog`"")
+    if ($uninstall.ExitCode -notin 0, 3010, 1641) {
+        throw "msiexec /x exited with $($uninstall.ExitCode); see $uninstallLog"
+    }
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (-not (Test-Path $installDir)) { break }
+        Start-Sleep -Seconds 1
+    }
+    if (Test-Path $installDir) {
+        throw "the uninstall left $installDir behind; see $uninstallLog"
+    }
+    if (Test-Path $shortcut) {
+        throw "the uninstall left $shortcut behind; see $uninstallLog"
+    }
+    Write-Host '   uninstalled; the install folder and the shortcut are gone'
+}
+
+if (-not $SkipPackage -and -not $SkipPublish) {
+    $wix = Find-Wix ''
+    if (-not $wix) {
+        Write-Host '   WiX Toolset v3 not found: the MSI installer is not built'
+    }
+    else {
+        Step 'building the MSI installer'
+        Write-Host "   WiX at $wix"
+        $msiName = "RetouchStudio-$PackageVersion-windows-x64.msi"
+        $msi = Join-Path $distDir $msiName
+        & (Join-Path $root 'Tools/package-windows-msi.ps1') `
+            -AppDir $appDir -Version $PackageVersion -OutputDir $distDir -WixDir $wix
+        Assert-ExitCode 'MSI packaging'
+        $msiManifest = "$msi.sha256"
+        if (-not (Test-Path $msi -PathType Leaf)) { throw "$msi was not written" }
+        if (-not (Test-Path $msiManifest -PathType Leaf)) { throw "$msiManifest was not written" }
+        $recorded = (Get-Content $msiManifest -Raw).Trim()
+        $hash = (Get-FileHash -Path $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($recorded -ne "$hash  $msiName") {
+            throw "the MSI manifest does not match the MSI: '$recorded'"
+        }
+        $size = (Get-Item $msi).Length
+        Write-Host "   $msiName ($size bytes), sha256 $hash"
+
+        if (-not $SkipGuiSmoke) {
+            Step 'installing and uninstalling the MSI'
+            Invoke-InstallProof $msi 'installed'
+        }
+    }
 }
 
 Write-Host 'WINDOWS APP BUILD: PASS'
