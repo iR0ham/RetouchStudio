@@ -8,7 +8,7 @@ in-box Windows Imaging Component.
 
 | Project | Role |
 | --- | --- |
-| `RetouchStudio.Core` | `net10.0`. The C ABI wrapper, the v4 document model, the undo session, the BGRA8 pixel buffer, crop/orientation/adjustment passes and the export runner. No WinRT, no WPF. |
+| `RetouchStudio.Core` | `net10.0`. The C ABI wrapper, the v4 document model, the undo session, the BGRA8 preview buffer and the 16-bit export buffer, crop/orientation/adjustment passes at both depths and the export runner. No WinRT, no WPF. |
 | `RetouchStudio.Imaging` | WIC decode and encode through `Windows.Graphics.Imaging`. |
 | `RetouchStudio.App` | The WPF window (`net10.0-windows10.0.19041.0`). |
 | `RetouchStudio.Tests` | Headless checks against the real DLL and the real WIC codec. |
@@ -52,14 +52,17 @@ folder into one zip plus a SHA-256 file.
   crop record in photo coordinates that macOS reads.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
-  and colour space are the shared decision, not the host's.
+  and colour space are the shared decision, not the host's. A PNG or TIFF plan
+  says 16 bits, so that export decodes the source at 16 bits, runs the same
+  crop/orientation/adjustment order on the 16-bit buffer and writes 16-bit
+  samples; JPEG stays 8-bit.
 - Metadata policy: an export keeps only the resolution by default. With
-  "Keep camera metadata" on, JPEG and TIFF carry the two keys the headless
-  probe proved the Windows writer keeps — camera model and ISO. The rest of the
-  EXIF block (make, capture date, exposure, aperture, flash, white balance,
-  GPS, comment) is silently dropped by that writer, so it is not promised. The
-  pixels are upright, so the orientation tag and the source pixel dimensions
-  are never copied.
+  "Keep camera metadata" on, JPEG, TIFF and 16-bit PNG carry the two keys the
+  headless probe proved the Windows writer keeps — camera model and ISO. The
+  rest of the EXIF block (make, capture date, exposure, aperture, flash, white
+  balance, GPS, comment) is silently dropped by that writer, so it is not
+  promised. The pixels are upright, so the orientation tag and the source pixel
+  dimensions are never copied.
 - Exports never overwrite the opened photo.
 
 ## What it does not do
@@ -67,16 +70,15 @@ folder into one zip plus a SHA-256 file.
 - No AI tools, skin/makeup/scene engines, healing, stickers, presets, batch,
   analysis callouts, watermark or poster export.
 - No freeform crop; the presets are the whole crop UI.
-- 8-bit output only. A 16-bit source is reduced at decode, and a PNG or TIFF
-  plan still writes 8-bit pixels even though the plan says 16. WIC itself is
-  not the limit: the headless probe on `windows-2025` decodes the 16-bit P3
-  fixture into `Rgba16` and writes PNG and TIFF files whose headers say 16 bits
-  per sample; the blocking piece is this host's 8-bit pixel buffer and
-  pipeline.
+- No 16-bit preview or editing path. The preview and the JPEG export work in
+  the 8-bit buffer, so a 16-bit source is reduced for display. Only a PNG or
+  TIFF export keeps 16-bit samples, and only through the exported document;
+  the sliders and the on-screen image are 8-bit.
 - No XMP and no IPTC: the Windows metadata API exposes neither, and its EXIF
   writer keeps only the two measured keys, so a kept export carries the camera
-  model and ISO only. PNG carries no EXIF either, because the API does not map
-  EXIF onto PNG chunks.
+  model and ISO only. The 16-bit PNG writer does carry those two keys; an
+  8-bit PNG export dropped them in earlier runs, and this host no longer writes
+  one.
 - No HEIC write (the HEIF codec is an optional system component) and no HEIC
   read path beyond whatever WIC happens to install. The `windows-2025` runner
   has no HEIF decoder, so the probe on the corpus HEIC export fails with
@@ -91,7 +93,11 @@ folder into one zip plus a SHA-256 file.
 
 ## Pixel semantics
 
-- Buffer: tightly packed BGRA8, top-left origin, straight alpha, sRGB.
+- Preview buffer: tightly packed BGRA8, top-left origin, straight alpha, sRGB.
+- Export buffer: tightly packed RGBA16 for PNG and TIFF, the same origin, alpha
+  and colour space. Both pipelines use the same formulas and order; a headless
+  check renders one image through both and requires them to agree within one
+  8-bit level, which is the only difference rounding may introduce.
 - Document order: crop in normalized photo coordinates, then orientation
   (mirror, quarter turns, straighten), then the nine global adjustments. The
   crop is stored against the photo, exactly as the shared model says.
@@ -154,6 +160,19 @@ on the save *after* a reopen, because the C ABI hands the host the typed record
 and keeps unknown top-level keys in the write context; checking the record
 itself would have asserted the wrong thing, which is what the first run caught.
 
-What this does not prove: pixel parity with the macOS renderer, HEIC, 16-bit
-output, metadata, packaging, an installer, or anything on a real desktop session.
-The run is also recorded in [`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).
+The 16-bit export path landed with `20d3a8c` and reports `PASS (108 checks)` on
+CI run [43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311).
+Those checks read the depth from each written file's own header (PNG IHDR and
+TIFF `BitsPerSample` both say 16), require an 8-bit source to promote exactly,
+require a no-op 16-bit export to keep every sample and still read back at 8 bits
+byte-for-byte, require the 16-bit P3 fixture to export sample-exact, round-trip a
+synthetic buffer that is off the 8-bit grid through PNG and TIFF, and find
+766 310 of 786 432 colour samples off the 8-bit grid in an adjusted export. The
+same run measured the two pipelines against each other on one input: one level
+of drift on tone and colour, two on clarity, because the 8-bit blur truncates
+on every pass while the 16-bit blur does not.
+
+What this does not prove: pixel parity with the macOS renderer, HEIC, XMP or
+IPTC metadata, packaging, an installer, a 16-bit preview or editing path, or
+anything on a real desktop session. The run is also recorded in
+[`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).

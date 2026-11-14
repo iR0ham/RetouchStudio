@@ -151,7 +151,7 @@
                       Foreground="{StaticResource MutedBrush}"
                       IsChecked="{Binding KeepSourceMetadata, Mode=TwoWay}" />
 
-            <TextBlock Text="The Windows host writes 8-bit JPEG, PNG and TIFF, applies the nine global sliders, crop and orientation, and keeps the project file format shared with macOS. Exports keep only the resolution unless you choose to keep camera metadata; PNG carries no EXIF on this host. AI tools, healing and stickers are not part of this host yet."
+            <TextBlock Text="The Windows host writes JPEG, and 16-bit PNG and TIFF, applies the nine global sliders, crop and orientation, and keeps the project file format shared with macOS. Exports keep only the resolution unless you choose to keep camera metadata, which carries the camera model and ISO. AI tools, healing and stickers are not part of this host yet."
                        TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"
                        FontSize="11" Margin="0,16,0,0" LineHeight="16" />
           </StackPanel>

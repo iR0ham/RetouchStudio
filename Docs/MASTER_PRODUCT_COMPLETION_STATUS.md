@@ -1,8 +1,10 @@
 # Master product completion status
 
-**Basis:** `main` at `1d32842` (PR #14 merged 2026-11-13T23:59:27Z), post-merge CI
-run [43531081160](https://github.com/iR0ham/RetouchStudio/actions/runs/43531081160)
-green across all five jobs. Working tree clean at the time of the audit.
+**Basis:** `main` at PR #20 (`1d2673c`, merged 2026-11-14). PR #21 (16-bit
+export) is verified by CI run
+[43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311),
+green across all five jobs. The original audit ran on `1d32842` (CI run
+43531081160, also green).
 **Updated:** 2026-11-14.
 
 This is the single progress and evidence record for the cross-platform
@@ -45,13 +47,13 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Masks (preview 1024 px, export 4096 px) | — | Core Image, feather + gates | ABSENT | engine suite, corpus | VERIFIED macOS |
 | Heal stamps, stickers, watermarks | values | yes | ABSENT | corpus references | VERIFIED macOS |
 | AI edits (composite, patch lifecycle) | values | yes, needs worker | ABSENT | engine/model suites | VERIFIED macOS; worker source outside repo |
-| Export JPEG/PNG | contract | 8-bit | 8-bit | host checks, corpus | VERIFIED per host |
-| Export TIFF | contract | 16-bit | 8-bit pixels in a TIFF | host checks | macOS VERIFIED; Windows TESTED 8-bit, 16-bit write probed |
+| Export JPEG/PNG | contract | 8-bit | 8-bit JPEG; 16-bit PNG | host checks, run 43557855311 | VERIFIED per host; Windows PNG depth VERIFIED |
+| Export TIFF | contract | 16-bit | 16-bit pixels, header-read | host checks, run 43557855311 | macOS VERIFIED; Windows VERIFIED per host |
 | Export HEIC | contract | 8-bit, alpha flattened | explicit refusal | corpus `F01_export_256.heic` | macOS VERIFIED; Windows ABSENT by design |
 | Orientation and alpha on load | — | EXIF baked, premultiplied compare | EXIF baked, straight alpha, white flatten for JPEG | corpus checks F10/F09 | Windows TESTED, no-op export pixel-identical |
-| 16-bit pixels | — | PNG/TIFF source and output | 8-bit core; WIC stores 16-bit PNG/TIFF (probe, run 43549524897) | format probe on `windows-2025` | macOS VERIFIED; Windows BLOCKED by the 8-bit pipeline, not the codec |
+| 16-bit pixels | — | PNG/TIFF source and output | PNG/TIFF export decodes and writes 16 bits; preview and JPEG stay 8-bit | host checks, run 43557855311 | macOS VERIFIED; Windows VERIFIED for PNG/TIFF export; 16-bit preview NOT IMPLEMENTED |
 | HEIC decode | — | ImageIO | no decoder on `windows-2025` (probe fails `0x88982F8B`) | format probe, run 43549524897 | macOS VERIFIED; Windows NOT AVAILABLE on CI |
-| Metadata keep/strip | — | EXIF/TIFF/IPTC/GPS + XMP | camera model + ISO when kept; resolution always; no XMP/IPTC | Windows host tests, run 43545230075 | macOS VERIFIED; Windows TESTED (measured allowlist) |
+| Metadata keep/strip | — | EXIF/TIFF/IPTC/GPS + XMP | camera model + ISO when kept in JPEG, TIFF and 16-bit PNG; resolution always; no XMP/IPTC | Windows host tests, runs 43545230075, 43557855311 | macOS VERIFIED; Windows TESTED (measured allowlist) |
 | ICC handling | — | source profile carried to render/write | always sRGB | corpus F11 P3 | macOS VERIFIED; Windows simplified to sRGB |
 | Batch export | planner | yes | ABSENT | planner suite | VERIFIED macOS |
 | AI runtime install | `AIRuntime` | disabled (`package == nil`) | ABSENT | runtime v2 suites | BLOCKED — no approved package |
@@ -69,11 +71,11 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 0 | Baseline and gap analysis | VERIFIED | This document; `main` `1d32842`; run 43531081160 |
 | 1 | Shared core and portable project architecture | VERIFIED | StudioCore boundary suite, conformance gate, R2–R4.8 docs |
 | 2 | W3 face analysis and masking | macOS VERIFIED; Windows BLOCKED | Vision landmarks and masks exist and are tested on macOS; the Windows host has no face path, and its only in-box detector returns boxes without landmarks, so a distributable landmark model must be chosen |
-| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows is 8-bit sRGB with tested metadata keep/strip, upright orientation, alpha, an exact no-op and exposure/levels that match the macOS references (MAE 0.01 / 0.007); clarity and vignette still differ (MAE 5.8 / 5.2); WIC's 16-bit storage and missing HEIF decoder are measured; full cross-host parity NOT VERIFIED |
+| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows exports 16-bit PNG/TIFF sample-exactly (run 43557855311) but previews and JPEG exports in 8-bit sRGB, with tested metadata keep/strip, upright orientation, alpha, an exact no-op and exposure/levels that match the macOS references (MAE 0.01 / 0.007); clarity and vignette still differ (MAE 5.8 / 5.2); ICC preservation and HEIC read are absent, the missing HEIF decoder measured; full cross-host parity NOT VERIFIED |
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
-| 7 | Windows product completion | PARTIAL | Light native editor builds, runs headless tests and opens a window on `windows-2025`; no installer, face analysis, AI, batch or packaging proof |
+| 7 | Windows product completion | PARTIAL | Light native editor builds, runs 108 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export; no installer, face analysis, AI, batch or packaging proof |
 | 8 | Cross-platform project interchange | VERIFIED | macOS v3 and v4 fixtures open on Windows, round-trip with structurally identical JSON, keep the unknown key and required feature, and a v3 save stays v3 (CI run 43534410772) |
 | 9 | Distribution, installers, updates | NOT STARTED | macOS DMGs exist; Windows installer absent; no update feed published |
 | 10 | CI/CD and release engineering | VERIFIED (CI) / NOT VERIFIED (release) | Five jobs green; the dormant release `windows-app` job has never executed |
@@ -142,6 +144,9 @@ must not claim them.
 | 2026-11-14 | `432e443` | CI run 43549524897, Windows App job | probe: F11 decodes as Rgba16 (512x512, 2 097 152 bytes); 16-bit PNG and TIFF encode store 16 bits (IHDR, TIFF `BitsPerSample`); HEIC decode unavailable `0x88982F8B` |
 | 2026-11-14 | `bc0514e` | PR #19 checks, all five jobs | success; merged with a merge commit |
 | 2026-11-14 | `516f549` | CI run 43553381673, Windows App job | `WINDOWS HOST TESTS: PASS (91 checks)`; against the macOS references: G01 MAE 0.01, G04 MAE 0.007, G09 MAE 5.80, G11 MAE 5.22 |
+| 2026-11-14 | `3824b80` | PR #20 checks, all five jobs | success; merged as `1d2673c`; adjustments follow the shared scales |
+| 2026-11-14 | `20d3a8c` | CI run 43557855311, Windows App job | `WINDOWS HOST TESTS: PASS (108 checks)`; PNG IHDR and TIFF `BitsPerSample` read back 16; 8-bit source promotes exactly; 16-bit no-op export sample-exact and 8-bit re-decode byte-identical; the 16-bit P3 fixture exports sample-exact; 766 310 of 786 432 colour samples off the 8-bit grid after an adjustment; pipelines drift 1 level (tone/colour) and 2 (clarity, 8-bit blur truncation); a kept 16-bit PNG carries the camera model and nothing outside the allowlist, a stripped one carries neither |
+| 2026-11-14 | `20d3a8c` | PR #21 checks, all five jobs | success; merge pending owner-authorized merge commit |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -162,13 +167,13 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 | WIC exposes no XMP/IPTC write path | metadata parity | a separate XMP packet writer, if the owner wants it |
 | WinRT metadata writer drops most EXIF keys | metadata parity | an EXIF rewrite outside WIC, if the owner wants it |
 | No HEIF decoder on `windows-2025` | HEIC read on CI | install the HEIF extension or accept the measured gap |
-| Windows core pipeline is 8-bit | 16-bit exports | a 16-bit pixel buffer and pipeline, a scoped project of its own |
+| Windows output is always sRGB | ICC preservation | carry the source profile into the render and write, a scoped project of its own |
 
 ## 7. Next actions
 
-1. W4 remaining: a 16-bit pipeline (WIC storage is proved), ICC preservation,
-   HEIC read on CI (no decoder), batch export, and the adjustment cases measured
-   against the macOS references. None of these is claimed until tested.
+1. W4 remaining: ICC preservation, HEIC read on CI (no decoder), batch export,
+   a 16-bit preview, and closer clarity/vignette parity with the macOS
+   references. None of these is claimed until tested.
 2. W3 on Windows is BLOCKED on an approved, distributable landmark model.
    The in-box detector gives boxes only, which cannot drive masks.
 3. W5: only after an approved runtime package exists.
