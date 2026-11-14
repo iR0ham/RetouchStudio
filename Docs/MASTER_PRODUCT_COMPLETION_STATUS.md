@@ -56,6 +56,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Unknown top-level keys across a save | context | yes | via C ABI | fixture `futureFlag`, Windows host test | VERIFIED |
 | Nested unknown fields | capture/apply | yes | via C ABI | R4.8 tests | VERIFIED (top-level and modelled records; unmodelled nested records are dropped by design) |
 | Cross-platform project interchange | codec | macOS fixtures | opens the same fixtures, saves structurally identical JSON | 14 host checks, CI run 43534410772 | VERIFIED |
+| Edits a host cannot render are named, not dropped | `DocumentModel.UnsupportedEdits` | renders heal/stickers/AI/analysis | keeps the records, names them in the status bar and asks before an export writes without them | 5 host checks | TESTED (headless; the confirmation dialog is UI, NOT VERIFIED) |
 | Undo/redo, 100-step history | `DocumentHistory` | yes | yes | StudioCore suite, 55 host checks | VERIFIED |
 | Nine global adjustments | `Adjustments` | full engine | 9-slider pipeline | host checks; G-case metrics vs macOS references | VERIFIED per host; exposure/levels aligned (MAE 0.01 / 0.007), vignette aligned (MAE 0.47, gated at 1), clarity aligned (MAE 0.06, gated at 1); negative vignette is a no-op on both hosts and negative clarity blurs instead of inverting; cross-host parity NOT VERIFIED |
 | Crop, quarter turns, mirror, straighten | values + policy | full freeform | 4 aspect presets, turns, mirror, straighten | host checks | VERIFIED (unit); Windows UI is preset-only |
