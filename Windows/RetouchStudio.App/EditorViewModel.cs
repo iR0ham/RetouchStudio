@@ -264,12 +264,38 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             }
             _exportLongEdge = value;
             Raise(nameof(ExportLongEdge));
+            Raise(nameof(LongEdgeIndex));
             if (_session is not null)
             {
                 _session.Document.ExportLongEdge = value > 0 ? value : null;
                 ScheduleCommit();
             }
         }
+    }
+
+    /// <summary>
+    /// The export long edge as the panel's four choices: 0 original, 1 4096,
+    /// 2 2048, 3 1080. Binding the index, not just the value, is what makes an
+    /// opened project show the setting it carries. Both apps write only these
+    /// choices, so an off-list value from a hand-edited file shows Original
+    /// while the export keeps the file's own value.
+    /// </summary>
+    public int LongEdgeIndex
+    {
+        get => _exportLongEdge switch
+        {
+            4096 => 1,
+            2048 => 2,
+            1080 => 3,
+            _ => 0,
+        };
+        set => ExportLongEdge = value switch
+        {
+            1 => 4096,
+            2 => 2048,
+            3 => 1080,
+            _ => 0,
+        };
     }
 
     /// <summary>
@@ -599,6 +625,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             Raise(nameof(ExportFormat));
             Raise(nameof(ExportQuality));
             Raise(nameof(ExportLongEdge));
+            Raise(nameof(LongEdgeIndex));
             CropLabel = session.Document.Crop is null ? "Original" : "Custom";
             Raise(nameof(HasDocument));
             Raise(nameof(Title));
