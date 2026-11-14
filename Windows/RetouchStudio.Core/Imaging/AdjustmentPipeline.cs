@@ -32,9 +32,10 @@ public readonly record struct GlobalAdjustments(
 }
 
 /// <summary>
-/// The global pass. Input is sRGB 8-bit RGBA; levels, exposure and contrast run
-/// through a 256-entry table, then warmth, saturation, vibrance, clarity and
-/// vignette run per pixel.
+/// The global pass. Input is sRGB 8-bit RGBA. Levels, exposure and contrast run
+/// per pixel through the shared weights and scale (levels in the luma-weighted
+/// shadow/highlight form, exposure on the 0.30 EV scale in linear light), then
+/// warmth, saturation, vibrance, clarity and vignette run per pixel.
 ///
 /// Parity with the macOS Core Image pipeline is not claimed: this host works in
 /// display-referred sRGB and leaves precision at 8 bits. The contract it does
@@ -50,7 +51,14 @@ public static class AdjustmentPipeline
             return source;
         }
 
-        var table = BuildToneTable(adjustments);
+        var black = 0.30 * adjustments.Blacks / 100.0;
+        var white = 1 - 0.30 * adjustments.Whites / 100.0;
+        var levelsActive = Math.Abs(black) > 0.001 || Math.Abs(white - 1) > 0.001;
+        var shadowK = Math.Max(0.30, 1 - SmoothStep(0, 0.48, black));
+        var highlightK = Math.Max(0.30, SmoothStep(0.52, 1, white));
+        var gain = Math.Pow(2, 0.30 * adjustments.Exposure / 100.0);
+        var contrast = 1 + 0.45 * adjustments.Contrast / 100.0;
+        var toneActive = adjustments.Exposure != 0 || adjustments.Contrast != 0;
         var blurred = adjustments.Clarity == 0 ? null : BoxBlur(source.Pixels, source.Width, source.Height);
 
         var width = source.Width;
@@ -59,10 +67,10 @@ public static class AdjustmentPipeline
         var sourcePixels = source.Pixels;
         var targetPixels = output.Pixels;
 
-        var saturationFactor = 1 + adjustments.Saturation / 100.0;
+        var saturationFactor = 1 + 0.6 * adjustments.Saturation / 100.0;
         var vibranceAmount = adjustments.Vibrance / 100.0;
         var warmthAmount = adjustments.Warmth / 100.0;
-        var clarityAmount = adjustments.Clarity / 100.0 * 1.5;
+        var clarityAmount = adjustments.Clarity / 100.0 * 0.75;
         var vignetteAmount = adjustments.Vignette / 100.0;
         var centreX = (width - 1) / 2.0;
         var centreY = (height - 1) / 2.0;
@@ -75,11 +83,39 @@ public static class AdjustmentPipeline
             {
                 var offset = (y * width + x) * 4;
                 // The buffer is BGRA: blue at +0, green at +1, red at +2. The
-                // tone table is float; the per-pixel maths runs in double so a
-                // chain of small factors cannot round to an unexpected byte.
-                double blue = table[sourcePixels[offset]];
-                double green = table[sourcePixels[offset + 1]];
-                double red = table[sourcePixels[offset + 2]];
+                // per-pixel maths runs in double so a chain of small factors
+                // cannot round to an unexpected byte.
+                double blue = sourcePixels[offset] / 255.0;
+                double green = sourcePixels[offset + 1] / 255.0;
+                double red = sourcePixels[offset + 2] / 255.0;
+
+                if (levelsActive)
+                {
+                    // The shared levels kernel: the endpoint move lands on the
+                    // shadows and highlights only, weighted by luma, so the
+                    // mid-tones keep their balance. Ported from LookEngine: the
+                    // kernel works on linear light encoded with a 1/2.2 gamma,
+                    // then returns to linear.
+                    var encodedBlue = Math.Pow(ToLinear(blue), 0.4545);
+                    var encodedGreen = Math.Pow(ToLinear(green), 0.4545);
+                    var encodedRed = Math.Pow(ToLinear(red), 0.4545);
+                    var levelLuma = 0.2126 * encodedRed + 0.7152 * encodedGreen
+                                  + 0.0722 * encodedBlue;
+                    var shadowWeight = 1 - SmoothStep(0, 0.48, levelLuma);
+                    var highlightWeight = SmoothStep(0.52, 1, levelLuma);
+                    var delta = -black * shadowWeight / shadowK
+                              + (1 - white) * highlightWeight / highlightK;
+                    blue = FromLinear(Math.Pow(Clamp01(encodedBlue + delta), 2.2));
+                    green = FromLinear(Math.Pow(Clamp01(encodedGreen + delta), 2.2));
+                    red = FromLinear(Math.Pow(Clamp01(encodedRed + delta), 2.2));
+                }
+
+                if (toneActive)
+                {
+                    blue = Tone(blue, gain, contrast);
+                    green = Tone(green, gain, contrast);
+                    red = Tone(red, gain, contrast);
+                }
 
                 if (warmthAmount != 0)
                 {
@@ -139,41 +175,46 @@ public static class AdjustmentPipeline
     }
 
     /// <summary>
-    /// Levels, then exposure, then a contrast pivot at mid grey. The black and
-    /// white endpoints move by at most 0.30, the same bound the shared model
-    /// documents for the Blacks/Whites sliders.
+    /// Exposure on the shared 0.30 EV scale in linear light, then a contrast
+    /// pivot at mid grey, both in display-referred sRGB like the rest of the
+    /// pass.
     /// </summary>
-    private static float[] BuildToneTable(GlobalAdjustments adjustments)
+    private static double Tone(double value, double gain, double contrast)
     {
-        var black = 0.30 * adjustments.Blacks / 100.0;
-        var white = 1 - 0.30 * adjustments.Whites / 100.0;
-        var range = white - black;
-        if (Math.Abs(range) < 1e-3)
-        {
-            range = range < 0 ? -1e-3 : 1e-3;
-        }
-        var gain = Math.Pow(2, adjustments.Exposure / 100.0 * 2.0);
-        var contrast = (100 + adjustments.Contrast) / 100.0;
+        value = FromLinear(ToLinear(value) * gain);
+        return Clamp01(0.5 + (value - 0.5) * contrast);
+    }
 
-        var table = new float[256];
-        for (var index = 0; index < 256; index++)
-        {
-            var value = index / 255.0;
-            value = Clamp01((value - black) / range);
-            value *= gain;
-            value = 0.5 + (value - 0.5) * contrast;
-            table[index] = (float)Clamp01(value);
-        }
-        return table;
+    private static double ToLinear(double value) =>
+        value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+
+    private static double FromLinear(double value) =>
+        value <= 0.0031308 ? value * 12.92 : 1.055 * Math.Pow(value, 1 / 2.4) - 0.055;
+
+    private static double SmoothStep(double edge0, double edge1, double value)
+    {
+        var t = Clamp01((value - edge0) / (edge1 - edge0));
+        return t * t * (3 - 2 * t);
     }
 
     /// <summary>
-    /// A separable box blur used only by clarity. The radius scales with the
-    /// photo so the effect reads the same at any resolution.
+    /// Three box passes approximate a Gaussian of the radius the shared unsharp
+    /// mask uses (0.4% of the short side), and the radius scales with the photo
+    /// so the effect reads the same at any resolution.
     /// </summary>
     private static byte[] BoxBlur(byte[] source, int width, int height)
     {
-        var radius = Math.Max(2, Math.Min(width, height) / 300);
+        var radius = Math.Max(1, (int)Math.Round(Math.Min(width, height) * 0.004));
+        var current = source;
+        for (var pass = 0; pass < 3; pass++)
+        {
+            current = BlurPass(current, width, height, radius);
+        }
+        return current;
+    }
+
+    private static byte[] BlurPass(byte[] source, int width, int height, int radius)
+    {
         var horizontal = new byte[source.Length];
         for (var y = 0; y < height; y++)
         {
@@ -227,12 +268,6 @@ public static class AdjustmentPipeline
             }
         }
         return blurred;
-    }
-
-    private static double SmoothStep(double edge0, double edge1, double value)
-    {
-        var t = Clamp01((value - edge0) / (edge1 - edge0));
-        return t * t * (3 - 2 * t);
     }
 
     private static double Clamp01(double value) => Math.Clamp(value, 0, 1);

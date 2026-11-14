@@ -36,6 +36,7 @@ internal static class Program
             Codec(root);
             Export(root);
             Corpus(root);
+            AdjustmentEvidence();
             FormatProbes(root);
             Metadata(root);
             Interchange(root);
@@ -254,11 +255,13 @@ internal static class Program
 
         var brighter = AdjustmentPipeline.Apply(
             gray, new GlobalAdjustments(100, 0, 0, 0, 0, 0, 0, 0, 0));
-        Check("positive exposure brightens", Mean(brighter) > Mean(gray) + 20);
+        Check("positive exposure brightens", Mean(brighter) > Mean(gray) + 5);
+        Check("full exposure stays on the shared 0.30 EV scale",
+              Mean(brighter) < Mean(gray) + 20);
 
         var darker = AdjustmentPipeline.Apply(
             gray, new GlobalAdjustments(-100, 0, 0, 0, 0, 0, 0, 0, 0));
-        Check("negative exposure darkens", Mean(darker) < Mean(gray) - 10);
+        Check("negative exposure darkens", Mean(darker) < Mean(gray) - 5);
 
         var warm = AdjustmentPipeline.Apply(
             gray, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 100, 0, 0));
@@ -342,6 +345,88 @@ internal static class Program
         {
             Pass("the export refuses to overwrite the opened photo");
         }
+    }
+
+    /// <summary>
+    /// The three adjustment cases both hosts implement, compared against the
+    /// macOS reference PNGs. This is measurement, not a gate: the Windows
+    /// pipeline is behaviourally aligned, not pixel-identical, and
+    /// `Docs/IMAGE_COMPARISON_METHODOLOGY.md` approves no numeric tolerance.
+    /// </summary>
+    private static void AdjustmentEvidence()
+    {
+        var repo = RepoRoot();
+        var fixtures = Path.Combine(repo, "Tests/Corpus/Fixtures");
+        var references = Path.Combine(repo, "Tests/Corpus/References");
+        var codec = new WindowsImageCodec();
+        var cases = new (string Id, string Fixture, GlobalAdjustments Adjustments)[]
+        {
+            ("G01_EXPOSURE_UP", "F05_gradient_sky.png",
+             new GlobalAdjustments(40, 0, 0, 0, 0, 0, 0, 0, 0)),
+            ("G04_BLACKS", "F06_highlights_shadows.png",
+             new GlobalAdjustments(0, 0, 60, 0, 0, 0, 0, 0, 0)),
+            ("G09_CLARITY_UP", "F04_detail_chart.png",
+             new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 55, 0)),
+            ("G11_VIGNETTE", "F01_portrait_srgb_8.png",
+             new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 0, 55)),
+        };
+
+        foreach (var (id, fixture, adjustments) in cases)
+        {
+            var source = codec.DecodeAsync(Path.Combine(fixtures, fixture))
+                              .GetAwaiter().GetResult();
+            var rendered = AdjustmentPipeline.Apply(source, adjustments);
+            var reference = codec.DecodeAsync(Path.Combine(references, id + ".png"))
+                                 .GetAwaiter().GetResult();
+            Check($"{id} reference has the rendered size",
+                  source.Width == reference.Width && source.Height == reference.Height);
+
+            var (mae, rmse, psnr, changed, lumaDelta) = Compare(rendered, reference);
+            Console.WriteLine($"  case {id}: mae {mae:0.###} rmse {rmse:0.###} " +
+                              $"psnr {psnr:0.##} dB changed {changed:P1} " +
+                              $"luma delta {lumaDelta:+0.###;-0.###;0}");
+        }
+    }
+
+    private static (double Mae, double Rmse, double Psnr, double Changed, double LumaDelta)
+        Compare(PixelBuffer rendered, PixelBuffer reference)
+    {
+        var pixels = rendered.Width * rendered.Height;
+        long absolute = 0;
+        long changed = 0;
+        double squares = 0;
+        double renderedLuma = 0;
+        double referenceLuma = 0;
+
+        for (var offset = 0; offset < rendered.Pixels.Length; offset += 4)
+        {
+            var anyChanged = false;
+            for (var channel = 0; channel < 3; channel++)
+            {
+                var difference = rendered.Pixels[offset + channel]
+                               - reference.Pixels[offset + channel];
+                absolute += Math.Abs(difference);
+                squares += (double)difference * difference;
+                anyChanged |= difference != 0;
+            }
+            if (anyChanged)
+            {
+                changed++;
+            }
+            renderedLuma += 0.2126 * rendered.Pixels[offset + 2]
+                          + 0.7152 * rendered.Pixels[offset + 1]
+                          + 0.0722 * rendered.Pixels[offset];
+            referenceLuma += 0.2126 * reference.Pixels[offset + 2]
+                           + 0.7152 * reference.Pixels[offset + 1]
+                           + 0.0722 * reference.Pixels[offset];
+        }
+
+        var samples = pixels * 3.0;
+        var mae = absolute / samples;
+        var mse = squares / samples;
+        var psnr = mse == 0 ? 99 : 10 * Math.Log10(255 * 255 / mse);
+        return (mae, Math.Sqrt(mse), psnr, changed / (double)pixels,
+                (renderedLuma - referenceLuma) / pixels);
     }
 
     /// <summary>
