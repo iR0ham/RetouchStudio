@@ -21,9 +21,12 @@ evidence links, which remain valid history.
 **Current integration state:** the W4 metadata workstream — crash recovery,
 batch cancellation, EXIF/XMP carry, the sRGB export declaration and the
 crop/turn/resize read-back checks — is merged into `main` as `4e31596` (PR #54)
-after five green checks on `91dde65` (run 43632188008). `develop` continues from
-`91dde65`; the next milestone is the UI-automation workstream (WP-1/WP-4
-wiring).
+after five green checks on `91dde65` (run 43632188008). The UI-automation
+workstream landed on `windows/ui-automation` (`bb06e28`, green run
+43647604771) and is merged into `develop` as `7af20f2`: the Windows harness now
+drives the golden path (window → Open Photo dialog → Exposure slider → 150%
+zoom → Export dialog → typed path → decoded JPEG) and the launch recovery
+prompt. The next milestone PR carries that work plus these documents.
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
@@ -60,11 +63,11 @@ wiring).
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; UI wiring NOT VERIFIED | CI does not drive the crop overlay drag, sliders by pointer, or dialogs | interactive harness is outside current CI; keep the limitation explicit |
-| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); UI wiring NOT VERIFIED | divider drag and pointer wiring not driven by CI | as WP-1 |
+| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, Exposure slider, zoom buttons, Export dialog writing a decoded JPEG) in run 43647604771 | CI does not drive the crop overlay drag, pointer slider drags, or the other eight sliders; the Save/Open Project dialogs are not driven | extend the harness per interaction |
+| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771) | divider drag, pointer zoom/pan and the peek modifier are not driven by CI | as WP-1 |
 | WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI | as WP-1 |
-| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure) | progress/cancel UI NOT VERIFIED; cancellation during a running batch is not exercised | UI harness |
-| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless (save/reopen, undo, candidate recovery with injected failures) | the recovery prompt is a MessageBox; its UI wiring is not driven by CI | none |
+| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure) | progress/cancel UI NOT VERIFIED; cancellation during a running batch is not exercised | the UI harness now exists; add a batch scenario |
+| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless; the launch recovery prompt is driven through UIA — the seeded copy is restored with its unsaved Exposure value (run 43647604771) | Save/Open Project dialogs, the undo button and the unsupported-edit prompt are not driven through UIA | none |
 | WP-6 | AI edits on Windows | NOT APPLICABLE until a runtime exists | blocked with W5 | W5 |
 
 ## WS-4 — W5 AI runtime
