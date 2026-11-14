@@ -415,21 +415,6 @@ public partial class MainWindow : Window
         Canvas.SetTop(element, y - element.Height / 2);
     }
 
-    private void LongEdge_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (LongEdgeBox is null)
-        {
-            return;
-        }
-        _vm.ExportLongEdge = LongEdgeBox.SelectedIndex switch
-        {
-            1 => 4096,
-            2 => 2048,
-            3 => 1080,
-            _ => 0,
-        };
-    }
-
     private void Report(string headline, Exception error) =>
         MessageBox.Show($"{headline}.\n\n{error.Message}", "Retouch Studio",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
