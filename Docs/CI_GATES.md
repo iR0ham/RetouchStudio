@@ -249,6 +249,8 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `f58b336` (merge of PR #47) | `CI` run 43620792640, `main` | all five jobs green on the merged tree |
 | 2026-11-14 | `e4bc466` (PR #48 head, merged as `4a034cd`) | `CI` run 43620925118 | five jobs green after `main` was merged into the branch; the run that gated the #48 merge |
 | 2026-11-14 | `4a034cd` (merge of PR #48) | `CI` run 43622071155, `main` | all five jobs green on the merged tree; the last post-merge `main` matrix, because push runs to `main` were removed in the same change (see [Post-merge runs and CI cadence](#post-merge-runs-and-ci-cadence)) |
+| 2026-11-14 | `675ae0a` (PR #49 head, merged as `be9a46d`) | `CI` run 43623366599 | five jobs green — the first run gated by all five required contexts, including `Windows StudioCore` and `Windows App`; the run that gated the #49 merge |
+| 2026-11-14 | `be9a46d` (merge of PR #49) | no post-merge run | merge of `675ae0a` after five green required checks; no `main` push matrix was created, which is the behaviour PR #49 introduced. The `pull_request` run had checked out `refs/pull/49/merge`, whose tree is this commit's tree, so no tree went unvalidated |
 
 `ci.yml` runs on `pull_request` targeting `main` and on pushes to
 `v1-macos-delivery`, `m5-cross-platform-core` and `ci/**`; pushes to `main` no
