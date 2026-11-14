@@ -392,8 +392,14 @@ internal static class Program
             using var reopened = ProjectSession.Open(savedPath);
             Check("an edit on Windows reopens with the project",
                   reopened.Document.Adjustment("exposure") == 13);
-            Check("the edit does not drop the unknown key",
-                  reopened.Document.Root["futureFlag"]?.GetValue<string>() == "kept");
+            // The ABI returns the typed record; an unknown top-level key travels
+            // in the write context, so it is proved by the next save, not by the
+            // reopened document.
+            var resavedPath = Path.Combine(root, "from-macos-v4-resaved.retouch");
+            reopened.Save(resavedPath);
+            var resaved = JsonNode.Parse(File.ReadAllText(resavedPath))!;
+            Check("a reopened project keeps the unknown key on the next save",
+                  resaved["futureFlag"]?.GetValue<string>() == "kept");
         }
 
         var v3Path = Path.Combine(repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch");
