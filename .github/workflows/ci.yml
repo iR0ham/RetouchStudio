@@ -157,6 +157,9 @@ jobs:
           swift-version: swift-6.4.2-release
           swift-build: 6.4.2-RELEASE
           build_arch: amd64
+          # The installer download is the slowest step on this image and has
+          # exceeded the job budget once; the action caches the download.
+          cache: true
 
       - name: Record toolchain
         shell: pwsh
@@ -196,7 +199,7 @@ jobs:
   windows-app:
     name: Windows App
     runs-on: windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
@@ -211,6 +214,9 @@ jobs:
           swift-version: swift-6.4.2-release
           swift-build: 6.4.2-RELEASE
           build_arch: amd64
+          # The installer download is the slowest step on this image and has
+          # exceeded the job budget once; the action caches the download.
+          cache: true
 
       - name: Install the .NET SDK
         uses: actions/setup-dotnet@v6
