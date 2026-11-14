@@ -208,6 +208,52 @@ public sealed class DocumentModel
     }
 
     /// <summary>
+    /// The edits a project carries that this host cannot render, in the words a
+    /// warning shows. A macOS project can hold all of them; exporting one here
+    /// would silently drop them, so the host asks before it writes.
+    /// </summary>
+    public IReadOnlyList<string> UnsupportedEdits
+    {
+        get
+        {
+            var found = new List<string>();
+            if (HasItems("healSpots"))
+            {
+                found.Add("heal spots");
+            }
+            if (HasItems("stickers"))
+            {
+                found.Add("stickers");
+            }
+            if (HasItems("aiEdits"))
+            {
+                found.Add("AI patches");
+            }
+            if (AnalysisEnabled)
+            {
+                found.Add("analysis callouts");
+            }
+            if ((ReadDouble("autoRetouchStrength") ?? 0) > 0)
+            {
+                found.Add("automatic retouch");
+            }
+            if ((ReadDouble("autoColorStrength") ?? 0) > 0)
+            {
+                found.Add("automatic colour");
+            }
+            return found;
+        }
+    }
+
+    private bool AnalysisEnabled =>
+        _root["analysis"] is JsonObject analysis
+        && analysis["isEnabled"] is JsonValue flag
+        && flag.TryGetValue<bool>(out var enabled) && enabled;
+
+    private bool HasItems(string key) =>
+        _root[key] is JsonArray { Count: > 0 };
+
+    /// <summary>
     /// A deep copy of one top-level record, for building a render request
     /// without touching the document.
     /// </summary>
