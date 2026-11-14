@@ -92,6 +92,11 @@ before upload, so a release carries one installer version, not two.
   to the edit, the way the macOS canvas peeks with the space bar. The original
   is rendered once per open at preview size, so the peek does not wait on a
   render, and the window drops it when focus is lost so it cannot stick.
+- A live histogram of the rendered preview in the colour panel: 64 bins per
+  channel plus Rec.709 luma, normalized to the tallest bin, redrawn with every
+  preview update. macOS bins an 80 px copy of the preview; Windows bins the
+  preview buffer it has just rendered, which is the same picture without a
+  second resample.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan

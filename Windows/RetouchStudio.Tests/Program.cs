@@ -50,6 +50,7 @@ internal static class Program
             CropPresets();
             OrientationComposition();
             GeometryRenderParity();
+            Histogram();
         }
         catch (Exception error)
         {
@@ -1928,6 +1929,39 @@ internal static class Program
         }
         throw new InvalidOperationException(
             "the shared project fixtures were not found; set RETOUCH_REPO_ROOT");
+    }
+
+    /// <summary>
+    /// The live histogram: one buffer with a known colour in every pixel, so
+    /// each channel's bin and the normalization to the tallest bin are literal
+    /// numbers, plus luma computed with the Rec.709 weights macOS uses.
+    /// </summary>
+    private static void Histogram()
+    {
+        var image = new PixelBuffer(2, 2);
+        Put(image, 0, 0, r: 0, g: 0, b: 0);
+        Put(image, 1, 0, r: 255, g: 255, b: 255);
+        Put(image, 0, 1, r: 255, g: 0, b: 0);
+        Put(image, 1, 1, r: 0, g: 0, b: 0);
+
+        var bins = HistogramSampler.Sample(image);
+        Check("the histogram bins each channel and luma separately",
+              bins.Count == 64 && bins.IsEmpty == false
+              && Near(bins.Red[0], 2.0 / 3.0) && Near(bins.Red[63], 2.0 / 3.0)
+              && Near(bins.Green[0], 1.0) && Near(bins.Green[63], 1.0 / 3.0)
+              && Near(bins.Blue[0], 1.0) && Near(bins.Blue[63], 1.0 / 3.0)
+              && Near(bins.Luma[0], 2.0 / 3.0) && Near(bins.Luma[63], 1.0 / 3.0)
+              && Near(bins.Luma[13], 1.0 / 3.0));
+
+        var coarse = HistogramSampler.Sample(image, 4);
+        Check("a coarser histogram folds the same pixels into fewer bins",
+              coarse.Count == 4 && Near(coarse.Green[0], 1.0)
+              && Near(coarse.Green[3], 1.0 / 3.0)
+              && Near(coarse.Red[0], 2.0 / 3.0) && Near(coarse.Red[3], 2.0 / 3.0));
+
+        Check("a histogram of nothing is empty",
+              HistogramSampler.Sample(image, 0).IsEmpty
+              && HistogramBins.Empty.IsEmpty);
     }
 
     private static void Put(PixelBuffer buffer, int x, int y,
