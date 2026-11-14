@@ -40,6 +40,118 @@ public sealed class WindowsImageCodec : IImageCodec
                              checked((int)decoder.OrientedPixelHeight));
     }
 
+    /// <summary>
+    /// Reads the depth from the container header — PNG's IHDR bit depth and
+    /// TIFF's BitsPerSample — so the preview can keep 16 bits for a file that
+    /// stores them. Anything else, including BigTIFF, reports 8 rather than
+    /// guessing: a missed 16-bit preview is a lost refinement, a wrong 16-bit
+    /// claim is not.
+    /// </summary>
+    public Task<int> ReadBitDepthAsync(string path) =>
+        Task.FromResult(ProbeDepth(Path.GetFullPath(path)));
+
+    private static int ProbeDepth(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var head = new byte[26];
+        if (stream.Read(head, 0, head.Length) < head.Length)
+        {
+            return 8;
+        }
+        if (head[0] == 0x89 && head[1] == (byte)'P' && head[2] == (byte)'N'
+            && head[3] == (byte)'G')
+        {
+            // Signature (8), chunk length (4), "IHDR" (4), width (4),
+            // height (4), then the bit depth.
+            return head[12] == (byte)'I' && head[13] == (byte)'H'
+                   && head[14] == (byte)'D' && head[15] == (byte)'R'
+                ? head[24]
+                : 8;
+        }
+        if (head[0] == (byte)'I' && head[1] == (byte)'I'
+            && head[2] == 42 && head[3] == 0)
+        {
+            return TiffDepth(stream, littleEndian: true);
+        }
+        if (head[0] == (byte)'M' && head[1] == (byte)'M'
+            && head[2] == 0 && head[3] == 42)
+        {
+            return TiffDepth(stream, littleEndian: false);
+        }
+        return 8;
+    }
+
+    private static int TiffDepth(FileStream stream, bool littleEndian)
+    {
+        var dictionary = new byte[4];
+        stream.Seek(4, SeekOrigin.Begin);
+        if (stream.Read(dictionary, 0, 4) < 4)
+        {
+            return 8;
+        }
+        var ifd = ReadUInt32(dictionary, littleEndian);
+        if (ifd == 0 || ifd + 2 > stream.Length)
+        {
+            return 8;
+        }
+        stream.Seek(ifd, SeekOrigin.Begin);
+        var countBytes = new byte[2];
+        if (stream.Read(countBytes, 0, 2) < 2)
+        {
+            return 8;
+        }
+        var count = ReadUInt16(countBytes, littleEndian);
+        var entry = new byte[12];
+        for (var index = 0; index < count; index++)
+        {
+            if (stream.Read(entry, 0, entry.Length) < entry.Length)
+            {
+                return 8;
+            }
+            if (ReadUInt16(entry.AsSpan(0, 2), littleEndian) != 258)
+            {
+                continue;
+            }
+            // BitsPerSample: a SHORT array. Up to two samples fit in the
+            // entry itself; three or more (RGB/RGBA) point at the array.
+            if (ReadUInt16(entry.AsSpan(2, 2), littleEndian) != 3)
+            {
+                return 8;
+            }
+            var samples = ReadUInt32(entry.AsSpan(4, 4), littleEndian);
+            if (samples == 0 || samples > 16)
+            {
+                return 8;
+            }
+            if (samples * 2 <= 4)
+            {
+                return ReadUInt16(entry.AsSpan(8, 2), littleEndian);
+            }
+            var offset = ReadUInt32(entry.AsSpan(8, 4), littleEndian);
+            if (offset + 2 > stream.Length)
+            {
+                return 8;
+            }
+            var here = stream.Position;
+            stream.Seek(offset, SeekOrigin.Begin);
+            var first = new byte[2];
+            var read = stream.Read(first, 0, 2);
+            stream.Seek(here, SeekOrigin.Begin);
+            return read == 2 ? ReadUInt16(first, littleEndian) : 8;
+        }
+        return 8;
+    }
+
+    private static ushort ReadUInt16(ReadOnlySpan<byte> bytes, bool littleEndian) =>
+        littleEndian
+            ? (ushort)(bytes[0] | (bytes[1] << 8))
+            : (ushort)((bytes[0] << 8) | bytes[1]);
+
+    private static uint ReadUInt32(ReadOnlySpan<byte> bytes, bool littleEndian) =>
+        littleEndian
+            ? (uint)bytes[0] | ((uint)bytes[1] << 8) | ((uint)bytes[2] << 16) | ((uint)bytes[3] << 24)
+            : ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | (uint)bytes[3];
+
     public async Task<PixelBuffer> DecodeAsync(string path)
     {
         var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));

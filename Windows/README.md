@@ -121,6 +121,12 @@ replaces the old one through the same `UpgradeCode`.
 ## Pixel semantics
 
 - Preview buffer: tightly packed BGRA8, top-left origin, straight alpha, sRGB.
+- Preview depth: the container header decides. A PNG or TIFF whose header
+  reports 16-bit samples is decoded and rendered through the 16-bit pipeline,
+  and only the display bitmap is reduced to BGRA8; an 8-bit file keeps the
+  8-bit path. At rest the two previews agree within one level; with strong
+  adjustments the 16-bit preview keeps source levels the 8-bit decode had
+  already rounded (8 levels apart on the P3 fixture, run 43593470894).
 - Source colour: WIC decodes with `ColorManageToSRgb`, so a Display P3 file is
   converted through its embedded profile rather than relabelled. On the
   `F11_p3_16bit.png` fixture four in-gamut points land within one level of a

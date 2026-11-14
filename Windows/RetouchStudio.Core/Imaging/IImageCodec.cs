@@ -16,6 +16,13 @@ public interface IImageCodec
     /// </summary>
     Task<ImageSize> ReadSizeAsync(string path);
 
+    /// <summary>
+    /// The sample depth the container stores, read from its header. The host
+    /// keeps 16-bit precision in the preview only when the file states 16; a
+    /// container with no readable depth statement reports 8.
+    /// </summary>
+    Task<int> ReadBitDepthAsync(string path);
+
     Task<PixelBuffer> DecodeAsync(string path);
 
     /// <summary>

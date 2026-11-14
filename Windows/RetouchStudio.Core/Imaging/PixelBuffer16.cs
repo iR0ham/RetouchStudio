@@ -160,6 +160,26 @@ public sealed class PixelBuffer16
         return output;
     }
 
+    /// <summary>
+    /// Reduces to the host's BGRA8 display buffer, rounding each sample to the
+    /// nearest 8-bit level. The preview pipeline works in 16 bits and comes
+    /// through here only for the final bitmap.
+    /// </summary>
+    public PixelBuffer ToBgra8()
+    {
+        var bytes = new byte[Width * Height * 4];
+        for (var offset = 0; offset < Pixels.Length; offset += 4)
+        {
+            bytes[offset] = ToByte(Pixels[offset + 2]);
+            bytes[offset + 1] = ToByte(Pixels[offset + 1]);
+            bytes[offset + 2] = ToByte(Pixels[offset]);
+            bytes[offset + 3] = ToByte(Pixels[offset + 3]);
+        }
+        return new PixelBuffer(Width, Height, bytes);
+    }
+
+    private static byte ToByte(ushort value) => (byte)((value * 255 + 32767) / 65535);
+
     public PixelBuffer16 FlattenOntoWhite()
     {
         var output = new PixelBuffer16(Width, Height);
