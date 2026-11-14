@@ -353,6 +353,19 @@ digs a step edge at +100, while negative clarity softens the same edge. The
 bound, because the 8-bit pass writes the pre-clarity picture as bytes before
 the detail is added.
 
+### Parallel adjustment pass (2026-11-14, PR #47)
+
+The per-pixel stage — levels, exposure/contrast, warmth, saturation and
+vibrance — used to run on one core while the clarity and vignette passes
+already used all of them. It now runs one row per worker in both the 8-bit and
+16-bit pipelines. Each row writes only its own pixels and its own samples of
+the clarity planes, so the output stays deterministic, and the suite's
+repeat-render byte comparison gates that. CI run
+[43618132157](https://github.com/iR0ham/RetouchStudio/actions/runs/43618132157)
+on `e43412b` printed `PASS (184 checks)` with the preview at a median
+**721 ms** (721 699 710 803 804) against 1187 ms on run 43598349755, and the
+16-bit export at 1189 ms. Hosted runners vary, so read the gap as indicative.
+
 ### Long-session heap (2026-11-14, PR #45)
 
 The render path is stateless — every preview is a fresh `PixelBuffer` — but

@@ -242,6 +242,9 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `de269d8` (PR #42 head, merged as `53e1c36`) | `CI` run 43615178242 | five jobs green; `Windows App` reports `PASS (174 checks)`; start-up 896 / 1097 / 4395 / 2751 ms; the run that gates the #42 merge |
 | 2026-11-14 | `53e1c36` (merge of PR #42) | `CI` run 43616466216, `main` | all five jobs green on the merged tree |
 | 2026-11-14 | `6a80ba1` (PR #45 head) | `CI` run 43612517678 | five jobs green; `Windows App` reports `PASS (170 checks)`; the managed heap is flat across twenty photo-sized renders |
+| 2026-11-14 | `e43412b` (PR #47 head) | `CI` run 43618132157 | five jobs green; `Windows App` reports `PASS (184 checks)`; the parallel per-row adjustment pass measured a median 721 ms preview and passed the repeat-render byte checks |
+| 2026-11-14 | `e940271` (merge of PR #45) | `CI` run 43618192192, `main` | all five jobs green on the merged tree |
+| 2026-11-14 | `3e4b517` (PR #46 head, merged as `03748fe`) | `CI` run 43618240754 | five jobs green; `Windows App` reports `PASS (184 checks)`; zoom, pan and the before/after split; the run that gated the #46 merge |
 
 `ci.yml` triggers on `pull_request: branches: [main]` only, so a pull request
 stacked on another feature branch receives no checks at all. PR #43 was opened
