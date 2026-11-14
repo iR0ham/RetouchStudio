@@ -234,9 +234,8 @@ are **observations, not approved tolerances**; no gate is derived from them.
 
 Comparable cases stop there: the Windows host implements the nine global
 adjustments and geometry only, so masked, vector, analysis and watermark cases
-from this corpus have no Windows counterpart yet. The adjustment cases
-(`G01`, `G04`, `G09`) still have to be rendered and measured before any
-statement about their parity.
+from this corpus have no Windows counterpart yet. The adjustment cases are
+rendered and measured in §9.1.
 
 The F10 luma difference (0.304) is recorded, not interpreted: it may come from
 decoder differences, colour management or dithering. It is not a pass rule.
@@ -250,13 +249,23 @@ against the macOS reference PNGs in the same size:
 |---|---|---|---|---|---|
 | G01 exposure +40 | 0.01 | 0.10 | 68.1 dB | 3.0% | +0.005 |
 | G04 blacks +60 | 0.007 | 0.084 | 69.7 dB | 1.8% | +0.001 |
-| G09 clarity +55 | 5.80 | 8.99 | 29.1 dB | 64.8% | +5.71 |
-| G11 vignette +55 | 5.22 | 6.52 | 31.8 dB | 97.7% | −1.59 |
+| G09 clarity +55 | 0.06 | 0.246 | 60.3 dB | 6.5% | −0.038 |
+| G11 vignette +55 | 0.473 | 0.688 | 51.4 dB | 76.4% | −0.401 |
 
-Exposure and levels now follow the shared formulas (0.30 EV in linear light;
-the luma-weighted levels kernel), which is why those two cases are
-indistinguishable from the reference. Clarity still approximates Core Image's
-unsharp mask with a three-pass box blur and vignette still uses a radial
-falloff instead of `CIVignette`, so those two remain visibly different. These
-numbers are observations; they must not be turned into gates without the
-measured, documented derivation this methodology requires.
+Exposure and levels follow the shared formulas (0.30 EV in linear light; the
+luma-weighted levels kernel), which is why those two cases are
+indistinguishable from the reference. Clarity and vignette were rebuilt from
+the filters' own output rather than approximated: a committed oracle
+(`Tools/ci-vignette-reference.swift`) applies `CIVignette` exactly, and the
+clarity chain (`CIUnsharpMask` at `radius = max(1.5, shortSide * 0.004)`,
+`intensity = 0.75 * clarity / 100`, then `SkinEngine.keepLuminance`) was
+reproduced byte-for-byte in an extended-linear-sRGB context. The host now
+implements the measured shapes — a Gaussian whose sigma is the unsharp radius
+with luminance-only detail, and `CIVignette`'s linear-light falloff — and both
+cases are gated at one level of MAE in the Windows suite. The remaining
+difference is 8-bit rounding. The clarity and vignette numbers are from CI run
+[43576450870](https://github.com/iR0ham/RetouchStudio/actions/runs/43576450870)
+(the vignette first landed in run 43573329343); the exposure and levels lines
+are unchanged since the run that introduced them. They are observations backed
+by that derivation; they must not be loosened or generalised without the same
+evidence.

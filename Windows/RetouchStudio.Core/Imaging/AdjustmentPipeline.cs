@@ -39,15 +39,19 @@ public readonly record struct GlobalAdjustments(
 /// The global pass. Input is sRGB 8-bit RGBA. Levels, exposure and contrast run
 /// per pixel through the shared weights and scale (levels in the luma-weighted
 /// shadow/highlight form, exposure on the 0.30 EV scale in linear light), then
-/// warmth, saturation, vibrance, clarity and vignette run per pixel.
+/// warmth, saturation and vibrance run per pixel. Clarity and vignette need
+/// neighbourhoods or positions, so they run in their own passes afterwards, in
+/// the same order the macOS host applies them.
 ///
-/// Parity with the macOS Core Image pipeline is not claimed: this host works in
-/// display-referred sRGB and leaves precision at 8 bits. The vignette follows
-/// CIVignette's measured behaviour — linear-light multiply, falloff in
-/// short-side units, intensity as the exponent — because that one is cheap to
-/// match. The contract the rest keeps is behavioural — identity means no
-/// change, each slider moves in the documented direction, and the output is
-/// deterministic.
+/// Parity with the macOS Core Image pipeline is not claimed for the tone and
+/// colour stages: this host works in display-referred sRGB and leaves precision
+/// at 8 bits. Two stages follow measured Core Image behaviour because their
+/// shapes are cheap to reproduce: the vignette (linear-light multiply, falloff
+/// in short-side units, intensity as the exponent) and clarity (CIUnsharpMask's
+/// Gaussian — radius used as sigma — followed by the keepLuminance kernel, so
+/// only luminance detail moves and colour is left where it was). The contract
+/// the rest keeps is behavioural — identity means no change, each slider moves
+/// in the documented direction, and the output is deterministic.
 /// </summary>
 public static class AdjustmentPipeline
 {
@@ -66,7 +70,6 @@ public static class AdjustmentPipeline
         var gain = Math.Pow(2, 0.30 * adjustments.Exposure / 100.0);
         var contrast = 1 + 0.45 * adjustments.Contrast / 100.0;
         var toneActive = adjustments.Exposure != 0 || adjustments.Contrast != 0;
-        var blurred = adjustments.Clarity == 0 ? null : BoxBlur(source.Pixels, source.Width, source.Height);
 
         var width = source.Width;
         var height = source.Height;
@@ -77,13 +80,28 @@ public static class AdjustmentPipeline
         var saturationFactor = 1 + 0.6 * adjustments.Saturation / 100.0;
         var vibranceAmount = adjustments.Vibrance / 100.0;
         var warmthAmount = adjustments.Warmth / 100.0;
-        var clarityAmount = adjustments.Clarity / 100.0 * 0.75;
         // macOS applies CIVignette only above zero; a negative value there is a
         // no-op, and this host follows that instead of inventing a brightening.
         var vignetteExponent = 1.4 * adjustments.Vignette / 100.0;
         var centreX = (width - 1) / 2.0;
         var centreY = (height - 1) / 2.0;
         var shortSide = Math.Min(width, height);
+
+        // Positive clarity sharpens linear luminance and leaves colour alone,
+        // which is what CIUnsharpMask plus SkinEngine.keepLuminance do: the
+        // written pixel keeps its own chroma and takes the sharpened luminance.
+        // Negative clarity blurs all three channels, exactly as the
+        // CIGaussianBlur the macOS host reaches for does. Both read the adjusted
+        // picture, so they are captured during the main pass and applied after
+        // it, before the vignette.
+        var clarityStrength = adjustments.Clarity / 100.0;
+        var clarityRadius = Math.Max(1.5, shortSide * 0.004);
+        var softRadius = Math.Max(0.5, shortSide * 0.0015 * -clarityStrength
+                                       * Math.Clamp(shortSide / 1400.0, 0.5, 3.0));
+        var lumaPlane = clarityStrength > 0 ? new float[width * height] : null;
+        var softPlanes = clarityStrength < 0
+            ? new float[3][] { new float[width * height], new float[width * height], new float[width * height] }
+            : null;
 
         for (var y = 0; y < height; y++)
         {
@@ -151,19 +169,73 @@ public static class AdjustmentPipeline
                     blue = luma + (blue - luma) * factor;
                 }
 
-                if (blurred is not null)
+                if (lumaPlane is not null)
                 {
-                    var blurLuma = (0.2126 * blurred[offset + 2] +
-                                    0.7152 * blurred[offset + 1] +
-                                    0.0722 * blurred[offset]) / 255.0;
-                    var delta = (luma - blurLuma) * clarityAmount;
-                    red += delta;
-                    green += delta;
-                    blue += delta;
+                    lumaPlane[y * width + x] = (float)(0.2126 * ToLinear(Clamp01(red))
+                                                     + 0.7152 * ToLinear(Clamp01(green))
+                                                     + 0.0722 * ToLinear(Clamp01(blue)));
+                }
+                else if (softPlanes is not null)
+                {
+                    softPlanes[0][y * width + x] = (float)ToLinear(Clamp01(blue));
+                    softPlanes[1][y * width + x] = (float)ToLinear(Clamp01(green));
+                    softPlanes[2][y * width + x] = (float)ToLinear(Clamp01(red));
                 }
 
-                if (vignetteExponent > 0)
+                targetPixels[offset] = ToByte(blue);
+                targetPixels[offset + 1] = ToByte(green);
+                targetPixels[offset + 2] = ToByte(red);
+                targetPixels[offset + 3] = sourcePixels[offset + 3];
+            }
+        }
+
+        if (lumaPlane is not null)
+        {
+            var blurredLuma = GaussianBlur(lumaPlane, width, height, clarityRadius);
+            var amount = 0.75 * clarityStrength;
+            Parallel.For(0, height, y =>
+            {
+                var row = y * width;
+                for (var x = 0; x < width; x++)
                 {
+                    var index = row + x;
+                    var offset = index * 4;
+                    var detail = (lumaPlane[index] - blurredLuma[index]) * amount;
+                    targetPixels[offset] = ToByte(FromLinear(Clamp01(
+                        ToLinear(targetPixels[offset] / 255.0) + detail)));
+                    targetPixels[offset + 1] = ToByte(FromLinear(Clamp01(
+                        ToLinear(targetPixels[offset + 1] / 255.0) + detail)));
+                    targetPixels[offset + 2] = ToByte(FromLinear(Clamp01(
+                        ToLinear(targetPixels[offset + 2] / 255.0) + detail)));
+                }
+            });
+        }
+        else if (softPlanes is not null)
+        {
+            var blurredBlue = GaussianBlur(softPlanes[0], width, height, softRadius);
+            var blurredGreen = GaussianBlur(softPlanes[1], width, height, softRadius);
+            var blurredRed = GaussianBlur(softPlanes[2], width, height, softRadius);
+            Parallel.For(0, height, y =>
+            {
+                var row = y * width;
+                for (var x = 0; x < width; x++)
+                {
+                    var index = row + x;
+                    var offset = index * 4;
+                    targetPixels[offset] = ToByte(FromLinear(Clamp01(blurredBlue[index])));
+                    targetPixels[offset + 1] = ToByte(FromLinear(Clamp01(blurredGreen[index])));
+                    targetPixels[offset + 2] = ToByte(FromLinear(Clamp01(blurredRed[index])));
+                }
+            });
+        }
+
+        if (vignetteExponent > 0)
+        {
+            Parallel.For(0, height, y =>
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var offset = (y * width + x) * 4;
                     var dx = x - centreX;
                     var dyPixel = y - centreY;
                     var distance = Math.Sqrt(dx * dx + dyPixel * dyPixel) / shortSide;
@@ -174,16 +246,14 @@ public static class AdjustmentPipeline
                     // made the falloff identical at 512, 720 and 1024 pixels.
                     var falloff = SmoothStep(0.03, 1.03, distance);
                     var multiplier = Math.Pow(1 - falloff, vignetteExponent);
-                    red = FromLinear(ToLinear(Clamp01(red)) * multiplier);
-                    green = FromLinear(ToLinear(Clamp01(green)) * multiplier);
-                    blue = FromLinear(ToLinear(Clamp01(blue)) * multiplier);
+                    targetPixels[offset] = ToByte(FromLinear(
+                        ToLinear(targetPixels[offset] / 255.0) * multiplier));
+                    targetPixels[offset + 1] = ToByte(FromLinear(
+                        ToLinear(targetPixels[offset + 1] / 255.0) * multiplier));
+                    targetPixels[offset + 2] = ToByte(FromLinear(
+                        ToLinear(targetPixels[offset + 2] / 255.0) * multiplier));
                 }
-
-                targetPixels[offset] = ToByte(blue);
-                targetPixels[offset + 1] = ToByte(green);
-                targetPixels[offset + 2] = ToByte(red);
-                targetPixels[offset + 3] = sourcePixels[offset + 3];
-            }
+            });
         }
         return output;
     }
@@ -199,6 +269,63 @@ public static class AdjustmentPipeline
         return Clamp01(0.5 + (value - 0.5) * contrast);
     }
 
+    /// <summary>
+    /// A separable Gaussian whose sigma is the radius Core Image's unsharp mask
+    /// takes, truncated at three sigma and clamped at the edges the way the
+    /// host's clampedToExtent blur is. Three box passes would be faster, but the
+    /// measured kernel is a Gaussian, and a box approximation would show as a
+    /// ring on the detail chart.
+    /// </summary>
+    private static float[] GaussianBlur(float[] plane, int width, int height, double sigma)
+    {
+        var support = Math.Max(1, (int)Math.Ceiling(3 * sigma));
+        var kernel = new double[support * 2 + 1];
+        var total = 0.0;
+        for (var step = -support; step <= support; step++)
+        {
+            var weight = Math.Exp(-(step * (double)step) / (2 * sigma * sigma));
+            kernel[step + support] = weight;
+            total += weight;
+        }
+        for (var index = 0; index < kernel.Length; index++)
+        {
+            kernel[index] /= total;
+        }
+
+        var horizontal = new float[plane.Length];
+        Parallel.For(0, height, y =>
+        {
+            var row = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                var sum = 0.0;
+                for (var step = -support; step <= support; step++)
+                {
+                    var sample = Math.Clamp(x + step, 0, width - 1);
+                    sum += plane[row + sample] * kernel[step + support];
+                }
+                horizontal[row + x] = (float)sum;
+            }
+        });
+
+        var blurred = new float[plane.Length];
+        Parallel.For(0, height, y =>
+        {
+            var row = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                var sum = 0.0;
+                for (var step = -support; step <= support; step++)
+                {
+                    var sample = Math.Clamp(y + step, 0, height - 1);
+                    sum += horizontal[sample * width + x] * kernel[step + support];
+                }
+                blurred[row + x] = (float)sum;
+            }
+        });
+        return blurred;
+    }
+
     private static double ToLinear(double value) =>
         value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
 
@@ -209,79 +336,6 @@ public static class AdjustmentPipeline
     {
         var t = Clamp01((value - edge0) / (edge1 - edge0));
         return t * t * (3 - 2 * t);
-    }
-
-    /// <summary>
-    /// Three box passes approximate a Gaussian of the radius the shared unsharp
-    /// mask uses (0.4% of the short side), and the radius scales with the photo
-    /// so the effect reads the same at any resolution.
-    /// </summary>
-    private static byte[] BoxBlur(byte[] source, int width, int height)
-    {
-        var radius = Math.Max(1, (int)Math.Round(Math.Min(width, height) * 0.004));
-        var current = source;
-        for (var pass = 0; pass < 3; pass++)
-        {
-            current = BlurPass(current, width, height, radius);
-        }
-        return current;
-    }
-
-    private static byte[] BlurPass(byte[] source, int width, int height, int radius)
-    {
-        var horizontal = new byte[source.Length];
-        for (var y = 0; y < height; y++)
-        {
-            var row = y * width;
-            for (var x = 0; x < width; x++)
-            {
-                var low = Math.Max(0, x - radius);
-                var high = Math.Min(width - 1, x + radius);
-                var count = high - low + 1;
-                var red = 0;
-                var green = 0;
-                var blue = 0;
-                for (var sample = low; sample <= high; sample++)
-                {
-                    var offset = (row + sample) * 4;
-                    red += source[offset];
-                    green += source[offset + 1];
-                    blue += source[offset + 2];
-                }
-                var target = (row + x) * 4;
-                horizontal[target] = (byte)(red / count);
-                horizontal[target + 1] = (byte)(green / count);
-                horizontal[target + 2] = (byte)(blue / count);
-                horizontal[target + 3] = 255;
-            }
-        }
-
-        var blurred = new byte[source.Length];
-        for (var y = 0; y < height; y++)
-        {
-            var low = Math.Max(0, y - radius);
-            var high = Math.Min(height - 1, y + radius);
-            var count = high - low + 1;
-            for (var x = 0; x < width; x++)
-            {
-                var red = 0;
-                var green = 0;
-                var blue = 0;
-                for (var sample = low; sample <= high; sample++)
-                {
-                    var offset = (sample * width + x) * 4;
-                    red += horizontal[offset];
-                    green += horizontal[offset + 1];
-                    blue += horizontal[offset + 2];
-                }
-                var target = (y * width + x) * 4;
-                blurred[target] = (byte)(red / count);
-                blurred[target + 1] = (byte)(green / count);
-                blurred[target + 2] = (byte)(blue / count);
-                blurred[target + 3] = 255;
-            }
-        }
-        return blurred;
     }
 
     private static double Clamp01(double value) => Math.Clamp(value, 0, 1);

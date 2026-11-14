@@ -111,12 +111,12 @@ replaces the old one through the same `UpgradeCode`.
   MSI; both are built from the same publish folder.
 - No macOS pixel parity claim. Exposure, blacks, whites, contrast and saturation
   now use the shared scales: against the macOS reference PNGs the host measures
-  MAE 0.01 for exposure +40 and 0.007 for blacks +60. Clarity +55 still differs
-  (MAE 5.8; CI's unsharp mask is approximated). The vignette follows
+  MAE 0.01 for exposure +40 and 0.007 for blacks +60. The vignette follows
   CIVignette's measured behaviour — linear light, short-side falloff, intensity
   as an exponent — and lands at MAE 0.47 for +55, gated at one level; a negative
-  vignette is a no-op, as on macOS. Every measurement is printed by the headless
-  suite.
+  vignette is a no-op, as on macOS. Clarity follows CIUnsharpMask and the
+  keepLuminance kernel and lands at MAE 0.06 for +55, also gated. Every
+  measurement is printed by the headless suite.
 
 ## Pixel semantics
 
@@ -196,8 +196,10 @@ byte-for-byte, require the 16-bit P3 fixture to export sample-exact, round-trip 
 synthetic buffer that is off the 8-bit grid through PNG and TIFF, and find
 766 310 of 786 432 colour samples off the 8-bit grid in an adjusted export. The
 same run measured the two pipelines against each other on one input: one level
-of drift on tone and colour, two on clarity, because the 8-bit blur truncates
-on every pass while the 16-bit blur does not.
+of drift on tone and colour, two on clarity, because the 8-bit blur truncated
+on every pass while the 16-bit blur did not. (The clarity pass changed on
+2026-11-14; the 8-bit path now quantises the pre-clarity picture, and the same
+comparison measures three levels. See the clarity parity section.)
 
 What this does not prove: pixel parity with the macOS renderer, HEIC, XMP or
 IPTC metadata, signing, an updater, a 16-bit preview or editing path, or
@@ -236,6 +238,33 @@ reports `PASS (118 checks)` with `G11_VIGNETTE: mae 0.473` — from 5.2 before �
 and the case is gated at one level rather than only printed. A negative
 vignette changes nothing, as on macOS where only `vignette > 0` runs the
 filter; a check holds that.
+
+### Clarity parity (2026-11-14, PR #27)
+
+Positive clarity was the last measured G-case that still differed: MAE 5.8
+against `G09_CLARITY_UP.png`, from an approximation that blurred in display
+space with three box passes. A standalone Core Image harness applying exactly
+the host's chain — `CIUnsharpMask` with
+`radius = max(1.5, shortSide * 0.004)` and `intensity = 0.75 * clarity / 100`,
+then `SkinEngine.keepLuminance` — reproduces the reference byte-for-byte, so the
+target was known precisely rather than guessed. Probing the filter with a
+single-pixel delta showed its kernel is a Gaussian whose sigma is the radius,
+and that intensity scales the response linearly.
+
+The host now builds a linear-luminance plane from the adjusted picture, blurs it
+with that Gaussian (truncated at three sigma, edges clamped), and adds the
+luminance detail to all three channels, which is exactly what keepLuminance
+computes. Negative clarity blurs all three channels in linear light with
+`CIGaussianBlur`'s radius and scale rule instead of inverting the unsharp.
+Clarity and vignette run as their own passes so the order stays the host's.
+CI run [43576450870](https://github.com/iR0ham/RetouchStudio/actions/runs/43576450870)
+reports `PASS (122 checks)` with `G09_CLARITY_UP: mae 0.06` — from 5.8 — rmse
+0.246, psnr 60.33 dB, 6.5% of pixels changed, and the case is gated at one
+level. New checks hold that positive clarity leaves a flat field untouched and
+digs a step edge at +100, while negative clarity softens the same edge. The
+8-bit and 16-bit paths drift three levels at clarity 40, inside their measured
+bound, because the 8-bit pass writes the pre-clarity picture as bytes before
+the detail is added.
 
 ### Installer run (2026-11-14, PR #22)
 

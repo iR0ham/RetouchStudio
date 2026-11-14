@@ -281,6 +281,34 @@ internal static class Program
             gray, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 0, -80));
         Check("a negative vignette changes nothing, as on macOS",
               negativeVignette.Pixels.AsSpan().SequenceEqual(gray.Pixels));
+
+        // Clarity follows the macOS shape: positive clarity moves luminance
+        // detail only, so a flat field cannot move, and a step edge gains
+        // contrast instead of colour fringes. Negative clarity blurs, which is
+        // what CIGaussianBlur does there, not an inverted unsharp.
+        var flatSharp = AdjustmentPipeline.Apply(
+            gray, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 100, 0));
+        Check("positive clarity leaves a flat field alone",
+              flatSharp.Pixels.AsSpan().SequenceEqual(gray.Pixels));
+
+        var edge = new PixelBuffer(16, 16);
+        for (var y = 0; y < 16; y++)
+        {
+            for (var x = 0; x < 16; x++)
+            {
+                var value = (byte)(x < 8 ? 80 : 160);
+                Put(edge, x, y, r: value, g: value, b: value);
+            }
+        }
+        var sharpEdge = AdjustmentPipeline.Apply(
+            edge, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 100, 0));
+        Check("positive clarity digs the dark side of a step edge",
+              Get(sharpEdge, 7, 8).R < 80 && Get(sharpEdge, 8, 8).R > 160);
+
+        var softEdge = AdjustmentPipeline.Apply(
+            edge, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, -100, 0));
+        Check("negative clarity softens the same edge",
+              Get(softEdge, 7, 8).R > 80 && Get(softEdge, 8, 8).R < 160);
     }
 
     private static void Codec(string root)
@@ -357,7 +385,7 @@ internal static class Program
     }
 
     /// <summary>
-    /// The three adjustment cases both hosts implement, compared against the
+    /// The four adjustment cases both hosts implement, compared against the
     /// macOS reference PNGs. This is measurement, not a gate: the Windows
     /// pipeline is behaviourally aligned, not pixel-identical, and
     /// `Docs/IMAGE_COMPARISON_METHODOLOGY.md` approves no numeric tolerance.
@@ -400,6 +428,13 @@ internal static class Program
                 // parity gate, not a smoke test: a level of headroom covers the
                 // 8-bit rounding the reference went through.
                 Check("G11 stays within one level of the macOS vignette", mae <= 1.0);
+            }
+            if (id == "G09_CLARITY_UP")
+            {
+                // Clarity reproduces CIUnsharpMask's Gaussian and the
+                // keepLuminance rebuild in linear light; what is left is 8-bit
+                // rounding on the detail chart's hard edges.
+                Check("G09 stays within one level of the macOS clarity", mae <= 1.0);
             }
         }
     }
@@ -828,9 +863,10 @@ internal static class Program
         }
 
         // Clarity is the one stage whose result is quantised before it is used:
-        // the 8-bit blur truncates on every pass, the 16-bit blur does not. So
-        // the tone/colour check runs without clarity, where only rounding can
-        // differ, and clarity gets its own, wider, measured bound.
+        // the 8-bit pass writes the pre-clarity picture as bytes and reads it
+        // back, while the 16-bit pass keeps 16 bits. So the tone/colour check
+        // runs without clarity, where only rounding can differ, and clarity gets
+        // its own, wider, measured bound.
         var adjustments = new GlobalAdjustments(30, 15, 10, -5, 25, 20, 10, 0, 30);
         var narrow = AdjustmentPipeline.Apply(eightBit, adjustments);
         var deep = AdjustmentPipeline16.Apply(wide, adjustments);
