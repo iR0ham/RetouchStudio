@@ -103,7 +103,9 @@ public static class AdjustmentPipeline
             ? new float[3][] { new float[width * height], new float[width * height], new float[width * height] }
             : null;
 
-        for (var y = 0; y < height; y++)
+        // Each row writes only its own pixels and plane samples, so the pass
+        // parallelises without changing a single output byte.
+        Parallel.For(0, height, y =>
         {
             for (var x = 0; x < width; x++)
             {
@@ -187,7 +189,7 @@ public static class AdjustmentPipeline
                 targetPixels[offset + 2] = ToByte(red);
                 targetPixels[offset + 3] = sourcePixels[offset + 3];
             }
-        }
+        });
 
         if (lumaPlane is not null)
         {

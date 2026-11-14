@@ -147,6 +147,7 @@ does not. These numbers were recorded on run `43598349755` (CI workflow,
 | time to first window — MSI-installed copy | same, first launch of the installed copy | **3851 ms** |
 | time to first window — upgraded copy | same, first launch after an in-place upgrade | **5740 ms** |
 | managed-heap growth over a render session | twenty photo-sized preview renders after the forty-document stress loop, full blocking collection before and after | **-0.0 MB**, gated at 150 MB (run `43612517678`, head `6a80ba1`) |
+| preview render — parallel main pass | same document and warm-up as the preview row, median of five; the per-pixel adjustment loop now runs one row per worker | **721 ms** (721 / 699 / 710 / 803 / 804), and the same run's 16-bit PNG export **1189 ms** (run `43618132157`, head `e43412b`) |
 
 The four start-up figures were recorded on run `43609703310` (CI workflow,
 `windows-2025`, x64, head `9269692`) and printed by the same smoke step that
@@ -162,7 +163,13 @@ The preview figure is a full 1:1 render of a 1.7 MP frame with every adjustment
 pass applied; clarity's linear-luminance Gaussian dominates. The decode happens
 once when the photo opens, so it is outside this number; it is also not a
 measure of UI responsiveness on a real display, where the preview surface is
-smaller. The export figure includes the decode, the full-size render and the
+smaller. The parallel-pass row is the same measurement after the per-pixel
+adjustment loop was given one row per worker: 721 ms against 1187 ms on the
+older run, and it was gated by the same pixel-identity checks, which repeat the
+render and compare every byte, so the speed did not come at the cost of a
+different picture. Both numbers come from hosted runners of the same type but
+different load, so the gap is indicative rather than a benchmark-grade
+speed-up. The export figure includes the decode, the full-size render and the
 encode-to-disk of a 16-bit PNG. A stress loop then renders forty documents that
 vary crop, quarter turn, flip, straighten and clarity sign, and requires that no
 render fails, that no crop/turn output exceeds the source area, and that a
