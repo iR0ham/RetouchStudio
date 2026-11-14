@@ -169,7 +169,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
 `windows-2025` and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 124
+`.def` export list, publishes the WPF host self-contained for x64, runs the 131
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
@@ -216,6 +216,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `c66cf38` (PR #29, colour-managed P3 decode) | `CI` run 43582087464, attempt 2 | five jobs green; `Windows App` reports `PASS (124 checks)`; a Display P3 photo decodes to sRGB within one level of ColorSync at four in-gamut points, and the 16-bit path agrees within four; attempt 1 was cancelled at the 45-minute job timeout while installing the Swift toolchain, with no failing step |
 | 2026-11-14 | `1adafa0` (PR #29, documentation head) | `CI` run 43586982825 | five jobs green on the exact head; merged as `413363f` |
 | 2026-11-14 | `413363f` (merge of PR #29) | `CI` run 43588258162, `main` | all five jobs green |
+| 2026-11-14 | `48b8b75` (PR #31, 16-bit preview) | `CI` run 43593470894 | five jobs green; `Windows App` reports `PASS (131 checks)`; the container depth probe reads PNG IHDR and TIFF BitsPerSample; the 16-bit preview is within one level of the 8-bit preview at rest and 8 levels under a strong adjustment set, gated at 10 |
 
 
 PR #13 was merged with a normal merge commit after every required context and
