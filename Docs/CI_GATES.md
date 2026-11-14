@@ -233,6 +233,21 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `32912ba` (merge of PR #37) | `CI` run 43605954063, `main` | all five jobs green |
 | 2026-11-14 | `1bf843e` (PR #39 head, merged as `a5e65eb`) | `CI` run 43606194309 | five jobs green; `Windows App` reports `PASS (169 checks)`; the orientation/crop order, the turn-straighten-mirror composition in both depths and the crop that follows a turn are proved pixel for pixel |
 | 2026-11-14 | `a5e65eb` (merge of PR #39) | `CI` run 43607538778, `main` | all five jobs green on the merged tree |
+| 2026-11-14 | `60513b8` (PR #41 head, merged as `4422df3`) | `CI` run 43610920612 | five jobs green; `Windows App` reports `PASS (169 checks)`; the smoke step prints each copy's time to first window (895 / 762 / 2094 / 2080 ms) and the perf lines |
+| 2026-11-14 | `4422df3` (merge of PR #41) | `CI` run 43612107743, `main` | all five jobs green |
+| 2026-11-14 | `863f528` (PR #42 head) | `CI` run 43612284616 | five jobs green; `Windows App` reports `PASS (171 checks)`; the overlay draws thirds, slides from inside, reads the pixel size and compares against the untouched photo; its drag wiring is not driven by CI |
+| 2026-11-14 | `11f670c` (PR #44 head, merged as `2c0d1fa`) | `CI` run 43611687120 | five jobs green; `Windows App` reports `PASS (172 checks)`; the histogram bins are pinned against a four-pixel fixture |
+| 2026-11-14 | `2c0d1fa` (merge of PR #44) | `CI` run 43614356967, `main` | all five jobs green |
+| 2026-11-14 | `0e0be3d` (PR #44 head) | `CI` run 43613038894 | five jobs green; `Windows App` reports `PASS (172 checks)`; start-up 907 / 1649 / 662 / 764 ms |
+| 2026-11-14 | `de269d8` (PR #42 head, merged as `53e1c36`) | `CI` run 43615178242 | five jobs green; `Windows App` reports `PASS (174 checks)`; start-up 896 / 1097 / 4395 / 2751 ms; the run that gates the #42 merge |
+| 2026-11-14 | `6a80ba1` (PR #45 head) | `CI` run 43612517678 | five jobs green; `Windows App` reports `PASS (170 checks)`; the managed heap is flat across twenty photo-sized renders |
+
+`ci.yml` triggers on `pull_request: branches: [main]` only, so a pull request
+stacked on another feature branch receives no checks at all. PR #43 was opened
+that way and never ran; its commits were folded into PR #42 instead (which
+targets `main`) and #43 was closed as merged when the base branch merged. Any
+new work that needs a green run must target `main`, either directly or by
+merging the base branch in.
 
 
 PR #13 was merged with a normal merge commit after every required context and
