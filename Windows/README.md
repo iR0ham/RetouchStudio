@@ -121,6 +121,13 @@ replaces the old one through the same `UpgradeCode`.
 ## Pixel semantics
 
 - Preview buffer: tightly packed BGRA8, top-left origin, straight alpha, sRGB.
+- Source colour: WIC decodes with `ColorManageToSRgb`, so a Display P3 file is
+  converted through its embedded profile rather than relabelled. On the
+  `F11_p3_16bit.png` fixture four in-gamut points land within one level of a
+  ColorSync conversion to sRGB, and more than ten levels away from the file's
+  own P3 values, so the check proves conversion and not rounding. Wide-gamut
+  pixels are clipped to sRGB, and the export is sRGB: the profile is consumed
+  on decode, not carried through the render.
 - Export buffer: tightly packed RGBA16 for PNG and TIFF, the same origin, alpha
   and colour space. Both pipelines use the same formulas and order; a headless
   check renders one image through both and requires them to agree within one
