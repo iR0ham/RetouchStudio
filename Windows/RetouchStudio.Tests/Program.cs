@@ -388,6 +388,9 @@ internal static class Program
         Check("keeping metadata keeps the resolution",
               Math.Abs(keptMeta.DpiX - 300) < 1);
 
+        Check("a kept export carries no GPS key",
+              !keptMeta.Properties.Keys.Any(key => key.StartsWith("System.GPS.", StringComparison.Ordinal)));
+
         var stripped = Path.Combine(root, "metadata-stripped.jpg");
         ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
                              .GetAwaiter().GetResult();

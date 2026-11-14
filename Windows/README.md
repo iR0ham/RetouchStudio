@@ -54,9 +54,12 @@ folder into one zip plus a SHA-256 file.
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's.
 - Metadata policy: an export keeps only the resolution by default. With
-  "Keep camera metadata" on, JPEG and TIFF carry the allowlisted camera,
-  capture, GPS and comment keys; the pixels are upright, so the orientation tag
-  and the source pixel dimensions are never copied.
+  "Keep camera metadata" on, JPEG and TIFF carry the two keys the headless
+  probe proved the Windows writer keeps — camera model and ISO. The rest of the
+  EXIF block (make, capture date, exposure, aperture, flash, white balance,
+  GPS, comment) is silently dropped by that writer, so it is not promised. The
+  pixels are upright, so the orientation tag and the source pixel dimensions
+  are never copied.
 - Exports never overwrite the opened photo.
 
 ## What it does not do
@@ -66,9 +69,10 @@ folder into one zip plus a SHA-256 file.
 - No freeform crop; the presets are the whole crop UI.
 - 8-bit output only. A 16-bit source is reduced at decode, and a PNG or TIFF
   plan still writes 8-bit pixels even though the plan says 16.
-- No XMP and no IPTC: the Windows metadata API exposes neither, so a kept
-  export carries EXIF camera keys only. PNG carries no EXIF either, because the
-  API does not map EXIF onto PNG chunks.
+- No XMP and no IPTC: the Windows metadata API exposes neither, and its EXIF
+  writer keeps only the two measured keys, so a kept export carries the camera
+  model and ISO only. PNG carries no EXIF either, because the API does not map
+  EXIF onto PNG chunks.
 - No HEIC write (the HEIF codec is an optional system component) and no HEIC
   read path beyond whatever WIC happens to install.
 - No recovery store, updater, installer or signing. Packaging is a zip.
