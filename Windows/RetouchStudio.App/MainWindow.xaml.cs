@@ -185,7 +185,7 @@ public partial class MainWindow : Window
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (!_vm.HasDocument)
+        if (!_vm.HasDocument || !ConfirmUnsupportedEdits("the exported photo"))
         {
             return;
         }
@@ -225,7 +225,7 @@ public partial class MainWindow : Window
 
     private async void BatchExport_Click(object sender, RoutedEventArgs e)
     {
-        if (!_vm.HasDocument)
+        if (!_vm.HasDocument || !ConfirmUnsupportedEdits("the batch export"))
         {
             return;
         }
@@ -433,6 +433,25 @@ public partial class MainWindow : Window
     private void Report(string headline, Exception error) =>
         MessageBox.Show($"{headline}.\n\n{error.Message}", "Retouch Studio",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
+
+    /// <summary>
+    /// A project can carry macOS-only edits this host keeps in the file but
+    /// cannot draw. Writing a photo that silently lacks them would look like a
+    /// successful export of work that is not in the pixels.
+    /// </summary>
+    private bool ConfirmUnsupportedEdits(string action)
+    {
+        var edits = _vm.UnsupportedEdits;
+        if (edits.Count == 0)
+        {
+            return true;
+        }
+        var answer = MessageBox.Show(this,
+            $"This project carries edits this host cannot render: {string.Join(", ", edits)}.\n\n" +
+            $"They stay in the project file, but {action} will not include them. Continue?",
+            "Retouch Studio", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        return answer == MessageBoxResult.Yes;
+    }
 
     /// <summary>
     /// The dark title bar is a Windows 10 20H1+ call. It is cosmetic, so a

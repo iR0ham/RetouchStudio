@@ -44,6 +44,7 @@ internal static class Program
             FormatProbes(root);
             Metadata(root);
             Interchange(root);
+            UnsupportedEditGuard();
         }
         catch (Exception error)
         {
@@ -1462,6 +1463,47 @@ internal static class Program
             Check("a v3 save keeps the unkeyed geometry", saved["crop"] is JsonArray);
             Check("a v3 save keeps every record", JsonNode.DeepEquals(saved, v3Fixture));
         }
+    }
+
+    /// <summary>
+    /// The host keeps macOS-only edits in the project file but cannot draw
+    /// them, so it has to name them before an export writes pixels that lack
+    /// them. The shared fixtures carry every kind; a new document carries none.
+    /// </summary>
+    private static void UnsupportedEditGuard()
+    {
+        var repo = RepoRoot();
+        using (var session = ProjectSession.Open(Path.Combine(
+                   repo, "Tests/Fixtures/ProjectV4/project-v4-full.retouch")))
+        {
+            var edits = session.Document.UnsupportedEdits;
+            Check("a macOS project names every edit this host cannot render",
+                  edits.Count == 6
+                  && edits.Contains("heal spots") && edits.Contains("stickers")
+                  && edits.Contains("AI patches") && edits.Contains("analysis callouts")
+                  && edits.Contains("automatic retouch") && edits.Contains("automatic colour"));
+        }
+        using (var session = ProjectSession.Open(Path.Combine(
+                   repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch")))
+        {
+            Check("a v3 project is checked the same way",
+                  session.Document.UnsupportedEdits.Count == 6);
+        }
+
+        var empty = new DocumentModel(new JsonObject());
+        Check("a project with no extra edits names none", empty.UnsupportedEdits.Count == 0);
+
+        empty.Root["healSpots"] = new JsonArray();
+        empty.Root["stickers"] = new JsonArray();
+        empty.Root["aiEdits"] = new JsonArray();
+        empty.Root["analysis"] = new JsonObject { ["isEnabled"] = false };
+        empty.Root["autoRetouchStrength"] = 0;
+        empty.Root["autoColorStrength"] = 0;
+        Check("empty lists and disabled tools are not edits", empty.UnsupportedEdits.Count == 0);
+
+        empty.Root["stickers"] = new JsonArray(new JsonObject { ["kind"] = "heart" });
+        Check("one sticker is enough to warn", empty.UnsupportedEdits.Count == 1
+              && empty.UnsupportedEdits[0] == "stickers");
     }
 
     /// <summary>
