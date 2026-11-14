@@ -25,9 +25,6 @@ public static class AdjustmentPipeline16
         var gain = Math.Pow(2, 0.30 * adjustments.Exposure / 100.0);
         var contrast = 1 + 0.45 * adjustments.Contrast / 100.0;
         var toneActive = adjustments.Exposure != 0 || adjustments.Contrast != 0;
-        var blurred = adjustments.Clarity == 0
-            ? null
-            : BoxBlur(source.Pixels, source.Width, source.Height);
 
         var width = source.Width;
         var height = source.Height;
@@ -38,11 +35,22 @@ public static class AdjustmentPipeline16
         var saturationFactor = 1 + 0.6 * adjustments.Saturation / 100.0;
         var vibranceAmount = adjustments.Vibrance / 100.0;
         var warmthAmount = adjustments.Warmth / 100.0;
-        var clarityAmount = adjustments.Clarity / 100.0 * 0.75;
         var vignetteExponent = 1.4 * adjustments.Vignette / 100.0;
         var centreX = (width - 1) / 2.0;
         var centreY = (height - 1) / 2.0;
         var shortSide = Math.Min(width, height);
+
+        // Same measured shapes as the 8-bit pass: positive clarity moves
+        // luminance detail only, negative clarity blurs every channel, and the
+        // vignette follows CIVignette.
+        var clarityStrength = adjustments.Clarity / 100.0;
+        var clarityRadius = Math.Max(1.5, shortSide * 0.004);
+        var softRadius = Math.Max(0.5, shortSide * 0.0015 * -clarityStrength
+                                       * Math.Clamp(shortSide / 1400.0, 0.5, 3.0));
+        var lumaPlane = clarityStrength > 0 ? new float[width * height] : null;
+        var softPlanes = clarityStrength < 0
+            ? new float[3][] { new float[width * height], new float[width * height], new float[width * height] }
+            : null;
 
         for (var y = 0; y < height; y++)
         {
@@ -103,29 +111,17 @@ public static class AdjustmentPipeline16
                     blue = luma + (blue - luma) * factor;
                 }
 
-                if (blurred is not null)
+                if (lumaPlane is not null)
                 {
-                    var blurLuma = (0.2126 * blurred[offset] +
-                                    0.7152 * blurred[offset + 1] +
-                                    0.0722 * blurred[offset + 2]) / 65535.0;
-                    var delta = (luma - blurLuma) * clarityAmount;
-                    red += delta;
-                    green += delta;
-                    blue += delta;
+                    lumaPlane[y * width + x] = (float)(0.2126 * ToLinear(Clamp01(red))
+                                                     + 0.7152 * ToLinear(Clamp01(green))
+                                                     + 0.0722 * ToLinear(Clamp01(blue)));
                 }
-
-                if (vignetteExponent > 0)
+                else if (softPlanes is not null)
                 {
-                    var dx = x - centreX;
-                    var dyPixel = y - centreY;
-                    var distance = Math.Sqrt(dx * dx + dyPixel * dyPixel) / shortSide;
-                    // Same measured CIVignette shape as the 8-bit pipeline:
-                    // linear light, short-side distance, intensity as exponent.
-                    var falloff = SmoothStep(0.03, 1.03, distance);
-                    var multiplier = Math.Pow(1 - falloff, vignetteExponent);
-                    red = FromLinear(ToLinear(Clamp01(red)) * multiplier);
-                    green = FromLinear(ToLinear(Clamp01(green)) * multiplier);
-                    blue = FromLinear(ToLinear(Clamp01(blue)) * multiplier);
+                    softPlanes[0][y * width + x] = (float)ToLinear(Clamp01(red));
+                    softPlanes[1][y * width + x] = (float)ToLinear(Clamp01(green));
+                    softPlanes[2][y * width + x] = (float)ToLinear(Clamp01(blue));
                 }
 
                 targetPixels[offset] = ToSample(red);
@@ -134,74 +130,120 @@ public static class AdjustmentPipeline16
                 targetPixels[offset + 3] = sourcePixels[offset + 3];
             }
         }
+
+        if (lumaPlane is not null)
+        {
+            var blurredLuma = GaussianBlur(lumaPlane, width, height, clarityRadius);
+            var amount = 0.75 * clarityStrength;
+            Parallel.For(0, height, y =>
+            {
+                var row = y * width;
+                for (var x = 0; x < width; x++)
+                {
+                    var index = row + x;
+                    var offset = index * 4;
+                    var detail = (lumaPlane[index] - blurredLuma[index]) * amount;
+                    targetPixels[offset] = ToSample(FromLinear(Clamp01(
+                        ToLinear(targetPixels[offset] / 65535.0) + detail)));
+                    targetPixels[offset + 1] = ToSample(FromLinear(Clamp01(
+                        ToLinear(targetPixels[offset + 1] / 65535.0) + detail)));
+                    targetPixels[offset + 2] = ToSample(FromLinear(Clamp01(
+                        ToLinear(targetPixels[offset + 2] / 65535.0) + detail)));
+                }
+            });
+        }
+        else if (softPlanes is not null)
+        {
+            var blurredRed = GaussianBlur(softPlanes[0], width, height, softRadius);
+            var blurredGreen = GaussianBlur(softPlanes[1], width, height, softRadius);
+            var blurredBlue = GaussianBlur(softPlanes[2], width, height, softRadius);
+            Parallel.For(0, height, y =>
+            {
+                var row = y * width;
+                for (var x = 0; x < width; x++)
+                {
+                    var index = row + x;
+                    var offset = index * 4;
+                    targetPixels[offset] = ToSample(FromLinear(Clamp01(blurredRed[index])));
+                    targetPixels[offset + 1] = ToSample(FromLinear(Clamp01(blurredGreen[index])));
+                    targetPixels[offset + 2] = ToSample(FromLinear(Clamp01(blurredBlue[index])));
+                }
+            });
+        }
+
+        if (vignetteExponent > 0)
+        {
+            Parallel.For(0, height, y =>
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var offset = (y * width + x) * 4;
+                    var dx = x - centreX;
+                    var dyPixel = y - centreY;
+                    var distance = Math.Sqrt(dx * dx + dyPixel * dyPixel) / shortSide;
+                    // Same measured CIVignette shape as the 8-bit pipeline:
+                    // linear light, short-side distance, intensity as exponent.
+                    var falloff = SmoothStep(0.03, 1.03, distance);
+                    var multiplier = Math.Pow(1 - falloff, vignetteExponent);
+                    targetPixels[offset] = ToSample(FromLinear(
+                        ToLinear(targetPixels[offset] / 65535.0) * multiplier));
+                    targetPixels[offset + 1] = ToSample(FromLinear(
+                        ToLinear(targetPixels[offset + 1] / 65535.0) * multiplier));
+                    targetPixels[offset + 2] = ToSample(FromLinear(
+                        ToLinear(targetPixels[offset + 2] / 65535.0) * multiplier));
+                }
+            });
+        }
         return output;
     }
 
-    private static ushort[] BoxBlur(ushort[] source, int width, int height)
+    private static float[] GaussianBlur(float[] plane, int width, int height, double sigma)
     {
-        var radius = Math.Max(1, (int)Math.Round(Math.Min(width, height) * 0.004));
-        var current = source;
-        for (var pass = 0; pass < 3; pass++)
+        var support = Math.Max(1, (int)Math.Ceiling(3 * sigma));
+        var kernel = new double[support * 2 + 1];
+        var total = 0.0;
+        for (var step = -support; step <= support; step++)
         {
-            current = BlurPass(current, width, height, radius);
+            var weight = Math.Exp(-(step * (double)step) / (2 * sigma * sigma));
+            kernel[step + support] = weight;
+            total += weight;
         }
-        return current;
-    }
+        for (var index = 0; index < kernel.Length; index++)
+        {
+            kernel[index] /= total;
+        }
 
-    private static ushort[] BlurPass(ushort[] source, int width, int height, int radius)
-    {
-        var horizontal = new ushort[source.Length];
-        for (var y = 0; y < height; y++)
+        var horizontal = new float[plane.Length];
+        Parallel.For(0, height, y =>
         {
             var row = y * width;
             for (var x = 0; x < width; x++)
             {
-                var low = Math.Max(0, x - radius);
-                var high = Math.Min(width - 1, x + radius);
-                var count = high - low + 1;
-                long red = 0;
-                long green = 0;
-                long blue = 0;
-                for (var sample = low; sample <= high; sample++)
+                var sum = 0.0;
+                for (var step = -support; step <= support; step++)
                 {
-                    var offset = (row + sample) * 4;
-                    red += source[offset];
-                    green += source[offset + 1];
-                    blue += source[offset + 2];
+                    var sample = Math.Clamp(x + step, 0, width - 1);
+                    sum += plane[row + sample] * kernel[step + support];
                 }
-                var target = (row + x) * 4;
-                horizontal[target] = (ushort)(red / count);
-                horizontal[target + 1] = (ushort)(green / count);
-                horizontal[target + 2] = (ushort)(blue / count);
-                horizontal[target + 3] = 65535;
+                horizontal[row + x] = (float)sum;
             }
-        }
+        });
 
-        var blurred = new ushort[source.Length];
-        for (var y = 0; y < height; y++)
+        var blurred = new float[plane.Length];
+        Parallel.For(0, height, y =>
         {
-            var low = Math.Max(0, y - radius);
-            var high = Math.Min(height - 1, y + radius);
-            var count = high - low + 1;
+            var row = y * width;
             for (var x = 0; x < width; x++)
             {
-                long red = 0;
-                long green = 0;
-                long blue = 0;
-                for (var sample = low; sample <= high; sample++)
+                var sum = 0.0;
+                for (var step = -support; step <= support; step++)
                 {
-                    var offset = (sample * width + x) * 4;
-                    red += horizontal[offset];
-                    green += horizontal[offset + 1];
-                    blue += horizontal[offset + 2];
+                    var sample = Math.Clamp(y + step, 0, height - 1);
+                    sum += horizontal[sample * width + x] * kernel[step + support];
                 }
-                var target = (y * width + x) * 4;
-                blurred[target] = (ushort)(red / count);
-                blurred[target + 1] = (ushort)(green / count);
-                blurred[target + 2] = (ushort)(blue / count);
-                blurred[target + 3] = 65535;
+                blurred[row + x] = (float)sum;
             }
-        }
+        });
         return blurred;
     }
 
