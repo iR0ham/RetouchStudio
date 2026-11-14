@@ -61,7 +61,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Signed update feed | `UpdatePolicy` | prepared, no feed shipped | ABSENT | update tests | IMPLEMENTED, not published |
 | macOS packaging + DMG | — | per-arch, ad-hoc signed | — | `Tools/make-dmg.sh` | VERIFIED locally; clean-machine install NOT VERIFIED |
 | Windows packaging | — | — | zip + SHA-256, built and re-checked on CI | zip manifest check, extracted-app smoke | VERIFIED |
-| Windows installer | — | — | WiX v3 MSI, per-machine, Start menu, fixed `UpgradeCode` | silent install → window from `Program Files` → uninstall, CI run 43561151628 | VERIFIED per host; install over a previous version NOT VERIFIED |
+| Windows installer | — | — | WiX v3 MSI, per-machine, Start menu, fixed `UpgradeCode` | silent install → window from `Program Files` → uninstall, runs 43561151628 and 43563787267 | VERIFIED per host, including an upgrade to a higher version in place |
 | Windows updater | — | — | ABSENT | — | NOT STARTED |
 | Notarization | — | pipeline ready | — | — | BLOCKED — no Apple Developer membership |
 | CI matrix | — | 3 required + Windows core | `windows-2025` app job | §5 | VERIFIED |
@@ -79,7 +79,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
 | 7 | Windows product completion | PARTIAL | Light native editor builds, runs 108 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export and an MSI that installs into `Program Files` and uninstalls cleanly on CI; no updater, face analysis, AI or batch |
 | 8 | Cross-platform project interchange | VERIFIED | macOS v3 and v4 fixtures open on Windows, round-trip with structurally identical JSON, keep the unknown key and required feature, and a v3 save stays v3 (CI run 43534410772) |
-| 9 | Distribution, installers, updates | PARTIAL | macOS DMGs exist; Windows ships a zip and an unsigned per-machine MSI whose silent install, start from `Program Files` and clean uninstall are proved on CI (run 43561151628); no updater, no update feed, no signing |
+| 9 | Distribution, installers, updates | PARTIAL | macOS DMGs exist; Windows ships a zip and an unsigned per-machine MSI whose silent install, start from `Program Files`, in-place upgrade and clean uninstall are proved on CI (runs 43561151628, 43563787267); no updater, no update feed, no signing |
 | 10 | CI/CD and release engineering | VERIFIED (CI) / NOT VERIFIED (release) | Five jobs green; the dormant release `windows-app` job has never executed |
 | 11 | Documentation and product definition | IN PROGRESS | This record plus the existing Windows, CI, release and StudioCore documents |
 
@@ -151,6 +151,7 @@ must not claim them.
 | 2026-11-14 | `20d3a8c` | PR #21 checks, all five jobs | success; merged with a merge commit as `18d4e46` |
 | 2026-11-14 | `18d4e46` | CI run 43560222549 (post-merge `main`) | all five jobs green |
 | 2026-11-14 | `2488ae4` | CI run 43561151628, Windows App job | MSI 398 086 490 bytes, msi version 0.0.0.0; silent install registered in Programs and Features; the installed copy in `Program Files\Retouch Studio` loaded a window; uninstall left no folder, shortcut or entry |
+| 2026-11-14 | `657781b` | CI run 43563787267, Windows App job | 0.0.1.0 installed over an installed 0.0.0.0; one Programs and Features entry with the new version; the upgraded copy loaded a window; the final uninstall left nothing behind |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -181,6 +182,6 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 2. W3 on Windows is BLOCKED on an approved, distributable landmark model.
    The in-box detector gives boxes only, which cannot drive masks.
 3. W5: only after an approved runtime package exists.
-4. W6: the Windows MSI exists and CI proves install, start and uninstall; next
-   is the updater plus an install over a previous version, each with a CI proof.
+4. W6: the Windows MSI exists and CI proves install, start, in-place upgrade
+   and uninstall; what remains is an updater, which needs a signed feed first.
 5. Notarization stays BLOCKED until credentials exist; never simulate it.

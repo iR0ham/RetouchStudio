@@ -174,13 +174,16 @@ headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
 it silently, starts the copy in `Program Files`, and uninstalls it with the
-folder, shortcut and Programs-and-Features entry gone. `-RequireMsi` makes a
-missing WiX toolset fail the job instead of silently skipping the installer.
-The job uploads `build/windows/dist/**` so the zip and the MSI can be
-inspected. On failure it uploads the published folder (`windows-app-publish`),
-so a broken build can be inspected. The job is not a required check: it is a
-light editor, and a required Windows context would block `main` on a runner
-image that is still proving itself.
+folder, shortcut and Programs-and-Features entry gone. A second package, built
+from the same folder with the patch number bumped, is then installed over the
+first: the job requires exactly one Programs-and-Features entry, the new
+version, the shortcut, and an upgraded copy that still loads a window.
+`-RequireMsi` makes a missing WiX toolset fail the job instead of silently
+skipping the installer. The job uploads `build/windows/dist/**` so the zip and
+the MSIs can be inspected. On failure it uploads the published folder
+(`windows-app-publish`), so a broken build can be inspected. The job is not a
+required check: it is a light editor, and a required Windows context would
+block `main` on a runner image that is still proving itself.
 
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
@@ -200,6 +203,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `2c50802` (PR #15, documentation only) | `CI` run 43535723386 | five jobs green on the PR head |
 | 2026-11-14 | `20d3a8c` (PR #21, Windows 16-bit export) | `CI` run 43557855311 | five jobs green; `Windows App` reports `PASS (108 checks)`, including 16-bit PNG/TIFF depth read from the file headers and sample-exact round trips |
 | 2026-11-14 | `2488ae4` (PR #22, Windows MSI) | `CI` run 43561151628 | five jobs green; `Windows App` builds a 398 MB MSI, installs it silently to `Program Files\Retouch Studio`, starts the installed copy into a loaded window, and uninstalls with the folder, shortcut and Programs-and-Features entry gone |
+| 2026-11-14 | `657781b` (PR #23, MSI upgrade) | `CI` run 43563787267 | five jobs green; `Windows App` installs 0.0.1.0 over an installed 0.0.0.0, leaving one entry with the new version, an upgraded copy that loads a window, and a clean uninstall |
 
 PR #13 was merged with a normal merge commit after every required context and
 the non-required `Windows StudioCore` job reported success on the final head.

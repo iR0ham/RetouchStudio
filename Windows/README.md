@@ -221,6 +221,31 @@ concatenation, and the log prints the exact defines `candle` receives
 (`-dAppDir=… -dProductVersion=0.0.0.0`), so the next regression of that kind is
 visible in one line.
 
-Not proven by this run: code signing, an updater, a clean install on a machine
-that already has an older version (the `MajorUpgrade` rule is declared but has
-not been exercised), and anything on a real desktop session.
+Not proven by this run: code signing, an updater, and anything on a real
+desktop session.
+
+### Upgrade run (2026-11-14, PR #23)
+
+Run 43563787267 on `657781b` also installs a higher version over an installed
+one, which is the state every user is in when the next release ships:
+
+```
+-> upgrading an installed version
+   built RetouchStudio-0.0.1-ci-windows-x64.msi (…, msi version 0.0.1.0)
+   installed C:\Program Files\Retouch Studio\RetouchStudio.exe as 0.0.0.0
+   installed C:\Program Files\Retouch Studio\RetouchStudio.exe as 0.0.1.0
+   the upgraded app loaded its window: 'Retouch Studio' (native handle 459152)
+   uninstalled; the folder, the shortcut and the entry are gone
+   upgraded in place from 0.0.0.0 to 0.0.1.0
+WINDOWS APP BUILD: PASS
+```
+
+Every install asserts exactly one Programs and Features entry, so a broken
+`MajorUpgrade` — two products side by side — fails the job instead of passing
+as "installed". Both packages are built from the same publish folder with
+nothing but the version changed.
+
+An earlier attempt at this step failed in the harness rather than the installer:
+the packaging tool's stdout was captured into the returned MSI path, so
+`msiexec` received the build log instead of a file. `Out-Host` plus a check
+that the build returns one existing file fixed it.
