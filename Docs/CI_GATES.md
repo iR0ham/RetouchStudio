@@ -192,6 +192,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-13 | `260cb41` (merge of PR #13, push to `main`) | `CI` | all four jobs green; no Node deprecation line in any job log |
 | 2026-11-13 | `28f8462` (PR #14, push and pull request) | `CI` | five jobs green: three required macOS contexts, `Windows StudioCore` and `Windows App` |
 | 2026-11-14 | `d0673d8` (PR #15, push and pull request) | `CI` run 43534410772 | five jobs green; `Windows App` reports `PASS (69 checks)` including the interchange gate |
+| 2026-11-14 | `2c50802` (PR #15, documentation only) | `CI` run 43535723386 | five jobs green on the PR head |
 
 PR #13 was merged with a normal merge commit after every required context and
 the non-required `Windows StudioCore` job reported success on the final head.

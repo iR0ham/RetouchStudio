@@ -123,6 +123,7 @@ must not claim them.
 | 2026-11-14 | `983fb21` | local macOS codec probe | v3 fixture re-encodes byte-identically and stays v3; v4 stays v4 with `futureFlag`, `requiredFeatures`, keyed crop |
 
 | 2026-11-14 | `d0673d8` | CI run 43534410772, all five jobs | success; Windows App job `WINDOWS HOST TESTS: PASS (69 checks)` including the 14 interchange checks |
+| 2026-11-14 | `2c50802` | CI run 43535723386, all five jobs | success (documentation only; PR #15 head, mergeable) |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
