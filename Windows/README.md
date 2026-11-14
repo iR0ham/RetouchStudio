@@ -72,6 +72,12 @@ before upload, so a release carries one installer version, not two.
   open and save unchanged, the status bar names them, and an export or batch
   export asks before writing a photo that lacks them, so an export is never
   silently missing work the project holds.
+- Screen readers: every slider is named by its visible label and the symbol
+  buttons (fit, −, +, the compare split, the crop handles) have spoken
+  names instead of glyphs.
+- Drag and drop: dropping a photo or a `.retouch` project anywhere on the
+  canvas opens it with the same unsaved-work check as the Open buttons. A drop
+  of several files opens the first; batch export is the path for many at once.
 - Nine global sliders in the same -100…100 range as macOS: exposure, contrast,
   blacks, whites, saturation, vibrance, warmth, clarity, vignette. Undo, redo and
   the dirty flag are the shared `DocumentHistory`, not a host copy.
@@ -87,10 +93,12 @@ before upload, so a release carries one installer version, not two.
   coordinates that macOS reads, and a turn or a mirror moves the stored crop
   with the frame, as macOS does, so a crop chosen before the turn keeps the
   same region of the photo.
-- Compare: a split at 45% of the displayed photo shows the untouched photo on
-  the left and the edit on the right, with BEFORE and AFTER tags; the divider's
-  round handle drags to any point of the frame, and the Compare button in the
-  top bar turns the split off. The untouched side is the photo as the decoder
+- Compare: the Compare button in the top bar turns on a split at 45% of the
+  displayed photo — the untouched photo on the left, the edit on the right,
+  with BEFORE and AFTER tags — and the divider's round handle drags to any
+  point of the frame. The split starts off so an untouched photo is not covered
+  by a divider (the macOS editor ships it on); the split's position is not
+  remembered between sessions. The untouched side is the photo as the decoder
   delivered it — EXIF rotation applied, no crop, no turn, no adjustments — and
   it is rendered once per open at preview size, so neither the split nor the
   peek waits on a render. Holding Space shows that same original over the whole
@@ -147,6 +155,8 @@ before upload, so a release carries one installer version, not two.
   arithmetic is checked headlessly, and the divider is drawn by the window, but
   no automated check drags the handle. The split position is not remembered
   between sessions, and macOS keeps it in settings.
+- No drag-out of the app, no recent-files list and no settings window; the
+  drop-in open is the only drag gesture, and no automated check performs it.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
   16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
   encoder is 8-bit.
