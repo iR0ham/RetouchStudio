@@ -1401,12 +1401,12 @@ internal static class Program
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
 
     /// <summary>
-    /// A diagnostic, not a gate: prints the colour space each container
-    /// declares for an export the shipping writer produced. Every pixel on this
-    /// host is converted to sRGB at decode, so an undeclared file is read back
-    /// as sRGB by convention rather than by contract, and a wide-gamut source
-    /// cannot be represented. The measurement decides what the writer must
-    /// declare; nothing is asserted until the numbers are recorded.
+    /// Every pixel on this host is converted to sRGB at decode, so an export
+    /// that declares nothing is read back as sRGB by convention rather than by
+    /// contract. The shipping writer now embeds a generated sRGB profile in
+    /// JPEG and PNG; each container is read back and the profile bytes must be
+    /// identical in both. TIFF stays untagged until a TIFF writer exists and is
+    /// printed, not asserted, so the gap is visible in the log.
     /// </summary>
     private static void Colour(string root)
     {
@@ -1425,33 +1425,52 @@ internal static class Program
         Console.WriteLine($"  colour source JPEG: {DescribeColourProfile(source)}");
 
         using var session = ProjectSession.Create(source);
-        var writes = new[]
-        {
-            (Name: "colour-export.jpg", Format: "jpeg", Quality: 0.9),
-            (Name: "colour-export.png", Format: "png", Quality: 1.0),
-            (Name: "colour-export.tiff", Format: "tiff", Quality: 1.0),
-        };
-        foreach (var write in writes)
-        {
-            var path = Path.Combine(root, write.Name);
-            ExportRunner.ExportAsync(session, codec, path, write.Format, write.Quality, 0)
-                         .GetAwaiter().GetResult();
-            Console.WriteLine($"  colour exported {write.Format.ToUpperInvariant()}: " +
-                              DescribeColourProfile(path));
-        }
+        var jpeg = Path.Combine(root, "colour-export.jpg");
+        ExportRunner.ExportAsync(session, codec, jpeg, "jpeg", 0.9, 0)
+                     .GetAwaiter().GetResult();
+        var png = Path.Combine(root, "colour-export.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                     .GetAwaiter().GetResult();
+        var tiff = Path.Combine(root, "colour-export.tiff");
+        ExportRunner.ExportAsync(session, codec, tiff, "tiff", 1.0, 0)
+                     .GetAwaiter().GetResult();
+        var stripped = Path.Combine(root, "colour-export-stripped.jpg");
+        ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
+                     .GetAwaiter().GetResult();
+
+        var jpegProfile = ColourProfileBytes(jpeg);
+        Check("an exported JPEG declares an RGB display profile",
+              jpegProfile is { Length: > 1024 }
+              && Encoding.ASCII.GetString(jpegProfile, 16, 4) == "RGB "
+              && Encoding.ASCII.GetString(jpegProfile, 12, 4) == "mntr");
+        Check("the JPEG profile carries the generated description",
+              jpegProfile is not null
+              && IccDescription(jpegProfile) == SrgbProfile.Description);
+        var pngProfile = ColourProfileBytes(png);
+        Check("an exported PNG declares the same profile bytes",
+              pngProfile is not null && jpegProfile is not null
+              && pngProfile.SequenceEqual(jpegProfile));
+        Check("stripping the source identity keeps the colour profile",
+              ColourProfileBytes(stripped) is not null);
+        Console.WriteLine($"  colour TIFF (documented gap): {DescribeColourProfile(tiff)}");
+    }
+
+    private static byte[]? ColourProfileBytes(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        return bytes.Length > 8 && bytes[0] == 0xFF && bytes[1] == 0xD8
+            ? JpegColourProfile(bytes)
+            : bytes.Length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50
+                ? PngColourProfile(bytes)
+                : TiffColourProfile(bytes);
     }
 
     private static string DescribeColourProfile(string path)
     {
-        var bytes = File.ReadAllBytes(path);
         byte[]? profile;
         try
         {
-            profile = bytes.Length > 8 && bytes[0] == 0xFF && bytes[1] == 0xD8
-                ? JpegColourProfile(bytes)
-                : bytes.Length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50
-                    ? PngColourProfile(bytes)
-                    : TiffColourProfile(bytes);
+            profile = ColourProfileBytes(path);
         }
         catch (Exception error)
         {

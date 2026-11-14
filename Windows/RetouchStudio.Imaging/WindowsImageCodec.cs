@@ -300,32 +300,32 @@ public sealed class WindowsImageCodec : IImageCodec
     }
 
     /// <summary>
-    /// Splices the source EXIF block and XMP packet into a finished file. The
-    /// source is described with the exported frame's size, so the carried tags
-    /// name the pixels that were actually written.
+    /// Splices the colour profile and, unless the source is being stripped, the
+    /// source EXIF block and XMP packet into a finished file. The EXIF block is
+    /// described with the exported frame's size, so the carried tags name the
+    /// pixels that were actually written. The profile is not privacy metadata:
+    /// the pixels are sRGB whether or not the source's identity is kept, so the
+    /// file always declares the space it was written in.
     /// </summary>
     private static void CarryBlocks(string path, string format, ImageMetadata? metadata,
                                     bool stripPrivacyMetadata, int width, int height)
     {
-        if (stripPrivacyMetadata || metadata is null)
-        {
-            return;
-        }
         if (format is not ("png" or "jpeg" or "jpg"))
         {
             return;
         }
-        var exif = metadata.ExifTiff is { } tiff
+        var carries = !stripPrivacyMetadata && metadata is not null;
+        var exif = carries && metadata!.ExifTiff is { } tiff
             ? MetadataCarry.NormalizeExif(tiff, width, height)
             : null;
-        var xmp = metadata.Xmp is { } packet ? MetadataCarry.NormalizeXmp(packet) : null;
+        var xmp = carries && metadata!.Xmp is { } packet ? MetadataCarry.NormalizeXmp(packet) : null;
         if (format == "png")
         {
-            MetadataCarry.WritePng(path, exif, xmp);
+            MetadataCarry.WritePng(path, exif, xmp, SrgbProfile.Bytes);
         }
         else
         {
-            MetadataCarry.WriteJpeg(path, exif, xmp);
+            MetadataCarry.WriteJpeg(path, exif, xmp, SrgbProfile.Bytes);
         }
     }
 
