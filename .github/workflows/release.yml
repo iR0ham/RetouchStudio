@@ -141,7 +141,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-x64
-          path: build/windows/dist/**
+          path: |
+            build/windows/dist/*.zip
+            build/windows/dist/*.zip.sha256
+            build/windows/dist/*.msi
+            build/windows/dist/*.msi.sha256
           if-no-files-found: error
 
   release:

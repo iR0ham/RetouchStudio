@@ -220,6 +220,8 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `48b8b75` (PR #31, 16-bit preview) | `CI` run 43593470894 | five jobs green; `Windows App` reports `PASS (131 checks)`; the container depth probe reads PNG IHDR and TIFF BitsPerSample; the 16-bit preview is within one level of the 8-bit preview at rest and 8 levels under a strong adjustment set, gated at 10 |
 | 2026-11-14 | `6307c09` (PR #33, custom crop) | `CI` run 43596432866 | five jobs green; `Windows App` reports `PASS (139 checks)`; the eight crop checks fit, resize, move and clamp a box in photo coordinates; merged as `cf3acf9`; the overlay's drag wiring is not driven by CI |
 | 2026-11-14 | `249f4c1` (PR #32, throughput and 16-bit crop) | `CI` run 43596513201 | five jobs green; `Windows App` reports `PASS (133 checks)`; the Swift installer download is cached and the job budget is 60 minutes after a 45-minute timeout cancelled an install |
+| 2026-11-14 | `cf3acf9` (merge of PR #33) | `CI` run 43597640995, `main` | all five jobs green on the merged tree |
+| 2026-11-14 | `0ab9a4d` (`workflow_dispatch` of `Release`) | `Release` run 43598113385 | four build jobs green, publish skipped by design: both per-arch DMGs and the Windows zip and MSI built and uploaded; artifacts re-verified locally (`shasum -c` OK, `hdiutil verify` valid, ad-hoc signature valid, Gatekeeper rejection expected without notarization); the run exposed the `$CONFIG` multibyte fault in `build.sh` and the leftover upgrade MSI |
 
 
 PR #13 was merged with a normal merge commit after every required context and
