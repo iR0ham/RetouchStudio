@@ -231,6 +231,7 @@ must not claim them.
 | 2026-11-14 | `e4bc466` | CI run 43620925118 (PR #48 head, merged as `4a034cd`) | five jobs green after `main` was merged into the branch; the run that gated the #48 merge |
 | 2026-11-14 | `4a034cd` | CI run 43622071155 (post-merge `main`, PR #48) | all five jobs green on the merged tree; `Windows StudioCore` and `Windows App` now required contexts |
 | 2026-11-14 | `675ae0a` | CI run 43623366599 (PR #49 head, merged as `be9a46d`) | five jobs green; the first merge gated by all five required contexts, Windows included; no post-merge `main` matrix was created, as designed |
+| 2026-11-14 | `78f8cc5` | CI run 43631106819 (`workflow_dispatch` on `develop`) | five jobs green; `WINDOWS HOST TESTS: PASS (253 checks)`; the candidate recovery store proves lift, restore, discard, quarantine and injected write/remove failures, and a no-op export is pixel-identical because the decoder recognises its own sRGB profile |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
