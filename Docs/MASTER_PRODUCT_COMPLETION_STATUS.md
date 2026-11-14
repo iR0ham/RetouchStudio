@@ -1,6 +1,6 @@
 # Master product completion status
 
-**Basis:** `main` at `a7d478e6` (merge of PR #26, 2026-11-14). PR #21 (16-bit
+**Basis:** `main` at `5ce61ca` (merge of PR #27, 2026-11-14). PR #21 (16-bit
 export) is verified by CI run
 [43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311)
 and merged as `18d4e46`; PR #22 (Windows MSI) is verified by run
@@ -14,7 +14,9 @@ verified by run
 [43573329343](https://github.com/iR0ham/RetouchStudio/actions/runs/43573329343),
 merged as `a7d478e6`, and post-merge `main` is green in run 43575818731. PR #27
 (clarity parity) is verified by run
-[43576450870](https://github.com/iR0ham/RetouchStudio/actions/runs/43576450870).
+[43576450870](https://github.com/iR0ham/RetouchStudio/actions/runs/43576450870)
+and its documentation head by run 43577351736, merged as `5ce61ca`, with
+post-merge `main` green in run 43578692160.
 The original audit ran on `1d32842` (CI run 43531081160, also green).
 **Updated:** 2026-11-14.
 
@@ -169,6 +171,8 @@ must not claim them.
 | 2026-11-14 | `04defe0` | CI run 43573329343, Windows App job | `WINDOWS HOST TESTS: PASS (118 checks)`; `G11_VIGNETTE: mae 0.473` (was 5.2), rmse 0.688, luma delta −0.4, now gated at one level; a negative vignette leaves every pixel unchanged; the committed oracle reproduces `G11_VIGNETTE.png` byte-for-byte (SHA-256 `af9bebfd…`) |
 | 2026-11-14 | `a7d478e6` | CI run 43575818731 (post-merge `main`) | all five jobs green |
 | 2026-11-14 | `528c597` | CI run 43576450870, Windows App job | `WINDOWS HOST TESTS: PASS (122 checks)`; `G09_CLARITY_UP: mae 0.06` (was 5.8), rmse 0.246, psnr 60.33 dB, changed 6.5%, luma delta −0.04, now gated at one level; a flat field is untouched by positive clarity, a step edge gains contrast at +100 and loses it at −100; `G11_VIGNETTE` still 0.473; both depths drift 3 levels with clarity on (8-bit pass quantises the pre-clarity picture) |
+| 2026-11-14 | `cb9937d` | CI run 43577351736 (PR #27 documentation head) | five jobs green on the exact merge head; merged with a merge commit as `5ce61ca` |
+| 2026-11-14 | `5ce61ca` | CI run 43578692160 (post-merge `main`) | all five jobs green |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral

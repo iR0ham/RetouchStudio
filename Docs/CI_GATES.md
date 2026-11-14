@@ -211,6 +211,8 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `04defe0` (PR #26, Windows vignette parity) | `CI` run 43573329343 | five jobs green; `Windows App` reports `PASS (118 checks)`; `G11_VIGNETTE: mae 0.473` (was 5.2) now gated at one level; a negative vignette is a no-op, as on macOS |
 | 2026-11-14 | `a7d478e6` (merge of PR #26) | `CI` run 43575818731, `main` | all five jobs green |
 | 2026-11-14 | `528c597` (PR #27, Windows clarity parity) | `CI` run 43576450870 | five jobs green; `Windows App` reports `PASS (122 checks)`; `G09_CLARITY_UP: mae 0.06` (was 5.8) now gated at one level; positive clarity leaves a flat field untouched and a step edge gains contrast, negative clarity softens it; `G11_VIGNETTE` unchanged at 0.473 |
+| 2026-11-14 | `cb9937d` (PR #27, documentation head) | `CI` run 43577351736 | five jobs green on the exact head; merged as `5ce61ca` |
+| 2026-11-14 | `5ce61ca` (merge of PR #27) | `CI` run 43578692160, `main` | all five jobs green |
 
 
 PR #13 was merged with a normal merge commit after every required context and
