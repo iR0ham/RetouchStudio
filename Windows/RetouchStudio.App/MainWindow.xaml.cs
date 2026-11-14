@@ -4,9 +4,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using Line = System.Windows.Shapes.Line;
 using Microsoft.Win32;
 using RetouchStudio.Core.Project;
+using RetouchStudio.Core.View;
 
 namespace RetouchStudio.App;
 
@@ -25,17 +27,43 @@ public partial class MainWindow : Window
     private CropValue _pendingCrop = new(0, 0, 1, 1);
     private bool _cropMode;
 
+    // Canvas zoom and pan. The arithmetic lives in CanvasView so the headless
+    // checks can pin it; this window only feeds it sizes and pointer points.
+    private readonly CanvasView _view = new();
+    private Point? _panPoint;
+
+    // Before/after split: the untouched photo on the left of the divider, the
+    // edit on the right, as the macOS canvas draws it.
+    private bool _compareEnabled = true;
+    private double _comparePosition = CompareSplit.DefaultFraction;
+
     public MainWindow()
     {
         InitializeComponent();
         DataContext = _vm;
         _vm.PropertyChanged += (_, args) =>
         {
-            if (_cropMode && args.PropertyName == nameof(EditorViewModel.Preview))
+            if (args.PropertyName == nameof(EditorViewModel.HasDocument))
             {
-                UpdateCropOverlay();
+                // A new photo starts fitted: a zoom chosen for the previous one
+                // would frame a region the new photo may not even have.
+                _panPoint = null;
+                _view.Reset();
+                ApplyView();
+            }
+            if (args.PropertyName is nameof(EditorViewModel.Preview)
+                                     or nameof(EditorViewModel.OriginalPreview)
+                                     or nameof(EditorViewModel.IsPeekingOriginal))
+            {
+                if (_cropMode && args.PropertyName == nameof(EditorViewModel.Preview))
+                {
+                    UpdateCropOverlay();
+                }
+                UpdateCompareOverlay();
             }
         };
+        PreviewHost.SizeChanged += PreviewHost_SizeChanged;
+        ApplyView();
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -93,6 +121,18 @@ public partial class MainWindow : Window
                 _vm.Undo();
                 e.Handled = true;
                 break;
+            case Key.OemPlus or Key.Add when ctrl:
+                StepZoom(inward: true);
+                e.Handled = true;
+                break;
+            case Key.OemMinus or Key.Subtract when ctrl:
+                StepZoom(inward: false);
+                e.Handled = true;
+                break;
+            case Key.D0 or Key.NumPad0 when ctrl:
+                ResetZoomView();
+                e.Handled = true;
+                break;
             case Key.Escape when _cropMode:
                 EndCrop();
                 e.Handled = true;
@@ -123,6 +163,250 @@ public partial class MainWindow : Window
     /// <summary>A peek held while the window loses focus must not stick.</summary>
     private void Window_Deactivated(object sender, EventArgs e) =>
         _vm.IsPeekingOriginal = false;
+
+    /// <summary>
+    /// The unzoomed fitted photo, in PreviewHost coordinates. It is computed
+    /// from layout and the bitmap's own aspect, not from the rendered visual,
+    /// so the zoom transform applied to the image cannot feed back into the
+    /// maths that positions it.
+    /// </summary>
+    private bool TryFittedRect(out DisplayRect fit)
+    {
+        fit = default;
+        var bitmap = _vm.Preview;
+        if (bitmap is null)
+        {
+            return false;
+        }
+        var margin = PhotoPlane.Margin;
+        var width = PhotoPlane.ActualWidth;
+        var height = PhotoPlane.ActualHeight;
+        if (width <= 0 || height <= 0)
+        {
+            return false;
+        }
+        var content = CropGeometry.Fit(bitmap.PixelWidth, bitmap.PixelHeight, width, height);
+        fit = content with { X = margin.Left + content.X, Y = margin.Top + content.Y };
+        return fit.Width > 0 && fit.Height > 0;
+    }
+
+    /// <summary>Pushes the CanvasView state onto the image and the dock.</summary>
+    private void ApplyView()
+    {
+        PreviewScale.ScaleX = _view.Zoom;
+        PreviewScale.ScaleY = _view.Zoom;
+        PreviewPan.X = _view.PanX;
+        PreviewPan.Y = _view.PanY;
+        ZoomText.Text = _view.ZoomText;
+        ZoomFitButton.IsEnabled = _view.IsZoomed;
+        ZoomOutButton.IsEnabled = _view.IsZoomed;
+        ZoomInButton.IsEnabled = _view.Zoom < CanvasView.MaxZoom - 0.001;
+        PreviewHost.Cursor = !_view.IsZoomed ? Cursors.Arrow
+                           : _panPoint is not null ? Cursors.SizeAll
+                           : Cursors.Hand;
+        UpdateCompareOverlay();
+    }
+
+    private void ResetZoomView()
+    {
+        _panPoint = null;
+        _view.Reset();
+        ApplyView();
+    }
+
+    private void StepZoom(bool inward)
+    {
+        if (!_vm.HasDocument || _cropMode || !TryFittedRect(out var fit))
+        {
+            return;
+        }
+        if (inward)
+        {
+            _view.ZoomIn(fit.Width, fit.Height, PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+        }
+        else
+        {
+            _view.ZoomOut(fit.Width, fit.Height, PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+        }
+        ApplyView();
+    }
+
+    /// <summary>
+    /// Ctrl+wheel zooms about the pointer, as macOS does with ⌘-scroll; a plain
+    /// wheel pans a zoomed photo, as macOS scroll does. A fitted photo has
+    /// nothing to pan, so the plain wheel is left alone.
+    /// </summary>
+    private void PreviewHost_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!_vm.HasDocument || _cropMode || !TryFittedRect(out var fit))
+        {
+            return;
+        }
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            var point = e.GetPosition(PreviewHost);
+            _view.SetZoom(_view.Zoom * Math.Exp(e.Delta * 0.0015), point.X, point.Y,
+                          fit.Width, fit.Height, PreviewHost.ActualWidth,
+                          PreviewHost.ActualHeight);
+            ApplyView();
+            e.Handled = true;
+        }
+        else if (_view.IsZoomed)
+        {
+            // One notch is 120 units; dividing keeps a click to a comfortable
+            // strip instead of half the photo.
+            _view.PanBy(0, e.Delta / 2.0, fit.Width, fit.Height,
+                        PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+            ApplyView();
+            e.Handled = true;
+        }
+    }
+
+    private void PreviewHost_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_vm.HasDocument || _cropMode)
+        {
+            return;
+        }
+        if (e.ClickCount == 2)
+        {
+            if (!TryFittedRect(out var fitted))
+            {
+                return;
+            }
+            _panPoint = null;
+            if (PreviewHost.IsMouseCaptured)
+            {
+                PreviewHost.ReleaseMouseCapture();
+            }
+            _view.Toggle(fitted.Width, fitted.Height, PreviewHost.ActualWidth,
+                         PreviewHost.ActualHeight);
+            ApplyView();
+            e.Handled = true;
+            return;
+        }
+        if (!_view.IsZoomed)
+        {
+            return;
+        }
+        _panPoint = e.GetPosition(PreviewHost);
+        PreviewHost.CaptureMouse();
+        ApplyView();
+        e.Handled = true;
+    }
+
+    private void PreviewHost_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_panPoint is not { } last || e.LeftButton != MouseButtonState.Pressed
+            || !TryFittedRect(out var fit))
+        {
+            return;
+        }
+        var now = e.GetPosition(PreviewHost);
+        _view.PanBy(now.X - last.X, now.Y - last.Y, fit.Width, fit.Height,
+                    PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+        _panPoint = now;
+        ApplyView();
+    }
+
+    private void PreviewHost_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_panPoint is null)
+        {
+            return;
+        }
+        _panPoint = null;
+        PreviewHost.ReleaseMouseCapture();
+        ApplyView();
+    }
+
+    private void PreviewHost_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_panPoint is null)
+        {
+            return;
+        }
+        _panPoint = null;
+        ApplyView();
+    }
+
+    private void ZoomFit_Click(object sender, RoutedEventArgs e) => ResetZoomView();
+
+    private void ZoomIn_Click(object sender, RoutedEventArgs e) => StepZoom(inward: true);
+
+    private void ZoomOut_Click(object sender, RoutedEventArgs e) => StepZoom(inward: false);
+
+    /// <summary>
+    /// Draws the before/after split: the untouched photo covers the left share
+    /// of the displayed frame, clipped in the plane's own coordinates so that
+    /// zoom and pan move both halves together. When there is nothing to
+    /// compare — no original yet, the Space peek, the crop overlay — the split
+    /// is hidden rather than left showing a divider over one picture.
+    /// </summary>
+    private void UpdateCompareOverlay()
+    {
+        if (!_compareEnabled || _cropMode || !_vm.HasDocument
+            || _vm.OriginalPreview is null || _vm.IsPeekingOriginal
+            || !TryFittedRect(out var fit))
+        {
+            CompareOverlay.Visibility = Visibility.Collapsed;
+            PreviewOriginal.Visibility = Visibility.Collapsed;
+            PreviewOriginal.Clip = null;
+            return;
+        }
+
+        var planeWidth = PhotoPlane.ActualWidth;
+        var planeHeight = PhotoPlane.ActualHeight;
+        var shownWidth = fit.Width * _view.Zoom;
+        var shownHeight = fit.Height * _view.Zoom;
+        var left = fit.X + fit.Width / 2 - shownWidth / 2 + _view.PanX;
+        var top = fit.Y + fit.Height / 2 - shownHeight / 2 + _view.PanY;
+        var splitX = left + shownWidth * _comparePosition;
+
+        // The plane's local x maps to the host as
+        // margin + planeW/2 + (x - planeW/2) * zoom + pan, so inverting that
+        // puts the clip on the same screen column as the divider.
+        var localSplit = planeWidth / 2
+                         + (splitX - PhotoPlane.Margin.Left - planeWidth / 2 - _view.PanX)
+                         / _view.Zoom;
+        PreviewOriginal.Visibility = Visibility.Visible;
+        PreviewOriginal.Clip = new RectangleGeometry(
+            new Rect(0, 0, Math.Max(0, localSplit), planeHeight));
+
+        CompareOverlay.Visibility = Visibility.Visible;
+        SetLine(CompareLine, splitX, top, splitX, top + shownHeight);
+        Canvas.SetLeft(CompareThumb, splitX - CompareThumb.Width / 2);
+        Canvas.SetTop(CompareThumb, top + shownHeight / 2 - CompareThumb.Height / 2);
+
+        PlaceBadge(CompareBeforeBadge, left + 8, top + 8);
+        CompareAfterBadge.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        PlaceBadge(CompareAfterBadge,
+                   left + shownWidth - CompareAfterBadge.DesiredSize.Width - 8, top + 8);
+    }
+
+    private static void PlaceBadge(FrameworkElement badge, double x, double y)
+    {
+        badge.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(badge, Math.Max(0, x));
+        Canvas.SetTop(badge, Math.Max(0, y));
+    }
+
+    private void CompareThumb_Drag(object sender, DragDeltaEventArgs e)
+    {
+        if (!TryFittedRect(out var fit))
+        {
+            return;
+        }
+        _comparePosition = CompareSplit.Move(_comparePosition, e.HorizontalChange,
+                                             fit.Width * _view.Zoom);
+        UpdateCompareOverlay();
+    }
+
+    private void CompareToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _compareEnabled = CompareToggle.IsChecked == true;
+        UpdateCompareOverlay();
+    }
 
     private async void OpenPhoto_Click(object sender, RoutedEventArgs e)
     {
@@ -324,12 +608,16 @@ public partial class MainWindow : Window
             return;
         }
         _cropMode = true;
+        // The overlay works in fitted coordinates, so a zoomed canvas returns
+        // to fit before it opens; the crop is chosen on the whole photo.
+        ResetZoomView();
+        ZoomDock.Visibility = Visibility.Collapsed;
         _pendingCrop = _vm.CurrentCrop ?? new CropValue(0, 0, 1, 1);
         _vm.IsCropping = true;
         CropOverlay.Visibility = Visibility.Visible;
         CropBar.Visibility = Visibility.Visible;
-        PreviewHost.SizeChanged += PreviewHost_SizeChanged;
         UpdateCropOverlay();
+        UpdateCompareOverlay();
     }
 
     private void CropApply_Click(object sender, RoutedEventArgs e)
@@ -348,10 +636,11 @@ public partial class MainWindow : Window
             return;
         }
         _cropMode = false;
-        PreviewHost.SizeChanged -= PreviewHost_SizeChanged;
+        ZoomDock.ClearValue(VisibilityProperty);
         CropOverlay.Visibility = Visibility.Collapsed;
         CropBar.Visibility = Visibility.Collapsed;
         _vm.IsCropping = false;
+        UpdateCompareOverlay();
     }
 
     private void PreviewHost_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -360,6 +649,7 @@ public partial class MainWindow : Window
         {
             UpdateCropOverlay();
         }
+        UpdateCompareOverlay();
     }
 
     private void CropHandle_Drag(object sender, DragDeltaEventArgs e)
@@ -396,19 +686,9 @@ public partial class MainWindow : Window
         UpdateCropOverlay();
     }
 
-    /// <summary>Where the shown bitmap sits inside the overlay's canvas.</summary>
-    private DisplayRect CurrentImageRect()
-    {
-        var bitmap = _vm.Preview;
-        if (bitmap is null)
-        {
-            return default;
-        }
-        var origin = PreviewImage.TranslatePoint(new Point(0, 0), PreviewHost);
-        var fit = CropGeometry.Fit(bitmap.PixelWidth, bitmap.PixelHeight,
-                                   PreviewImage.ActualWidth, PreviewImage.ActualHeight);
-        return fit with { X = fit.X + origin.X, Y = fit.Y + origin.Y };
-    }
+    /// <summary>Where the fitted photo sits inside the overlay's canvas.</summary>
+    private DisplayRect CurrentImageRect() =>
+        TryFittedRect(out var fit) ? fit : default;
 
     private void UpdateCropOverlay()
     {

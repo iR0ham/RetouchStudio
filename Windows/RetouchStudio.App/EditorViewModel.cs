@@ -173,6 +173,12 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// The untouched photo at preview size, for the hold-Space peek and the
+    /// before/after split. Null until the first render of an opened photo.
+    /// </summary>
+    public BitmapSource? OriginalPreview => _originalPreview;
+
     /// <summary>Whether a compare peek is available right now.</summary>
     public bool CanPeekOriginal =>
         _session is not null && _originalPreview is not null && !_isCropping;
@@ -716,6 +722,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _sourceHeight = 0;
         Set(ref _preview, null, nameof(Preview));
         _originalPreview = null;
+        Raise(nameof(OriginalPreview));
         _isPeekingOriginal = false;
         SetHistogram(HistogramBins.Empty);
         DimensionText = "";
@@ -856,6 +863,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         if (session is null || (source is null && source16 is null))
         {
             _originalPreview = null;
+            Raise(nameof(OriginalPreview));
             return;
         }
         var plain = new DocumentModel(new JsonObject());
@@ -873,6 +881,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
         _originalPreview = bitmap;
         Raise(nameof(CanPeekOriginal));
+        Raise(nameof(OriginalPreview));
     }
 
     /// <summary>
