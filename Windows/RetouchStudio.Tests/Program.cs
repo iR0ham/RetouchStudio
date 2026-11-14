@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using RetouchStudio.Core.Imaging;
 using RetouchStudio.Core.Interop;
@@ -33,6 +34,7 @@ internal static class Program
             Codec(root);
             Export(root);
             Metadata(root);
+            Interchange(root);
         }
         catch (Exception error)
         {
@@ -419,6 +421,119 @@ internal static class Program
 
     private static string Text(ImageMetadata metadata, string key) =>
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
+
+    /// <summary>
+    /// The interchange gate: a project written on macOS opens, edits and saves
+    /// on Windows without losing a supported record. The fixtures are the same
+    /// files the macOS suite pins, so both hosts are measured against one file.
+    /// The comparison is over parsed JSON, not bytes: whitespace and key order
+    /// are not part of the portable contract.
+    /// </summary>
+    private static void Interchange(string root)
+    {
+        var repo = RepoRoot();
+        var v4Fixture = JsonNode.Parse(Encoding.UTF8.GetString(
+            File.ReadAllBytes(Path.Combine(repo,
+                "Tests/Fixtures/ProjectV4/project-v4-full.retouch"))))!;
+        var v3Fixture = JsonNode.Parse(Encoding.UTF8.GetString(
+            File.ReadAllBytes(Path.Combine(repo,
+                "Tests/Fixtures/ProjectV3/project-v3-full.retouch"))))!;
+
+        var v4Path = Path.Combine(repo, "Tests/Fixtures/ProjectV4/project-v4-full.retouch");
+        using (var session = ProjectSession.Open(v4Path))
+        {
+            var model = session.Document;
+            Check("a macOS v4 project opens on Windows", model.Version == 4);
+            Check("the photo path comes from the project",
+                  model.ImagePath == "/Users/owner/Photos/portrait-session-07.jpg");
+
+            var crop = model.Crop ?? default;
+            Check("the crop arrives as named geometry",
+                  crop.X == 0.08 && crop.Y == 0.12
+                  && crop.Width == 0.76 && crop.Height == 0.74);
+
+            var orientation = model.Orientation;
+            Check("the orientation arrives",
+                  orientation.QuarterTurns == 1 && orientation.Flipped
+                  && orientation.Angle == 3.5);
+            Check("the adjustments arrive",
+                  model.Adjustment("smooth") == 35 && model.Adjustment("contrast") == 12
+                  && model.Adjustment("exposure") == 5);
+
+            var savedPath = Path.Combine(root, "from-macos-v4.retouch");
+            session.Save(savedPath);
+            var saved = JsonNode.Parse(File.ReadAllText(savedPath))!;
+            Check("a saved v4 project keeps every record",
+                  JsonNode.DeepEquals(saved, v4Fixture));
+            Check("an unknown top-level key survives the Windows save",
+                  saved["futureFlag"]?.GetValue<string>() == "kept");
+            Check("the required feature survives the Windows save",
+                  saved["requiredFeatures"] is JsonArray features && features.Count == 1);
+
+            model.SetAdjustment("exposure", 13);
+            session.Save(savedPath);
+            using var reopened = ProjectSession.Open(savedPath);
+            Check("an edit on Windows reopens with the project",
+                  reopened.Document.Adjustment("exposure") == 13);
+            // The ABI returns the typed record; an unknown top-level key travels
+            // in the write context, so it is proved by the next save, not by the
+            // reopened document.
+            var resavedPath = Path.Combine(root, "from-macos-v4-resaved.retouch");
+            reopened.Save(resavedPath);
+            var resaved = JsonNode.Parse(File.ReadAllText(resavedPath))!;
+            Check("a reopened project keeps the unknown key on the next save",
+                  resaved["futureFlag"]?.GetValue<string>() == "kept");
+        }
+
+        var v3Path = Path.Combine(repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch");
+        using (var session = ProjectSession.Open(v3Path))
+        {
+            Check("a macOS v3 project opens as the current record",
+                  session.Document.Version == 4);
+
+            var savedPath = Path.Combine(root, "from-macos-v3.retouch");
+            session.Save(savedPath);
+            var saved = JsonNode.Parse(File.ReadAllText(savedPath))!;
+            Check("a v3 project saves as v3", saved["version"]!.GetValue<int>() == 3);
+            Check("a v3 save keeps the unkeyed geometry", saved["crop"] is JsonArray);
+            Check("a v3 save keeps every record", JsonNode.DeepEquals(saved, v3Fixture));
+        }
+    }
+
+    /// <summary>
+    /// The checkout that holds the shared fixtures. `build-windows.ps1` runs the
+    /// tests from the repository root; the upward search keeps a direct
+    /// `dotnet run` from the test project working too.
+    /// </summary>
+    private static string RepoRoot()
+    {
+        var starts = new[]
+        {
+            Environment.GetEnvironmentVariable("RETOUCH_REPO_ROOT"),
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory,
+        };
+        foreach (var start in starts)
+        {
+            if (string.IsNullOrEmpty(start))
+            {
+                continue;
+            }
+            for (var directory = new DirectoryInfo(start);
+                 directory is not null;
+                 directory = directory.Parent)
+            {
+                var marker = Path.Combine(directory.FullName,
+                                          "Tests/Fixtures/ProjectV4/project-v4-full.retouch");
+                if (File.Exists(marker))
+                {
+                    return directory.FullName;
+                }
+            }
+        }
+        throw new InvalidOperationException(
+            "the shared project fixtures were not found; set RETOUCH_REPO_ROOT");
+    }
 
     private static void Put(PixelBuffer buffer, int x, int y,
                             byte r = 0, byte g = 0, byte b = 0, byte a = 255)
