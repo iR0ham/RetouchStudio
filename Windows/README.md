@@ -160,6 +160,19 @@ on the save *after* a reopen, because the C ABI hands the host the typed record
 and keeps unknown top-level keys in the write context; checking the record
 itself would have asserted the wrong thing, which is what the first run caught.
 
-What this does not prove: pixel parity with the macOS renderer, HEIC, 16-bit
-output, metadata, packaging, an installer, or anything on a real desktop session.
-The run is also recorded in [`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).
+The 16-bit export path landed with `20d3a8c` and reports `PASS (108 checks)` on
+CI run [43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311).
+Those checks read the depth from each written file's own header (PNG IHDR and
+TIFF `BitsPerSample` both say 16), require an 8-bit source to promote exactly,
+require a no-op 16-bit export to keep every sample and still read back at 8 bits
+byte-for-byte, require the 16-bit P3 fixture to export sample-exact, round-trip a
+synthetic buffer that is off the 8-bit grid through PNG and TIFF, and find
+766 310 of 786 432 colour samples off the 8-bit grid in an adjusted export. The
+same run measured the two pipelines against each other on one input: one level
+of drift on tone and colour, two on clarity, because the 8-bit blur truncates
+on every pass while the 16-bit blur does not.
+
+What this does not prove: pixel parity with the macOS renderer, HEIC, XMP or
+IPTC metadata, packaging, an installer, a 16-bit preview or editing path, or
+anything on a real desktop session. The run is also recorded in
+[`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).
