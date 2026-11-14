@@ -48,7 +48,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Export JPEG/PNG | contract | 8-bit | 8-bit | host checks, corpus | VERIFIED per host |
 | Export TIFF | contract | 16-bit | 8-bit via WIC | plan check only | macOS VERIFIED; Windows IMPLEMENTED, not pixel-tested |
 | Export HEIC | contract | 8-bit, alpha flattened | explicit refusal | corpus `F01_export_256.heic` | macOS VERIFIED; Windows ABSENT by design |
-| Metadata keep/strip | — | EXIF/TIFF/IPTC/GPS + XMP | none written | corpus `F01_metadata_kept/stripped` | macOS VERIFIED; Windows ABSENT |
+| Metadata keep/strip | — | EXIF/TIFF/IPTC/GPS + XMP | camera model + ISO when kept; resolution always; no XMP/IPTC | Windows host tests, run 43545230075 | macOS VERIFIED; Windows TESTED (measured allowlist) |
 | ICC handling | — | source profile carried to render/write | always sRGB | corpus F11 P3 | macOS VERIFIED; Windows simplified to sRGB |
 | Batch export | planner | yes | ABSENT | planner suite | VERIFIED macOS |
 | AI runtime install | `AIRuntime` | disabled (`package == nil`) | ABSENT | runtime v2 suites | BLOCKED — no approved package |
@@ -66,7 +66,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 0 | Baseline and gap analysis | VERIFIED | This document; `main` `1d32842`; run 43531081160 |
 | 1 | Shared core and portable project architecture | VERIFIED | StudioCore boundary suite, conformance gate, R2–R4.8 docs |
 | 2 | W3 face analysis and masking | macOS VERIFIED; Windows NOT STARTED | Vision landmarks and masks exist and are tested on macOS; the Windows host has no face path |
-| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows is 8-bit sRGB with no metadata; cross-host pixel comparison NOT VERIFIED |
+| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows is 8-bit sRGB, metadata keep/strip tested with a measured two-key allowlist; cross-host pixel comparison NOT VERIFIED |
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
@@ -123,6 +123,9 @@ must not claim them.
 | 2026-11-14 | `983fb21` | local macOS codec probe | v3 fixture re-encodes byte-identically and stays v3; v4 stays v4 with `futureFlag`, `requiredFeatures`, keyed crop |
 | 2026-11-14 | `d0673d8` | CI run 43534410772, all five jobs | success; Windows App job `WINDOWS HOST TESTS: PASS (69 checks)` including the 14 interchange checks |
 | 2026-11-14 | `2c50802` | CI run 43535723386, all five jobs | success (documentation only; PR #15 head, mergeable) |
+| 2026-11-14 | `a43bdeb` | PR #15 checks, all five jobs | success; merged with a merge commit as `223063c` |
+| 2026-11-14 | `e36fd94` | PR #16 checks, all five jobs | success; merged with a merge commit as `de96fd6` |
+| 2026-11-14 | `c32d344` | CI run 43545230075, Windows App job | `WINDOWS HOST TESTS: PASS (79 checks)`; probe: only camera model and ISO survive, GPS/date/make/exposure/aperture/flash/white-balance/comment dropped, `DateTaken` throws |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -139,18 +142,21 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 | Model weights not in the repository | AI feature verification | owner-approved download |
 | Worker source lives outside this repository | helper builds from a fresh clone | keep the external checkout or publish the source |
 | No physical Windows machine | interactive Windows verification | CI-only evidence remains the standard |
-| Node-less hook mode blocks the Bash tool | local shell work | run shell through the node REPL, as done here |
+| WIC exposes no XMP/IPTC write path | metadata parity | a separate XMP packet writer, if the owner wants it |
+| WinRT metadata writer drops most EXIF keys | metadata parity | an EXIF rewrite outside WIC, if the owner wants it |
 
 ## 7. Next actions
 
-1. PR #15 is green on `d0673d8` (run 43534410772) and mergeable. Merging needs
-   the owner's explicit authorization; it is not merged here.
+1. W4 metadata is in review as PR #17: keep-only-resolution by default, an
+   opt-in per-export "Keep camera metadata", and a metadata allowlist limited
+   to the keys the Windows probe proves survive a round trip.
 2. W3 on Windows: implement face detection behind a platform interface, feed
    the same normalized records into the v4 document, and prove save/reopen.
    This needs a parity-level decision (Vision-equivalent detector vs. a
    bundled model), which is a product decision, not a code detail.
 3. W4 parity: define tolerances, then measure macOS vs. Windows on the
-   existing corpus before claiming any parity.
+   existing corpus before claiming any parity. 16-bit, ICC and HEIC remain
+   Windows gaps until implemented and tested.
 4. W5: only after an approved runtime package exists.
 5. W6: installer, then updater, each with a clean-install proof on CI.
 6. Notarization stays BLOCKED until credentials exist; never simulate it.

@@ -52,7 +52,7 @@ public static class RenderRequests
     /// asking the planner for work the renderer cannot do.
     /// </summary>
     public static byte[] Build(DocumentModel document, string format, double quality,
-                               int longEdge)
+                               int longEdge, bool stripsPrivacyMetadata = true)
     {
         var request = new JsonObject
         {
@@ -67,7 +67,7 @@ public static class RenderRequests
             ["format"] = format,
             ["quality"] = Math.Round(quality, 2),
             ["longEdge"] = longEdge > 0 ? longEdge : null,
-            ["stripsPrivacyMetadata"] = true,
+            ["stripsPrivacyMetadata"] = stripsPrivacyMetadata,
             ["includeStamps"] = false,
             ["includeAnalysis"] = false,
             ["aiUpscale"] = false,
@@ -101,10 +101,11 @@ public static class RenderRequests
 
     public static ExportPlan Plan(DocumentModel document, int sourceWidth, int sourceHeight,
                                   string format, double quality, int longEdge,
-                                  string colorProfileName = "sRGB")
+                                  string colorProfileName = "sRGB",
+                                  bool stripsPrivacyMetadata = true)
     {
         var plan = StudioCoreApi.RenderPlan(
-            Build(document, format, quality, longEdge),
+            Build(document, format, quality, longEdge, stripsPrivacyMetadata),
             BuildSource(sourceWidth, sourceHeight, colorProfileName));
         return ExportPlan.Parse(plan);
     }
