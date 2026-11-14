@@ -59,13 +59,14 @@ public sealed class PixelBuffer16
         return output;
     }
 
+    /// <summary>
+    /// Applies the document orientation in the shared order: quarter turns,
+    /// then the straighten angle in the turned frame, then the mirror, matching
+    /// macOS <c>Models/Orientation.swift</c>.
+    /// </summary>
     public PixelBuffer16 ApplyOrientation(OrientationValue orientation)
     {
         var current = this;
-        if (orientation.Flipped)
-        {
-            current = current.FlipHorizontally();
-        }
         for (var turn = 0; turn < ((orientation.QuarterTurns % 4) + 4) % 4; turn++)
         {
             current = current.RotateQuarterClockwise();
@@ -73,6 +74,10 @@ public sealed class PixelBuffer16
         if (orientation.Angle != 0)
         {
             current = current.RotateDegrees(orientation.Angle);
+        }
+        if (orientation.Flipped)
+        {
+            current = current.FlipHorizontally();
         }
         return current;
     }
@@ -109,7 +114,11 @@ public sealed class PixelBuffer16
         return output;
     }
 
-    /// <summary>Bilinear rotation with clamped edges; positive is clockwise.</summary>
+    /// <summary>
+    /// Bilinear rotation with clamped edges; positive is clockwise. The cover
+    /// scale keeps the turned photo covering the frame, as in
+    /// <see cref="PixelBuffer.RotateDegrees"/>.
+    /// </summary>
     public PixelBuffer16 RotateDegrees(double degrees)
     {
         if (degrees == 0)
@@ -119,6 +128,9 @@ public sealed class PixelBuffer16
         var radians = degrees * Math.PI / 180.0;
         var cos = Math.Cos(radians);
         var sin = Math.Sin(radians);
+        var cover = Math.Max(1, Math.Max(
+            (Width * Math.Abs(cos) + Height * Math.Abs(sin)) / Width,
+            (Width * Math.Abs(sin) + Height * Math.Abs(cos)) / Height)) * 1.001;
         var centreX = (Width - 1) / 2.0;
         var centreY = (Height - 1) / 2.0;
         var output = new PixelBuffer16(Width, Height);
@@ -129,8 +141,8 @@ public sealed class PixelBuffer16
             for (var x = 0; x < Width; x++)
             {
                 var dx = x - centreX;
-                var sourceX = centreX + dx * cos + dy * sin;
-                var sourceY = centreY - dx * sin + dy * cos;
+                var sourceX = centreX + (dx * cos + dy * sin) / cover;
+                var sourceY = centreY + (-dx * sin + dy * cos) / cover;
                 Sample(sourceX, sourceY, output.Pixels, (y * Width + x) * 8);
             }
         }

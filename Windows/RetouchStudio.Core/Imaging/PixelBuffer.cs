@@ -65,19 +65,15 @@ public sealed class PixelBuffer
     }
 
     /// <summary>
-    /// Applies the document orientation: mirror, quarter turns, then the
-    /// straighten angle. The angle rotates the image clockwise about its centre
-    /// and keeps the canvas size, sampling with clamped edges. Aligning the
-    /// result with the macOS renderer is not claimed; the host's convention is
-    /// documented in <c>Windows/README.md</c>.
+    /// Applies the document orientation in the shared order: quarter turns,
+    /// then the straighten angle in the turned frame, then the mirror. macOS
+    /// composes the same three transforms in that order
+    /// (<c>Models/Orientation.swift</c>), so the same document shows the same
+    /// frame on both hosts.
     /// </summary>
     public PixelBuffer ApplyOrientation(OrientationValue orientation)
     {
         var current = this;
-        if (orientation.Flipped)
-        {
-            current = current.FlipHorizontally();
-        }
         for (var turn = 0; turn < ((orientation.QuarterTurns % 4) + 4) % 4; turn++)
         {
             current = current.RotateQuarterClockwise();
@@ -85,6 +81,10 @@ public sealed class PixelBuffer
         if (orientation.Angle != 0)
         {
             current = current.RotateDegrees(orientation.Angle);
+        }
+        if (orientation.Flipped)
+        {
+            current = current.FlipHorizontally();
         }
         return current;
     }
@@ -121,7 +121,12 @@ public sealed class PixelBuffer
         return output;
     }
 
-    /// <summary>Bilinear rotation with clamped edges; positive is clockwise.</summary>
+    /// <summary>
+    /// Bilinear rotation with clamped edges; positive is clockwise. The photo is
+    /// enlarged just enough that its turned corners still cover the frame, so a
+    /// straighten never stretches edge pixels into the corners — the same cover
+    /// scale macOS computes in <c>DocumentOrientation.coverScale</c>.
+    /// </summary>
     public PixelBuffer RotateDegrees(double degrees)
     {
         if (degrees == 0)
@@ -131,6 +136,9 @@ public sealed class PixelBuffer
         var radians = degrees * Math.PI / 180.0;
         var cos = Math.Cos(radians);
         var sin = Math.Sin(radians);
+        var cover = Math.Max(1, Math.Max(
+            (Width * Math.Abs(cos) + Height * Math.Abs(sin)) / Width,
+            (Width * Math.Abs(sin) + Height * Math.Abs(cos)) / Height)) * 1.001;
         var centreX = (Width - 1) / 2.0;
         var centreY = (Height - 1) / 2.0;
         var output = new PixelBuffer(Width, Height);
@@ -141,8 +149,8 @@ public sealed class PixelBuffer
             for (var x = 0; x < Width; x++)
             {
                 var dx = x - centreX;
-                var sourceX = centreX + dx * cos + dy * sin;
-                var sourceY = centreY - dx * sin + dy * cos;
+                var sourceX = centreX + (dx * cos + dy * sin) / cover;
+                var sourceY = centreY + (-dx * sin + dy * cos) / cover;
                 Sample(sourceX, sourceY, output.Pixels, (y * Width + x) * 4);
             }
         }

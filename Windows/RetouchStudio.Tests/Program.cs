@@ -48,6 +48,7 @@ internal static class Program
             PerformanceAndStress(root);
             UnsupportedEditGuard();
             CropPresets();
+            OrientationComposition();
         }
         catch (Exception error)
         {
@@ -265,7 +266,7 @@ internal static class Program
               Get(flipped, 0, 0).R == 200 && Get(flipped, 1, 0).R == 17);
 
         var oriented = pair.ApplyOrientation(new OrientationValue(0, true, 0));
-        Check("apply-orientation mirrors first", Get(oriented, 0, 0).R == 200);
+        Check("apply-orientation mirrors an unturned frame", Get(oriented, 0, 0).R == 200);
 
         var wide = new PixelBuffer(8, 4);
         var resized = wide.ResizeLongEdge(4);
@@ -1677,6 +1678,97 @@ internal static class Program
         }
         Check("a crop takes the upright frame's left half after a quarter turn",
               orderMatches);
+
+        var deep = new PixelBuffer16(256, 192);
+        for (var y = 0; y < deep.Height; y++)
+        {
+            for (var x = 0; x < deep.Width; x++)
+            {
+                var offset = (y * deep.Width + x) * 4;
+                deep.Pixels[offset] = (ushort)((x * 7 + y * 13) % 256 * 257);
+                deep.Pixels[offset + 1] = (ushort)(y * 257);
+                deep.Pixels[offset + 2] = (ushort)(x * 257);
+                deep.Pixels[offset + 3] = 65535;
+            }
+        }
+        var deepHalf = ExportRunner.RenderDocument16(deep, half);
+        var deepMatches = deepHalf.Width == 96 && deepHalf.Height == 256;
+        for (var y = 0; y < 256 && deepMatches; y++)
+        {
+            for (var x = 0; x < 96 && deepMatches; x++)
+            {
+                var ai = (y * deepHalf.Width + x) * 4;
+                var bi = ((191 - x) * deep.Width + y) * 4;
+                for (var channel = 0; channel < 4 && deepMatches; channel++)
+                {
+                    deepMatches = deepHalf.Pixels[ai + channel] == deep.Pixels[bi + channel];
+                }
+            }
+        }
+        Check("the 16-bit export turns and crops the same frame", deepMatches);
+    }
+
+    private static void OrientationComposition()
+    {
+        var photo = new PixelBuffer(256, 192);
+        var deep = new PixelBuffer16(256, 192);
+        for (var y = 0; y < photo.Height; y++)
+        {
+            for (var x = 0; x < photo.Width; x++)
+            {
+                Put(photo, x, y, (byte)x, (byte)y, (byte)((x * 7 + y * 13) % 256));
+                var offset = (y * deep.Width + x) * 4;
+                deep.Pixels[offset] = (ushort)((x * 7 + y * 13) % 256 * 257);
+                deep.Pixels[offset + 1] = (ushort)(y * 257);
+                deep.Pixels[offset + 2] = (ushort)(x * 257);
+                deep.Pixels[offset + 3] = 65535;
+            }
+        }
+        var document = new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1).WithFlip(),
+        };
+        var mirrored = ExportRunner.RenderDocument(photo, document);
+        var mirrored16 = ExportRunner.RenderDocument16(deep, document);
+        var compositionMatches = mirrored.Width == 192 && mirrored.Height == 256
+                                 && mirrored16.Width == 192 && mirrored16.Height == 256;
+        for (var y = 0; y < 256 && compositionMatches; y++)
+        {
+            for (var x = 0; x < 192 && compositionMatches; x++)
+            {
+                compositionMatches = Matches(mirrored, x, y, photo, y, x);
+                var ai = (y * 192 + x) * 4;
+                var bi = (x * 256 + y) * 4;
+                for (var channel = 0; channel < 4 && compositionMatches; channel++)
+                {
+                    compositionMatches = mirrored16.Pixels[ai + channel] == deep.Pixels[bi + channel];
+                }
+            }
+        }
+        Check("a mirror follows the quarter turn in both depths", compositionMatches);
+
+        var framed = new PixelBuffer(400, 400);
+        for (var y = 0; y < 400; y++)
+        {
+            for (var x = 0; x < 400; x++)
+            {
+                Put(framed, x, y, (byte)(x / 2), (byte)(y / 2), 0);
+            }
+        }
+        var straight = ExportRunner.RenderDocument(framed, new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithAngle(20),
+        });
+        // Without the cover scale every corner samples the clamped edge, which
+        // is the corner pixel itself; with it every corner is resampled from
+        // inside the photo, so none of them can equal its source corner.
+        var corners = new[] { (0, 0), (399, 0), (0, 399), (399, 399) };
+        var covered = straight.Width == 400 && straight.Height == 400;
+        foreach (var (x, y) in corners)
+        {
+            covered &= Get(straight, x, y) != Get(framed, x, y);
+        }
+        Check("a straighten covers every corner from inside the photo", covered);
     }
 
     private static bool Matches(PixelBuffer a, int ax, int ay, PixelBuffer b, int bx, int by)
