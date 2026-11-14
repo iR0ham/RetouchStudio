@@ -4,7 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
-using System.Windows.Shapes;
+using Line = System.Windows.Shapes.Line;
 using Microsoft.Win32;
 using RetouchStudio.Core.Project;
 
