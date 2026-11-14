@@ -240,6 +240,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `2c0d1fa` (merge of PR #44) | `CI` run 43614356967, `main` | all five jobs green |
 | 2026-11-14 | `0e0be3d` (PR #44 head) | `CI` run 43613038894 | five jobs green; `Windows App` reports `PASS (172 checks)`; start-up 907 / 1649 / 662 / 764 ms |
 | 2026-11-14 | `de269d8` (PR #42 head, merged as `53e1c36`) | `CI` run 43615178242 | five jobs green; `Windows App` reports `PASS (174 checks)`; start-up 896 / 1097 / 4395 / 2751 ms; the run that gates the #42 merge |
+| 2026-11-14 | `53e1c36` (merge of PR #42) | `CI` run 43616466216, `main` | all five jobs green on the merged tree |
 | 2026-11-14 | `6a80ba1` (PR #45 head) | `CI` run 43612517678 | five jobs green; `Windows App` reports `PASS (170 checks)`; the managed heap is flat across twenty photo-sized renders |
 
 `ci.yml` triggers on `pull_request: branches: [main]` only, so a pull request

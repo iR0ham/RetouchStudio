@@ -261,6 +261,10 @@ public partial class MainWindow : Window
                 return;
             }
             _panPoint = null;
+            if (PreviewHost.IsMouseCaptured)
+            {
+                PreviewHost.ReleaseMouseCapture();
+            }
             _view.Toggle(fitted.Width, fitted.Height, PreviewHost.ActualWidth,
                          PreviewHost.ActualHeight);
             ApplyView();
@@ -521,6 +525,7 @@ public partial class MainWindow : Window
         // The overlay works in fitted coordinates, so a zoomed canvas returns
         // to fit before it opens; the crop is chosen on the whole photo.
         ResetZoomView();
+        ZoomDock.Visibility = Visibility.Collapsed;
         _pendingCrop = _vm.CurrentCrop ?? new CropValue(0, 0, 1, 1);
         _vm.IsCropping = true;
         CropOverlay.Visibility = Visibility.Visible;
@@ -546,6 +551,7 @@ public partial class MainWindow : Window
         }
         _cropMode = false;
         PreviewHost.SizeChanged -= PreviewHost_SizeChanged;
+        ZoomDock.ClearValue(VisibilityProperty);
         CropOverlay.Visibility = Visibility.Collapsed;
         CropBar.Visibility = Visibility.Collapsed;
         _vm.IsCropping = false;
