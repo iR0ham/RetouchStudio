@@ -53,7 +53,9 @@ if [ -z "$SDK" ]; then
   exit 1
 fi
 
-echo "→ کامپایل پروژه ($CONFIG، ${ARCHS[*]}) با SDK: $(basename "$SDK")"
+# An ASCII comma after $CONFIG: bash reads a multibyte character glued to a
+# name as part of the name, and `set -u` then fails on `CONFIG<byte>`.
+echo "→ کامپایل پروژه ($CONFIG, ${ARCHS[*]}) با SDK: $(basename "$SDK")"
 mkdir -p "$OUT_DIR"
 
 FLAGS=(-sdk "$SDK")
