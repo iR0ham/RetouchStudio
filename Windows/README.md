@@ -57,12 +57,12 @@ folder into one zip plus a SHA-256 file.
   crop/orientation/adjustment order on the 16-bit buffer and writes 16-bit
   samples; JPEG stays 8-bit.
 - Metadata policy: an export keeps only the resolution by default. With
-  "Keep camera metadata" on, JPEG and TIFF carry the two keys the headless
-  probe proved the Windows writer keeps — camera model and ISO. The rest of the
-  EXIF block (make, capture date, exposure, aperture, flash, white balance,
-  GPS, comment) is silently dropped by that writer, so it is not promised. The
-  pixels are upright, so the orientation tag and the source pixel dimensions
-  are never copied.
+  "Keep camera metadata" on, JPEG, TIFF and 16-bit PNG carry the two keys the
+  headless probe proved the Windows writer keeps — camera model and ISO. The
+  rest of the EXIF block (make, capture date, exposure, aperture, flash, white
+  balance, GPS, comment) is silently dropped by that writer, so it is not
+  promised. The pixels are upright, so the orientation tag and the source pixel
+  dimensions are never copied.
 - Exports never overwrite the opened photo.
 
 ## What it does not do
@@ -76,8 +76,9 @@ folder into one zip plus a SHA-256 file.
   the sliders and the on-screen image are 8-bit.
 - No XMP and no IPTC: the Windows metadata API exposes neither, and its EXIF
   writer keeps only the two measured keys, so a kept export carries the camera
-  model and ISO only. PNG carries no EXIF either, because the API does not map
-  EXIF onto PNG chunks.
+  model and ISO only. The 16-bit PNG writer does carry those two keys; an
+  8-bit PNG export dropped them in earlier runs, and this host no longer writes
+  one.
 - No HEIC write (the HEIF codec is an optional system component) and no HEIC
   read path beyond whatever WIC happens to install. The `windows-2025` runner
   has no HEIF decoder, so the probe on the corpus HEIC export fails with

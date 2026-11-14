@@ -812,12 +812,23 @@ internal static class Program
             Pass("a 16-bit encode refuses a JPEG");
         }
 
-        var adjustments = new GlobalAdjustments(30, 15, 10, -5, 25, 20, 10, 40, 30);
+        // Clarity is the one stage whose result is quantised before it is used:
+        // the 8-bit blur truncates on every pass, the 16-bit blur does not. So
+        // the tone/colour check runs without clarity, where only rounding can
+        // differ, and clarity gets its own, wider, measured bound.
+        var adjustments = new GlobalAdjustments(30, 15, 10, -5, 25, 20, 10, 0, 30);
         var narrow = AdjustmentPipeline.Apply(eightBit, adjustments);
         var deep = AdjustmentPipeline16.Apply(wide, adjustments);
         var drift = Drift(narrow, deep);
-        Console.WriteLine($"  8-bit vs 16-bit adjustment drift: {drift} levels max");
-        Check("both depths apply the same adjustment maths", drift <= 1);
+        Console.WriteLine($"  8-bit vs 16-bit tone/colour drift: {drift} levels max");
+        Check("both depths apply the same tone and colour maths", drift <= 1);
+
+        var sharpened = adjustments with { Clarity = 40 };
+        var sharpDrift = Drift(AdjustmentPipeline.Apply(eightBit, sharpened),
+                               AdjustmentPipeline16.Apply(wide, sharpened));
+        Console.WriteLine($"  8-bit vs 16-bit clarity drift: {sharpDrift} levels max");
+        Check("clarity at both depths stays inside the 8-bit blur's truncation",
+              sharpDrift <= 3);
     }
 
     /// <summary>Largest difference between an 8-bit buffer and its promotion.</summary>
@@ -992,12 +1003,27 @@ internal static class Program
         Check("keeping metadata works for TIFF",
               Text(tiffMeta, "System.Photo.CameraModel") == "RS-Test");
 
+        // Measured on the 16-bit PNG path: the writer keeps the allowlist.
+        // Earlier 8-bit PNG exports dropped it, and this host no longer writes
+        // 8-bit PNG, so the deeper writer's behaviour is the one that ships.
         var png = Path.Combine(root, "metadata-kept.png");
         ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0,
                                  stripPrivacyMetadata: false).GetAwaiter().GetResult();
         var pngMeta = codec.ReadMetadataAsync(png).GetAwaiter().GetResult();
-        Check("PNG carries no EXIF on this host",
-              !pngMeta.Properties.ContainsKey("System.Photo.CameraModel"));
+        Check("a kept 16-bit PNG carries the camera model",
+              Text(pngMeta, "System.Photo.CameraModel") == "RS-Test");
+        Check("a kept 16-bit PNG carries no key outside the allowlist",
+              !pngMeta.Properties.Keys.Any(key =>
+                  key != "System.Photo.CameraModel" && key != "System.Photo.IsoSpeed"
+                  && (key.StartsWith("System.Photo.", StringComparison.Ordinal)
+                      || key.StartsWith("System.GPS.", StringComparison.Ordinal))));
+
+        var pngStripped = Path.Combine(root, "metadata-stripped.png");
+        ExportRunner.ExportAsync(session, codec, pngStripped, "png", 1.0, 0)
+                             .GetAwaiter().GetResult();
+        var pngStrippedMeta = codec.ReadMetadataAsync(pngStripped).GetAwaiter().GetResult();
+        Check("stripping drops the camera model from a 16-bit PNG",
+              !pngStrippedMeta.Properties.ContainsKey("System.Photo.CameraModel"));
 
         Probe(root, codec);
     }
