@@ -292,9 +292,17 @@ internal static class Program
             throw new InvalidOperationException(
                 $"the file-name box holds '{ReadValue(saveEdit)}' instead of '{output}'");
         }
-        PressDefaultButton(saveDialog, "Save", "Open");
+        CommitFileName(saveEdit);
         var dismissed = WaitFor(() => !IsWindowVisible(dialogHandle),
                                 TimeSpan.FromSeconds(30));
+        if (!dismissed)
+        {
+            // An auto-complete suggestion can swallow the Enter; the button
+            // still saves, so the path is only reported as uncommitted.
+            PressDefaultButton(saveDialog, "Save", "Open");
+            dismissed = WaitFor(() => !IsWindowVisible(dialogHandle),
+                                TimeSpan.FromSeconds(30));
+        }
         if (!dismissed)
         {
             throw new InvalidOperationException(
@@ -581,26 +589,73 @@ internal static class Program
     }
 
     /// <summary>
-    /// Types an absolute path into the file-name box. The common dialog keeps
-    /// the name in a combo whose auto-complete can discard a value set through
-    /// UI Automation, so the labelled combo wins, the same text is also set on
-    /// its Win32 window, and the caller reads it back before pressing Save.
+    /// Types an absolute path into the file-name edit one character at a time.
+    /// The common dialog mirrors the name from the edit's keystroke
+    /// notifications; a value pasted into the automation property, or set on
+    /// the window in one call, leaves the dialog's own copy at its default and
+    /// Save then returns that default. Only keystrokes update it.
     /// </summary>
     private static AutomationElement SetFileName(AutomationElement dialog, string path)
     {
         var target = FindFileNameControl(dialog)
             ?? throw new InvalidOperationException("the dialog has no file-name box");
-        if (target.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)
-            && pattern is ValuePattern value)
+        var edit = FindFileNameEdit(dialog);
+        var handle = edit is null ? IntPtr.Zero : (IntPtr)edit.Current.NativeWindowHandle;
+        if (handle != IntPtr.Zero)
+        {
+            SendMessageW(handle, WmSetText, IntPtr.Zero, "");
+            foreach (var character in path)
+            {
+                SendMessageW(handle, WmChar, (IntPtr)(int)character, IntPtr.Zero);
+            }
+        }
+        else if (target.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)
+                 && pattern is ValuePattern value)
         {
             value.SetValue(path);
         }
-        var handle = (IntPtr)target.Current.NativeWindowHandle;
-        if (handle != IntPtr.Zero)
+        return edit ?? target;
+    }
+
+    /// <summary>
+    /// Presses Enter inside the file-name edit so the dialog commits its own
+    /// copy of the typed path before it closes.
+    /// </summary>
+    private static void CommitFileName(AutomationElement edit)
+    {
+        try
         {
-            SendMessageW(handle, WmSetText, IntPtr.Zero, path);
+            edit.SetFocus();
         }
-        return target;
+        catch (ElementNotAvailableException)
+        {
+            return;
+        }
+        var handle = (IntPtr)edit.Current.NativeWindowHandle;
+        if (handle == IntPtr.Zero)
+        {
+            return;
+        }
+        SendMessageW(handle, WmKeyDown, (IntPtr)VkReturn, IntPtr.Zero);
+        SendMessageW(handle, WmKeyUp, (IntPtr)VkReturn, IntPtr.Zero);
+    }
+
+    private static AutomationElement? FindFileNameEdit(AutomationElement dialog)
+    {
+        foreach (AutomationElement edit in dialog.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Edit)))
+        {
+            var name = edit.Current.Name;
+            if ((edit.Current.AutomationId == "1001"
+                 || name.StartsWith("File name", StringComparison.OrdinalIgnoreCase))
+                && (IntPtr)edit.Current.NativeWindowHandle != IntPtr.Zero)
+            {
+                return edit;
+            }
+        }
+        return null;
     }
 
     private static AutomationElement? FindFileNameControl(AutomationElement dialog)
@@ -749,7 +804,15 @@ internal static class Program
     private static extern IntPtr SendMessageW(IntPtr window, uint message,
                                               IntPtr wParam, string text);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessageW(IntPtr window, uint message,
+                                              IntPtr wParam, IntPtr lParam);
+
     private const uint WmSetText = 0x000C;
+    private const uint WmChar = 0x0102;
+    private const uint WmKeyDown = 0x0100;
+    private const uint WmKeyUp = 0x0101;
+    private const int VkReturn = 0x0D;
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
