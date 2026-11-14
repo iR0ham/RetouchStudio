@@ -18,9 +18,12 @@ tests and documentation of one milestone share a single PR; routine changes and
 documentation-only changes do not get their own PR. Rows below keep their old
 evidence links, which remain valid history.
 
-**Current integration state:** `develop` folds the W4 metadata workstream —
+**Current integration state:** the W4 metadata workstream — crash recovery,
 batch cancellation, EXIF/XMP carry, the sRGB export declaration and the
-crop/turn/resize read-back checks — pending full-matrix validation.
+crop/turn/resize read-back checks — is merged into `main` as `4e31596` (PR #54)
+after five green checks on `91dde65` (run 43632188008). `develop` continues from
+`91dde65`; the next milestone is the UI-automation workstream (WP-1/WP-4
+wiring).
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
