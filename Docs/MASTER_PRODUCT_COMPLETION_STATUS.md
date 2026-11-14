@@ -1,7 +1,16 @@
 # Master product completion status
 
-**Basis:** `main` at `5ce61ca` (merge of PR #27, 2026-11-14). PR #21 (16-bit
-export) is verified by CI run
+**Basis:** `main` at `4a034cd` (merge of PR #48, 2026-11-14). PR #47 (parallel
+adjustment pass) is verified by run
+[43619500646](https://github.com/iR0ham/RetouchStudio/actions/runs/43619500646)
+on head `49a028d` and merged as `f58b336`; post-merge `main` is green in run
+43620792640. PR #48 (drop-to-open, accessibility names, compare split off by
+default) is verified by run
+[43620925118](https://github.com/iR0ham/RetouchStudio/actions/runs/43620925118)
+on head `e4bc466` and merged as `4a034cd`; post-merge `main` is green in run
+[43622071155](https://github.com/iR0ham/RetouchStudio/actions/runs/43622071155).
+All five checks are required on `main` since 2026-11-14. Earlier merges follow.
+PR #21 (16-bit export) is verified by CI run
 [43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311)
 and merged as `18d4e46`; PR #22 (Windows MSI) is verified by run
 [43561151628](https://github.com/iR0ham/RetouchStudio/actions/runs/43561151628)
@@ -41,8 +50,9 @@ names the real commit.
 
 Repository safety rules in force: no force-push, no reset/rebase, no rewriting
 published history, no deletion of user work, no merge of a pull request without
-explicit owner authorization, no golden-corpus regeneration, no private photos,
-no secrets, no authentication or branch-protection bypass.
+the owner's standing authorization for in-scope, reviewed changes (Master Plan
+v4, §17), no golden-corpus regeneration, no private photos, no secrets, no
+authentication or branch-protection bypass.
 
 ## 2. Capability matrix
 
@@ -84,7 +94,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Windows installer | — | — | WiX v3 MSI, per-machine, Start menu, fixed `UpgradeCode` | silent install → window from `Program Files` → uninstall, runs 43561151628 and 43563787267 | VERIFIED per host, including an upgrade to a higher version in place |
 | Windows updater | — | — | ABSENT | — | NOT STARTED |
 | Notarization | — | pipeline ready | — | — | BLOCKED — no Apple Developer membership |
-| CI matrix | — | 3 required + Windows core | `windows-2025` app job | §5 | VERIFIED |
+| CI matrix | — | 5 required contexts | `windows-2025` core and app jobs | §5, `CI_GATES.md` | VERIFIED |
 
 ## 3. Phase status
 
@@ -211,6 +221,10 @@ must not claim them.
 | 2026-11-14 | `e43412b` | CI run 43618132157 (PR #47 head) | five jobs green; `Windows App` `PASS (184 checks)`; the per-pixel adjustment pass now runs one row per worker, and the same preview measured a median **721 ms** (721 699 710 803 804) with the 16-bit export at 1189 ms and every repeat-render byte check still passing; start-up 800 / 1103 / 1414 / 993 ms |
 | 2026-11-14 | `e940271` | CI run 43618192192 (post-merge `main`, PR #45) | all five jobs green on the merged tree |
 | 2026-11-14 | `3e4b517` | CI run 43618240754 (PR #46 head, merged as `03748fe`) | five jobs green; `Windows App` `PASS (184 checks)`; zoom, pan and the before/after split ride together with the macOS limits (fit–4×, anchored, clamped, 45% split); start-up 752 / 892 / 1554 / 887 ms, preview median 1041 ms |
+| 2026-11-14 | `49a028d` | CI run 43619500646 (PR #47 head, merged as `f58b336`) | five jobs green; `Windows App` `PASS (184 checks)`; the run that gated the #47 merge |
+| 2026-11-14 | `f58b336` | CI run 43620792640 (post-merge `main`, PR #47) | all five jobs green on the merged tree |
+| 2026-11-14 | `e4bc466` | CI run 43620925118 (PR #48 head, merged as `4a034cd`) | five jobs green after `main` was merged into the branch; the run that gated the #48 merge |
+| 2026-11-14 | `4a034cd` | CI run 43622071155 (post-merge `main`, PR #48) | all five jobs green on the merged tree; `Windows StudioCore` and `Windows App` now required contexts |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -232,7 +246,7 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 | WinRT metadata writer drops most EXIF keys | metadata parity | an EXIF rewrite outside WIC, if the owner wants it |
 | No HEIF decoder on `windows-2025` | HEIC read on CI | install the HEIF extension or accept the measured gap |
 | Windows output is always sRGB, with wide-gamut colours clipped at decode | ICC preservation and wide-gamut rendering | carry the source profile into the render and write, a scoped project of its own |
-| Branch protection on `main` requires only `StudioCore Boundary`, `Platform-neutral Conformance` and `macOS Integration` | a Windows regression can merge while `Windows App` or `Windows StudioCore` is red or still running | owner decision: add the Windows contexts to the required set (changing protection needs owner approval) |
+| Branch protection on `main` required only `StudioCore Boundary`, `Platform-neutral Conformance` and `macOS Integration` | a Windows regression could merge while `Windows App` or `Windows StudioCore` was red or still running | RESOLVED 2026-11-14: all five contexts are required, strict and admin-enforced; read back from the protection API after the change, recorded in `CI_GATES.md` |
 | The golden corpus may not be regenerated without owner approval | pixel-level straighten/crop agreement between hosts | owner-approved fixture and reference images added to `Tests/Corpus`, so a Windows straighten can be compared to the macOS render rather than to the shared formulas |
 
 ## 7. Next actions
@@ -272,3 +286,38 @@ on CI.
    installation.
 6. Green checks are a checkpoint, not a stopping point; implementation
    continues automatically.
+7. Work is delivered as workstream batches: one PR per coherent, reviewable
+   milestone, carrying its implementation, tests and status updates. A PR is
+   not opened for a single commit, a small fix, or merge bookkeeping.
+8. The full five-job matrix runs once per merge candidate; intermediate commits
+   are validated with focused local suites. Post-merge matrices on `main` were
+   removed on 2026-11-14 because the strict gate already validates the merge
+   commit's exact tree (see `CI_GATES.md`, "Post-merge runs and CI cadence").
+9. All five checks are required, including `Windows StudioCore` and
+   `Windows App`. A red or missing Windows check blocks the merge candidate;
+   no check is ever bypassed, skipped or weakened.
+
+## 9. Current product direction / user steering
+
+**Product Owner:** the owner; the Lead owns technical execution and routine
+engineering decisions. The authoritative direction is
+[`ORIGINAL_MASTER_PLAN.md`](ORIGINAL_MASTER_PLAN.md) (v4, received
+2026-11-14), and later owner instructions take precedence over it.
+
+- **Current direction:** continue autonomous execution under the v4
+  priorities, with workstream batching instead of micro-PRs. The owner has not
+  paused any workstream.
+- **Applied 2026-11-14:** all five checks required on `main`; duplicate
+  post-merge matrices removed; status record reconciled with the #47 and #48
+  merges; the missing plan/audit/acceptance documents created as one batch.
+- **Preserved:** the local-only branch `windows/memory-perf` (`3e00182`,
+  working-set and peak-memory instrumentation) is deliberately unpushed; its
+  integration waits for a workstream decision.
+- **Next milestone:** W4 on Windows — the remaining metadata, colour and
+  format work (plan §4 and the final directive).
+- **Decisions recorded, not blocking:** wide-gamut/ICC preservation on write is
+  a scoped project of its own; HEIC read waits for a decoder on the CI image or
+  stays a documented gap; the Windows face-landmark backend is a measured Lead
+  decision under plan §5; notarization stays BLOCKED on Apple credentials.
+- **Excluded unless the owner authorizes:** a public production release, paid
+  services or certificates, and any Linux product build.

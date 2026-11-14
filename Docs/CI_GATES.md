@@ -1,29 +1,27 @@
 # CI Merge Gates
 
-**Status:** enabled on `main` on 2026-11-13. The three checks below are
-required, strict, and enforced for administrators; force pushes and branch
-deletion are disabled.
+**Status:** enabled on `main` on 2026-11-13; widened from three to all five
+contexts on 2026-11-14. Every check below is required, strict, and enforced for
+administrators; force pushes and branch deletion are disabled.
 **Actions:** the workflows run `actions/checkout@v7`,
 `actions/upload-artifact@v7` and `actions/download-artifact@v8` on the Node 24
-runtime, so the deprecated Node.js 20 notices are gone. Two further jobs,
-`Windows StudioCore` and `Windows App`, run on `windows-2025` and are not
-required. Both workflows were installed on
-2026-11-13 after the GitHub token gained the `workflow` scope; the history is
-under [Action runtimes and versions](#action-runtimes-and-versions).
-**Date:** 2026-11-13
+runtime, so the deprecated Node.js 20 notices are gone. Both workflows were
+installed on 2026-11-13 after the GitHub token gained the `workflow` scope; the
+history is under [Action runtimes and versions](#action-runtimes-and-versions).
+**Date:** 2026-11-14
 **Workflows:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml),
 [`.github/workflows/release.yml`](../.github/workflows/release.yml)
 
 The repository workflow is named `CI`. It runs five jobs and each job reports a
-status check under its own name. The first three are the required merge checks:
+status check under its own name. All five are required merge checks:
 
 | Check | Runner | Command |
 |---|---|---|
 | `StudioCore Boundary` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` |
 | `Platform-neutral Conformance` | `ubuntu-24.04` (x64) | `./Tests/Conformance/run-conformance.sh` |
 | `macOS Integration` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` and `RETOUCH_ARCH=arm64 ./Tests/run.sh` |
-| `Windows StudioCore` (not required; green on 2026-11-13) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
-| `Windows App` (not required; green on 2026-11-13) | `windows-2025` (x64) | `pwsh ./Tools/build-windows.ps1` |
+| `Windows StudioCore` (required since 2026-11-14) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
+| `Windows App` (required since 2026-11-14) | `windows-2025` (x64) | `pwsh ./Tools/build-windows.ps1` |
 
 ## What each check proves
 
@@ -156,10 +154,10 @@ application.
 `windows-core` in `ci.yml` installs Swift 6.4.2 with
 `compnerd/gha-setup-swift@v0.5.1` on `windows-2025`, runs that script, then runs
 the same conformance gate with `CC=clang` (Git Bash on the Windows image has no
-`cc`) and `PYTHON=python`. The job is not a required check. It first ran green
-on `eba8075` (PR #13) on 2026-11-13, which confirms the runner label, the
-third-party action, the toolchain tag and the `clang` assumption; the run is
-recorded under [Verified runs](#verified-runs).
+`cc`) and `PYTHON=python`. The job is a required check since 2026-11-14. It
+first ran green on `eba8075` (PR #13) on 2026-11-13, which confirms the runner
+label, the third-party action, the toolchain tag and the `clang` assumption; the
+run is recorded under [Verified runs](#verified-runs).
 
 The Windows gap and the intended implementation are analysed in
 [`WINDOWS_IMPLEMENTATION_PATH.md`](WINDOWS_IMPLEMENTATION_PATH.md).
@@ -182,9 +180,11 @@ version, the shortcut, and an upgraded copy that still loads a window.
 `-RequireMsi` makes a missing WiX toolset fail the job instead of silently
 skipping the installer. The job uploads `build/windows/dist/**` so the zip and
 the MSIs can be inspected. On failure it uploads the published folder
-(`windows-app-publish`), so a broken build can be inspected. The job is not a
-required check: it is a light editor, and a required Windows context would
-block `main` on a runner image that is still proving itself.
+(`windows-app-publish`), so a broken build can be inspected. The job is a
+required check since 2026-11-14, by owner direction: Windows is a first-class
+product, so a Windows regression must be able to block `main`. The job had
+already run green on every PR between 2026-11-13 and the switch, including the
+runs recorded below.
 
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
@@ -245,13 +245,22 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `e43412b` (PR #47 head) | `CI` run 43618132157 | five jobs green; `Windows App` reports `PASS (184 checks)`; the parallel per-row adjustment pass measured a median 721 ms preview and passed the repeat-render byte checks |
 | 2026-11-14 | `e940271` (merge of PR #45) | `CI` run 43618192192, `main` | all five jobs green on the merged tree |
 | 2026-11-14 | `3e4b517` (PR #46 head, merged as `03748fe`) | `CI` run 43618240754 | five jobs green; `Windows App` reports `PASS (184 checks)`; zoom, pan and the before/after split; the run that gated the #46 merge |
+| 2026-11-14 | `49a028d` (PR #47 head, merged as `f58b336`) | `CI` run 43619500646 | five jobs green on the exact head; `Windows App` reports `PASS (184 checks)`; the run that gated the #47 merge |
+| 2026-11-14 | `f58b336` (merge of PR #47) | `CI` run 43620792640, `main` | all five jobs green on the merged tree |
+| 2026-11-14 | `e4bc466` (PR #48 head, merged as `4a034cd`) | `CI` run 43620925118 | five jobs green after `main` was merged into the branch; the run that gated the #48 merge |
+| 2026-11-14 | `4a034cd` (merge of PR #48) | `CI` run 43622071155, `main` | all five jobs green on the merged tree; the last post-merge `main` matrix, because push runs to `main` were removed in the same change (see [Post-merge runs and CI cadence](#post-merge-runs-and-ci-cadence)) |
 
-`ci.yml` triggers on `pull_request: branches: [main]` only, so a pull request
-stacked on another feature branch receives no checks at all. PR #43 was opened
-that way and never ran; its commits were folded into PR #42 instead (which
-targets `main`) and #43 was closed as merged when the base branch merged. Any
-new work that needs a green run must target `main`, either directly or by
-merging the base branch in.
+`ci.yml` runs on `pull_request` targeting `main` and on pushes to
+`v1-macos-delivery`, `m5-cross-platform-core` and `ci/**`; pushes to `main` no
+longer run it (see
+[Post-merge runs and CI cadence](#post-merge-runs-and-ci-cadence)). The
+pull-request event checks out `refs/pull/N/merge` — the head merged into the
+current `main` — so the run validates exactly the tree the merge commit will
+contain. A pull request stacked on another feature branch still receives no
+checks, because the base is not `main`. PR #43 was opened that way and never
+ran; its commits were folded into PR #42 instead (which targets `main`) and #43
+was closed as merged when the base branch merged. Any new work that needs a
+green run must target `main`, either directly or by merging the base branch in.
 
 
 PR #13 was merged with a normal merge commit after every required context and
@@ -379,39 +388,77 @@ replaced with the repository variable.
 No paid signing certificate or notarization is used; macOS builds are ad-hoc
 signed and Windows output is unsigned.
 
+## Post-merge runs and CI cadence
+
+Since 2026-11-14 `ci.yml` no longer runs on pushes to `main`. The reason is
+that the post-merge matrix was a provable duplicate: strict required checks
+force the pull-request head to contain the current `main` tip, and the
+`pull_request` checkout uses `refs/pull/N/merge`, whose tree is exactly the
+tree of the merge commit GitHub then creates. The five jobs for that tree had
+already passed before the merge, so the push run re-validated the same tree for
+about twenty minutes of hosted-runner time and competed with the next
+workstream's runs. PR #47 and PR #48 are the last two merges with a post-merge
+run recorded in [Verified runs](#verified-runs) above.
+
+What replaces it:
+
+- `workflow_dispatch` still starts the full five-job matrix on any ref, so a
+  direct push to `main` (outside this project's policy) can be validated by
+  dispatching on that SHA.
+- Pushes to `ci/**` still run the workflow, so a workflow change is tested
+  before it is proposed.
+- `concurrency` cancels a superseded `pull_request` run when the same PR is
+  pushed again; `cancel-in-progress` is off for non-PR events, so an
+  intentionally dispatched run is never cancelled.
+- The full matrix runs once per coherent merge candidate. Intermediate commits
+  are validated with focused local suites; a red or missing required check
+  still blocks the merge.
+
+If GitHub's settings ever require a post-merge run again, re-add `main` to the
+`push.branches` list in `ci.yml`; the rest of the gate is unchanged.
+
 ## Branch protection for `main`
 
-The required status checks are exactly:
+All five status checks are required. Their exact context names were read from
+the check runs of `main` at `4a034cd` before the protection was changed:
 
 ```
 StudioCore Boundary
 Platform-neutral Conformance
 macOS Integration
+Windows StudioCore
+Windows App
 ```
 
-This policy is applied to `main` and was read back on 2026-11-13 with
-`gh api repos/iR0ham/RetouchStudio/branches/main/protection`: strict, the three
-contexts above, `enforce_admins` on, force pushes off, deletions off, no required
-review. The configuration is reproduced here so it can be re-applied if it is
-ever lost:
+The policy was applied on 2026-11-14 and read back with
+`gh api repos/iR0ham/RetouchStudio/branches/main/protection`: strict, the five
+contexts above, `enforce_admins` on, force pushes off, deletions off, no
+required review. The read-back is:
+
+```json
+{"strict": true,
+ "contexts": ["StudioCore Boundary", "Platform-neutral Conformance",
+              "macOS Integration", "Windows StudioCore", "Windows App"],
+ "admins": true, "force_push": false, "deletions": false}
+```
+
+The configuration is reproduced here so it can be re-applied if it is ever
+lost. The `checks` form binds each context to the GitHub Actions app, which is
+the binding the live policy uses:
 
 ```bash
-gh api -X PUT repos/iR0ham/RetouchStudio/branches/main/protection \
+gh api -X PATCH \
+  repos/iR0ham/RetouchStudio/branches/main/protection/required_status_checks \
   --input - <<'JSON'
 {
-  "required_status_checks": {
-    "strict": true,
-    "contexts": [
-      "StudioCore Boundary",
-      "Platform-neutral Conformance",
-      "macOS Integration"
-    ]
-  },
-  "enforce_admins": true,
-  "required_pull_request_reviews": null,
-  "restrictions": null,
-  "allow_force_pushes": false,
-  "allow_deletions": false
+  "strict": true,
+  "checks": [
+    {"context": "StudioCore Boundary", "app_id": 15368},
+    {"context": "Platform-neutral Conformance", "app_id": 15368},
+    {"context": "macOS Integration", "app_id": 15368},
+    {"context": "Windows StudioCore", "app_id": 15368},
+    {"context": "Windows App", "app_id": 15368}
+  ]
 }
 JSON
 ```
