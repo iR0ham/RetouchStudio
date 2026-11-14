@@ -1,10 +1,14 @@
-# Performance Benchmarks — 1.0 (macOS)
+# Performance Benchmarks — 1.0
 
-**Status:** measured on the host below, at commit `0403e59` plus the benchmark
-harness and the Vision input change described here. This is an observation
-report, not a gate: the harness is deliberately outside `Tests/run.sh`, and no
-test fails on a timing. Windows numbers are not included; none have been
-produced. See [Not measured](#not-measured) before quoting any figure.
+**Status:** the macOS figures were measured on the host below, at commit
+`0403e59` plus the benchmark harness and the Vision input change described
+here. The Windows figures come from the headless host tests on GitHub's
+`windows-2025` runner and cover preview and 16-bit export only; see
+[Windows host](#windows-host-ci). This is an observation report, not a gate:
+the macOS harness is deliberately outside `Tests/run.sh` and does not fail on
+any timing; the Windows numbers print on every run and gate only at
+deliberately loose 3 s (preview) and 30 s (export) ceilings. See
+[Not measured](#not-measured) before quoting any figure.
 
 ## Host and build
 
@@ -54,7 +58,7 @@ AI upscale.
 
 Results are written to `build/benchmarks/latest.json` (git-ignored).
 
-## Results
+## Results (macOS)
 
 Resident memory is the process RSS immediately after the third load of that
 input. The harness clears the Core Image cache between images, because the app
@@ -125,10 +129,36 @@ therefore a cumulative high-water mark of a synthetic seven-document process,
 not a per-photo figure. Attributing the residual needs Instruments or `heap`
 against a live app session, which has not been run.
 
+## Windows host (CI)
+
+The Windows host renders on the CPU through WIC and `RetouchStudio.Core`; there
+is no GPU path and none is claimed. `Windows/RetouchStudio.Tests` measures a
+photo-sized preview and a 16-bit PNG export, prints both, and asserts only a
+loose ceiling so a pathological regression fails while a noisy shared runner
+does not. These numbers were recorded on run `43598349755` (CI workflow,
+`windows-2025`, x64, tests run at head `6f65650`); later runs print their own.
+
+| stage | input | result |
+|---|---|---|
+| preview render | 1600×1067 pre-decoded source, all nine sliders at 40, crop and turn off; one untimed warm-up, median of five | **1187 ms** (1189 / 1187 / 1189 / 1166 / 1137) |
+| 16-bit PNG export | same document at original size — decode from disk, crop, orientation, adjustments, 16-bit PNG encode, write | **1594 ms** |
+
+The preview figure is a full 1:1 render of a 1.7 MP frame with every adjustment
+pass applied; clarity's linear-luminance Gaussian dominates. The decode happens
+once when the photo opens, so it is outside this number; it is also not a
+measure of UI responsiveness on a real display, where the preview surface is
+smaller. The export figure includes the decode, the full-size render and the
+encode-to-disk of a 16-bit PNG. A stress loop then renders forty documents that
+vary crop, quarter turn, flip, straighten and clarity sign, and requires that no
+render fails, that no crop/turn output exceeds the source area, and that a
+repeated render is pixel-identical; it is a correctness loop, not a timing.
+
 ## Not measured
 
-- **Windows** load/export/AI timings — no Windows runner has executed this
-  harness, and no figure here applies to Windows.
+- **Windows AI timings, batch export, memory and cold start** — the tests above
+  time one preview render and one 16-bit PNG export. No Windows figure here may
+  be quoted for an AI stage, a batch, resident memory or startup, and the macOS
+  harness never runs on Windows.
 - **AI runtime execution** — the bundled runtime is not installed in this
   environment; upscale, background removal, generative fill and scene analysis
   timings are **NOT VERIFIED**.
