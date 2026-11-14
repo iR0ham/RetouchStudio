@@ -2589,9 +2589,9 @@ internal static class Program
         {
             ["adjustments"] = new JsonObject
             {
-                ["smooth"] = 30,
+                ["smooth"] = 30.0,
                 ["lookID"] = "kodachrome",
-                ["backgroundImageAmount"] = 100,
+                ["backgroundImageAmount"] = 100.0,
             },
         });
         Check("a skin amount and a look are named",
@@ -2613,7 +2613,7 @@ internal static class Program
         {
             ["adjustments"] = new JsonObject
             {
-                ["hslSaturation"] = new JsonArray(0, 0, 12, 0),
+                ["hslSaturation"] = new JsonArray(0.0, 0.0, 12.0, 0.0),
             },
         });
         Check("one HSL band amount is named",
@@ -2624,8 +2624,8 @@ internal static class Program
         {
             ["adjustments"] = new JsonObject
             {
-                ["exposure"] = 20, ["contrast"] = 10, ["clarity"] = 15,
-                ["texturePreserve"] = 70,
+                ["exposure"] = 20.0, ["contrast"] = 10.0, ["clarity"] = 15.0,
+                ["texturePreserve"] = 70.0,
             },
         });
         Check("the nine renderable sliders are not edits",
