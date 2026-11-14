@@ -9,12 +9,14 @@ entry is not verified.
 Status vocabulary follows the plan: VERIFIED, IMPLEMENTED, PARTIALLY
 IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 
-**Workflow (2026-11-14 steering):** development is local-first and
-milestone-based, per [`WORKFLOW.md`](WORKFLOW.md). Work accumulates on the
-shared `develop` branch with local commits and periodic backup pushes; the full
-five-context matrix runs at a milestone (dispatch on `develop`, then the
-milestone PR); routine changes do not get their own PR. Rows below keep their
-old evidence links, which remain valid history.
+**Workflow (2026-11-14 steering):** development is GitHub-based and
+milestone-driven, per [`WORKFLOW.md`](WORKFLOW.md). Work is pushed continuously
+to organized development branches and folded into the shared `develop`
+integration branch; the full five-context matrix runs at a milestone (dispatch
+on `develop` or the milestone branch, then the milestone PR). Implementation,
+tests and documentation of one milestone share a single PR; routine changes and
+documentation-only changes do not get their own PR. Rows below keep their old
+evidence links, which remain valid history.
 
 **Current integration state:** `develop` folds the W4 metadata workstream —
 batch cancellation, EXIF/XMP carry, the sRGB export declaration and the
