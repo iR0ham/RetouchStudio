@@ -79,9 +79,11 @@ public static class ExportRunner
             rendered = rendered.ResizeLongEdge(longEdge);
         }
 
-        // The plan says whether this export is a photograph that may carry the
-        // source metadata; the caller decides whether privacy stripping is on.
-        var metadata = plan.CarriesSourceMetadata && !stripPrivacyMetadata
+        // The plan says whether this export is a photograph. The metadata is
+        // read even when stripping is on, because the resolution travels with
+        // the pixels either way; the codec copies the identity keys only when
+        // stripping is off.
+        var metadata = plan.CarriesSourceMetadata
             ? await codec.ReadMetadataAsync(sourcePath)
             : Imaging.ImageMetadata.Empty;
         await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,

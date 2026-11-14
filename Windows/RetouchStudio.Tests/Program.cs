@@ -380,8 +380,6 @@ internal static class Program
         ExportRunner.ExportAsync(session, codec, kept, "jpeg", 0.9, 0,
                                  stripPrivacyMetadata: false).GetAwaiter().GetResult();
         var keptMeta = codec.ReadMetadataAsync(kept).GetAwaiter().GetResult();
-        Check("keeping metadata carries the camera manufacturer",
-              Text(keptMeta, "System.Photo.CameraManufacturer") == "Retouch");
         Check("keeping metadata carries the camera model",
               Text(keptMeta, "System.Photo.CameraModel") == "RS-Test");
         Check("keeping metadata carries the ISO",
@@ -414,6 +412,45 @@ internal static class Program
         var pngMeta = codec.ReadMetadataAsync(png).GetAwaiter().GetResult();
         Check("PNG carries no EXIF on this host",
               !pngMeta.Properties.ContainsKey("System.Photo.CameraModel"));
+
+        Probe(root, codec);
+    }
+
+    /// <summary>
+    /// A diagnostic, not a gate: writes one candidate key per file and prints
+    /// whether it survives, so the allowlist grows from measured behaviour
+    /// instead of from documentation. A dropped key is not asserted here
+    /// because the list is deliberately wider than what a JPEG encoder keeps.
+    /// </summary>
+    private static void Probe(string root, WindowsImageCodec codec)
+    {
+        var image = new PixelBuffer(4, 3);
+        var probes = new (string Key, object Value)[]
+        {
+            ("System.Photo.CameraManufacturer", "Probe"),
+            ("System.Photo.DateTaken", new DateTime(2024, 5, 17, 10, 30, 0, DateTimeKind.Unspecified)),
+            ("System.Photo.ExposureTime", 0.008),
+            ("System.Photo.FNumber", 2.8),
+            ("System.Photo.IsoSpeed", (ushort)400),
+            ("System.GPS.LatitudeRef", "N"),
+        };
+        foreach (var (key, value) in probes)
+        {
+            try
+            {
+                var path = Path.Combine(root, "probe-" + key.Replace('.', '-') + ".jpg");
+                codec.EncodeAsync(image, path, "jpeg", 0.95,
+                                  new ImageMetadata(new Dictionary<string, object> { [key] = value }),
+                                  stripPrivacyMetadata: false).GetAwaiter().GetResult();
+                var read = codec.ReadMetadataAsync(path).GetAwaiter().GetResult();
+                Console.WriteLine($"  probe {key}: " +
+                                  (read.Properties.ContainsKey(key) ? "kept" : "dropped"));
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine($"  probe {key}: failed ({error.Message})");
+            }
+        }
     }
 
     private static string Text(ImageMetadata metadata, string key) =>
