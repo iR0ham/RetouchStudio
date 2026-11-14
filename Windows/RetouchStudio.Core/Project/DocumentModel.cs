@@ -234,6 +234,73 @@ public sealed class DocumentModel
             {
                 found.Add("analysis callouts");
             }
+            // The nine global sliders are the only adjustment amounts this
+            // host renders. Every other amount macOS writes is named here so
+            // an export cannot silently drop it.
+            if (AnyAmount("smooth", "blemish", "wrinkle", "skinToneEvens",
+                          "darkCircles", "skinBrighten"))
+            {
+                found.Add("skin retouching");
+            }
+            if (AnyAmount("skinFinish", "shine", "splitTone"))
+            {
+                found.Add("skin finish");
+            }
+            if (AnyAmount("teethWhiten", "teethAlign"))
+            {
+                found.Add("teeth whitening");
+            }
+            if (AnyAmount("eyeBrighten", "eyeSharpen", "irisEnhance", "lashDarken"))
+            {
+                found.Add("eye enhancement");
+            }
+            if (AnyAmount("eyeSize", "noseSize", "noseTip", "lipSize", "cheekSize",
+                          "jawWidth", "chinLength", "faceWidth", "faceLength"))
+            {
+                found.Add("face reshaping");
+            }
+            if (AnyAmount("lipTint", "blush", "browDefine", "eyeshadow", "eyeliner",
+                          "contour", "lipGloss"))
+            {
+                found.Add("makeup");
+            }
+            if (ReadAdjustmentString("lookID") is { Length: > 0 })
+            {
+                found.Add("a look");
+            }
+            if (AnyAmount("grain"))
+            {
+                found.Add("film grain");
+            }
+            if (AnyAmount("curveShadows", "curveMidtones", "curveHighlights"))
+            {
+                found.Add("curves");
+            }
+            if (AnyAmountInArray("hslHue") || AnyAmountInArray("hslSaturation")
+                || AnyAmountInArray("hslLuminance"))
+            {
+                found.Add("HSL colour");
+            }
+            if (AnyAmount("bodySmooth", "bodyTone", "bodySlim", "bodyWaist",
+                          "bodyArms", "bodyLegs"))
+            {
+                found.Add("body adjustments");
+            }
+            if (AnyAmount("backgroundBlur", "backgroundTone", "backgroundSaturation",
+                          "backgroundFill")
+                || ReadAdjustmentBool("backgroundRemove")
+                || ReadAdjustmentString("backgroundImage") is { Length: > 0 })
+            {
+                found.Add("background adjustments");
+            }
+            if (AnyAmount("hairColor", "hairShine", "hairVolume"))
+            {
+                found.Add("hair adjustments");
+            }
+            if (AnyAmount("lensTint"))
+            {
+                found.Add("lens tint");
+            }
             // autoRetouchStrength and autoColorStrength are the settings for
             // those tools, not edits: the settings ride every project file
             // macOS writes, while an applied Smart Analyze result is merged
@@ -242,6 +309,23 @@ public sealed class DocumentModel
             return found;
         }
     }
+
+    private double Amount(string key) =>
+        Adjustments is { } adjustments ? ReadDouble(adjustments, key) ?? 0 : 0;
+
+    private bool AnyAmount(params string[] keys) => keys.Any(key => Amount(key) != 0);
+
+    private bool AnyAmountInArray(string key) =>
+        Adjustments?[key] is JsonArray values
+        && values.Any(value => ReadDouble(value) is not (null or 0.0));
+
+    private string? ReadAdjustmentString(string key) =>
+        Adjustments?[key] is JsonValue value
+        && value.TryGetValue<string>(out var text) ? text : null;
+
+    private bool ReadAdjustmentBool(string key) =>
+        Adjustments?[key] is JsonValue value
+        && value.TryGetValue<bool>(out var flag) && flag;
 
     private bool AnalysisEnabled =>
         _root["analysis"] is JsonObject analysis
