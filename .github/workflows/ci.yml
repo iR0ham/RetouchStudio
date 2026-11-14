@@ -4,8 +4,11 @@ on:
   pull_request:
     branches: [main]
   push:
+    # `main` is deliberately absent. With strict required checks the pull
+    # request run checks out `refs/pull/N/merge`, whose tree is exactly the
+    # merge commit's tree, so a push run on `main` repeats a matrix that has
+    # already passed for that tree. Use `workflow_dispatch` for an ad-hoc run.
     branches:
-      - main
       - v1-macos-delivery
       - m5-cross-platform-core
       - 'ci/**'
@@ -194,8 +197,8 @@ jobs:
   # The host itself, not just the shared core: builds studioscore_core.dll,
   # publishes the self-contained WPF app, runs the headless host tests against
   # the real DLL and Windows Imaging Component, and smoke-runs the published
-  # exe until it opens a window. Not a required check; it proves a Windows
-  # build and runtime start, nothing about an installer or a release.
+  # exe until it opens a window. Required on `main` since 2026-11-14; it proves
+  # a Windows build and runtime start, nothing about an installer or a release.
   windows-app:
     name: Windows App
     runs-on: windows-2025
