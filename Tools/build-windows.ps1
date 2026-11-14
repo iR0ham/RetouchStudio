@@ -257,6 +257,12 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiProjectOutput project
     Assert-ExitCode 'UI project tests'
+
+    # Batch export runs from the UI: photo picker, folder picker, written file.
+    $uiBatchOutput = Join-Path $uiTemp 'retouchstudio-ui-batch.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiBatchOutput batch
+    Assert-ExitCode 'UI batch tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted
