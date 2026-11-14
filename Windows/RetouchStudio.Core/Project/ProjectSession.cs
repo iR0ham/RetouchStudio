@@ -64,6 +64,17 @@ public sealed class ProjectSession : IDisposable
 
     public byte[] CurrentState() => Document.ToUtf8();
 
+    /// <summary>The recovery copy of the current document, as it stands now.</summary>
+    public RecoverySnapshot Recovery(DateTimeOffset savedAt)
+        => RecoverySnapshot.Capture(CurrentState(), _context, ImagePath, savedAt);
+
+    /// <summary>
+    /// A session for a document read from a recovery copy. It has no project
+    /// file, so the first save asks the owner where it goes.
+    /// </summary>
+    public static ProjectSession FromRecovery(byte[] document, byte[] context)
+        => new(DocumentModel.Parse(document), context);
+
     public (bool CanUndo, bool CanRedo) HistoryFlags() => _history.Flags(CurrentState());
 
     public bool IsDirty() => _history.IsDirty(CurrentState());

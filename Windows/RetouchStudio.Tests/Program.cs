@@ -50,6 +50,7 @@ internal static class Program
             CarryTransforms(root);
             Colour(root);
             Interchange(root);
+            Recovery(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard();
             CropPresets();
@@ -2153,6 +2154,197 @@ internal static class Program
             Check("a v3 save keeps the unkeyed geometry", saved["crop"] is JsonArray);
             Check("a v3 save keeps every record", JsonNode.DeepEquals(saved, v3Fixture));
         }
+    }
+
+    /// <summary>
+    /// WP-5 / R-5 on Windows: an autosave slot replaced atomically, immutable
+    /// candidates no decision can overwrite, launch preparation that preserves
+    /// every unresolved copy, and a restore order proved at each crash point by
+    /// injected failures.
+    /// </summary>
+    private static void Recovery(string root)
+    {
+        var photo = Path.Combine(root, "recovery-photo.png");
+        var otherPhoto = Path.Combine(root, "recovery-other.png");
+        File.WriteAllBytes(photo, new byte[] { 1, 2, 3, 4, 5, 6 });
+        File.WriteAllBytes(otherPhoto, new byte[] { 9, 9, 9 });
+        var context = Encoding.UTF8.GetBytes("""{"version":4,"requiredFeatures":["futureMask"]}""");
+        var at = new DateTimeOffset(2026, 11, 14, 10, 30, 0, TimeSpan.Zero);
+
+        static byte[] ProjectFor(string imagePath, Action<JsonObject>? customize = null)
+        {
+            var document = new JsonObject
+            {
+                ["version"] = 4,
+                ["imagePath"] = imagePath,
+                ["adjustments"] = new JsonObject(),
+                ["exportFormat"] = "jpeg",
+                ["exportQuality"] = 0.92,
+            };
+            customize?.Invoke(document);
+            return Encoding.UTF8.GetBytes(document.ToJsonString());
+        }
+
+        static RecoverySnapshot SnapshotAt(byte[] project, byte[] context,
+                                           string imagePath, DateTimeOffset savedAt)
+            => RecoverySnapshot.Capture(project, context, imagePath, savedAt);
+
+        var snapshot = SnapshotAt(ProjectFor(photo), context, photo, at);
+        Check("a snapshot records the photo's size and date",
+              snapshot.Source is { Bytes: 6 });
+        var decoded = RecoverySnapshot.FromUtf8(snapshot.ToUtf8());
+        Check("the document survives a snapshot round trip",
+              decoded?.Document().ImagePath == photo);
+        Check("the write context survives a snapshot round trip",
+              decoded is not null
+              && JsonNode.DeepEquals(JsonNode.Parse(decoded.Context), JsonNode.Parse(context)));
+        Check("the saved time survives a snapshot round trip", decoded?.SavedAt == at);
+        Check("the photo identity survives a snapshot round trip",
+              decoded?.Source == snapshot.Source);
+        Check("an unchanged photo is recognised as the snapshot's photo",
+              decoded?.SourceState() == RecoverySourceState.Available);
+        var noPhoto = SnapshotAt(ProjectFor(Path.Combine(root, "gone.png")), context,
+                                 Path.Combine(root, "gone.png"), at);
+        Check("a snapshot of a missing photo records no identity, and says so",
+              noPhoto.Source is null && noPhoto.SourceState() == RecoverySourceState.Missing);
+        var changed = SnapshotAt(ProjectFor(otherPhoto), context, otherPhoto, at);
+        File.AppendAllText(otherPhoto, "changed");
+        Check("a photo replaced at the same path is noticed",
+              changed.SourceState() == RecoverySourceState.Changed);
+
+        var future = RecoverySnapshot.Capture(
+            ProjectFor(photo, doc => doc["futureField"] = true),
+            context, photo, at);
+        var futureCopy = RecoverySnapshot.FromUtf8(future.ToUtf8());
+        Check("an unknown project key survives recovery",
+              futureCopy?.Document().Root["futureField"]?.GetValue<bool>() == true);
+        Check("a non-snapshot file is refused, not thrown on",
+              RecoverySnapshot.FromUtf8(Encoding.UTF8.GetBytes("{ not json")) is null
+              && RecoverySnapshot.FromUtf8(Encoding.UTF8.GetBytes("""{"version":1}""")) is null);
+
+        var store = new RecoveryStore(Path.Combine(root, "recovery-store"));
+        Check("an autosave writes the working slot",
+              store.WriteWorking(snapshot, out var written) && written is not null);
+        Check("the working slot leaves no temporary file",
+              File.Exists(store.WorkingPath) && !File.Exists(store.WorkingPath + ".tmp"));
+        var read = store.ReadWorking();
+        Check("the working slot reads back the document that was written",
+              read is not null
+              && JsonNode.DeepEquals(JsonNode.Parse(read.Project), JsonNode.Parse(snapshot.Project))
+              && JsonNode.DeepEquals(JsonNode.Parse(read.Context), JsonNode.Parse(context)));
+        store.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at.AddMilliseconds(-500)),
+                           out var second);
+        Check("autosave time never goes backwards",
+              second is not null && read is not null && second.SavedAt > read.SavedAt);
+
+        var emptyStore = new RecoveryStore(Path.Combine(root, "recovery-empty"));
+        Check("a clean launch lists no copies", emptyStore.PrepareForLaunch().Count == 0);
+
+        var crashStore = new RecoveryStore(Path.Combine(root, "recovery-crash"));
+        crashStore.WriteWorking(SnapshotAt(
+            ProjectFor(photo, doc => doc["adjustments"]!["exposure"] = 1),
+            context, photo, at), out _);
+        var liftA = crashStore.PrepareForLaunch();
+        Check("a launch lifts the crashed document into a candidate",
+              liftA.Count == 1 && !File.Exists(crashStore.WorkingPath)
+              && File.Exists(liftA[0].Path)
+              && RecoveryStore.IsCandidateFileName(Path.GetFileName(liftA[0].Path)));
+        crashStore.WriteWorking(SnapshotAt(
+            ProjectFor(photo, doc => doc["adjustments"]!["exposure"] = 2),
+            context, photo, at.AddMinutes(1)), out _);
+        var liftB = crashStore.PrepareForLaunch();
+        Check("each crashed document keeps its own independent copy", liftB.Count == 2);
+        Check("candidates are listed oldest first",
+              liftB[0].Snapshot.Document().Adjustment("exposure") == 1
+              && liftB[1].Snapshot.Document().Adjustment("exposure") == 2);
+        Check("a later autosave cannot change an earlier candidate",
+              File.Exists(liftA[0].Path)
+              && liftA[0].Snapshot.Document().Adjustment("exposure") == 1);
+
+        var candidatesDirectory = Path.GetDirectoryName(liftA[0].Path)!;
+        File.WriteAllBytes(Path.Combine(candidatesDirectory, $"5-{Guid.NewGuid():N}.retouch"),
+                           Encoding.UTF8.GetBytes("{ not json"));
+        File.WriteAllText(crashStore.WorkingPath, "{ not json");
+        var afterCorrupt = crashStore.PrepareForLaunch();
+        Check("a corrupt candidate is quarantined and not listed", afterCorrupt.Count == 2);
+        Check("a corrupt working slot is quarantined and the slot is freed",
+              !File.Exists(crashStore.WorkingPath));
+        Check("quarantine keeps the unreadable bytes",
+              Directory.GetFiles(Path.Combine(crashStore.Directory, "quarantine")).Length == 2);
+
+        crashStore.InjectedFailures.Add(RecoveryStore.Failure.Quarantine);
+        File.WriteAllText(crashStore.WorkingPath, "{ broken");
+        crashStore.PrepareForLaunch();
+        Check("a copy that cannot be quarantined stays in place",
+              File.Exists(crashStore.WorkingPath)
+              && File.ReadAllText(crashStore.WorkingPath) == "{ broken");
+        crashStore.InjectedFailures.Clear();
+
+        var migrateStore = new RecoveryStore(Path.Combine(root, "recovery-migrate"));
+        migrateStore.WriteWorking(snapshot, out _);
+        migrateStore.InjectedFailures.Add(RecoveryStore.Failure.Migrate);
+        var stuck = migrateStore.PrepareForLaunch();
+        Check("a working slot that cannot be lifted stays whole and is offered",
+              File.Exists(migrateStore.WorkingPath) && stuck.Count == 1
+              && stuck[0].Path == migrateStore.WorkingPath);
+        Check("restoring a slot that could not be lifted keeps it whole",
+              migrateStore.Restore(stuck[0]) && File.Exists(migrateStore.WorkingPath));
+        migrateStore.InjectedFailures.Clear();
+
+        var restoreStore = new RecoveryStore(Path.Combine(root, "recovery-restore"));
+        restoreStore.WriteWorking(snapshot, out _);
+        var restoreList = restoreStore.PrepareForLaunch();
+        Check("a restore writes the working copy and deletes the candidate",
+              restoreStore.Restore(restoreList[0])
+              && File.Exists(restoreStore.WorkingPath)
+              && !File.Exists(restoreList[0].Path));
+        Check("the restored working copy is the candidate's document",
+              restoreStore.ReadWorking() is { } restored
+              && JsonNode.DeepEquals(JsonNode.Parse(restored.Project),
+                                     JsonNode.Parse(restoreList[0].Snapshot.Project)));
+
+        var crashRestore = new RecoveryStore(Path.Combine(root, "recovery-crash-restore"));
+        crashRestore.WriteWorking(snapshot, out _);
+        var crashList = crashRestore.PrepareForLaunch();
+        crashRestore.InjectedFailures.Add(RecoveryStore.Failure.WorkingWrite);
+        Check("a crash before the restore write leaves the candidate",
+              !crashRestore.Restore(crashList[0]) && File.Exists(crashList[0].Path));
+        crashRestore.InjectedFailures.Clear();
+        crashRestore.InjectedFailures.Add(RecoveryStore.Failure.CandidateRemove);
+        Check("a crash after the restore write leaves both complete copies",
+              !crashRestore.Restore(crashList[0])
+              && File.Exists(crashList[0].Path)
+              && File.Exists(crashRestore.WorkingPath));
+        crashRestore.InjectedFailures.Clear();
+
+        var discardStore = new RecoveryStore(Path.Combine(root, "recovery-discard"));
+        discardStore.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at), out _);
+        var discardA = discardStore.PrepareForLaunch();
+        discardStore.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at.AddMinutes(1)), out _);
+        var discardB = discardStore.PrepareForLaunch();
+        Check("discarding one copy leaves the other",
+              discardStore.Discard(discardB[0])
+              && !File.Exists(discardB[0].Path)
+              && File.Exists(discardA[0].Path));
+
+        var missingCandidate = new RecoveryStore.Candidate(
+            Path.Combine(root, "never-written.retouch"), snapshot);
+        var missingStore = new RecoveryStore(Path.Combine(root, "recovery-missing"));
+        Check("a missing candidate is refused and nothing is written",
+              !missingStore.Restore(missingCandidate)
+              && !File.Exists(missingStore.WorkingPath));
+
+        var ownStore = new RecoveryStore(Path.Combine(root, "recovery-own"));
+        ownStore.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at), out _);
+        Check("another document's autosave is not dropped",
+              !ownStore.RemoveWorking(otherPhoto) && File.Exists(ownStore.WorkingPath));
+        Check("the document's own autosave is dropped",
+              ownStore.RemoveWorking(photo) && !File.Exists(ownStore.WorkingPath));
+
+        Check("a foreign file name is not a candidate",
+              !RecoveryStore.IsCandidateFileName("working.retouch")
+              && !RecoveryStore.IsCandidateFileName("1234-not-a-guid.retouch")
+              && !RecoveryStore.IsCandidateFileName($"{Guid.NewGuid():N}.retouch"));
     }
 
     /// <summary>
