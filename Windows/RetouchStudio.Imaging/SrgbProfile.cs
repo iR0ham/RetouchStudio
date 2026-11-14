@@ -14,9 +14,6 @@ namespace RetouchStudio.Imaging;
 /// </summary>
 public static class SrgbProfile
 {
-    /// <summary>The profile bytes written into an export.</summary>
-    public static readonly byte[] Bytes = Build();
-
     /// <summary>The name a person sees in a colour picker.</summary>
     public const string Description = "sRGB (Retouch Studio)";
 
@@ -31,6 +28,12 @@ public static class SrgbProfile
     };
 
     private const int CurveCount = 1024;
+
+    /// <summary>
+    /// The profile bytes written into an export. Declared after the tables it
+    /// reads, because static initializers run in textual order.
+    /// </summary>
+    public static readonly byte[] Bytes = Build();
 
     private static byte[] Build()
     {
