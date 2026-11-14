@@ -39,7 +39,7 @@
       <DockPanel>
         <TextBlock DockPanel.Dock="Right" Text="{Binding DimensionText}"
                    Foreground="{StaticResource MutedBrush}" FontSize="11" />
-        <TextBlock DockPanel.Dock="Right" Text="·  hold Space to compare  ·"
+        <TextBlock DockPanel.Dock="Right" Text="·  drag to pan · Ctrl+wheel to zoom · hold Space to compare  ·"
                    Foreground="{StaticResource MutedBrush}" FontSize="11"
                    Margin="0,0,10,0">
           <TextBlock.Style>
@@ -65,7 +65,12 @@
       </Grid.ColumnDefinitions>
 
       <Border Grid.Column="0" Background="#0E1012" Margin="10" CornerRadius="6">
-        <Grid x:Name="PreviewHost" ClipToBounds="True">
+        <Grid x:Name="PreviewHost" ClipToBounds="True" Background="Transparent"
+              MouseLeftButtonDown="PreviewHost_MouseLeftButtonDown"
+              MouseMove="PreviewHost_MouseMove"
+              MouseLeftButtonUp="PreviewHost_MouseLeftButtonUp"
+              MouseWheel="PreviewHost_MouseWheel"
+              LostMouseCapture="PreviewHost_LostMouseCapture">
           <TextBlock Text="Open a photo, or a project made on either platform."
                      Foreground="{StaticResource MutedBrush}" FontSize="13"
                      HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -80,7 +85,44 @@
               </Style>
             </TextBlock.Style>
           </TextBlock>
-          <Image x:Name="PreviewImage" Source="{Binding Preview}" Stretch="Uniform" Margin="18" />
+          <Image x:Name="PreviewImage" Source="{Binding Preview}" Stretch="Uniform" Margin="18"
+                 RenderTransformOrigin="0.5,0.5">
+            <Image.RenderTransform>
+              <TransformGroup>
+                <ScaleTransform x:Name="PreviewScale" />
+                <TranslateTransform x:Name="PreviewPan" />
+              </TransformGroup>
+            </Image.RenderTransform>
+          </Image>
+          <Border x:Name="ZoomDock" Background="#B30B0D0F" CornerRadius="5"
+                  BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                  Padding="2" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                  Margin="0,0,14,12">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding HasDocument}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <StackPanel Orientation="Horizontal">
+              <Button x:Name="ZoomFitButton" Content="Fit" Style="{StaticResource ToolButton}"
+                      Padding="7,2" FontSize="11" Click="ZoomFit_Click"
+                      ToolTip="Fit to window (Ctrl+0)" />
+              <Button x:Name="ZoomOutButton" Content="−" Style="{StaticResource ToolButton}"
+                      Padding="7,2" FontSize="12" Click="ZoomOut_Click"
+                      ToolTip="Zoom out (Ctrl+-)" />
+              <TextBlock x:Name="ZoomText" Text="Fit" Foreground="{StaticResource TextBrush}"
+                         FontSize="11" MinWidth="40" TextAlignment="Center"
+                         VerticalAlignment="Center" />
+              <Button x:Name="ZoomInButton" Content="+" Style="{StaticResource ToolButton}"
+                      Padding="7,2" FontSize="12" Click="ZoomIn_Click"
+                      ToolTip="Zoom in (Ctrl++)" />
+            </StackPanel>
+          </Border>
           <Canvas x:Name="CropOverlay" Visibility="Collapsed" ClipToBounds="True">
             <Rectangle x:Name="CropShadeTop" Fill="#8C0B0D0F" IsHitTestVisible="False" />
             <Rectangle x:Name="CropShadeBottom" Fill="#8C0B0D0F" IsHitTestVisible="False" />

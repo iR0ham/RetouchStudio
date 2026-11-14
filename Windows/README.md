@@ -97,6 +97,14 @@ before upload, so a release carries one installer version, not two.
   preview update. macOS bins an 80 px copy of the preview; Windows bins the
   preview buffer it has just rendered, which is the same picture without a
   second resample.
+- Zoom and pan, with the macOS limits: the canvas starts fitted (1×), Ctrl+wheel
+  zooms about the pointer up to 4×, a plain wheel pans a zoomed photo, dragging
+  moves it, and a double-click toggles between fit and 4×. The dock at the lower
+  right shows the percentage and offers fit, − and +; Ctrl++ , Ctrl+- and Ctrl+0
+  do the same from the keyboard. The pan is clamped so the photo cannot be
+  dragged off the canvas, a zoom keeps the image point under the pointer still,
+  and opening another photo returns to fit. Starting a custom crop returns to
+  fit too, because the overlay works in fitted coordinates.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan
@@ -126,6 +134,10 @@ before upload, so a release carries one installer version, not two.
   checks cover the placement, resize, slide and readout arithmetic
   (`CropGeometry`), and the smoke run proves the window loads, but no automated
   check moves a handle or drags the frame.
+- The zoom and pan wiring is likewise not driven by CI: `CanvasView`'s limits,
+  anchoring and pan clamps are checked headlessly, but no automated check spins
+  a wheel or drags the photo. There are no pinch or touch gestures — WPF would
+  turn them into pans — so zoom is the wheel, the dock and the shortcuts.
 - Compare is a whole-frame peek only: the macOS split handle that wipes
   between original and edit is not part of this host.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the

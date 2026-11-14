@@ -7,6 +7,7 @@ using System.Windows.Input;
 using Line = System.Windows.Shapes.Line;
 using Microsoft.Win32;
 using RetouchStudio.Core.Project;
+using RetouchStudio.Core.View;
 
 namespace RetouchStudio.App;
 
@@ -25,17 +26,31 @@ public partial class MainWindow : Window
     private CropValue _pendingCrop = new(0, 0, 1, 1);
     private bool _cropMode;
 
+    // Canvas zoom and pan. The arithmetic lives in CanvasView so the headless
+    // checks can pin it; this window only feeds it sizes and pointer points.
+    private readonly CanvasView _view = new();
+    private Point? _panPoint;
+
     public MainWindow()
     {
         InitializeComponent();
         DataContext = _vm;
         _vm.PropertyChanged += (_, args) =>
         {
+            if (args.PropertyName == nameof(EditorViewModel.HasDocument))
+            {
+                // A new photo starts fitted: a zoom chosen for the previous one
+                // would frame a region the new photo may not even have.
+                _panPoint = null;
+                _view.Reset();
+                ApplyView();
+            }
             if (_cropMode && args.PropertyName == nameof(EditorViewModel.Preview))
             {
                 UpdateCropOverlay();
             }
         };
+        ApplyView();
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -93,6 +108,18 @@ public partial class MainWindow : Window
                 _vm.Undo();
                 e.Handled = true;
                 break;
+            case Key.OemPlus or Key.Add when ctrl:
+                StepZoom(inward: true);
+                e.Handled = true;
+                break;
+            case Key.OemMinus or Key.Subtract when ctrl:
+                StepZoom(inward: false);
+                e.Handled = true;
+                break;
+            case Key.D0 or Key.NumPad0 when ctrl:
+                ResetZoomView();
+                e.Handled = true;
+                break;
             case Key.Escape when _cropMode:
                 EndCrop();
                 e.Handled = true;
@@ -123,6 +150,173 @@ public partial class MainWindow : Window
     /// <summary>A peek held while the window loses focus must not stick.</summary>
     private void Window_Deactivated(object sender, EventArgs e) =>
         _vm.IsPeekingOriginal = false;
+
+    /// <summary>
+    /// The unzoomed fitted photo, in PreviewHost coordinates. It is computed
+    /// from layout and the bitmap's own aspect, not from the rendered visual,
+    /// so the zoom transform applied to the image cannot feed back into the
+    /// maths that positions it.
+    /// </summary>
+    private bool TryFittedRect(out DisplayRect fit)
+    {
+        fit = default;
+        var bitmap = _vm.Preview;
+        if (bitmap is null)
+        {
+            return false;
+        }
+        var margin = PreviewImage.Margin;
+        var width = PreviewHost.ActualWidth - margin.Left - margin.Right;
+        var height = PreviewHost.ActualHeight - margin.Top - margin.Bottom;
+        if (width <= 0 || height <= 0)
+        {
+            return false;
+        }
+        var content = CropGeometry.Fit(bitmap.PixelWidth, bitmap.PixelHeight, width, height);
+        fit = content with { X = margin.Left + content.X, Y = margin.Top + content.Y };
+        return fit.Width > 0 && fit.Height > 0;
+    }
+
+    /// <summary>Pushes the CanvasView state onto the image and the dock.</summary>
+    private void ApplyView()
+    {
+        PreviewScale.ScaleX = _view.Zoom;
+        PreviewScale.ScaleY = _view.Zoom;
+        PreviewPan.X = _view.PanX;
+        PreviewPan.Y = _view.PanY;
+        ZoomText.Text = _view.ZoomText;
+        ZoomFitButton.IsEnabled = _view.IsZoomed;
+        ZoomOutButton.IsEnabled = _view.IsZoomed;
+        ZoomInButton.IsEnabled = _view.Zoom < CanvasView.MaxZoom - 0.001;
+        PreviewHost.Cursor = !_view.IsZoomed ? Cursors.Arrow
+                           : _panPoint is not null ? Cursors.SizeAll
+                           : Cursors.Hand;
+    }
+
+    private void ResetZoomView()
+    {
+        _panPoint = null;
+        _view.Reset();
+        ApplyView();
+    }
+
+    private void StepZoom(bool inward)
+    {
+        if (!_vm.HasDocument || _cropMode || !TryFittedRect(out var fit))
+        {
+            return;
+        }
+        if (inward)
+        {
+            _view.ZoomIn(fit.Width, fit.Height, PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+        }
+        else
+        {
+            _view.ZoomOut(fit.Width, fit.Height, PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+        }
+        ApplyView();
+    }
+
+    /// <summary>
+    /// Ctrl+wheel zooms about the pointer, as macOS does with ⌘-scroll; a plain
+    /// wheel pans a zoomed photo, as macOS scroll does. A fitted photo has
+    /// nothing to pan, so the plain wheel is left alone.
+    /// </summary>
+    private void PreviewHost_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!_vm.HasDocument || _cropMode || !TryFittedRect(out var fit))
+        {
+            return;
+        }
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            var point = e.GetPosition(PreviewHost);
+            _view.SetZoom(_view.Zoom * Math.Exp(e.Delta * 0.0015), point.X, point.Y,
+                          fit.Width, fit.Height, PreviewHost.ActualWidth,
+                          PreviewHost.ActualHeight);
+            ApplyView();
+            e.Handled = true;
+        }
+        else if (_view.IsZoomed)
+        {
+            // One notch is 120 units; dividing keeps a click to a comfortable
+            // strip instead of half the photo.
+            _view.PanBy(0, e.Delta / 2.0, fit.Width, fit.Height,
+                        PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+            ApplyView();
+            e.Handled = true;
+        }
+    }
+
+    private void PreviewHost_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_vm.HasDocument || _cropMode)
+        {
+            return;
+        }
+        if (e.ClickCount == 2)
+        {
+            if (!TryFittedRect(out var fitted))
+            {
+                return;
+            }
+            _panPoint = null;
+            _view.Toggle(fitted.Width, fitted.Height, PreviewHost.ActualWidth,
+                         PreviewHost.ActualHeight);
+            ApplyView();
+            e.Handled = true;
+            return;
+        }
+        if (!_view.IsZoomed)
+        {
+            return;
+        }
+        _panPoint = e.GetPosition(PreviewHost);
+        PreviewHost.CaptureMouse();
+        ApplyView();
+        e.Handled = true;
+    }
+
+    private void PreviewHost_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_panPoint is not { } last || e.LeftButton != MouseButtonState.Pressed
+            || !TryFittedRect(out var fit))
+        {
+            return;
+        }
+        var now = e.GetPosition(PreviewHost);
+        _view.PanBy(now.X - last.X, now.Y - last.Y, fit.Width, fit.Height,
+                    PreviewHost.ActualWidth, PreviewHost.ActualHeight);
+        _panPoint = now;
+        ApplyView();
+    }
+
+    private void PreviewHost_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_panPoint is null)
+        {
+            return;
+        }
+        _panPoint = null;
+        PreviewHost.ReleaseMouseCapture();
+        ApplyView();
+    }
+
+    private void PreviewHost_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_panPoint is null)
+        {
+            return;
+        }
+        _panPoint = null;
+        ApplyView();
+    }
+
+    private void ZoomFit_Click(object sender, RoutedEventArgs e) => ResetZoomView();
+
+    private void ZoomIn_Click(object sender, RoutedEventArgs e) => StepZoom(inward: true);
+
+    private void ZoomOut_Click(object sender, RoutedEventArgs e) => StepZoom(inward: false);
 
     private async void OpenPhoto_Click(object sender, RoutedEventArgs e)
     {
@@ -324,6 +518,9 @@ public partial class MainWindow : Window
             return;
         }
         _cropMode = true;
+        // The overlay works in fitted coordinates, so a zoomed canvas returns
+        // to fit before it opens; the crop is chosen on the whole photo.
+        ResetZoomView();
         _pendingCrop = _vm.CurrentCrop ?? new CropValue(0, 0, 1, 1);
         _vm.IsCropping = true;
         CropOverlay.Visibility = Visibility.Visible;

@@ -5,6 +5,7 @@ using RetouchStudio.Core.Imaging;
 using RetouchStudio.Core.Interop;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Core.Render;
+using RetouchStudio.Core.View;
 using RetouchStudio.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -51,6 +52,7 @@ internal static class Program
             OrientationComposition();
             GeometryRenderParity();
             Histogram();
+            CanvasZoom();
         }
         catch (Exception error)
         {
@@ -1962,6 +1964,67 @@ internal static class Program
         Check("a histogram of nothing is empty",
               HistogramSampler.Sample(image, 0).IsEmpty
               && HistogramBins.Empty.IsEmpty);
+    }
+
+    /// <summary>
+    /// Canvas zoom and pan, with the numbers written out: a 800x600 photo fitted
+    /// into a 1000x700 canvas, zoomed to 2x about the point (750, 350), must keep
+    /// that point on the same image pixel, and a drag must stop at the canvas
+    /// edge instead of losing the photo.
+    /// </summary>
+    private static void CanvasZoom()
+    {
+        const double fittedWidth = 800, fittedHeight = 600;
+        const double canvasWidth = 1000, canvasHeight = 700;
+
+        var view = new CanvasView();
+        var start = view.ZoomText;
+        view.ZoomIn(fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        var afterOne = view.Zoom;
+        view.ZoomIn(fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        view.ZoomIn(fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        view.ZoomIn(fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        var atCeiling = view.Zoom;
+        Check("zoom steps by 1.5 and stops at the 4x ceiling",
+              start == "Fit" && Near(afterOne, 1.5) && Near(atCeiling, 4)
+              && view.ZoomText == "400%");
+
+        var anchored = new CanvasView();
+        anchored.SetZoom(2, 750, 350, fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        var beforeOffset = (750 - canvasWidth / 2) / 1.0;
+        var afterOffset = (750 - canvasWidth / 2 - anchored.PanX) / anchored.Zoom;
+        Check("zooming about a point keeps the image pixel under it",
+              Near(anchored.Zoom, 2) && Near(afterOffset, beforeOffset)
+              && Near(anchored.PanX, -250) && Near(anchored.PanY, 0));
+
+        var panned = new CanvasView();
+        panned.SetZoom(2, 750, 350, fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        panned.PanBy(500, 500, fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        var crowded = (panned.PanX, panned.PanY);
+        panned.PanBy(-1000, -1000, fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        Check("a drag stops at the canvas edge in both directions",
+              Near(crowded.Item1, 250) && Near(crowded.Item2, 250)
+              && Near(panned.PanX, -300) && Near(panned.PanY, -250));
+
+        panned.SetZoomCentered(1, fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        Check("zooming back to fit drops the pan and the badge",
+              Near(panned.Zoom, 1) && Near(panned.PanX, 0) && Near(panned.PanY, 0)
+              && !panned.IsZoomed && panned.ZoomText == "Fit");
+
+        var toggled = new CanvasView();
+        toggled.Toggle(fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        var doubled = toggled.Zoom;
+        toggled.Toggle(fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        Check("a double-click toggles between fit and 4x",
+              Near(doubled, 4) && Near(toggled.Zoom, 1) && Near(toggled.PanX, 0));
+
+        var stepped = new CanvasView();
+        for (var step = 0; step < 8; step++)
+        {
+            stepped.ZoomOut(fittedWidth, fittedHeight, canvasWidth, canvasHeight);
+        }
+        Check("zoom out floors at fit",
+              Near(stepped.Zoom, 1) && Near(stepped.PanX, 0) && Near(stepped.PanY, 0));
     }
 
     private static void Put(PixelBuffer buffer, int x, int y,
