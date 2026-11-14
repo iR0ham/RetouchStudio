@@ -37,7 +37,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Nested unknown fields | capture/apply | yes | via C ABI | R4.8 tests | VERIFIED (top-level and modelled records; unmodelled nested records are dropped by design) |
 | Cross-platform project interchange | codec | macOS fixtures | opens the same fixtures, saves structurally identical JSON | 14 host checks, CI run 43534410772 | VERIFIED |
 | Undo/redo, 100-step history | `DocumentHistory` | yes | yes | StudioCore suite, 55 host checks | VERIFIED |
-| Nine global adjustments | `Adjustments` | full engine | 9-slider pipeline | host checks, engine suite | VERIFIED per host; cross-host pixel parity NOT VERIFIED |
+| Nine global adjustments | `Adjustments` | full engine | 9-slider pipeline | host checks; G-case metrics vs macOS references | VERIFIED per host; exposure/levels aligned (MAE 0.01 / 0.007), clarity and vignette still differ (MAE 5.8 / 5.2); cross-host parity NOT VERIFIED |
 | Crop, quarter turns, mirror, straighten | values + policy | full freeform | 4 aspect presets, turns, mirror, straighten | host checks | VERIFIED (unit); Windows UI is preset-only |
 | Face detection, landmarks, multi-face, confidence | — | Vision, biggest-first | ABSENT | engine suite, `--selftest` | VERIFIED macOS |
 | Face line mesh | — | ~76 Vision points + forehead/cheek rows, drawn as a web | ABSENT | self-check draws-mesh probe | VERIFIED macOS; no dense/3D mesh exists |
@@ -69,7 +69,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 0 | Baseline and gap analysis | VERIFIED | This document; `main` `1d32842`; run 43531081160 |
 | 1 | Shared core and portable project architecture | VERIFIED | StudioCore boundary suite, conformance gate, R2–R4.8 docs |
 | 2 | W3 face analysis and masking | macOS VERIFIED; Windows BLOCKED | Vision landmarks and masks exist and are tested on macOS; the Windows host has no face path, and its only in-box detector returns boxes without landmarks, so a distributable landmark model must be chosen |
-| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows is 8-bit sRGB with tested metadata keep/strip, upright orientation, alpha and an exact no-op; WIC's 16-bit storage and missing HEIF decoder are measured; cross-host pixel comparison NOT VERIFIED |
+| 3 | W4 image engine and rendering parity | PARTIAL | macOS pipeline characterised (16-bit PNG/TIFF, ICC, metadata, corpus references); Windows is 8-bit sRGB with tested metadata keep/strip, upright orientation, alpha, an exact no-op and exposure/levels that match the macOS references (MAE 0.01 / 0.007); clarity and vignette still differ (MAE 5.8 / 5.2); WIC's 16-bit storage and missing HEIF decoder are measured; full cross-host parity NOT VERIFIED |
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
@@ -140,6 +140,8 @@ must not claim them.
 | 2026-11-14 | `44a2869` | PR #17 checks, all five jobs | success; merged with a merge commit as `9278d65` |
 | 2026-11-14 | `0afcce5` | CI run 43547671904, Windows App job | `WINDOWS HOST TESTS: PASS (86 checks)`; F10 upright 480x720 at luma 115.442 / sd 61.798 against macOS 115.746 / 61.530, identical on the next run; F01 no-op export pixel-identical; merged as `27028d1` |
 | 2026-11-14 | `432e443` | CI run 43549524897, Windows App job | probe: F11 decodes as Rgba16 (512x512, 2 097 152 bytes); 16-bit PNG and TIFF encode store 16 bits (IHDR, TIFF `BitsPerSample`); HEIC decode unavailable `0x88982F8B` |
+| 2026-11-14 | `bc0514e` | PR #19 checks, all five jobs | success; merged with a merge commit |
+| 2026-11-14 | `516f549` | CI run 43553381673, Windows App job | `WINDOWS HOST TESTS: PASS (91 checks)`; against the macOS references: G01 MAE 0.01, G04 MAE 0.007, G09 MAE 5.80, G11 MAE 5.22 |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral

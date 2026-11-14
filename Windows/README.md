@@ -82,9 +82,12 @@ folder into one zip plus a SHA-256 file.
   has no HEIF decoder, so the probe on the corpus HEIC export fails with
   `0x88982F8B`.
 - No recovery store, updater, installer or signing. Packaging is a zip.
-- No macOS pixel parity claim. The sliders move in the documented direction and
-  the output is deterministic; the macOS Core Image pipeline is a different
-  renderer and is not reproduced stage for stage.
+- No macOS pixel parity claim. Exposure, blacks, whites, contrast and saturation
+  now use the shared scales: against the macOS reference PNGs the host measures
+  MAE 0.01 for exposure +40 and 0.007 for blacks +60, while clarity +55 still
+  differs (MAE 5.8; CI's unsharp mask is approximated) and vignette +55 differs
+  (MAE 5.2). Every measurement is printed by the headless suite; no tolerance is
+  approved.
 
 ## Pixel semantics
 

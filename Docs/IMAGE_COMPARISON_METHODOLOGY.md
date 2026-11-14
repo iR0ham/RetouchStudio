@@ -240,3 +240,23 @@ statement about their parity.
 
 The F10 luma difference (0.304) is recorded, not interpreted: it may come from
 decoder differences, colour management or dithering. It is not a pass rule.
+
+### 9.1 Adjustment cases (2026-11-14)
+
+The Windows host renders four cases both hosts implement and prints metrics
+against the macOS reference PNGs in the same size:
+
+| Case | MAE | RMSE | PSNR | Changed | Luma delta |
+|---|---|---|---|---|---|
+| G01 exposure +40 | 0.01 | 0.10 | 68.1 dB | 3.0% | +0.005 |
+| G04 blacks +60 | 0.007 | 0.084 | 69.7 dB | 1.8% | +0.001 |
+| G09 clarity +55 | 5.80 | 8.99 | 29.1 dB | 64.8% | +5.71 |
+| G11 vignette +55 | 5.22 | 6.52 | 31.8 dB | 97.7% | −1.59 |
+
+Exposure and levels now follow the shared formulas (0.30 EV in linear light;
+the luma-weighted levels kernel), which is why those two cases are
+indistinguishable from the reference. Clarity still approximates Core Image's
+unsharp mask with a three-pass box blur and vignette still uses a radial
+falloff instead of `CIVignette`, so those two remain visibly different. These
+numbers are observations; they must not be turned into gates without the
+measured, documented derivation this methodology requires.
