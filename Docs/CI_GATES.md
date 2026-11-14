@@ -222,6 +222,9 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `249f4c1` (PR #32, throughput and 16-bit crop) | `CI` run 43596513201 | five jobs green; `Windows App` reports `PASS (133 checks)`; the Swift installer download is cached and the job budget is 60 minutes after a 45-minute timeout cancelled an install |
 | 2026-11-14 | `cf3acf9` (merge of PR #33) | `CI` run 43597640995, `main` | all five jobs green |
 | 2026-11-14 | `6f65650` (PR #36, Windows performance and stress) | `CI` run 43598349755 | five jobs green; `Windows App` reports `PASS (145 checks)`; `perf preview 1600x1067 nine sliders: median 1187 ms (1189 1187 1189 1166 1137)`, `perf 16-bit PNG export 1594 ms`, forty stress documents render, repeat pixel-identically, and keep the source area |
+| 2026-11-14 | `dd7177f` (PR #34, unsupported-edit guard) | `CI` run 43599860760 | five jobs green; `Windows App` reports `PASS (146 checks)`; both interchange fixtures name the six unrenderable edits, empty lists and disabled tools name none, one sticker warns |
+| 2026-11-14 | `dd14310` (merge of PR #34) | `CI` run 43600764519, `main` | all five jobs green |
+| 2026-11-14 | `1c3bae1` (PR #36 head, merged as `3fa6883`) | `CI` run 43600876917 | five jobs green; `Windows App` reports `PASS (152 checks)`; the perf lines print again (median 1056 ms, export 1368 ms), meeting the budgets on a second runner |
 | 2026-11-14 | `0ab9a4d` (Release dry run, `workflow_dispatch`) | `Release` run 43598113385 | both macOS slices and `Windows StudioCore` succeed; `Windows x64 application` succeeds with the MSI install, upgrade and uninstall; publish is skipped because the ref is not a tag; the four artifacts and their checksums were re-verified locally |
 | 2026-11-14 | `d57aa78` (merge of PR #32) | `CI` run 43599028784, `main` | all five jobs green |
 

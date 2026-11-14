@@ -187,6 +187,9 @@ must not claim them.
 | 2026-11-14 | `249f4c1` | CI run 43596513201, all five jobs | success; `Windows App` `PASS (133 checks)`; the Swift installer is cached and the job budget raised to 60 minutes (PR #32) |
 | 2026-11-14 | `d57aa78` | CI run 43599028784 (post-merge `main`) | all five jobs green |
 | 2026-11-14 | `6f65650` | CI run 43598349755, Windows App job | `WINDOWS HOST TESTS: PASS (145 checks)`; a 1600×1067 preview with all nine sliders renders at a median 1187 ms over five runs (1189 1187 1189 1166 1137) and a 16-bit PNG export takes 1594 ms, both under deliberately loose 3 s / 30 s ceilings; forty documents differing by crop, quarter turn, flip, straighten and clarity sign all render, repeat pixel-identically, and never exceed the source area (PR #36) |
+| 2026-11-14 | `dd7177f` | CI run 43599860760 (PR #34 head) | five jobs green; `Windows App` `PASS (146 checks)`; a v4 and a v3 project each name all six edits this host cannot render, empty lists and disabled tools name none, and one sticker is enough to warn; the export and batch dialogs ask before writing pixels that lack them, a dialog no CI run drives |
+| 2026-11-14 | `dd14310` | CI run 43600764519 (post-merge `main`, PR #34) | all five jobs green |
+| 2026-11-14 | `1c3bae1` | CI run 43600876917 (PR #36 head) | five jobs green; `Windows App` `PASS (152 checks)`, the merged count; the measurement printed again at median 1056 ms (1092 1085 1056 1027 1033) and 1368 ms for the 16-bit export, meeting the budgets on a second runner; merged as `3fa6883` |
 | 2026-11-14 | `0ab9a4d` | Release run 43598113385 (`workflow_dispatch`) | the four build jobs succeed and publish is skipped because the ref is not a tag; both DMGs, the Windows zip and MSI were downloaded and their checksums, `hdiutil verify`, bundle layout and ad-hoc signature re-verified locally (PR #35) |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
