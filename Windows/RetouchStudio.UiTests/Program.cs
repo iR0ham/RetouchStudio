@@ -221,15 +221,15 @@ internal static class Program
         var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
 
         var project = Path.ChangeExtension(output, ".retouch");
-        var document = new JsonObject
+        // The project is written by the same codec the app opens, so the
+        // seeded file cannot differ from a project the host itself saved.
+        using (var session = ProjectSession.Create(photo))
         {
-            ["version"] = 4,
-            ["imagePath"] = photo,
-            ["adjustments"] = new JsonObject { ["smooth"] = 30.0 },
-            ["exportFormat"] = "jpeg",
-            ["exportQuality"] = 0.92,
-        };
-        File.WriteAllText(project, document.ToJsonString());
+            session.Document.SetAdjustment("smooth", 30);
+            session.Commit();
+            session.Save(project);
+        }
+        Ok("seeded a project carrying skin retouching");
 
         var open = FindButton(window, "Open Project")
             ?? throw new InvalidOperationException("the Open Project button is missing");
@@ -258,7 +258,9 @@ internal static class Program
                      TimeSpan.FromSeconds(90)))
         {
             throw new InvalidOperationException(
-                $"the project did not open; the title is '{window.Current.Name}'");
+                $"the project did not open; the title is '{window.Current.Name}'; " +
+                $"the windows are {DescribeAppWindows(process.Id)}; the texts are " +
+                DescribeTexts(window));
         }
         Ok($"the project opened with its photo: '{window.Current.Name}'");
 
