@@ -273,7 +273,7 @@ internal static class Program
             ?? throw new InvalidOperationException("the Export click opened no window");
         var saveDialog = AutomationElement.FromHandle(dialogHandle);
         var caption = saveDialog.Current.Name;
-        if (FindFirstEdit(saveDialog) is null)
+        if (FindFileNameControl(saveDialog) is null)
         {
             throw new InvalidOperationException(
                 $"the Export window '{caption}' has no file-name box: " +
@@ -282,6 +282,10 @@ internal static class Program
         Ok($"Export opened its window '{caption}'");
 
         var saveEdit = SetFileName(saveDialog, output);
+        Ok($"typed '{ReadValue(saveEdit)}' into the file-name box " +
+           $"[{saveEdit.Current.ControlType.ProgrammaticName} " +
+           $"'{saveEdit.Current.AutomationId}' '{saveEdit.Current.Name}']; " +
+           $"the window has {DescribeEditors(saveDialog)}");
         var typed = WaitFor(() => ReadValue(saveEdit) == output, TimeSpan.FromSeconds(10));
         if (!typed)
         {
@@ -577,16 +581,84 @@ internal static class Program
     }
 
     /// <summary>
-    /// Types an absolute path into the file-name box. The box is the edit the
-    /// standard dialog marks as 1148; any edit is the fallback for a dialog
-    /// that does not carry that id.
+    /// Types an absolute path into the file-name box. The common dialog keeps
+    /// the name in a combo whose auto-complete can discard a value set through
+    /// UI Automation, so the labelled combo wins, the same text is also set on
+    /// its Win32 window, and the caller reads it back before pressing Save.
     /// </summary>
     private static AutomationElement SetFileName(AutomationElement dialog, string path)
     {
-        var edit = FindFirstEdit(dialog)
+        var target = FindFileNameControl(dialog)
             ?? throw new InvalidOperationException("the dialog has no file-name box");
-        ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).SetValue(path);
-        return edit;
+        if (target.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)
+            && pattern is ValuePattern value)
+        {
+            value.SetValue(path);
+        }
+        var handle = (IntPtr)target.Current.NativeWindowHandle;
+        if (handle != IntPtr.Zero)
+        {
+            SendMessageW(handle, WmSetText, IntPtr.Zero, path);
+        }
+        return target;
+    }
+
+    private static AutomationElement? FindFileNameControl(AutomationElement dialog)
+    {
+        AutomationElement? labelled = null;
+        AutomationElement? identified = null;
+        AutomationElement? anyCombo = null;
+        AutomationElement? anyEdit = null;
+        foreach (ControlType type in new[] { ControlType.ComboBox, ControlType.Edit })
+        {
+            foreach (AutomationElement candidate in dialog.FindAll(
+                         TreeScope.Descendants,
+                         new PropertyCondition(AutomationElement.ControlTypeProperty, type)))
+            {
+                var name = candidate.Current.Name;
+                if (name.StartsWith("File name", StringComparison.OrdinalIgnoreCase))
+                {
+                    labelled ??= candidate;
+                }
+                if (candidate.Current.AutomationId == "1148")
+                {
+                    identified ??= candidate;
+                }
+                if (type == ControlType.ComboBox)
+                {
+                    anyCombo ??= candidate;
+                }
+                else
+                {
+                    anyEdit ??= candidate;
+                }
+            }
+        }
+        return labelled ?? identified ?? anyCombo ?? anyEdit;
+    }
+
+    private static string ReadValue(AutomationElement control) =>
+        control.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)
+        && pattern is ValuePattern value
+            ? value.Current.Value
+            : "";
+
+    /// <summary>Every editable control the dialog exposes, with its current text.</summary>
+    private static string DescribeEditors(AutomationElement dialog)
+    {
+        var editors = new List<string>();
+        foreach (ControlType type in new[] { ControlType.ComboBox, ControlType.Edit })
+        {
+            foreach (AutomationElement item in dialog.FindAll(
+                         TreeScope.Descendants,
+                         new PropertyCondition(AutomationElement.ControlTypeProperty, type)))
+            {
+                editors.Add($"[{type.ProgrammaticName.Replace("ControlType.", "")} " +
+                            $"id '{item.Current.AutomationId}' name '{item.Current.Name}' " +
+                            $"value '{ReadValue(item)}']");
+            }
+        }
+        return editors.Count == 0 ? "no editors" : string.Join(" ", editors);
     }
 
     private static string ReadValue(AutomationElement edit) =>
@@ -639,36 +711,6 @@ internal static class Program
         return files.Count == 0 ? "none" : string.Join(", ", files);
     }
 
-    /// <summary>The file-name box of a standard dialog, found by id, label, then order.</summary>
-    private static AutomationElement? FindFirstEdit(AutomationElement dialog)
-    {
-        var edit = dialog.FindFirst(
-            TreeScope.Descendants,
-            new AndCondition(
-                new PropertyCondition(AutomationElement.ControlTypeProperty,
-                                      ControlType.Edit),
-                new PropertyCondition(AutomationElement.AutomationIdProperty, "1148")));
-        if (edit is not null)
-        {
-            return edit;
-        }
-        // The label carries the colon in some builds and not in others.
-        foreach (AutomationElement candidate in dialog.FindAll(
-                     TreeScope.Descendants,
-                     new PropertyCondition(AutomationElement.ControlTypeProperty,
-                                           ControlType.Edit)))
-        {
-            if (candidate.Current.Name.StartsWith("File name",
-                                                 StringComparison.OrdinalIgnoreCase))
-            {
-                return candidate;
-            }
-        }
-        return dialog.FindFirst(
-            TreeScope.Descendants,
-            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-    }
-
     /// <summary>
     /// The default button of the standard dialog is button 1; the name is the
     /// fallback, with the accelerator ampersand removed.
@@ -705,6 +747,12 @@ internal static class Program
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassNameW(IntPtr window, StringBuilder name, int count);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageW(IntPtr window, uint message,
+                                              IntPtr wParam, string text);
+
+    private const uint WmSetText = 0x000C;
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
