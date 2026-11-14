@@ -153,6 +153,18 @@ public sealed class WindowsImageCodec : IImageCodec
             ? (uint)bytes[0] | ((uint)bytes[1] << 8) | ((uint)bytes[2] << 16) | ((uint)bytes[3] << 24)
             : ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | (uint)bytes[3];
 
+    /// <summary>
+    /// WIC converts from the file's embedded profile to sRGB. A file this host
+    /// wrote already holds sRGB pixels, and converting them again would only add
+    /// rounding, so its own profile is recognised and the conversion skipped.
+    /// Any other profile, or none, still converts.
+    /// </summary>
+    private static ColorManagementMode ColourModeFor(string path) =>
+        MetadataCarry.TryReadIcc(Path.GetFullPath(path), out var declared)
+        && declared.AsSpan().SequenceEqual(SrgbProfile.Bytes)
+            ? ColorManagementMode.DoNotColorManage
+            : ColorManagementMode.ColorManageToSRgb;
+
     public async Task<PixelBuffer> DecodeAsync(string path)
     {
         var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
@@ -164,7 +176,7 @@ public sealed class WindowsImageCodec : IImageCodec
             BitmapAlphaMode.Straight,
             new BitmapTransform(),
             ExifOrientationMode.RespectExifOrientation,
-            ColorManagementMode.ColorManageToSRgb);
+            ColourModeFor(path));
         var pixels = data.DetachPixelData();
 
         // OrientedPixelWidth/Height are the size after EXIF orientation, which
@@ -192,7 +204,7 @@ public sealed class WindowsImageCodec : IImageCodec
             BitmapAlphaMode.Straight,
             new BitmapTransform(),
             ExifOrientationMode.RespectExifOrientation,
-            ColorManagementMode.ColorManageToSRgb);
+            ColourModeFor(path));
         var pixels = data.DetachPixelData();
 
         var width = checked((int)decoder.OrientedPixelWidth);
@@ -300,32 +312,32 @@ public sealed class WindowsImageCodec : IImageCodec
     }
 
     /// <summary>
-    /// Splices the source EXIF block and XMP packet into a finished file. The
-    /// source is described with the exported frame's size, so the carried tags
-    /// name the pixels that were actually written.
+    /// Splices the colour profile and, unless the source is being stripped, the
+    /// source EXIF block and XMP packet into a finished file. The EXIF block is
+    /// described with the exported frame's size, so the carried tags name the
+    /// pixels that were actually written. The profile is not privacy metadata:
+    /// the pixels are sRGB whether or not the source's identity is kept, so the
+    /// file always declares the space it was written in.
     /// </summary>
     private static void CarryBlocks(string path, string format, ImageMetadata? metadata,
                                     bool stripPrivacyMetadata, int width, int height)
     {
-        if (stripPrivacyMetadata || metadata is null)
-        {
-            return;
-        }
         if (format is not ("png" or "jpeg" or "jpg"))
         {
             return;
         }
-        var exif = metadata.ExifTiff is { } tiff
+        var carries = !stripPrivacyMetadata && metadata is not null;
+        var exif = carries && metadata!.ExifTiff is { } tiff
             ? MetadataCarry.NormalizeExif(tiff, width, height)
             : null;
-        var xmp = metadata.Xmp is { } packet ? MetadataCarry.NormalizeXmp(packet) : null;
+        var xmp = carries && metadata!.Xmp is { } packet ? MetadataCarry.NormalizeXmp(packet) : null;
         if (format == "png")
         {
-            MetadataCarry.WritePng(path, exif, xmp);
+            MetadataCarry.WritePng(path, exif, xmp, SrgbProfile.Bytes);
         }
         else
         {
-            MetadataCarry.WriteJpeg(path, exif, xmp);
+            MetadataCarry.WriteJpeg(path, exif, xmp, SrgbProfile.Bytes);
         }
     }
 

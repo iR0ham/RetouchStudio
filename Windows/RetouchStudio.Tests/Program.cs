@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Nodes;
 using RetouchStudio.Core.Imaging;
@@ -46,7 +47,10 @@ internal static class Program
             FormatProbes(root);
             Metadata(root);
             Carry(root);
+            CarryTransforms(root);
+            Colour(root);
             Interchange(root);
+            Recovery(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard();
             CropPresets();
@@ -1132,6 +1136,49 @@ internal static class Program
               mixed[0].Destination is null && mixed[0].Error is not null
               && mixed[1].Destination is not null && mixed[1].Error is null
               && File.Exists(mixed[1].Destination));
+
+        // Cancellation is cooperative between files: the one being written is
+        // finished, so no half-written result is left behind.
+        var cancelDir = Path.Combine(root, "batch-cancel");
+        using var cancelToken = new CancellationTokenSource();
+        var cancelling = new CancelAfterFirst(cancelToken);
+        var cancelled = BatchExporter.ExportAsync(session.Document, codec,
+            new BatchExportRequest(sources, cancelDir, "png", 1.0, 0, true),
+            cancelling, cancelToken.Token).GetAwaiter().GetResult();
+        Check("cancelling a batch stops after the file in flight",
+              cancelled.Count == 1 && cancelling.Count == 1);
+        Check("a cancelled batch keeps the file it finished",
+              cancelled[0].Error is null && cancelled[0].Destination is not null
+              && File.Exists(cancelled[0].Destination));
+        Check("a cancelled batch starts no later file",
+              !File.Exists(Path.Combine(cancelDir, "two-retouched.png"))
+              && !File.Exists(Path.Combine(cancelDir, "three-retouched.png")));
+
+        using var alreadyCancelled = new CancellationTokenSource();
+        alreadyCancelled.Cancel();
+        var preCancelledDir = Path.Combine(root, "batch-precancel");
+        var preCancelled = BatchExporter.ExportAsync(session.Document, codec,
+            new BatchExportRequest(sources, preCancelledDir, "png", 1.0, 0, true),
+            null, alreadyCancelled.Token).GetAwaiter().GetResult();
+        Check("a batch cancelled before it starts writes nothing",
+              preCancelled.Count == 0
+              && !Directory.EnumerateFiles(preCancelledDir).Any());
+    }
+
+    /// <summary>Cancels its batch as soon as the first file has been reported.</summary>
+    private sealed class CancelAfterFirst(CancellationTokenSource source)
+        : IProgress<BatchExportItem>
+    {
+        public int Count { get; private set; }
+
+        public void Report(BatchExportItem value)
+        {
+            Count++;
+            if (Count == 1)
+            {
+                source.Cancel();
+            }
+        }
     }
 
     private static string Sha256(string path) =>
@@ -1398,6 +1445,267 @@ internal static class Program
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
 
     /// <summary>
+    /// Every pixel on this host is converted to sRGB at decode, so an export
+    /// that declares nothing is read back as sRGB by convention rather than by
+    /// contract. The shipping writer now embeds a generated sRGB profile in
+    /// JPEG and PNG; each container is read back and the profile bytes must be
+    /// identical in both. TIFF stays untagged until a TIFF writer exists and is
+    /// printed, not asserted, so the gap is visible in the log.
+    /// </summary>
+    private static void Colour(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(16, 12);
+        for (var y = 0; y < 12; y++)
+        {
+            for (var x = 0; x < 16; x++)
+            {
+                Put(image, x, y, r: (byte)(x * 15), g: (byte)(y * 20), b: (byte)(255 - x * 12));
+            }
+        }
+
+        var source = Path.Combine(root, "colour-source.jpg");
+        codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
+        Console.WriteLine($"  colour source JPEG: {DescribeColourProfile(source)}");
+
+        using var session = ProjectSession.Create(source);
+        var jpeg = Path.Combine(root, "colour-export.jpg");
+        ExportRunner.ExportAsync(session, codec, jpeg, "jpeg", 0.9, 0)
+                     .GetAwaiter().GetResult();
+        var png = Path.Combine(root, "colour-export.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                     .GetAwaiter().GetResult();
+        var tiff = Path.Combine(root, "colour-export.tiff");
+        ExportRunner.ExportAsync(session, codec, tiff, "tiff", 1.0, 0)
+                     .GetAwaiter().GetResult();
+        var stripped = Path.Combine(root, "colour-export-stripped.jpg");
+        ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
+                     .GetAwaiter().GetResult();
+
+        var jpegProfile = ColourProfileBytes(jpeg);
+        Check("an exported JPEG declares an RGB display profile",
+              jpegProfile is { Length: > 1024 }
+              && Encoding.ASCII.GetString(jpegProfile, 16, 4) == "RGB "
+              && Encoding.ASCII.GetString(jpegProfile, 12, 4) == "mntr");
+        Check("the JPEG profile carries the generated description",
+              jpegProfile is not null
+              && IccDescription(jpegProfile) == SrgbProfile.Description);
+        var pngProfile = ColourProfileBytes(png);
+        Check("an exported PNG declares the same profile bytes",
+              pngProfile is not null && jpegProfile is not null
+              && pngProfile.SequenceEqual(jpegProfile));
+        Check("stripping the source identity keeps the colour profile",
+              ColourProfileBytes(stripped) is not null);
+        Console.WriteLine($"  colour TIFF (documented gap): {DescribeColourProfile(tiff)}");
+    }
+
+    private static byte[]? ColourProfileBytes(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        return bytes.Length > 8 && bytes[0] == 0xFF && bytes[1] == 0xD8
+            ? JpegColourProfile(bytes)
+            : bytes.Length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50
+                ? PngColourProfile(bytes)
+                : TiffColourProfile(bytes);
+    }
+
+    private static string DescribeColourProfile(string path)
+    {
+        byte[]? profile;
+        try
+        {
+            profile = ColourProfileBytes(path);
+        }
+        catch (Exception error)
+        {
+            return $"unreadable ({error.Message})";
+        }
+        if (profile is null)
+        {
+            return "no embedded profile (readers assume sRGB)";
+        }
+        if (profile.Length < 132)
+        {
+            return $"embedded profile too short ({profile.Length} bytes)";
+        }
+        var space = Encoding.ASCII.GetString(profile, 16, 4).TrimEnd('\0', ' ');
+        var profileClass = Encoding.ASCII.GetString(profile, 12, 4).TrimEnd('\0', ' ');
+        var description = IccDescription(profile) ?? "unnamed";
+        return "embedded " + space + " " + profileClass + " profile, \"" +
+               description + "\", " + profile.Length + " bytes";
+    }
+
+    private static byte[]? JpegColourProfile(byte[] bytes)
+    {
+        var segments = new SortedDictionary<byte, byte[]>();
+        var at = 2;
+        while (at + 4 <= bytes.Length && bytes[at] == 0xFF)
+        {
+            var marker = bytes[at + 1];
+            if (marker == 0xDA || marker == 0xD9)
+            {
+                break;
+            }
+            if (marker is >= 0xD0 and <= 0xD8)
+            {
+                at += 2;
+                continue;
+            }
+            var length = (bytes[at + 2] << 8) | bytes[at + 3];
+            if (length < 2 || at + 2 + length > bytes.Length)
+            {
+                break;
+            }
+            if (marker == 0xE2 && length >= 16)
+            {
+                var payload = at + 4;
+                // "ICC_PROFILE\0" then the segment number and the segment count.
+                if (Encoding.ASCII.GetString(bytes, payload, 11) == "ICC_PROFILE"
+                    && bytes[payload + 11] == 0)
+                {
+                    segments[bytes[payload + 12]] = bytes[(payload + 14)..(at + 2 + length)];
+                }
+            }
+            at += 2 + length;
+        }
+        return segments.Count == 0 ? null : segments.Values.SelectMany(part => part).ToArray();
+    }
+
+    private static byte[]? PngColourProfile(byte[] bytes)
+    {
+        var at = 8;
+        while (at + 12 <= bytes.Length)
+        {
+            var length = (bytes[at] << 24) | (bytes[at + 1] << 16)
+                       | (bytes[at + 2] << 8) | bytes[at + 3];
+            if (length < 0 || at + 12 + length > bytes.Length)
+            {
+                return null;
+            }
+            var type = Encoding.ASCII.GetString(bytes, at + 4, 4);
+            if (type == "iCCP")
+            {
+                var data = new ReadOnlySpan<byte>(bytes, at + 8, length);
+                var zero = data.IndexOf((byte)0);
+                if (zero < 0 || zero + 2 > data.Length)
+                {
+                    return null;
+                }
+                // A profile name, a compression method byte, then the profile.
+                using var compressed = new MemoryStream(data[(zero + 2)..].ToArray());
+                using var zlib = new ZLibStream(compressed, CompressionMode.Decompress);
+                using var plain = new MemoryStream();
+                zlib.CopyTo(plain);
+                return plain.ToArray();
+            }
+            if (type == "IEND")
+            {
+                break;
+            }
+            at += 12 + length;
+        }
+        return null;
+    }
+
+    private static byte[]? TiffColourProfile(byte[] bytes)
+    {
+        if (bytes.Length < 8)
+        {
+            return null;
+        }
+        var little = bytes[0] == 0x49;
+        var offset = (int)ColourTiffU32(bytes, 4, little);
+        if (offset < 8 || offset + 2 > bytes.Length)
+        {
+            return null;
+        }
+        var count = ColourTiffU16(bytes, offset, little);
+        for (var i = 0; i < count; i++)
+        {
+            var entry = offset + 2 + i * 12;
+            if (entry + 12 > bytes.Length)
+            {
+                return null;
+            }
+            if (ColourTiffU16(bytes, entry, little) != 34675)
+            {
+                continue;
+            }
+            var length = (int)ColourTiffU32(bytes, entry + 4, little);
+            if (length < 0 || length > bytes.Length)
+            {
+                return null;
+            }
+            var start = length <= 4 ? entry + 8 : (int)ColourTiffU32(bytes, entry + 8, little);
+            if (start + length > bytes.Length)
+            {
+                return null;
+            }
+            return bytes[start..(start + length)];
+        }
+        return null;
+    }
+
+    private static ushort ColourTiffU16(byte[] bytes, int at, bool little) =>
+        little
+            ? (ushort)(bytes[at] | (bytes[at + 1] << 8))
+            : (ushort)((bytes[at] << 8) | bytes[at + 1]);
+
+    private static uint ColourTiffU32(byte[] bytes, int at, bool little) =>
+        little
+            ? (uint)bytes[at] | ((uint)bytes[at + 1] << 8)
+              | ((uint)bytes[at + 2] << 16) | ((uint)bytes[at + 3] << 24)
+            : ((uint)bytes[at] << 24) | ((uint)bytes[at + 1] << 16)
+              | ((uint)bytes[at + 2] << 8) | bytes[at + 3];
+
+    /// <summary>
+    /// The human description of an ICC profile, from a v2 `desc` tag or a v4
+    /// `mluc` tag. A profile without a readable description still counts as
+    /// embedded; the header fields carry the colour space either way.
+    /// </summary>
+    private static string? IccDescription(byte[] profile)
+    {
+        var count = (int)ColourTiffU32(profile, 128, little: false);
+        if (count < 0 || count > 64 || 132 + count * 12 > profile.Length)
+        {
+            return null;
+        }
+        for (var i = 0; i < count; i++)
+        {
+            var entry = 132 + i * 12;
+            var signature = Encoding.ASCII.GetString(profile, entry, 4);
+            var offset = (int)ColourTiffU32(profile, entry + 4, little: false);
+            if (offset < 0 || offset + 12 > profile.Length)
+            {
+                continue;
+            }
+            if (signature == "desc")
+            {
+                var length = (int)ColourTiffU32(profile, offset + 8, little: false);
+                if (length > 0 && length <= 256 && offset + 12 + length <= profile.Length)
+                {
+                    return Encoding.ASCII.GetString(profile, offset + 12, length).TrimEnd('\0');
+                }
+            }
+            if (signature == "mluc")
+            {
+                var records = (int)ColourTiffU32(profile, offset + 8, little: false);
+                if (records < 1 || records > 8 || offset + 28 > profile.Length)
+                {
+                    continue;
+                }
+                var length = (int)ColourTiffU32(profile, offset + 20, little: false);
+                var start = offset + (int)ColourTiffU32(profile, offset + 24, little: false);
+                if (length > 0 && length <= 512 && start + length <= profile.Length)
+                {
+                    return Encoding.BigEndianUnicode.GetString(profile, start, length).TrimEnd('\0');
+                }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Metadata the WinRT writer cannot express: the source EXIF block and XMP
     /// packet are carried at the container level, the orientation is made
     /// upright, the frame dimensions are replaced and the thumbnail is unlinked.
@@ -1488,6 +1796,91 @@ internal static class Program
         var brokenSize = codec.ReadSizeAsync(brokenOut).GetAwaiter().GetResult();
         Check("an invalid EXIF block is skipped without failing the export",
               brokenSize.Width == 8 && brokenSize.Height == 6);
+    }
+
+    /// <summary>
+    /// The carried metadata describes the pixels the writer produced, not the
+    /// photo that was opened. A crop, a quarter turn and a long-edge resize each
+    /// change the frame through the shipping export path; every transformed
+    /// export must stay upright, name the exported frame and leave no camera
+    /// thumbnail.
+    /// </summary>
+    private static void CarryTransforms(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(40, 30);
+        for (var y = 0; y < 30; y++)
+        {
+            for (var x = 0; x < 40; x++)
+            {
+                Put(image, x, y, r: (byte)(x * 6), g: (byte)(y * 8), b: 120);
+            }
+        }
+
+        var source = Path.Combine(root, "transform-source.jpg");
+        codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
+        MetadataCarry.WriteJpeg(
+            source,
+            BuildExif(orientation: 6, width: 40, height: 30),
+            Encoding.UTF8.GetBytes(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF>"
+                + "<rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+                + "xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" "
+                + "dc:title=\"Transform test\" tiff:Orientation=\"6\"/>"
+                + "</rdf:RDF></x:xmpmeta>"));
+
+        // The source decodes upright as 30x40, so a half-size crop is exactly
+        // 15x20 and no rounding can hide behind it.
+        using (var session = ProjectSession.Create(source))
+        {
+            session.Document.Crop = new CropValue(0.5, 0.5, 0.5, 0.5);
+            var path = Path.Combine(root, "transform-cropped.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 0,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            var xmp = MetadataCarry.ReadXmp(path);
+            Check("a crop exports the cropped frame", size.Width == 15 && size.Height == 20);
+            Check("a cropped export names the cropped frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a cropped export is upright", TiffNumber(exif, 0x0112) == 1);
+            Check("a cropped export keeps the XMP title",
+                  xmp is not null && Encoding.UTF8.GetString(xmp).Contains("Transform test"));
+            Check("a cropped export leaves no camera thumbnail",
+                  (TiffNumber(exif, 0x0201) ?? 0) == 0);
+        }
+
+        using (var session = ProjectSession.Create(source))
+        {
+            session.Document.Orientation = session.Document.Orientation.WithQuarterTurn(1);
+            var path = Path.Combine(root, "transform-turned.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 0,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            Check("a quarter turn exports the turned frame",
+                  size.Width == 40 && size.Height == 30);
+            Check("a turned export names the turned frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a turned export is upright", TiffNumber(exif, 0x0112) == 1);
+        }
+
+        using (var session = ProjectSession.Create(source))
+        {
+            var path = Path.Combine(root, "transform-resized.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 20,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            Check("a long-edge resize exports the resized frame",
+                  size.Width == 15 && size.Height == 20);
+            Check("a resized export names the resized frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a resized export is upright", TiffNumber(exif, 0x0112) == 1);
+        }
     }
 
     private static byte[] BuildExif(ushort orientation, int width, int height)
@@ -1764,6 +2157,198 @@ internal static class Program
     }
 
     /// <summary>
+    /// WP-5 / R-5 on Windows: an autosave slot replaced atomically, immutable
+    /// candidates no decision can overwrite, launch preparation that preserves
+    /// every unresolved copy, and a restore order proved at each crash point by
+    /// injected failures.
+    /// </summary>
+    private static void Recovery(string root)
+    {
+        var photo = Path.Combine(root, "recovery-photo.png");
+        var otherPhoto = Path.Combine(root, "recovery-other.png");
+        File.WriteAllBytes(photo, new byte[] { 1, 2, 3, 4, 5, 6 });
+        File.WriteAllBytes(otherPhoto, new byte[] { 9, 9, 9 });
+        var context = Encoding.UTF8.GetBytes("""{"version":4,"requiredFeatures":["futureMask"]}""");
+        var at = new DateTimeOffset(2026, 11, 14, 10, 30, 0, TimeSpan.Zero);
+
+        static byte[] ProjectFor(string imagePath, Action<JsonObject>? customize = null)
+        {
+            var document = new JsonObject
+            {
+                ["version"] = 4,
+                ["imagePath"] = imagePath,
+                ["adjustments"] = new JsonObject(),
+                ["exportFormat"] = "jpeg",
+                ["exportQuality"] = 0.92,
+            };
+            customize?.Invoke(document);
+            return Encoding.UTF8.GetBytes(document.ToJsonString());
+        }
+
+        static RecoverySnapshot SnapshotAt(byte[] project, byte[] context,
+                                           string imagePath, DateTimeOffset savedAt)
+            => RecoverySnapshot.Capture(project, context, imagePath, savedAt);
+
+        var snapshot = SnapshotAt(ProjectFor(photo), context, photo, at);
+        Check("a snapshot records the photo's size and date",
+              snapshot.Source is { Bytes: 6 });
+        var decoded = RecoverySnapshot.FromUtf8(snapshot.ToUtf8());
+        Check("the document survives a snapshot round trip",
+              decoded?.Document().ImagePath == photo);
+        Check("the write context survives a snapshot round trip",
+              decoded is not null
+              && JsonNode.DeepEquals(JsonNode.Parse(decoded.Context), JsonNode.Parse(context)));
+        Check("the saved time survives a snapshot round trip", decoded?.SavedAt == at);
+        Check("the photo identity survives a snapshot round trip",
+              decoded?.Source == snapshot.Source);
+        Check("an unchanged photo is recognised as the snapshot's photo",
+              decoded?.SourceState() == RecoverySourceState.Available);
+        var noPhoto = SnapshotAt(ProjectFor(Path.Combine(root, "gone.png")), context,
+                                 Path.Combine(root, "gone.png"), at);
+        Check("a snapshot of a missing photo records no identity, and says so",
+              noPhoto.Source is null && noPhoto.SourceState() == RecoverySourceState.Missing);
+        var changed = SnapshotAt(ProjectFor(otherPhoto), context, otherPhoto, at);
+        File.AppendAllText(otherPhoto, "changed");
+        Check("a photo replaced at the same path is noticed",
+              changed.SourceState() == RecoverySourceState.Changed);
+
+        var future = RecoverySnapshot.Capture(
+            ProjectFor(photo, doc => doc["futureField"] = true),
+            context, photo, at);
+        var futureCopy = RecoverySnapshot.FromUtf8(future.ToUtf8());
+        Check("an unknown project key survives recovery",
+              futureCopy?.Document().Root["futureField"]?.GetValue<bool>() == true);
+        Check("a non-snapshot file is refused, not thrown on",
+              RecoverySnapshot.FromUtf8(Encoding.UTF8.GetBytes("{ not json")) is null
+              && RecoverySnapshot.FromUtf8(Encoding.UTF8.GetBytes("""{"version":1}""")) is null);
+
+        var store = new RecoveryStore(Path.Combine(root, "recovery-store"));
+        Check("an autosave writes the working slot",
+              store.WriteWorking(snapshot, out var written) && written is not null);
+        Check("the working slot leaves no temporary file",
+              File.Exists(store.WorkingPath) && !File.Exists(store.WorkingPath + ".tmp"));
+        var read = store.ReadWorking();
+        Check("the working slot reads back the document that was written",
+              read is not null
+              && JsonNode.DeepEquals(JsonNode.Parse(read.Project), JsonNode.Parse(snapshot.Project))
+              && JsonNode.DeepEquals(JsonNode.Parse(read.Context), JsonNode.Parse(context)));
+        store.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at.AddMilliseconds(-500)),
+                           out var second);
+        Check("autosave time never goes backwards",
+              second is not null && read is not null && second.SavedAt > read.SavedAt);
+
+        var emptyStore = new RecoveryStore(Path.Combine(root, "recovery-empty"));
+        Check("a clean launch lists no copies", emptyStore.PrepareForLaunch().Count == 0);
+
+        var crashStore = new RecoveryStore(Path.Combine(root, "recovery-crash"));
+        crashStore.WriteWorking(SnapshotAt(
+            ProjectFor(photo, doc => doc["adjustments"]!["exposure"] = 1),
+            context, photo, at), out _);
+        var liftA = crashStore.PrepareForLaunch();
+        Check("a launch lifts the crashed document into a candidate",
+              liftA.Count == 1 && !File.Exists(crashStore.WorkingPath)
+              && File.Exists(liftA[0].Path)
+              && RecoveryStore.IsCandidateFileName(Path.GetFileName(liftA[0].Path)));
+        crashStore.WriteWorking(SnapshotAt(
+            ProjectFor(photo, doc => doc["adjustments"]!["exposure"] = 2),
+            context, photo, at.AddMinutes(1)), out _);
+        var liftB = crashStore.PrepareForLaunch();
+        Check("each crashed document keeps its own independent copy", liftB.Count == 2);
+        Check("candidates are listed oldest first",
+              liftB[0].Snapshot.Document().Adjustment("exposure") == 1
+              && liftB[1].Snapshot.Document().Adjustment("exposure") == 2);
+        Check("a later autosave cannot change an earlier candidate",
+              File.Exists(liftA[0].Path)
+              && liftA[0].Snapshot.Document().Adjustment("exposure") == 1);
+
+        var candidatesDirectory = Path.GetDirectoryName(liftA[0].Path)!;
+        File.WriteAllBytes(Path.Combine(candidatesDirectory, $"5-{Guid.NewGuid():N}.retouch"),
+                           Encoding.UTF8.GetBytes("{ not json"));
+        File.WriteAllText(crashStore.WorkingPath, "{ not json");
+        var afterCorrupt = crashStore.PrepareForLaunch();
+        Check("a corrupt candidate is quarantined and not listed", afterCorrupt.Count == 2);
+        Check("a corrupt working slot is quarantined and the slot is freed",
+              !File.Exists(crashStore.WorkingPath));
+        Check("quarantine keeps the unreadable bytes",
+              Directory.GetFiles(Path.Combine(crashStore.Directory, "quarantine")).Length == 2);
+
+        crashStore.InjectedFailures.Add(RecoveryStore.Failure.Quarantine);
+        File.WriteAllText(crashStore.WorkingPath, "{ broken");
+        crashStore.PrepareForLaunch();
+        Check("a copy that cannot be quarantined stays in place",
+              File.Exists(crashStore.WorkingPath)
+              && File.ReadAllText(crashStore.WorkingPath) == "{ broken");
+        crashStore.InjectedFailures.Clear();
+
+        var migrateStore = new RecoveryStore(Path.Combine(root, "recovery-migrate"));
+        migrateStore.WriteWorking(snapshot, out _);
+        migrateStore.InjectedFailures.Add(RecoveryStore.Failure.Migrate);
+        var stuck = migrateStore.PrepareForLaunch();
+        Check("a working slot that cannot be lifted stays whole and is offered",
+              File.Exists(migrateStore.WorkingPath) && stuck.Count == 1
+              && stuck[0].Path == migrateStore.WorkingPath);
+        Check("restoring a slot that could not be lifted keeps it whole",
+              migrateStore.Restore(stuck[0]) && File.Exists(migrateStore.WorkingPath));
+        migrateStore.InjectedFailures.Clear();
+
+        var restoreStore = new RecoveryStore(Path.Combine(root, "recovery-restore"));
+        restoreStore.WriteWorking(snapshot, out _);
+        var restoreList = restoreStore.PrepareForLaunch();
+        Check("a restore writes the working copy and deletes the candidate",
+              restoreStore.Restore(restoreList[0])
+              && File.Exists(restoreStore.WorkingPath)
+              && !File.Exists(restoreList[0].Path));
+        Check("the restored working copy is the candidate's document",
+              restoreStore.ReadWorking() is { } restored
+              && JsonNode.DeepEquals(JsonNode.Parse(restored.Project),
+                                     JsonNode.Parse(restoreList[0].Snapshot.Project)));
+
+        var crashRestore = new RecoveryStore(Path.Combine(root, "recovery-crash-restore"));
+        crashRestore.WriteWorking(snapshot, out _);
+        var crashList = crashRestore.PrepareForLaunch();
+        crashRestore.InjectedFailures.Add(RecoveryStore.Failure.WorkingWrite);
+        Check("a crash before the restore write leaves the candidate",
+              !crashRestore.Restore(crashList[0]) && File.Exists(crashList[0].Path));
+        crashRestore.InjectedFailures.Clear();
+        crashRestore.InjectedFailures.Add(RecoveryStore.Failure.CandidateRemove);
+        Check("a crash after the restore write leaves both complete copies",
+              !crashRestore.Restore(crashList[0])
+              && File.Exists(crashList[0].Path)
+              && File.Exists(crashRestore.WorkingPath));
+        crashRestore.InjectedFailures.Clear();
+
+        var discardStore = new RecoveryStore(Path.Combine(root, "recovery-discard"));
+        discardStore.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at), out _);
+        var discardA = discardStore.PrepareForLaunch();
+        discardStore.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at.AddMinutes(1)), out _);
+        var discardB = discardStore.PrepareForLaunch();
+        Check("discarding one copy leaves the other",
+              discardA[0].Path == discardB[0].Path
+              && discardStore.Discard(discardB[0])
+              && !File.Exists(discardB[0].Path)
+              && File.Exists(discardB[1].Path));
+
+        var missingCandidate = new RecoveryStore.Candidate(
+            Path.Combine(root, "never-written.retouch"), snapshot);
+        var missingStore = new RecoveryStore(Path.Combine(root, "recovery-missing"));
+        Check("a missing candidate is refused and nothing is written",
+              !missingStore.Restore(missingCandidate)
+              && !File.Exists(missingStore.WorkingPath));
+
+        var ownStore = new RecoveryStore(Path.Combine(root, "recovery-own"));
+        ownStore.WriteWorking(SnapshotAt(ProjectFor(photo), context, photo, at), out _);
+        Check("another document's autosave is not dropped",
+              !ownStore.RemoveWorking(otherPhoto) && File.Exists(ownStore.WorkingPath));
+        Check("the document's own autosave is dropped",
+              ownStore.RemoveWorking(photo) && !File.Exists(ownStore.WorkingPath));
+
+        Check("a foreign file name is not a candidate",
+              !RecoveryStore.IsCandidateFileName("working.retouch")
+              && !RecoveryStore.IsCandidateFileName("1234-not-a-guid.retouch")
+              && !RecoveryStore.IsCandidateFileName($"{Guid.NewGuid():N}.retouch"));
+    }
+
+    /// <summary>
     /// W5 on Windows: a photo-sized preview render, the same document exported
     /// through the 16-bit path, and a stress loop across crops, turns and both
     /// clarity signs. Budgets are safety nets for a pathological regression,
@@ -1880,6 +2465,16 @@ internal static class Program
         Console.WriteLine($"  stress heap growth {growth:0.0} MB over twenty " +
                           $"preview renders");
         Check("twenty photo-sized renders keep the managed heap flat", growth < 150);
+
+        // The managed heap says nothing about the decoder's native buffers, so
+        // the process totals are printed next to it. They are recorded, not
+        // gated: the runner's own baseline and the JIT move them run to run,
+        // and a ceiling tight enough to catch a leak would fail on noise.
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        Console.WriteLine($"  memory working set {process.WorkingSet64 / 1048576.0:0} MB, " +
+                          $"peak {process.PeakWorkingSet64 / 1048576.0:0} MB " +
+                          $"after sixty renders");
     }
 
     /// <summary>

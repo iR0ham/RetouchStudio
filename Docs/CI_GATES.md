@@ -250,6 +250,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `e4bc466` (PR #48 head, merged as `4a034cd`) | `CI` run 43620925118 | five jobs green after `main` was merged into the branch; the run that gated the #48 merge |
 | 2026-11-14 | `4a034cd` (merge of PR #48) | `CI` run 43622071155, `main` | all five jobs green on the merged tree; the last post-merge `main` matrix, because push runs to `main` were removed in the same change (see [Post-merge runs and CI cadence](#post-merge-runs-and-ci-cadence)) |
 | 2026-11-14 | `675ae0a` (PR #49 head, merged as `be9a46d`) | `CI` run 43623366599 | five jobs green — the first run gated by all five required contexts, including `Windows StudioCore` and `Windows App`; the run that gated the #49 merge |
+| 2026-11-14 | `78f8cc5` (develop milestone head) | `CI` run 43631106819, `workflow_dispatch` on `develop` | five jobs green; `Windows App` reports `PASS (253 checks)`; the candidate recovery store proves lift, restore, discard, quarantine and injected write/remove failures; a no-op export is pixel-identical in 8 and 16 bits because the decoder recognises its own sRGB profile, and the one test that compared a candidate with itself was corrected |
 | 2026-11-14 | `be9a46d` (merge of PR #49) | no post-merge run | merge of `675ae0a` after five green required checks; no `main` push matrix was created, which is the behaviour PR #49 introduced. The `pull_request` run had checked out `refs/pull/49/merge`, whose tree is this commit's tree, so no tree went unvalidated |
 
 `ci.yml` runs on `pull_request` targeting `main` and on pushes to
@@ -415,6 +416,13 @@ What replaces it:
 - The full matrix runs once per coherent merge candidate. Intermediate commits
   are validated with focused local suites; a red or missing required check
   still blocks the merge.
+- Since the 2026-11-14 steering ([`WORKFLOW.md`](WORKFLOW.md)) development is
+  GitHub-based and milestone-driven: work is pushed continuously to organized
+  development branches (folded into the shared `develop` integration branch),
+  a dispatch on `develop` or the milestone branch runs the full matrix at a
+  milestone boundary, and a milestone PR is the only PR that reaches `main`.
+  Targeted checks run during development; there are no per-task PRs, no
+  documentation-only PRs and no re-dispatches for an unchanged head.
 
 If GitHub's settings ever require a post-merge run again, re-add `main` to the
 `push.branches` list in `ci.yml`; the rest of the gate is unchanged.

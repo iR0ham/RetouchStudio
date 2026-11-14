@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -76,6 +77,60 @@ public partial class MainWindow : Window
         if (!string.IsNullOrEmpty(marker))
         {
             File.WriteAllText(marker, Title);
+        }
+
+        ShowRecoveryPrompt();
+    }
+
+    /// <summary>
+    /// Offers the copies a crash left behind, one at a time. Restore opens the
+    /// document, discard drops that copy only, and cancel keeps every remaining
+    /// copy for the next launch.
+    /// </summary>
+    private async void ShowRecoveryPrompt()
+    {
+        IReadOnlyList<RecoveryStore.Candidate> candidates;
+        try
+        {
+            candidates = _vm.PrepareRecovery();
+        }
+        catch (Exception error)
+        {
+            Report("The recovery folder could not be read", error);
+            return;
+        }
+        foreach (var candidate in candidates)
+        {
+            var when = candidate.Snapshot.SavedAt.ToLocalTime()
+                                                .ToString("g", CultureInfo.CurrentCulture);
+            var answer = MessageBox.Show(
+                this,
+                $"Retouch Studio closed with unsaved changes from {when}.\n\n" +
+                "Yes - restore them here\nNo - discard this copy\nCancel - decide later",
+                "Recover unsaved changes", MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+            if (answer == MessageBoxResult.Cancel)
+            {
+                return;
+            }
+            if (answer != MessageBoxResult.Yes)
+            {
+                _vm.DiscardRecovery(candidate);
+                continue;
+            }
+            try
+            {
+                if (!await _vm.RestoreRecoveryAsync(candidate))
+                {
+                    Report("The unsaved changes could not be recovered",
+                           new IOException("the recovery copy could not be rewritten"));
+                }
+            }
+            catch (Exception error)
+            {
+                Report("The unsaved changes could not be opened", error);
+            }
+            return;
         }
     }
 
@@ -616,6 +671,8 @@ public partial class MainWindow : Window
             Report("The photos could not be exported", error);
         }
     }
+
+    private void CancelBatch_Click(object sender, RoutedEventArgs e) => _vm.CancelBatch();
 
     private void Undo_Click(object sender, RoutedEventArgs e) => _vm.Undo();
 

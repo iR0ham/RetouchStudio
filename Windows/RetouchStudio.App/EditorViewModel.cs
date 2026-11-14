@@ -90,6 +90,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private readonly WindowsImageCodec _codec = new();
     private readonly DispatcherTimer _renderTimer;
     private readonly DispatcherTimer _commitTimer;
+    private readonly RecoveryStore _recovery = new(RecoveryDirectory);
     private ProjectSession? _session;
     private PixelBuffer? _previewSource;
     private PixelBuffer16? _previewSource16;
@@ -117,6 +118,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private bool _keepSourceMetadata;
     private string _cropLabel = "Original";
     private bool _isCropping;
+    private CancellationTokenSource? _batchCancellation;
+    private bool _isBatchRunning;
 
     public EditorViewModel()
     {
@@ -215,6 +218,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         get => _status;
         private set => Set(ref _status, value);
+    }
+
+    /// <summary>True while a batch export is running; enables its Cancel button.</summary>
+    public bool IsBatchRunning
+    {
+        get => _isBatchRunning;
+        private set => Set(ref _isBatchRunning, value);
     }
 
     public string DimensionText
@@ -471,10 +481,62 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public void Save(string projectPath)
     {
         FlushCommit();
-        _session?.Save(projectPath);
+        if (_session is not null)
+        {
+            _session.Save(projectPath);
+            _recovery.RemoveWorking(_session.ImagePath);
+        }
         RefreshState();
         Status = $"Saved {Path.GetFileName(projectPath)}.";
     }
+
+    /// <summary>
+    /// Where autosave copies live. The environment override exists so the QA
+    /// driver can point a run at a scratch folder.
+    /// </summary>
+    public static string RecoveryDirectory
+    {
+        get
+        {
+            var overridden = Environment.GetEnvironmentVariable("RETOUCHSTUDIO_RECOVERY");
+            return string.IsNullOrEmpty(overridden)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                               "Retouch Studio", "Recovery")
+                : overridden;
+        }
+    }
+
+    /// <summary>
+    /// Lifts the crashed session into a candidate and lists every unresolved
+    /// copy, oldest first. Called once at launch, before a document exists.
+    /// </summary>
+    public IReadOnlyList<RecoveryStore.Candidate> PrepareRecovery() =>
+        _recovery.PrepareForLaunch();
+
+    /// <summary>
+    /// Opens the candidate's document. False when the copy could not be
+    /// restored, in which case it stays offered for the next launch.
+    /// </summary>
+    public async Task<bool> RestoreRecoveryAsync(RecoveryStore.Candidate candidate)
+    {
+        CloseSession();
+        if (!_recovery.Restore(candidate))
+        {
+            return false;
+        }
+        if (_recovery.ReadWorking() is not { } snapshot)
+        {
+            return false;
+        }
+        var session = ProjectSession.FromRecovery(snapshot.Project, snapshot.Context);
+        await AdoptAsync(session);
+        Status = $"Recovered the unsaved changes from " +
+                 $"{candidate.Snapshot.SavedAt.ToLocalTime():g}.";
+        return true;
+    }
+
+    public void DiscardRecovery(RecoveryStore.Candidate candidate) =>
+        _recovery.Discard(candidate);
 
     public async Task<string> ExportAsync(string destination)
     {
@@ -495,7 +557,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>
     /// Exports a selection with the open document's edits. Every file takes the
     /// single-export path and the results are reported one by one, so a file
-    /// that fails does not stop the rest.
+    /// that fails does not stop the rest. A cancel takes effect before the next
+    /// file starts, because the file in flight is already being written.
     /// </summary>
     public async Task<IReadOnlyList<BatchExportItem>> BatchExportAsync(
         IReadOnlyList<string> sources, string destinationDirectory)
@@ -509,17 +572,41 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             throw new InvalidOperationException("no photos were selected");
         }
         FlushCommit();
-        var results = await BatchExporter.ExportAsync(
-            _session.Document, _codec,
-            new BatchExportRequest(sources, destinationDirectory, _exportFormat,
-                                   _exportQuality, _exportLongEdge,
-                                   !_keepSourceMetadata));
-        var exported = results.Count(item => item.Error is null);
-        var folder = Path.GetFileName(destinationDirectory.TrimEnd(
-            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        Status = $"Exported {exported} of {results.Count} photos to {folder}.";
-        return results;
+        var total = sources.Count;
+        var done = 0;
+        using var cancellation = new CancellationTokenSource();
+        _batchCancellation = cancellation;
+        IsBatchRunning = true;
+        try
+        {
+            var results = await BatchExporter.ExportAsync(
+                _session.Document, _codec,
+                new BatchExportRequest(sources, destinationDirectory, _exportFormat,
+                                       _exportQuality, _exportLongEdge,
+                                       !_keepSourceMetadata),
+                new Progress<BatchExportItem>(_ =>
+                {
+                    done++;
+                    Status = $"Exported {done} of {total}…";
+                }),
+                cancellation.Token);
+            var exported = results.Count(item => item.Error is null);
+            var folder = Path.GetFileName(destinationDirectory.TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            Status = results.Count < total
+                ? $"Export cancelled after {results.Count} of {total} photos."
+                : $"Exported {exported} of {results.Count} photos to {folder}.";
+            return results;
+        }
+        finally
+        {
+            IsBatchRunning = false;
+            _batchCancellation = null;
+        }
     }
+
+    /// <summary>Stops a running batch before its next file.</summary>
+    public void CancelBatch() => _batchCancellation?.Cancel();
 
     public void Undo()
     {
@@ -634,6 +721,12 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             "The document has unsaved changes. Close anyway?",
             "Retouch Studio", System.Windows.MessageBoxButton.YesNo,
             System.Windows.MessageBoxImage.Warning);
+        if (answer == System.Windows.MessageBoxResult.Yes && _session is not null)
+        {
+            // The owner chose to drop the edits, so the crash copy goes too;
+            // otherwise the next launch would offer what was just refused.
+            _recovery.RemoveWorking(_session.ImagePath);
+        }
         return answer == System.Windows.MessageBoxResult.Yes;
     }
 
@@ -714,6 +807,12 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _renderTimer.Stop();
         _commitTimer.Stop();
         _commitPending = false;
+        // Replacing the document drops its crash copy: the owner moved on
+        // without restoring it, and the next document owns the slot.
+        if (_session is not null)
+        {
+            _recovery.RemoveWorking(_session.ImagePath);
+        }
         _session?.Dispose();
         _session = null;
         _previewSource = null;
@@ -767,6 +866,17 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _session.Commit();
         _commitPending = false;
         RefreshState();
+        Autosave();
+    }
+
+    /// <summary>Keeps a crash copy of the edits since the last save.</summary>
+    private void Autosave()
+    {
+        if (_session is null || !IsDirty)
+        {
+            return;
+        }
+        _recovery.WriteWorking(_session.Recovery(DateTimeOffset.UtcNow), out _);
     }
 
     private async Task RenderPreviewAsync()

@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -19,6 +20,20 @@ public static class MetadataCarry
 
     /// <summary>An XMP packet larger than this is dropped rather than written.</summary>
     public const int MaxXmpBytes = 1 << 20;
+
+    /// <summary>An ICC profile larger than this is dropped rather than written.</summary>
+    public const int MaxIccBytes = 1 << 22;
+
+    /// <summary>The largest profile slice one JPEG APP2 segment can carry.</summary>
+    public const int MaxIccChunkBytes = 65519;
+
+    private static readonly byte[] IccSignature =
+    {
+        (byte)'I', (byte)'C', (byte)'C', (byte)'_', (byte)'P', (byte)'R',
+        (byte)'O', (byte)'F', (byte)'I', (byte)'L', (byte)'E', 0,
+    };
+
+    private const string IccProfileName = "sRGB";
 
     private const int TagOrientation = 0x0112;
     private const int TagImageWidth = 0x0100;
@@ -157,12 +172,13 @@ public static class MetadataCarry
     }
 
     /// <summary>
-    /// Replaces the JPEG's Exif and XMP APP1 segments with the supplied blocks.
-    /// The file is left untouched when it is not a complete JPEG or a segment is
-    /// malformed; the rewrite goes through a temporary file so an interrupted
-    /// write cannot leave a half-file behind.
+    /// Replaces the JPEG's Exif and XMP APP1 segments, and its ICC profile
+    /// APP2 segments, with the supplied blocks. The file is left untouched when
+    /// it is not a complete JPEG or a segment is malformed; the rewrite goes
+    /// through a temporary file so an interrupted write cannot leave a
+    /// half-file behind.
     /// </summary>
-    public static void WriteJpeg(string path, byte[]? exif, byte[]? xmp)
+    public static void WriteJpeg(string path, byte[]? exif, byte[]? xmp, byte[]? icc = null)
     {
         var full = Path.GetFullPath(path);
         var file = File.ReadAllBytes(full);
@@ -174,7 +190,8 @@ public static class MetadataCarry
                         && exif.Length + ExifSignature.Length + 2 <= ushort.MaxValue;
         var writeXmp = xmp is { Length: > 0 }
                        && xmp.Length + XmpSignature.Length + 2 <= ushort.MaxValue;
-        if (!writeExif && !writeXmp)
+        var writeIcc = icc is { Length: > 0 } && icc.Length <= MaxIccBytes;
+        if (!writeExif && !writeXmp && !writeIcc)
         {
             return;
         }
@@ -207,13 +224,16 @@ public static class MetadataCarry
                          && StartsWith(file, index + 4, length - 2, ExifSignature);
             var isXmp = writeXmp && marker == 0xE1
                         && StartsWith(file, index + 4, length - 2, XmpSignature);
-            if (!isExif && !isXmp)
+            var isIcc = writeIcc && marker == 0xE2
+                        && StartsWith(file, index + 4, length - 2, IccSignature);
+            if (!isExif && !isXmp && !isIcc)
             {
                 output.Write(file, index, 2 + length);
             }
             if (marker == 0xE0 && !inserted)
             {
-                WriteApp1Segments(output, writeExif ? exif : null, writeXmp ? xmp : null);
+                WriteCarriedSegments(output, writeExif ? exif : null,
+                                     writeXmp ? xmp : null, writeIcc ? icc : null);
                 inserted = true;
             }
             index += 2 + length;
@@ -224,18 +244,19 @@ public static class MetadataCarry
         }
         if (!inserted)
         {
-            WriteApp1Segments(output, writeExif ? exif : null, writeXmp ? xmp : null);
+            WriteCarriedSegments(output, writeExif ? exif : null,
+                                 writeXmp ? xmp : null, writeIcc ? icc : null);
         }
         output.Write(file, index, file.Length - index);
         Replace(full, output.ToArray());
     }
 
     /// <summary>
-    /// Replaces the PNG's eXIf and XMP iTXt chunks with the supplied blocks. The
-    /// chunks go immediately before the first IDAT so a decoder sees the
-    /// metadata as soon as the image begins.
+    /// Replaces the PNG's eXIf, XMP iTXt and iCCP chunks with the supplied
+    /// blocks. The chunks go immediately before the first IDAT so a decoder
+    /// sees the metadata and the colour space as soon as the image begins.
     /// </summary>
-    public static void WritePng(string path, byte[]? exif, byte[]? xmp)
+    public static void WritePng(string path, byte[]? exif, byte[]? xmp, byte[]? icc = null)
     {
         var full = Path.GetFullPath(path);
         var file = File.ReadAllBytes(full);
@@ -245,7 +266,8 @@ public static class MetadataCarry
         }
         var writeExif = exif is { Length: > 0 } && exif.Length <= MaxExifBytes;
         var writeXmp = xmp is { Length: > 0 } && xmp.Length <= MaxXmpBytes;
-        if (!writeExif && !writeXmp)
+        var writeIcc = icc is { Length: > 0 } && icc.Length <= MaxIccBytes;
+        if (!writeExif && !writeXmp && !writeIcc)
         {
             return;
         }
@@ -270,11 +292,13 @@ public static class MetadataCarry
             var name = Encoding.ASCII.GetString(file, index + 4, 4);
             if (!inserted && name == "IDAT")
             {
-                WritePngChunks(output, writeExif ? exif : null, writeXmp ? xmp : null);
+                WriteCarriedChunks(output, writeExif ? exif : null,
+                                   writeXmp ? xmp : null, writeIcc ? icc : null);
                 inserted = true;
             }
             var drop = (writeExif && name == "eXIf")
-                       || (writeXmp && name == "iTXt" && IsXmpText(file, index, length));
+                       || (writeXmp && name == "iTXt" && IsXmpText(file, index, length))
+                       || (writeIcc && name == "iCCP");
             if (!drop)
             {
                 output.Write(file, index, 12 + length);
@@ -417,7 +441,8 @@ public static class MetadataCarry
         return data[..PngTextKeyword.Length].SequenceEqual(PngTextKeyword);
     }
 
-    private static void WriteApp1Segments(MemoryStream output, byte[]? exif, byte[]? xmp)
+    private static void WriteCarriedSegments(MemoryStream output, byte[]? exif,
+                                             byte[]? xmp, byte[]? icc)
     {
         if (exif is not null)
         {
@@ -426,6 +451,33 @@ public static class MetadataCarry
         if (xmp is not null)
         {
             WriteApp1(output, XmpSignature, xmp);
+        }
+        if (icc is not null)
+        {
+            WriteApp2Profile(output, icc);
+        }
+    }
+
+    /// <summary>
+    /// A profile larger than one segment is split in order; each segment names
+    /// its position and the total, which is how readers reassemble it.
+    /// </summary>
+    private static void WriteApp2Profile(MemoryStream output, byte[] profile)
+    {
+        var count = (profile.Length + MaxIccChunkBytes - 1) / MaxIccChunkBytes;
+        for (var part = 0; part < count; part++)
+        {
+            var start = part * MaxIccChunkBytes;
+            var length = Math.Min(MaxIccChunkBytes, profile.Length - start);
+            var segment = IccSignature.Length + 2 + length + 2;
+            output.WriteByte(0xFF);
+            output.WriteByte(0xE2);
+            output.WriteByte((byte)(segment >> 8));
+            output.WriteByte((byte)segment);
+            output.Write(IccSignature, 0, IccSignature.Length);
+            output.WriteByte((byte)(part + 1));
+            output.WriteByte((byte)count);
+            output.Write(profile, start, length);
         }
     }
 
@@ -440,11 +492,23 @@ public static class MetadataCarry
         output.Write(payload, 0, payload.Length);
     }
 
-    private static void WritePngChunks(MemoryStream output, byte[]? exif, byte[]? xmp)
+    private static void WriteCarriedChunks(MemoryStream output, byte[]? exif,
+                                           byte[]? xmp, byte[]? icc)
     {
         if (exif is not null)
         {
             WritePngChunk(output, "eXIf", exif);
+        }
+        if (icc is not null)
+        {
+            var name = Encoding.ASCII.GetBytes(IccProfileName);
+            var compressed = ZlibCompress(icc);
+            var data = new byte[name.Length + 2 + compressed.Length];
+            name.CopyTo(data, 0);
+            // The name terminator, then compression method 0 (deflate).
+            data[name.Length] = 0;
+            compressed.CopyTo(data, name.Length + 2);
+            WritePngChunk(output, "iCCP", data);
         }
         if (xmp is not null)
         {
@@ -456,6 +520,171 @@ public static class MetadataCarry
             xmp.CopyTo(data, PngTextKeyword.Length + 5);
             WritePngChunk(output, "iTXt", data);
         }
+    }
+
+    /// <summary>
+    /// The ICC profile the container declares, or false when it declares none
+    /// or the profile cannot be read whole. The decoder uses this to recognise
+    /// files this host wrote: their pixels are already sRGB, so converting them
+    /// again would only add rounding.
+    /// </summary>
+    public static bool TryReadIcc(string path, out byte[] profile)
+    {
+        profile = Array.Empty<byte>();
+        try
+        {
+            // The profile sits before the image data, so only the head of the
+            // file is read; a 26-megapixel export is not loaded twice.
+            using var stream = File.OpenRead(Path.GetFullPath(path));
+            var head = new byte[MaxIccBytes + (1 << 16)];
+            var read = 0;
+            int got;
+            while (read < head.Length
+                   && (got = stream.Read(head, read, head.Length - read)) > 0)
+            {
+                read += got;
+            }
+            var file = read == head.Length ? head : head.AsSpan(0, read).ToArray();
+            var declared = IsJpeg(file) ? ReadJpegIcc(file)
+                         : IsPng(file) ? ReadPngIcc(file)
+                         : null;
+            if (declared is null)
+            {
+                return false;
+            }
+            profile = declared;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static byte[]? ReadJpegIcc(byte[] file)
+    {
+        var parts = new SortedDictionary<int, byte[]>();
+        var expected = -1;
+        var index = 2;
+        while (index + 4 <= file.Length)
+        {
+            if (file[index] != 0xFF)
+            {
+                return null;
+            }
+            var marker = file[index + 1];
+            if (marker is 0xDA or 0xD9)
+            {
+                break;
+            }
+            var length = (file[index + 2] << 8) | file[index + 3];
+            if (length < 2 || index + 2 + length > file.Length)
+            {
+                return null;
+            }
+            if (marker == 0xE2
+                && StartsWith(file, index + 4, length - 2, IccSignature))
+            {
+                var payload = index + 4 + IccSignature.Length;
+                var available = length - 2 - IccSignature.Length;
+                if (available < 2)
+                {
+                    return null;
+                }
+                int sequence = file[payload];
+                int count = file[payload + 1];
+                if (sequence == 0 || count == 0 || count > 255)
+                {
+                    return null;
+                }
+                if (expected < 0)
+                {
+                    expected = count;
+                }
+                else if (expected != count)
+                {
+                    return null;
+                }
+                parts[sequence] = file.AsSpan(payload + 2, available - 2).ToArray();
+            }
+            index += 2 + length;
+        }
+        if (expected <= 0 || parts.Count != expected)
+        {
+            return null;
+        }
+        var total = 0;
+        foreach (var part in parts.Values)
+        {
+            total += part.Length;
+        }
+        if (total <= 0 || total > MaxIccBytes)
+        {
+            return null;
+        }
+        var profile = new byte[total];
+        var at = 0;
+        for (var i = 1; i <= expected; i++)
+        {
+            if (!parts.TryGetValue(i, out var part))
+            {
+                return null;
+            }
+            part.CopyTo(profile, at);
+            at += part.Length;
+        }
+        return profile;
+    }
+
+    private static byte[]? ReadPngIcc(byte[] file)
+    {
+        var chunk = ReadPngChunk(file, "iCCP", MaxIccBytes);
+        if (chunk is null)
+        {
+            return null;
+        }
+        var zero = chunk.AsSpan().IndexOf((byte)0);
+        if (zero <= 0 || zero + 2 > chunk.Length || chunk[zero + 1] != 0)
+        {
+            return null;
+        }
+        var compressed = chunk.AsSpan(zero + 2).ToArray();
+        return compressed.Length == 0 ? null : ZlibDecompress(compressed, MaxIccBytes);
+    }
+
+    private static byte[]? ZlibDecompress(byte[] input, int maximum)
+    {
+        try
+        {
+            using var source = new MemoryStream(input, writable: false);
+            using var zlib = new ZLibStream(source, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            var buffer = new byte[8192];
+            int read;
+            while ((read = zlib.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (output.Length + read > maximum)
+                {
+                    return null;
+                }
+                output.Write(buffer, 0, read);
+            }
+            return output.ToArray();
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    private static byte[] ZlibCompress(byte[] input)
+    {
+        using var output = new MemoryStream();
+        using (var zlib = new ZLibStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            zlib.Write(input, 0, input.Length);
+        }
+        return output.ToArray();
     }
 
     private static void WritePngChunk(MemoryStream output, string type, byte[] data)

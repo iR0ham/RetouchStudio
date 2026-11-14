@@ -139,7 +139,10 @@ before upload, so a release carries one installer version, not two.
   export takes, so a batch cannot render differently from exporting the files
   one by one. Results are named `<source>-retouched.<ext>`; a name already on
   disk gets a `-2`, `-3` suffix rather than being overwritten, and one
-  unreadable file is reported while the rest keep exporting.
+  unreadable file is reported while the rest keep exporting. The status bar
+  counts the files as they finish, and "Cancel Batch" (enabled only while a
+  batch runs) stops before the next file: the file in flight is finished, so a
+  cancelled batch never leaves a partial result and never touches the sources.
 
 ## What it does not do
 
@@ -157,6 +160,10 @@ before upload, so a release carries one installer version, not two.
   arithmetic is checked headlessly, and the divider is drawn by the window, but
   no automated check drags the handle. The split position is not remembered
   between sessions, and macOS keeps it in settings.
+- The Cancel Batch button's click is not driven by CI: the exporter's
+  cancellation is checked headlessly, but no automated check presses the
+  button. Cancellation is cooperative between files, so a very large photo in
+  flight finishes before the batch stops.
 - No drag-out of the app, no recent-files list and no settings window; the
   drop-in open is the only drag gesture, and no automated check performs it.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the

@@ -27,18 +27,27 @@ public sealed record BatchExportItem(string Source, string? Destination, string?
 /// <see cref="ExportRunner.ExportSourceAsync"/>, which is the same path a single
 /// export takes, so a batch cannot produce a different rendering than exporting
 /// the files one by one.
+///
+/// Cancellation is honoured between files: a file that is already being written
+/// is finished, so a cancelled batch never leaves a half-written result, and no
+/// later file is started.
 /// </summary>
 public static class BatchExporter
 {
     public static async Task<IReadOnlyList<BatchExportItem>> ExportAsync(
         DocumentModel document, IImageCodec codec, BatchExportRequest request,
-        IProgress<BatchExportItem>? progress = null)
+        IProgress<BatchExportItem>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(request.DestinationDirectory);
         var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var results = new List<BatchExportItem>(request.Sources.Count);
         foreach (var source in request.Sources)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
             BatchExportItem item;
             try
             {

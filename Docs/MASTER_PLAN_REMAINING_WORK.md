@@ -9,6 +9,19 @@ entry is not verified.
 Status vocabulary follows the plan: VERIFIED, IMPLEMENTED, PARTIALLY
 IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 
+**Workflow (2026-11-14 steering):** development is GitHub-based and
+milestone-driven, per [`WORKFLOW.md`](WORKFLOW.md). Work is pushed continuously
+to organized development branches and folded into the shared `develop`
+integration branch; the full five-context matrix runs at a milestone (dispatch
+on `develop` or the milestone branch, then the milestone PR). Implementation,
+tests and documentation of one milestone share a single PR; routine changes and
+documentation-only changes do not get their own PR. Rows below keep their old
+evidence links, which remain valid history.
+
+**Current integration state:** `develop` folds the W4 metadata workstream —
+batch cancellation, EXIF/XMP carry, the sRGB export declaration and the
+crop/turn/resize read-back checks — pending full-matrix validation.
+
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
 | ID | Item | Status | Evidence |
@@ -21,13 +34,13 @@ IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| W4-1 | Metadata keep-safe / strip / allowlist for JPEG, TIFF, 16-bit PNG | TESTED (camera model + ISO, resolution) | verify read-back after crop/rotate/resize and after colour conversion; document unsupported keys | none |
+| W4-1 | Metadata keep-safe / strip / allowlist for JPEG, TIFF, 16-bit PNG | TESTED (camera model + ISO, resolution; EXIF/XMP carry read back after crop, quarter turn and resize) | TIFF keeps only the WinRT allowlist; unsupported keys are documented in `WINDOWS_FORMAT_AUDIT.md` | none |
 | W4-2 | XMP write, IPTC write | NOT IMPLEMENTED | evaluate a distributable XMP packet writer; WIC exposes no write path | library choice (Lead decision), licence review |
 | W4-3 | Full EXIF rewrite (GPS, date, exposure, lens) | NOT IMPLEMENTED | WIC drops most keys; needs an EXIF writer outside WIC | library choice (Lead decision) |
-| W4-4 | ICC preservation on write / wide-gamut output | NOT IMPLEMENTED | source profile is converted to sRGB on decode and clipped; carry the profile through render and write | scoped project; owner-visible colour trade-off |
+| W4-4 | ICC preservation on write / wide-gamut output | PARTIAL | exports declare the generated sRGB profile (JPEG APP2, PNG iCCP) even when stripping, and the decoder skips re-conversion for its own profile; the source's wide gamut is still clipped on decode and its profile is not carried | carrying wide gamut is an owner-visible colour trade-off |
 | W4-5 | HEIC read on CI | BLOCKED | no HEIF decoder on `windows-2025` (`0x88982F8B`) | install the HEIF extension or accept and document the gap |
-| W4-6 | Format audit document (import, decode, orientation, colour, metadata, bit depth, export, batch) | PARTIAL | JPEG/PNG/TIFF per host verified; HEIC macOS only; RAW absent | follows W4-1…W4-5 |
-| W4-7 | RenderPlan consumed end to end (dimensions, depth, alpha, profile, compression, quality, metadata, orientation) | PARTIAL | dimensions/depth/alpha/orientation/quality verified; profile and metadata policy are fixed, not passed through | W4-1, W4-4 |
+| W4-6 | Format audit document (import, decode, orientation, colour, metadata, bit depth, export, batch) | DONE as a document (`Docs/WINDOWS_FORMAT_AUDIT.md`) | records the gaps it cannot close: HEIC needs the optional codec, RAW is absent, TIFF is untagged | none |
+| W4-7 | RenderPlan consumed end to end (dimensions, depth, alpha, profile, compression, quality, metadata, orientation) | PARTIAL | dimensions, depth, alpha, orientation, quality and the strip policy are honoured; the profile is fixed sRGB rather than passed through | W4-4 (wide-gamut carry) |
 | W4-8 | Deterministic cross-host corpus comparisons (MAE, max error, SSIM, colour difference) | PARTIAL | adjustments compared to macOS references (exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47 MAE); straighten/crop lacks a cross-host pixel reference | golden-corpus fixture needs owner approval |
 
 ## WS-2 — W3 face analysis and masks
@@ -48,7 +61,7 @@ IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 | WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); UI wiring NOT VERIFIED | divider drag and pointer wiring not driven by CI | as WP-1 |
 | WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI | as WP-1 |
 | WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure) | progress/cancel UI NOT VERIFIED; cancellation during a running batch is not exercised | UI harness |
-| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | PARTIAL | save/reopen and undo tested; Windows crash recovery is not recorded in the ledger | recovery workstream |
+| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless (save/reopen, undo, candidate recovery with injected failures) | the recovery prompt is a MessageBox; its UI wiring is not driven by CI | none |
 | WP-6 | AI edits on Windows | NOT APPLICABLE until a runtime exists | blocked with W5 | W5 |
 
 ## WS-4 — W5 AI runtime
@@ -68,7 +81,7 @@ IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 | R-2 | Windows start-up to first window | MEASURED, recorded not gated | plain numbers per run; noise expected | none |
 | R-3 | Managed heap across twenty renders | MEASURED flat, gated at 150 MB | longer sessions NOT VERIFIED | none |
 | R-4 | Native working-set / decoder buffers | MEASUREMENT EXISTS ONLY ON THE UNPUSHED LOCAL BRANCH `windows/memory-perf` (`3e00182`) | review and integrate under a workstream, or re-implement | workstream decision |
-| R-5 | Interrupted saves, disk full, crash during processing, shutdown recovery | NOT VERIFIED on Windows | recovery tests need a scoped batch | WP-5 |
+| R-5 | Interrupted saves, disk full, crash during processing, shutdown recovery | TESTED on Windows for the crash path | write, remove, quarantine and lift failures are injected rather than produced by the OS; disk-full and shutdown ordering are not exercised | none |
 | R-6 | Cancellation races in export/batch | PARTIAL | per-file failure isolation tested; cancellation mid-render not exercised | UI/harness |
 
 ## WS-6 — Distribution and update
@@ -89,7 +102,7 @@ IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 | X-2 | Rendering parity for global adjustments | PARTIAL | straighten/crop need a cross-host pixel reference (owner-approved fixture) |
 | X-3 | Feature-data parity (crop, analysis, masks, heal, stickers, AI records) | PARTIAL | shared records exist; Windows cannot render several of them and names them before export |
 | X-4 | Metadata and colour parity across hosts | PARTIAL | Windows always writes sRGB; XMP/IPTC absent |
-| X-5 | Recovery parity | NOT VERIFIED | Windows recovery is not recorded |
+| X-5 | Recovery parity | TESTED per host (same observable rules: one working slot, immutable candidates, quarantine, restore write→verify→delete, monotonic savedAt, source identity) | the rules are reimplemented in C# rather than shared through the C ABI, so parity is proven by matching checks, not by shared code |
 
 ## Blockers (unchanged unless noted)
 
@@ -105,10 +118,11 @@ IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 
 ## Queue order
 
-1. WS-1 (W4 Windows metadata/colour/format), the next implementation batch.
-2. WS-3 items that are verifiable without a UI harness (batch cancellation,
-   recovery, project lifecycle).
-3. WS-2 after the landmark-model decision.
+1. Close WS-1 (W4): validate the metadata/colour workstream on `develop`,
+   then the format audit and the remaining RenderPlan pass-through.
+2. WS-3 items that are verifiable without a UI harness (crash recovery,
+   project lifecycle).
+3. WS-2 after the landmark-model decision (a measured Lead decision).
 4. WS-5 R-4 and R-5 inside the reliability batch.
 5. WS-6 after a signing decision.
 6. WS-4 only when the runtime package exists.
