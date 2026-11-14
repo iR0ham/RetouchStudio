@@ -62,6 +62,11 @@ replaces the old one through the same `UpgradeCode`.
 - Opens and saves the same `.retouch` project bytes as the macOS app, through
   `ProjectCodec`: v3 files are read and rewritten as v3, v4 files keep their
   version, their keyed geometry and every unknown key the file carried.
+- A project can carry edits this host does not render: heal spots, stickers, AI
+  patches, analysis callouts and the two automatic strengths. Those records
+  open and save unchanged, the status bar names them, and an export or batch
+  export asks before writing a photo that lacks them, so an export is never
+  silently missing work the project holds.
 - Nine global sliders in the same -100…100 range as macOS: exposure, contrast,
   blacks, whites, saturation, vibrance, warmth, clarity, vignette. Undo, redo and
   the dirty flag are the shared `DocumentHistory`, not a host copy.
