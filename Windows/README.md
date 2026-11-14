@@ -72,6 +72,9 @@ before upload, so a release carries one installer version, not two.
   open and save unchanged, the status bar names them, and an export or batch
   export asks before writing a photo that lacks them, so an export is never
   silently missing work the project holds.
+- Screen readers: every slider is named by its visible label and the symbol
+  buttons (fit, −, +, the compare split, the crop handles) have spoken
+  names instead of glyphs.
 - Drag and drop: dropping a photo or a `.retouch` project anywhere on the
   canvas opens it with the same unsaved-work check as the Open buttons. A drop
   of several files opens the first; batch export is the path for many at once.
