@@ -93,10 +93,12 @@ before upload, so a release carries one installer version, not two.
   coordinates that macOS reads, and a turn or a mirror moves the stored crop
   with the frame, as macOS does, so a crop chosen before the turn keeps the
   same region of the photo.
-- Compare: a split at 45% of the displayed photo shows the untouched photo on
-  the left and the edit on the right, with BEFORE and AFTER tags; the divider's
-  round handle drags to any point of the frame, and the Compare button in the
-  top bar turns the split off. The untouched side is the photo as the decoder
+- Compare: the Compare button in the top bar turns on a split at 45% of the
+  displayed photo — the untouched photo on the left, the edit on the right,
+  with BEFORE and AFTER tags — and the divider's round handle drags to any
+  point of the frame. The split starts off so an untouched photo is not covered
+  by a divider (the macOS editor ships it on); the split's position is not
+  remembered between sessions. The untouched side is the photo as the decoder
   delivered it — EXIF rotation applied, no crop, no turn, no adjustments — and
   it is rendered once per open at preview size, so neither the split nor the
   peek waits on a render. Holding Space shows that same original over the whole

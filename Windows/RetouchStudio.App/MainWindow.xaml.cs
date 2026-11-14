@@ -34,7 +34,7 @@ public partial class MainWindow : Window
 
     // Before/after split: the untouched photo on the left of the divider, the
     // edit on the right, as the macOS canvas draws it.
-    private bool _compareEnabled = true;
+    private bool _compareEnabled;
     private double _comparePosition = CompareSplit.DefaultFraction;
 
     public MainWindow()

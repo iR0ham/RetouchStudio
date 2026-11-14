@@ -31,7 +31,7 @@
         <Button Content="Rotate Right" Style="{StaticResource ToolButton}" Click="RotateRight_Click" />
         <Button Content="Flip" Style="{StaticResource ToolButton}" Click="Flip_Click" />
         <Border Width="1" Background="{StaticResource LineBrush}" Margin="6,2,12,2" />
-        <ToggleButton x:Name="CompareToggle" Content="Compare" IsChecked="True"
+        <ToggleButton x:Name="CompareToggle" Content="Compare" IsChecked="False"
                       Style="{StaticResource ToolToggle}" Click="CompareToggle_Click"
                       IsEnabled="{Binding HasDocument}"
                       AutomationProperties.Name="Compare before and after"
