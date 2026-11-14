@@ -152,7 +152,7 @@ public static class AdjustmentPipeline
         {
             range = range < 0 ? -1e-3 : 1e-3;
         }
-        var gain = Math.Pow(2, adjustments.Exposure / 100.0 * 2.0);
+        var gain = Math.Pow(2, 0.30 * adjustments.Exposure / 100.0);
         var contrast = (100 + adjustments.Contrast) / 100.0;
 
         var table = new float[256];
@@ -160,12 +160,21 @@ public static class AdjustmentPipeline
         {
             var value = index / 255.0;
             value = Clamp01((value - black) / range);
-            value *= gain;
+            // The shared scale is 0.30 EV at the slider's end, applied in linear
+            // light as the macOS exposure filter does; the table is otherwise
+            // display-referred sRGB.
+            value = FromLinear(ToLinear(value) * gain);
             value = 0.5 + (value - 0.5) * contrast;
             table[index] = (float)Clamp01(value);
         }
         return table;
     }
+
+    private static double ToLinear(double value) =>
+        value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+
+    private static double FromLinear(double value) =>
+        value <= 0.0031308 ? value * 12.92 : 1.055 * Math.Pow(value, 1 / 2.4) - 0.055;
 
     /// <summary>
     /// A separable box blur used only by clarity. The radius scales with the

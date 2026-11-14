@@ -255,11 +255,13 @@ internal static class Program
 
         var brighter = AdjustmentPipeline.Apply(
             gray, new GlobalAdjustments(100, 0, 0, 0, 0, 0, 0, 0, 0));
-        Check("positive exposure brightens", Mean(brighter) > Mean(gray) + 20);
+        Check("positive exposure brightens", Mean(brighter) > Mean(gray) + 5);
+        Check("full exposure stays on the shared 0.30 EV scale",
+              Mean(brighter) < Mean(gray) + 20);
 
         var darker = AdjustmentPipeline.Apply(
             gray, new GlobalAdjustments(-100, 0, 0, 0, 0, 0, 0, 0, 0));
-        Check("negative exposure darkens", Mean(darker) < Mean(gray) - 10);
+        Check("negative exposure darkens", Mean(darker) < Mean(gray) - 5);
 
         var warm = AdjustmentPipeline.Apply(
             gray, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 100, 0, 0));
@@ -365,6 +367,8 @@ internal static class Program
              new GlobalAdjustments(0, 0, 60, 0, 0, 0, 0, 0, 0)),
             ("G09_CLARITY_UP", "F04_detail_chart.png",
              new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 55, 0)),
+            ("G11_VIGNETTE", "F01_portrait_srgb_8.png",
+             new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 0, 55)),
         };
 
         foreach (var (id, fixture, adjustments) in cases)
