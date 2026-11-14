@@ -13,10 +13,11 @@ namespace RetouchStudio.Imaging;
 /// the only rotation the pipeline adds.
 ///
 /// Encoding writes 8-bit JPEG/PNG/TIFF, and 16-bit PNG/TIFF when the export
-/// plan asks for that depth. It carries the measured keys below when privacy
-/// stripping is off and the container supports EXIF (JPEG and TIFF); with
-/// stripping on, only the resolution the pixels were written with travels. XMP
-/// is not exposed by the Windows metadata API and is never written.
+/// plan asks for that depth. With stripping off it carries the source EXIF
+/// block and XMP packet into JPEG and PNG at the container level
+/// (<see cref="MetadataCarry"/>), because the WinRT metadata writer drops most
+/// EXIF keys; TIFF keeps the measured WinRT allowlist. With stripping on, only
+/// the resolution the pixels were written with travels.
 /// </summary>
 public sealed class WindowsImageCodec : IImageCodec
 {
@@ -225,7 +226,9 @@ public sealed class WindowsImageCodec : IImageCodec
         }
         // The decoder reports the resolution as a first-class property; the
         // metadata graph does not always expose it under a property key.
-        return new ImageMetadata(values, decoder.DpiX, decoder.DpiY);
+        var exif = MetadataCarry.ReadExif(Path.GetFullPath(path));
+        var xmp = MetadataCarry.ReadXmp(Path.GetFullPath(path));
+        return new ImageMetadata(values, decoder.DpiX, decoder.DpiY, exif, xmp);
     }
 
     public async Task EncodeAsync(PixelBuffer image, string path, string format, double quality,
@@ -249,44 +252,81 @@ public sealed class WindowsImageCodec : IImageCodec
         var folder = await StorageFolder.GetFolderFromPathAsync(directory);
         var file = await folder.CreateFileAsync(Path.GetFileName(full),
                                                 CreationCollisionOption.ReplaceExisting);
-        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
-
-        var encoder = await BitmapEncoder.CreateAsync(container, stream);
-        encoder.SetPixelData(
-            BitmapPixelFormat.Bgra8,
-            lower is "jpeg" or "jpg" ? BitmapAlphaMode.Ignore : BitmapAlphaMode.Straight,
-            (uint)image.Width,
-            (uint)image.Height,
-            DpiOr96(metadata?.DpiX),
-            DpiOr96(metadata?.DpiY),
-            image.Pixels);
-
-        var properties = new BitmapPropertySet();
-        if (lower is "jpeg" or "jpg")
         {
-            properties["ImageQuality"] = new BitmapTypedValue(
-                (float)Math.Clamp(quality, 0.0, 1.0), PropertyType.Single);
-        }
-        if (!stripPrivacyMetadata && carriesExif && metadata is not null)
-        {
-            foreach (var (key, value) in metadata.Properties)
+            // The stream must be closed before the container writer reopens the
+            // file to splice in the metadata block.
+            using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+
+            var encoder = await BitmapEncoder.CreateAsync(container, stream);
+            encoder.SetPixelData(
+                BitmapPixelFormat.Bgra8,
+                lower is "jpeg" or "jpg" ? BitmapAlphaMode.Ignore : BitmapAlphaMode.Straight,
+                (uint)image.Width,
+                (uint)image.Height,
+                DpiOr96(metadata?.DpiX),
+                DpiOr96(metadata?.DpiY),
+                image.Pixels);
+
+            var properties = new BitmapPropertySet();
+            if (lower is "jpeg" or "jpg")
             {
-                if (ToTypedValue(value) is { } typed)
+                properties["ImageQuality"] = new BitmapTypedValue(
+                    (float)Math.Clamp(quality, 0.0, 1.0), PropertyType.Single);
+            }
+            if (!stripPrivacyMetadata && carriesExif && metadata is not null)
+            {
+                foreach (var (key, value) in metadata.Properties)
                 {
-                    properties[key] = typed;
+                    if (ToTypedValue(value) is { } typed)
+                    {
+                        properties[key] = typed;
+                    }
                 }
             }
-        }
-        if (properties.Count > 0)
-        {
-            // One call, not one per key: a second call replaces the values of
-            // the same metadata schema, which would silently drop the keys set
-            // by the first. The allowlist is exactly the set the headless test
-            // proves a JPEG and a TIFF keep.
-            await encoder.BitmapProperties.SetPropertiesAsync(properties);
+            if (properties.Count > 0)
+            {
+                // One call, not one per key: a second call replaces the values of
+                // the same metadata schema, which would silently drop the keys set
+                // by the first. The allowlist is exactly the set the headless test
+                // proves a JPEG and a TIFF keep.
+                await encoder.BitmapProperties.SetPropertiesAsync(properties);
+            }
+
+            await encoder.FlushAsync();
         }
 
-        await encoder.FlushAsync();
+        CarryBlocks(full, lower, metadata, stripPrivacyMetadata,
+                    image.Width, image.Height);
+    }
+
+    /// <summary>
+    /// Splices the source EXIF block and XMP packet into a finished file. The
+    /// source is described with the exported frame's size, so the carried tags
+    /// name the pixels that were actually written.
+    /// </summary>
+    private static void CarryBlocks(string path, string format, ImageMetadata? metadata,
+                                    bool stripPrivacyMetadata, int width, int height)
+    {
+        if (stripPrivacyMetadata || metadata is null)
+        {
+            return;
+        }
+        if (format is not ("png" or "jpeg" or "jpg"))
+        {
+            return;
+        }
+        var exif = metadata.ExifTiff is { } tiff
+            ? MetadataCarry.NormalizeExif(tiff, width, height)
+            : null;
+        var xmp = metadata.Xmp is { } packet ? MetadataCarry.NormalizeXmp(packet) : null;
+        if (format == "png")
+        {
+            MetadataCarry.WritePng(path, exif, xmp);
+        }
+        else
+        {
+            MetadataCarry.WriteJpeg(path, exif, xmp);
+        }
     }
 
     public async Task Encode16Async(PixelBuffer16 image, string path, string format,
@@ -308,37 +348,42 @@ public sealed class WindowsImageCodec : IImageCodec
         var folder = await StorageFolder.GetFolderFromPathAsync(directory);
         var file = await folder.CreateFileAsync(Path.GetFileName(full),
                                                 CreationCollisionOption.ReplaceExisting);
-        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
-
-        var encoder = await BitmapEncoder.CreateAsync(container, stream);
-        var bytes = new byte[image.Pixels.Length * 2];
-        System.Buffer.BlockCopy(image.Pixels, 0, bytes, 0, bytes.Length);
-        encoder.SetPixelData(
-            BitmapPixelFormat.Rgba16,
-            BitmapAlphaMode.Straight,
-            (uint)image.Width,
-            (uint)image.Height,
-            DpiOr96(metadata?.DpiX),
-            DpiOr96(metadata?.DpiY),
-            bytes);
-
-        var properties = new BitmapPropertySet();
-        if (!stripPrivacyMetadata && metadata is not null)
         {
-            foreach (var (key, value) in metadata.Properties)
+            using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+
+            var encoder = await BitmapEncoder.CreateAsync(container, stream);
+            var bytes = new byte[image.Pixels.Length * 2];
+            System.Buffer.BlockCopy(image.Pixels, 0, bytes, 0, bytes.Length);
+            encoder.SetPixelData(
+                BitmapPixelFormat.Rgba16,
+                BitmapAlphaMode.Straight,
+                (uint)image.Width,
+                (uint)image.Height,
+                DpiOr96(metadata?.DpiX),
+                DpiOr96(metadata?.DpiY),
+                bytes);
+
+            var properties = new BitmapPropertySet();
+            if (!stripPrivacyMetadata && metadata is not null)
             {
-                if (ToTypedValue(value) is { } typed)
+                foreach (var (key, value) in metadata.Properties)
                 {
-                    properties[key] = typed;
+                    if (ToTypedValue(value) is { } typed)
+                    {
+                        properties[key] = typed;
+                    }
                 }
             }
-        }
-        if (properties.Count > 0)
-        {
-            await encoder.BitmapProperties.SetPropertiesAsync(properties);
+            if (properties.Count > 0)
+            {
+                await encoder.BitmapProperties.SetPropertiesAsync(properties);
+            }
+
+            await encoder.FlushAsync();
         }
 
-        await encoder.FlushAsync();
+        CarryBlocks(full, lower, metadata, stripPrivacyMetadata,
+                    image.Width, image.Height);
     }
 
     private static double DpiOr96(double? value) =>
