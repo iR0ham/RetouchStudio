@@ -173,6 +173,12 @@ before upload, so a release carries one installer version, not two.
   the turned frame. While the crop overlay is open the preview shows the
   upright frame without its crop, so the rectangle the owner drags and the
   stored crop share one coordinate system.
+- The crop and the two lossless orientation remaps are compared against source
+  indices written in the test, not against the helper that produced them: a
+  0.1/0.1/0.8/0.7 crop of a 256x192 frame must render the 205x134 box at
+  (26, 19) pixel for pixel, a flip must mirror across its row, and a quarter
+  turn must read `(y, H-1-x)` of the source. A transpose or an off-by-one fails
+  there even when the arithmetic still looks plausible.
 - Straighten rotates clockwise for a positive angle and keeps the canvas size;
   the cover scale and the position of the rotation in the turn/straighten/
   mirror order are the same formulas macOS uses (`Models/Orientation.swift`),

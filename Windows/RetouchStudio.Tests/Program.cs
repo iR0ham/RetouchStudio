@@ -49,6 +49,7 @@ internal static class Program
             UnsupportedEditGuard();
             CropPresets();
             OrientationComposition();
+            GeometryRenderParity();
         }
         catch (Exception error)
         {
@@ -1813,6 +1814,74 @@ internal static class Program
                && a.Pixels[ai + 1] == b.Pixels[bi + 1]
                && a.Pixels[ai + 2] == b.Pixels[bi + 2]
                && a.Pixels[ai + 3] == b.Pixels[bi + 3];
+    }
+
+    /// <summary>
+    /// Crop and orientation are pure pixel remaps, so each result is compared
+    /// against an index written in this test rather than against the helper
+    /// that produced it: a transpose, a mirrored turn or an off-by-one shows
+    /// up here even though the geometry arithmetic would still look plausible.
+    /// The 0.1/0.8/0.7 crop of a 256x192 frame rounds to a 205x134 box at
+    /// (26, 19).
+    /// </summary>
+    private static void GeometryRenderParity()
+    {
+        var source = new PixelBuffer(256, 192);
+        for (var y = 0; y < source.Height; y++)
+        {
+            for (var x = 0; x < source.Width; x++)
+            {
+                Put(source, x, y, (byte)x, (byte)y, (byte)((x * 7 + y * 13) % 256));
+            }
+        }
+
+        // The reference is the same buffer through the identity pipeline, so a
+        // no-op rounding difference cannot masquerade as a geometry fault.
+        var plain = ExportRunner.RenderDocument(source, new DocumentModel(new JsonObject()));
+
+        var cropped = ExportRunner.RenderDocument(source, new DocumentModel(new JsonObject())
+        {
+            Crop = new CropValue(0.1, 0.1, 0.8, 0.7),
+        });
+        Check("a crop renders the rounded 205x134 region",
+              cropped.Width == 205 && cropped.Height == 134);
+        var cropMatches = cropped.Width == 205 && cropped.Height == 134;
+        for (var y = 0; cropMatches && y < cropped.Height; y++)
+        {
+            for (var x = 0; x < cropped.Width; x++)
+            {
+                cropMatches = Matches(cropped, x, y, plain, 26 + x, 19 + y);
+            }
+        }
+        Check("every crop pixel is the photo pixel at that offset", cropMatches);
+
+        var flipped = ExportRunner.RenderDocument(source, new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithFlip(),
+        });
+        var flipMatches = flipped.Width == source.Width && flipped.Height == source.Height;
+        for (var y = 0; flipMatches && y < source.Height; y++)
+        {
+            for (var x = 0; x < source.Width; x++)
+            {
+                flipMatches = Matches(flipped, x, y, plain, source.Width - 1 - x, y);
+            }
+        }
+        Check("a horizontal flip mirrors each pixel across its row", flipMatches);
+
+        var turned = ExportRunner.RenderDocument(source, new DocumentModel(new JsonObject())
+        {
+            Orientation = OrientationValue.Identity.WithQuarterTurn(1),
+        });
+        var turnMatches = turned.Width == source.Height && turned.Height == source.Width;
+        for (var y = 0; turnMatches && y < turned.Height; y++)
+        {
+            for (var x = 0; x < turned.Width; x++)
+            {
+                turnMatches = Matches(turned, x, y, plain, y, source.Height - 1 - x);
+            }
+        }
+        Check("a quarter turn maps each output pixel to its clockwise source", turnMatches);
     }
 
     private static bool Near(double value, double expected) =>
