@@ -146,6 +146,7 @@ does not. These numbers were recorded on run `43598349755` (CI workflow,
 | time to first window — zipped and extracted folder | same | **1230 ms** |
 | time to first window — MSI-installed copy | same, first launch of the installed copy | **3851 ms** |
 | time to first window — upgraded copy | same, first launch after an in-place upgrade | **5740 ms** |
+| managed-heap growth over a render session | twenty photo-sized preview renders after the forty-document stress loop, full blocking collection before and after | **-0.0 MB**, gated at 150 MB (run `43612517678`, head `6a80ba1`) |
 
 The four start-up figures were recorded on run `43609703310` (CI workflow,
 `windows-2025`, x64, head `9269692`) and printed by the same smoke step that
@@ -153,6 +154,9 @@ already proved each copy opens a window. They measure process start to the
 window reporting itself loaded, on a hosted runner with no GPU and a cold file
 cache for the installed copies, so the installed and upgraded numbers include
 first-launch disk and antivirus cost; they are recorded evidence, not budgets.
+They vary run to run on the shared runner: run `43615178242` (head `de269d8`)
+printed 896 / 1097 / 4395 / 2751 ms for the same four copies, and run
+`43613038894` printed 907 / 1649 / 662 / 764 ms. Each run prints its own line.
 
 The preview figure is a full 1:1 render of a 1.7 MP frame with every adjustment
 pass applied; clarity's linear-luminance Gaussian dominates. The decode happens
@@ -162,13 +166,17 @@ smaller. The export figure includes the decode, the full-size render and the
 encode-to-disk of a 16-bit PNG. A stress loop then renders forty documents that
 vary crop, quarter turn, flip, straighten and clarity sign, and requires that no
 render fails, that no crop/turn output exceeds the source area, and that a
-repeated render is pixel-identical; it is a correctness loop, not a timing.
+repeated render is pixel-identical; it is a correctness loop, not a timing. The
+heap row runs twenty more photo-sized renders after that loop and compares
+`GC.GetTotalMemory(forceFullCollection: true)` on both sides, so it reports
+managed heap that survived collection — a leak signal, not a memory footprint.
 
 ## Not measured
 
-- **Windows AI timings, batch export, memory and cold start** — the tests above
-  time one preview render and one 16-bit PNG export. No Windows figure here may
-  be quoted for an AI stage, a batch, resident memory or startup, and the macOS
+- **Windows AI timings, batch export and working-set memory** — the tests above
+  time one preview render and one 16-bit PNG export, and report one managed-heap
+  delta. No Windows figure here may be quoted for an AI stage, a batch, resident
+  (working-set) memory or sustained long sessions, and the macOS
   harness never runs on Windows.
 - **AI runtime execution** — the bundled runtime is not installed in this
   environment; upscale, background removal, generative fill and scene analysis
