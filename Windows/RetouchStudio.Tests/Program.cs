@@ -1568,9 +1568,9 @@ internal static class Program
             return null;
         }
         var start = count <= 4
-            ? entry + 8
+            ? (long)(entry + 8)
             : ReadTiffU32(tiff, entry + 8, little);
-        if (start > int.MaxValue || (long)start + count > tiff.Length)
+        if (start > int.MaxValue || start + count > tiff.Length)
         {
             return null;
         }
