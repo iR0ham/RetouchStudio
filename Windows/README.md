@@ -111,10 +111,12 @@ replaces the old one through the same `UpgradeCode`.
   MSI; both are built from the same publish folder.
 - No macOS pixel parity claim. Exposure, blacks, whites, contrast and saturation
   now use the shared scales: against the macOS reference PNGs the host measures
-  MAE 0.01 for exposure +40 and 0.007 for blacks +60, while clarity +55 still
-  differs (MAE 5.8; CI's unsharp mask is approximated) and vignette +55 differs
-  (MAE 5.2). Every measurement is printed by the headless suite; no tolerance is
-  approved.
+  MAE 0.01 for exposure +40 and 0.007 for blacks +60. Clarity +55 still differs
+  (MAE 5.8; CI's unsharp mask is approximated). The vignette follows
+  CIVignette's measured behaviour — linear light, short-side falloff, intensity
+  as an exponent — and lands at MAE 0.47 for +55, gated at one level; a negative
+  vignette is a no-op, as on macOS. Every measurement is printed by the headless
+  suite.
 
 ## Pixel semantics
 
@@ -215,6 +217,25 @@ writes `one-retouched-2.png`, and a missing input reported as an error while
 the next file still exports. The WPF host exposes the run as a "Batch Export…"
 button; the GUI smoke only proves that adding the button did not stop the
 window loading, not that a person clicked through the dialogs.
+
+### Vignette parity (2026-11-14, PR #26)
+
+`Tools/ci-vignette-reference.swift` applies `CIVignette` exactly as
+`ImageProcessor` does, in the same extended-linear-sRGB working space. On
+`F01_portrait_srgb_8.png` at +55 its output is byte-identical to the committed
+`G11_VIGNETTE.png` (SHA-256 `af9bebfd…`), so filter output, not a guess, is the
+measurement target.
+
+Measuring that output showed three properties the host's display-space
+smoothstep did not have: the multiplier is applied in linear light, the falloff
+is keyed to the short side (the curve is the same at 512, 720 and 1024 pixels),
+and the intensity is an exponent, so the slider darkens faster than linearly.
+The pipeline now follows that shape in both the 8-bit and 16-bit paths. CI run
+[43573329343](https://github.com/iR0ham/RetouchStudio/actions/runs/43573329343)
+reports `PASS (118 checks)` with `G11_VIGNETTE: mae 0.473` — from 5.2 before —
+and the case is gated at one level rather than only printed. A negative
+vignette changes nothing, as on macOS where only `vignette > 0` runs the
+filter; a check holds that.
 
 ### Installer run (2026-11-14, PR #22)
 
