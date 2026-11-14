@@ -3,7 +3,8 @@
 # the headless host tests against the real DLL and Windows Imaging Component,
 # a GUI liveness check that the published exe opens a window, the same check
 # from the extracted release zip, and, when WiX Toolset v3 is installed, an MSI
-# that is silently installed, started from Program Files and uninstalled again.
+# that is silently installed, started from Program Files, upgraded in place by a
+# higher version and uninstalled again.
 #
 #   pwsh -File Tools/build-windows.ps1
 #   pwsh -File Tools/build-windows.ps1 -SkipGuiSmoke     # no interactive desktop
@@ -248,9 +249,11 @@ if (-not $SkipPackage -and -not $SkipGuiSmoke -and -not $SkipPublish) {
 
 # 8. The MSI is the artifact a user runs, so it is not merely built: it is
 #    installed silently, the installed copy is started from Program Files, and
-#    it is uninstalled again. WiX v3 is not on every developer machine, so the
-#    MSI is skipped when the toolset is absent; the CI image has it and proves
-#    the whole path.
+#    it is uninstalled again. A second package with a higher version is then
+#    installed over the first, because that is the state a user is in when the
+#    next version ships. WiX v3 is not on every developer machine, so the MSI is
+#    skipped when the toolset is absent; the CI image has it and proves the
+#    whole path.
 function Find-Wix([string]$requested) {
     $candidates = @($requested, $env:WIX,
         (Join-Path ${env:ProgramFiles(x86)} 'WiX Toolset v3.14'),
@@ -264,69 +267,117 @@ function Find-Wix([string]$requested) {
     return $null
 }
 
-function Get-InstalledProduct {
+function Get-InstalledProducts {
     $uninstall = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    Get-ItemProperty $uninstall -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -eq 'Retouch Studio' } |
-        Select-Object -First 1
+    @(Get-ItemProperty $uninstall -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -eq 'Retouch Studio' })
 }
 
-function Invoke-InstallProof([string]$Msi, [string]$Label, [string]$ExpectedVersion) {
-    $installDir = Join-Path $env:ProgramFiles 'Retouch Studio'
-    $installedExe = Join-Path $installDir 'RetouchStudio.exe'
-    $shortcutDir = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Retouch Studio'
-    $shortcut = Join-Path $shortcutDir 'Retouch Studio.lnk'
-    if (Test-Path $installDir) {
-        throw "$installDir already exists; the install proof needs a clean machine state"
+function Get-InstallPaths {
+    $dir = Join-Path $env:ProgramFiles 'Retouch Studio'
+    [pscustomobject]@{
+        Dir      = $dir
+        Exe      = Join-Path $dir 'RetouchStudio.exe'
+        Shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Retouch Studio\Retouch Studio.lnk'
     }
+}
 
+function Assert-CleanInstall {
+    $paths = Get-InstallPaths
+    if (Test-Path $paths.Dir) {
+        throw "$($paths.Dir) already exists; the installer proof needs a clean state"
+    }
+    if (@(Get-InstalledProducts).Count -ne 0) {
+        throw 'Retouch Studio is already registered in Programs and Features'
+    }
+}
+
+function Install-Msi([string]$Msi, [string]$ExpectedVersion) {
+    $paths = Get-InstallPaths
     $temp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-    $installLog = Join-Path $temp 'retouchstudio-msi-install.log'
-    $uninstallLog = Join-Path $temp 'retouchstudio-msi-uninstall.log'
-    Remove-Item $installLog, $uninstallLog -ErrorAction SilentlyContinue
-
+    $log = Join-Path $temp ("retouchstudio-msi-" + [guid]::NewGuid().ToString('N') + ".log")
     $msiexec = Join-Path $env:WINDIR 'System32\msiexec.exe'
     $install = Start-Process $msiexec -PassThru -Wait -ArgumentList @(
-        '/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$installLog`"")
+        '/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$log`"")
     if ($install.ExitCode -notin 0, 3010, 1641) {
-        throw "msiexec /i exited with $($install.ExitCode); see $installLog"
+        throw "msiexec /i $Msi exited with $($install.ExitCode); see $log"
     }
-    if (-not (Test-Path $installedExe -PathType Leaf)) {
-        throw "the MSI did not install $installedExe; see $installLog"
+    if (-not (Test-Path $paths.Exe -PathType Leaf)) {
+        throw "the MSI did not install $($paths.Exe); see $log"
     }
-    if (-not (Test-Path $shortcut -PathType Leaf)) {
-        throw "the MSI did not create $shortcut; see $installLog"
+    if (-not (Test-Path $paths.Shortcut -PathType Leaf)) {
+        throw "the MSI did not create $($paths.Shortcut); see $log"
     }
-    $product = Get-InstalledProduct
-    if ($null -eq $product) {
-        throw 'the MSI did not register Retouch Studio in Programs and Features'
+    $products = @(Get-InstalledProducts)
+    if ($products.Count -ne 1) {
+        throw "expected one Retouch Studio entry in Programs and Features, found $($products.Count); see $log"
     }
-    if ($ExpectedVersion -and $product.DisplayVersion -ne $ExpectedVersion) {
-        throw "the installed product reports version '$($product.DisplayVersion)', not '$ExpectedVersion'"
+    if ($products[0].DisplayVersion -ne $ExpectedVersion) {
+        throw "the installed product reports '$($products[0].DisplayVersion)', not '$ExpectedVersion'; see $log"
     }
-    Write-Host "   installed $installedExe as $($product.DisplayVersion)"
+    Write-Host "   installed $($paths.Exe) as $($products[0].DisplayVersion)"
+}
 
-    Invoke-GuiSmoke $installedExe $Label
-
+function Uninstall-Msi([string]$Msi) {
+    $paths = Get-InstallPaths
+    $temp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+    $log = Join-Path $temp ("retouchstudio-msi-uninstall-" + [guid]::NewGuid().ToString('N') + ".log")
+    $msiexec = Join-Path $env:WINDIR 'System32\msiexec.exe'
     $uninstall = Start-Process $msiexec -PassThru -Wait -ArgumentList @(
-        '/x', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$uninstallLog`"")
+        '/x', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$log`"")
     if ($uninstall.ExitCode -notin 0, 3010, 1641) {
-        throw "msiexec /x exited with $($uninstall.ExitCode); see $uninstallLog"
+        throw "msiexec /x $Msi exited with $($uninstall.ExitCode); see $log"
     }
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        if (-not (Test-Path $installDir)) { break }
+        if (-not (Test-Path $paths.Dir)) { break }
         Start-Sleep -Seconds 1
     }
-    if (Test-Path $installDir) {
-        throw "the uninstall left $installDir behind; see $uninstallLog"
+    if (Test-Path $paths.Dir) {
+        throw "the uninstall left $($paths.Dir) behind; see $log"
     }
-    if (Test-Path $shortcut) {
-        throw "the uninstall left $shortcut behind; see $uninstallLog"
+    if (Test-Path $paths.Shortcut) {
+        throw "the uninstall left $($paths.Shortcut) behind; see $log"
     }
-    if ($null -ne (Get-InstalledProduct)) {
-        throw "the uninstall left Retouch Studio in Programs and Features; see $uninstallLog"
+    if (@(Get-InstalledProducts).Count -ne 0) {
+        throw "the uninstall left Retouch Studio in Programs and Features; see $log"
     }
     Write-Host '   uninstalled; the folder, the shortcut and the entry are gone'
+}
+
+function Get-MsiVersion([string]$Version) {
+    if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)') {
+        throw "Version '$Version' has no numeric major.minor.patch prefix"
+    }
+    "$($matches[1]).$($matches[2]).$($matches[3]).0"
+}
+
+function Get-NextPackageVersion([string]$Version) {
+    if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)') {
+        throw "Version '$Version' has no numeric major.minor.patch prefix"
+    }
+    $next = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
+    $next + $Version.Substring($matches[0].Length)
+}
+
+function Build-Msi([string]$Wix, [string]$Version) {
+    # heat, candle and light write their progress to stdout; Out-Host keeps that
+    # in the log without mixing it into this function's return value.
+    & (Join-Path $root 'Tools/package-windows-msi.ps1') `
+        -AppDir $appDir -Version $Version -OutputDir $distDir -WixDir $Wix | Out-Host
+    Assert-ExitCode 'MSI packaging'
+    $name = "RetouchStudio-$Version-windows-x64.msi"
+    $path = Join-Path $distDir $name
+    $manifest = "$path.sha256"
+    if (-not (Test-Path $path -PathType Leaf)) { throw "$path was not written" }
+    if (-not (Test-Path $manifest -PathType Leaf)) { throw "$manifest was not written" }
+    $recorded = (Get-Content $manifest -Raw).Trim()
+    $hash = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($recorded -ne "$hash  $name") {
+        throw "the MSI manifest does not match the MSI: '$recorded'"
+    }
+    $size = (Get-Item $path).Length
+    Write-Host "   $name ($size bytes), sha256 $hash"
+    return $path
 }
 
 if (-not $SkipPackage -and -not $SkipPublish) {
@@ -340,28 +391,33 @@ if (-not $SkipPackage -and -not $SkipPublish) {
     else {
         Step 'building the MSI installer'
         Write-Host "   WiX at $wix"
-        $msiName = "RetouchStudio-$PackageVersion-windows-x64.msi"
-        $msi = Join-Path $distDir $msiName
-        & (Join-Path $root 'Tools/package-windows-msi.ps1') `
-            -AppDir $appDir -Version $PackageVersion -OutputDir $distDir -WixDir $wix
-        Assert-ExitCode 'MSI packaging'
-        $msiManifest = "$msi.sha256"
-        if (-not (Test-Path $msi -PathType Leaf)) { throw "$msi was not written" }
-        if (-not (Test-Path $msiManifest -PathType Leaf)) { throw "$msiManifest was not written" }
-        $recorded = (Get-Content $msiManifest -Raw).Trim()
-        $hash = (Get-FileHash -Path $msi -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($recorded -ne "$hash  $msiName") {
-            throw "the MSI manifest does not match the MSI: '$recorded'"
+        $msi = Build-Msi $wix $PackageVersion
+        if ($msi -isnot [string] -or -not (Test-Path $msi -PathType Leaf)) {
+            throw "the MSI build did not return one file; it returned '$msi'"
         }
-        $size = (Get-Item $msi).Length
-        Write-Host "   $msiName ($size bytes), sha256 $hash"
 
         if (-not $SkipGuiSmoke) {
-            Step 'installing and uninstalling the MSI'
-            $expected = if ($PackageVersion -match '^(\d+)\.(\d+)\.(\d+)') {
-                "$($matches[1]).$($matches[2]).$($matches[3]).0"
-            } else { '' }
-            Invoke-InstallProof $msi 'installed' $expected
+            Step 'installing, starting and uninstalling the MSI'
+            Assert-CleanInstall
+            Install-Msi $msi (Get-MsiVersion $PackageVersion)
+            Invoke-GuiSmoke ((Get-InstallPaths).Exe) 'installed'
+            Uninstall-Msi $msi
+
+            # An installed product is the state every user is in when the next
+            # version ships, so the upgrade rule is proved, not just declared:
+            # a second package built from the same folder replaces the first in
+            # place, leaving one entry and the new version.
+            Step 'upgrading an installed version'
+            $upgradeVersion = Get-NextPackageVersion $PackageVersion
+            $upgradeMsi = Build-Msi $wix $upgradeVersion
+            if ($upgradeMsi -isnot [string] -or -not (Test-Path $upgradeMsi -PathType Leaf)) {
+                throw "the upgrade MSI build did not return one file; it returned '$upgradeMsi'"
+            }
+            Install-Msi $msi (Get-MsiVersion $PackageVersion)
+            Install-Msi $upgradeMsi (Get-MsiVersion $upgradeVersion)
+            Invoke-GuiSmoke ((Get-InstallPaths).Exe) 'upgraded'
+            Uninstall-Msi $upgradeMsi
+            Write-Host "   upgraded in place from $(Get-MsiVersion $PackageVersion) to $(Get-MsiVersion $upgradeVersion)"
         }
     }
 }
