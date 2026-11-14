@@ -520,7 +520,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public async Task<bool> RestoreRecoveryAsync(RecoveryStore.Candidate candidate)
     {
         CloseSession();
-        if (!_recovery.Restore(candidate) || _recovery.ReadWorking() is not { } snapshot)
+        if (!_recovery.Restore(candidate))
+        {
+            return false;
+        }
+        if (_recovery.ReadWorking() is not { } snapshot)
         {
             return false;
         }

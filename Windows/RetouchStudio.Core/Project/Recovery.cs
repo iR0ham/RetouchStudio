@@ -438,7 +438,7 @@ public sealed class RecoveryStore
             return false;
         }
         return long.TryParse(stem[..dash], out _) &&
-               Guid.TryParseExact(stem[(dash + 1)..], "N");
+               Guid.TryParseExact(stem[(dash + 1)..], "N", out _);
     }
 
     private static RecoverySnapshot? TryReadFile(string path)
