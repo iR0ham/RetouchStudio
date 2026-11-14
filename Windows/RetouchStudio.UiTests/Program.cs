@@ -661,9 +661,6 @@ internal static class Program
         return editors.Count == 0 ? "no editors" : string.Join(" ", editors);
     }
 
-    private static string ReadValue(AutomationElement edit) =>
-        ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-
     /// <summary>Every non-empty text the window shows, for a failure report.</summary>
     private static string DescribeTexts(AutomationElement window)
     {
