@@ -218,3 +218,26 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 4. W6: the Windows MSI exists and CI proves install, start, in-place upgrade
    and uninstall; what remains is an updater, which needs a signed feed first.
 5. Notarization stays BLOCKED until credentials exist; never simulate it.
+
+## 8. Execution rules (owner directive, 2026-11-14)
+
+These govern how this plan is carried out; they supersede any habit of idling
+on CI.
+
+1. CI never blocks the workstream. While a run is in flight, the next
+   independent task starts; status checks are quick reads (30–60 s), never
+   multi-minute sleeps.
+2. Documentation rides in the active workstream. No documentation-only pull
+   requests are opened just to record a merge; the record is updated in the
+   workstream's own changes before its final validation run.
+3. No CI run is started for documentation-only or intermediate commits when an
+   existing run already validates the change. CI is the hard gate at the merge
+   boundary, and required checks are never bypassed.
+4. A prioritized queue of independent tasks is kept; when a task waits on an
+   external process, the queue moves.
+5. Slow jobs are fixed, not endured: the Windows Swift toolchain download now
+   runs with the setup action's cache enabled and the app job has a 60-minute
+   budget, after one run was cancelled at the old 45-minute timeout during
+   installation.
+6. Green checks are a checkpoint, not a stopping point; implementation
+   continues automatically.

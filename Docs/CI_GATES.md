@@ -167,9 +167,10 @@ The Windows gap and the intended implementation are analysed in
 ## Windows application job
 
 `windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
-`windows-2025` and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
+`windows-2025` — the Swift installer download is cached by the setup action —
+and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 131
+`.def` export list, publishes the WPF host self-contained for x64, runs the 133
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs

@@ -849,6 +849,25 @@ internal static class Program
                   && back.Pixels.AsSpan().SequenceEqual(p3.Pixels));
             Check("the 16-bit source carries precision 8 bits cannot hold",
                   CountOffGrid(p3) > 0);
+
+            // A crop is stored against the photo, so it runs before the turn.
+            // The crop is deliberately not square: a swapped order would give
+            // the same pixel count but a different frame, and only this shape
+            // catches it.
+            session.Document.Crop = new CropValue(0.25, 0.1, 0.5, 0.4);
+            session.Document.Orientation = session.Document.Orientation.WithQuarterTurn(1);
+            var cropped = Path.Combine(root, "depth-16-crop-turn.png");
+            ExportRunner.ExportAsync(session, codec, cropped, "png", 1.0, 0)
+                        .GetAwaiter().GetResult();
+            var croppedBack = codec.Decode16Async(cropped).GetAwaiter().GetResult();
+            var expected = p3.Crop(session.Document.Crop!)
+                             .ApplyOrientation(session.Document.Orientation);
+            Check("a 16-bit export crops in photo coordinates before the turn",
+                  croppedBack.Width == 205 && croppedBack.Height == 256
+                  && croppedBack.Width == expected.Width
+                  && croppedBack.Height == expected.Height);
+            Check("a cropped 16-bit export keeps every sample",
+                  croppedBack.Pixels.AsSpan().SequenceEqual(expected.Pixels));
         }
 
         // A buffer the 8-bit path could not have produced, so an exact return
