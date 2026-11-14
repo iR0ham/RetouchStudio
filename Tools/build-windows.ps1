@@ -418,6 +418,23 @@ if (-not $SkipPackage -and -not $SkipPublish) {
             Invoke-GuiSmoke ((Get-InstallPaths).Exe) 'upgraded'
             Uninstall-Msi $upgradeMsi
             Write-Host "   upgraded in place from $(Get-MsiVersion $PackageVersion) to $(Get-MsiVersion $upgradeVersion)"
+
+            # The upgrade package exists only to prove the rule. Leaving it in
+            # dist would publish two versions as the release's installers, so
+            # only the package built for this run stays.
+            foreach ($leftover in @($upgradeMsi,
+                                   "$upgradeMsi.sha256",
+                                   [IO.Path]::ChangeExtension($upgradeMsi, '.wixpdb'))) {
+                if (Test-Path $leftover -PathType Leaf) {
+                    Remove-Item $leftover -Force
+                }
+            }
+            $stray = @(Get-ChildItem $distDir -Filter 'RetouchStudio-*-windows-x64.msi' |
+                       Where-Object { $_.FullName -ne $msi })
+            if ($stray.Count -gt 0) {
+                throw "dist holds an extra MSI after the upgrade test: $($stray.Name -join ', ')"
+            }
+            Write-Host "   dist holds the one package for this run: $(Split-Path $msi -Leaf)"
         }
     }
 }
