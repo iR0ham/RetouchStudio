@@ -213,18 +213,8 @@ internal static class Program
         var open = FindButton(window, "Open Photo")
             ?? throw new InvalidOperationException("the Open Photo button is missing");
         Invoke(open);
-        // A modal dialog disables its owner, so this says whether the click
-        // reached the handler even when the dialog window cannot be listed.
-        var ownerDisabled = WaitFor(() => !IsEnabled(window), TimeSpan.FromSeconds(10));
         var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(90))
-            ?? WaitWindowAnyProcess("Open Photo", TimeSpan.FromSeconds(5));
-        if (openDialog is null)
-        {
-            throw new InvalidOperationException(
-                "the Open dialog never appeared (the owner " +
-                $"{(ownerDisabled ? "was" : "was not")} disabled; the app " +
-                $"{(process.HasExited ? $"exited with {process.ExitCode}" : "is still running")})");
-        }
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
         Ok("Open Photo opened its dialog");
 
         SetFileName(openDialog, photo);
@@ -334,96 +324,97 @@ internal static class Program
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
         while (DateTime.UtcNow < deadline)
         {
-            try
+            foreach (var handle in VisibleWindows(processId))
             {
-                var windows = AutomationElement.RootElement.FindAll(
-                    TreeScope.Children,
-                    new PropertyCondition(AutomationElement.ProcessIdProperty, processId));
-                foreach (AutomationElement window in windows)
+                try
                 {
-                    var yes = FindButton(window, "Yes", contains: true);
+                    var yes = FindButton(AutomationElement.FromHandle(handle), "Yes",
+                                         contains: true);
                     if (yes is not null)
                     {
                         Invoke(yes);
                         return;
                     }
                 }
-            }
-            catch (ElementNotAvailableException)
-            {
-            }
-            Thread.Sleep(250);
-        }
-    }
-
-    /// <summary>A window on the desktop, whatever process hosts it.</summary>
-    private static AutomationElement? WaitWindowAnyProcess(string title, TimeSpan patience)
-    {
-        var deadline = DateTime.UtcNow + patience;
-        while (DateTime.UtcNow < deadline)
-        {
-            try
-            {
-                foreach (AutomationElement candidate in AutomationElement.RootElement.FindAll(
-                             TreeScope.Children,
-                             new PropertyCondition(AutomationElement.ControlTypeProperty,
-                                                   ControlType.Window)))
+                catch (ElementNotAvailableException)
                 {
-                    if (candidate.Current.Name == title)
-                    {
-                        return candidate;
-                    }
                 }
             }
-            catch (ElementNotAvailableException)
-            {
-            }
             Thread.Sleep(250);
-        }
-        return null;
-    }
-
-    /// <summary>Reads the live enabled state; a stale cache would hide a modal owner.</summary>
-    private static bool IsEnabled(AutomationElement element)
-    {
-        try
-        {
-            return element.Current.IsEnabled;
-        }
-        catch (ElementNotAvailableException)
-        {
-            return false;
         }
     }
 
     private static AutomationElement? WaitWindow(int processId, string title,
                                                  TimeSpan patience)
+        => WaitWindow((int?)processId, title, patience);
+
+    /// <summary>
+    /// The desktop's top-level windows are found through Win32. The common
+    /// dialogs are plain visible windows, but this hosted session's UIA root
+    /// does not list them among its children; the handle still yields a normal
+    /// automation element for their controls.
+    /// </summary>
+    private static AutomationElement? WaitWindow(int? processId, string title,
+                                                 TimeSpan patience)
     {
         var deadline = DateTime.UtcNow + patience;
         while (DateTime.UtcNow < deadline)
         {
-            try
+            var handle = FindVisibleWindow(processId, title);
+            if (handle != IntPtr.Zero)
             {
-                var windows = AutomationElement.RootElement.FindAll(
-                    TreeScope.Children,
-                    new AndCondition(
-                        new PropertyCondition(AutomationElement.ProcessIdProperty, processId),
-                        new PropertyCondition(AutomationElement.ControlTypeProperty,
-                                              ControlType.Window)));
-                foreach (AutomationElement candidate in windows)
+                try
                 {
-                    if (candidate.Current.Name == title)
-                    {
-                        return candidate;
-                    }
+                    return AutomationElement.FromHandle(handle);
                 }
-            }
-            catch (ElementNotAvailableException)
-            {
+                catch (ElementNotAvailableException)
+                {
+                }
             }
             Thread.Sleep(250);
         }
         return null;
+    }
+
+    private static IntPtr FindVisibleWindow(int? processId, string title)
+    {
+        var found = IntPtr.Zero;
+        EnumWindows((window, _) =>
+        {
+            if (!IsWindowVisible(window))
+            {
+                return true;
+            }
+            GetWindowThreadProcessId(window, out var owner);
+            if (processId is { } wanted && owner != (uint)wanted)
+            {
+                return true;
+            }
+            var text = new StringBuilder(256);
+            GetWindowTextW(window, text, text.Capacity);
+            if (text.ToString() != title)
+            {
+                return true;
+            }
+            found = window;
+            return false;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static List<IntPtr> VisibleWindows(int processId)
+    {
+        var handles = new List<IntPtr>();
+        EnumWindows((window, _) =>
+        {
+            GetWindowThreadProcessId(window, out var owner);
+            if (owner == (uint)processId && IsWindowVisible(window))
+            {
+                handles.Add(window);
+            }
+            return true;
+        }, IntPtr.Zero);
+        return handles;
     }
 
     private static bool WaitFor(Func<bool> probe, TimeSpan patience)
@@ -610,6 +601,11 @@ internal static class Program
             var own = AutomationElement.RootElement.FindFirst(
                 TreeScope.Children,
                 new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id));
+            var handles = VisibleWindows(process.Id);
+            if (own is null && handles.Count > 0)
+            {
+                own = AutomationElement.FromHandle(handles[0]);
+            }
             if (own is null)
             {
                 return;
