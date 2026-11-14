@@ -274,6 +274,13 @@ internal static class Program
             gray, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 0, 100));
         Check("vignette darkens the corner more than the centre",
               Get(vignetted, 0, 0).R < Get(vignetted, 2, 2).R);
+
+        // macOS only runs CIVignette above zero, so a negative slider is a
+        // no-op there; the shared document must not look different here.
+        var negativeVignette = AdjustmentPipeline.Apply(
+            gray, new GlobalAdjustments(0, 0, 0, 0, 0, 0, 0, 0, -80));
+        Check("a negative vignette changes nothing, as on macOS",
+              negativeVignette.Pixels.AsSpan().SequenceEqual(gray.Pixels));
     }
 
     private static void Codec(string root)
@@ -387,6 +394,13 @@ internal static class Program
             Console.WriteLine($"  case {id}: mae {mae:0.###} rmse {rmse:0.###} " +
                               $"psnr {psnr:0.##} dB changed {changed:P1} " +
                               $"luma delta {lumaDelta:+0.###;-0.###;0}");
+            if (id == "G11_VIGNETTE")
+            {
+                // The vignette follows CIVignette's measured shape, so this is a
+                // parity gate, not a smoke test: a level of headroom covers the
+                // 8-bit rounding the reference went through.
+                Check("G11 stays within one level of the macOS vignette", mae <= 1.0);
+            }
         }
     }
 

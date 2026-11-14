@@ -39,14 +39,13 @@ public static class AdjustmentPipeline16
         var vibranceAmount = adjustments.Vibrance / 100.0;
         var warmthAmount = adjustments.Warmth / 100.0;
         var clarityAmount = adjustments.Clarity / 100.0 * 0.75;
-        var vignetteAmount = adjustments.Vignette / 100.0;
+        var vignetteExponent = 1.4 * adjustments.Vignette / 100.0;
         var centreX = (width - 1) / 2.0;
         var centreY = (height - 1) / 2.0;
-        var maxRadius = Math.Sqrt(centreX * centreX + centreY * centreY);
+        var shortSide = Math.Min(width, height);
 
         for (var y = 0; y < height; y++)
         {
-            var dy = (y - centreY) / maxRadius;
             for (var x = 0; x < width; x++)
             {
                 var offset = (y * width + x) * 4;
@@ -115,15 +114,18 @@ public static class AdjustmentPipeline16
                     blue += delta;
                 }
 
-                if (vignetteAmount != 0)
+                if (vignetteExponent > 0)
                 {
-                    var dx = (x - centreX) / maxRadius;
-                    var radius = Math.Sqrt(dx * dx + dy * dy);
-                    var falloff = SmoothStep(0.35, 1.0, radius);
-                    var multiplier = 1 - vignetteAmount * falloff;
-                    red *= multiplier;
-                    green *= multiplier;
-                    blue *= multiplier;
+                    var dx = x - centreX;
+                    var dyPixel = y - centreY;
+                    var distance = Math.Sqrt(dx * dx + dyPixel * dyPixel) / shortSide;
+                    // Same measured CIVignette shape as the 8-bit pipeline:
+                    // linear light, short-side distance, intensity as exponent.
+                    var falloff = SmoothStep(0.03, 1.03, distance);
+                    var multiplier = Math.Pow(1 - falloff, vignetteExponent);
+                    red = FromLinear(ToLinear(Clamp01(red)) * multiplier);
+                    green = FromLinear(ToLinear(Clamp01(green)) * multiplier);
+                    blue = FromLinear(ToLinear(Clamp01(blue)) * multiplier);
                 }
 
                 targetPixels[offset] = ToSample(red);
