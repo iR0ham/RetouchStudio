@@ -230,6 +230,9 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `07c7713` (PR #38 head, merged as `b6b72cb`) | `CI` run 43603560807 | five jobs green; `Windows App` reports `PASS (156 checks)`; a crop renders the 205x134 box at (26, 19) of the photo, a flip mirrors each row and a quarter turn reads the clockwise source, against indices written in the test |
 | 2026-11-14 | `b6b72cb` (merge of PR #38) | `CI` run 43604723334, `main` | all five jobs green on the merged tree |
 | 2026-11-14 | `d233a3d` (PR #37 head, merged as `32912ba`) | `CI` run 43604785315 | five jobs green; the export long edge is chosen in the dialog and reaches the plan |
+| 2026-11-14 | `32912ba` (merge of PR #37) | `CI` run 43605954063, `main` | all five jobs green |
+| 2026-11-14 | `1bf843e` (PR #39 head, merged as `a5e65eb`) | `CI` run 43606194309 | five jobs green; `Windows App` reports `PASS (169 checks)`; the orientation/crop order, the turn-straighten-mirror composition in both depths and the crop that follows a turn are proved pixel for pixel |
+| 2026-11-14 | `a5e65eb` (merge of PR #39) | `CI` run 43607538778, `main` | all five jobs green on the merged tree |
 
 
 PR #13 was merged with a normal merge commit after every required context and
