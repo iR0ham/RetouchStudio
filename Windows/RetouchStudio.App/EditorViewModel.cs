@@ -338,6 +338,35 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         return destination;
     }
 
+    /// <summary>
+    /// Exports a selection with the open document's edits. Every file takes the
+    /// single-export path and the results are reported one by one, so a file
+    /// that fails does not stop the rest.
+    /// </summary>
+    public async Task<IReadOnlyList<BatchExportItem>> BatchExportAsync(
+        IReadOnlyList<string> sources, string destinationDirectory)
+    {
+        if (_session is null)
+        {
+            throw new InvalidOperationException("there is no open document");
+        }
+        if (sources.Count == 0)
+        {
+            throw new InvalidOperationException("no photos were selected");
+        }
+        FlushCommit();
+        var results = await BatchExporter.ExportAsync(
+            _session.Document, _codec,
+            new BatchExportRequest(sources, destinationDirectory, _exportFormat,
+                                   _exportQuality, _exportLongEdge,
+                                   !_keepSourceMetadata));
+        var exported = results.Count(item => item.Error is null);
+        var folder = Path.GetFileName(destinationDirectory.TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        Status = $"Exported {exported} of {results.Count} photos to {folder}.";
+        return results;
+    }
+
     public void Undo()
     {
         if (_session is null)

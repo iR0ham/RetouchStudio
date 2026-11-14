@@ -82,10 +82,16 @@ replaces the old one through the same `UpgradeCode`.
   promised. The pixels are upright, so the orientation tag and the source pixel
   dimensions are never copied.
 - Exports never overwrite the opened photo.
+- Batch export: pick several photos, choose a folder, and each one is rendered
+  with the open document's edits through the same `ExportRunner` path a single
+  export takes, so a batch cannot render differently from exporting the files
+  one by one. Results are named `<source>-retouched.<ext>`; a name already on
+  disk gets a `-2`, `-3` suffix rather than being overwritten, and one
+  unreadable file is reported while the rest keep exporting.
 
 ## What it does not do
 
-- No AI tools, skin/makeup/scene engines, healing, stickers, presets, batch,
+- No AI tools, skin/makeup/scene engines, healing, stickers, presets,
   analysis callouts, watermark or poster export.
 - No freeform crop; the presets are the whole crop UI.
 - No 16-bit preview or editing path. The preview and the JPEG export work in
