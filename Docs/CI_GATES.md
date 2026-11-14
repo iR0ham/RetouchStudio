@@ -170,7 +170,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-2025` — the Swift installer download is cached by the setup action —
 and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 141
+`.def` export list, publishes the WPF host self-contained for x64, runs the 152
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
@@ -220,6 +220,10 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `48b8b75` (PR #31, 16-bit preview) | `CI` run 43593470894 | five jobs green; `Windows App` reports `PASS (131 checks)`; the container depth probe reads PNG IHDR and TIFF BitsPerSample; the 16-bit preview is within one level of the 8-bit preview at rest and 8 levels under a strong adjustment set, gated at 10 |
 | 2026-11-14 | `6307c09` (PR #33, custom crop) | `CI` run 43596432866 | five jobs green; `Windows App` reports `PASS (139 checks)`; the eight crop checks fit, resize, move and clamp a box in photo coordinates; merged as `cf3acf9`; the overlay's drag wiring is not driven by CI |
 | 2026-11-14 | `249f4c1` (PR #32, throughput and 16-bit crop) | `CI` run 43596513201 | five jobs green; `Windows App` reports `PASS (133 checks)`; the Swift installer download is cached and the job budget is 60 minutes after a 45-minute timeout cancelled an install |
+| 2026-11-14 | `cf3acf9` (merge of PR #33) | `CI` run 43597640995, `main` | all five jobs green |
+| 2026-11-14 | `6f65650` (PR #36, Windows performance and stress) | `CI` run 43598349755 | five jobs green; `Windows App` reports `PASS (145 checks)`; `perf preview 1600x1067 nine sliders: median 1187 ms (1189 1187 1189 1166 1137)`, `perf 16-bit PNG export 1594 ms`, forty stress documents render, repeat pixel-identically, and keep the source area |
+| 2026-11-14 | `0ab9a4d` (Release dry run, `workflow_dispatch`) | `Release` run 43598113385 | both macOS slices and `Windows StudioCore` succeed; `Windows x64 application` succeeds with the MSI install, upgrade and uninstall; publish is skipped because the ref is not a tag; the four artifacts and their checksums were re-verified locally |
+| 2026-11-14 | `d57aa78` (merge of PR #32) | `CI` run 43599028784, `main` | all five jobs green |
 
 
 PR #13 was merged with a normal merge commit after every required context and
