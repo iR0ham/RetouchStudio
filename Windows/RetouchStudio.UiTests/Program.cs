@@ -152,6 +152,8 @@ internal static class Program
     /// </summary>
     private static void RunRecovery(Process process, string photo)
     {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
         var prompt = WaitWindow(process.Id, "Recover unsaved changes", StartUpPatience)
             ?? throw new InvalidOperationException("the recovery prompt never appeared");
         Ok("the seeded unsaved copy raised the recovery prompt");
@@ -159,8 +161,8 @@ internal static class Program
             ?? throw new InvalidOperationException("the recovery prompt has no Yes button");
         Invoke(yes);
 
-        var window = WaitWindow(process.Id, "Retouch Studio", TimeSpan.FromSeconds(90))
-            ?? throw new InvalidOperationException("the main window never appeared");
+        // The window was found before the prompt was answered, so the title
+        // wait cannot miss a restore that finishes faster than one poll.
         var photoName = Path.GetFileName(photo);
         var opened = WaitFor(
             () => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
@@ -256,7 +258,7 @@ internal static class Program
             throw new InvalidOperationException("the zoom readout never reached 150%");
         }
         Ok("the zoom control reached 150% through UIA");
-        var fit = FindButton(window, "Fit")
+        var fit = FindButton(window, "Fit to window")
             ?? throw new InvalidOperationException("the Fit button is missing");
         Invoke(fit);
 
