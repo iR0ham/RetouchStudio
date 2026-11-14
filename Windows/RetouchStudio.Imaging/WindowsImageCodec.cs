@@ -12,10 +12,11 @@ namespace RetouchStudio.Imaging;
 /// EXIF orientation and converts to sRGB, so the document's own orientation is
 /// the only rotation the pipeline adds.
 ///
-/// Encoding writes 8-bit files. It carries the measured keys below when
-/// privacy stripping is off and the container supports EXIF (JPEG and TIFF);
-/// with stripping on, only the resolution the pixels were written with travels.
-/// XMP is not exposed by the Windows metadata API and is never written.
+/// Encoding writes 8-bit JPEG/PNG/TIFF, and 16-bit PNG/TIFF when the export
+/// plan asks for that depth. It carries the measured keys below when privacy
+/// stripping is off and the container supports EXIF (JPEG and TIFF); with
+/// stripping on, only the resolution the pixels were written with travels. XMP
+/// is not exposed by the Windows metadata API and is never written.
 /// </summary>
 public sealed class WindowsImageCodec : IImageCodec
 {
@@ -29,6 +30,15 @@ public sealed class WindowsImageCodec : IImageCodec
         "System.Photo.CameraModel",
         "System.Photo.IsoSpeed",
     };
+
+    public async Task<ImageSize> ReadSizeAsync(string path)
+    {
+        var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
+        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read);
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+        return new ImageSize(checked((int)decoder.OrientedPixelWidth),
+                             checked((int)decoder.OrientedPixelHeight));
+    }
 
     public async Task<PixelBuffer> DecodeAsync(string path)
     {
@@ -56,6 +66,33 @@ public sealed class WindowsImageCodec : IImageCodec
                 $"{width}x{height} image");
         }
         return new PixelBuffer(width, height, pixels);
+    }
+
+    public async Task<PixelBuffer16> Decode16Async(string path)
+    {
+        var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
+        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read);
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+
+        var data = await decoder.GetPixelDataAsync(
+            BitmapPixelFormat.Rgba16,
+            BitmapAlphaMode.Straight,
+            new BitmapTransform(),
+            ExifOrientationMode.RespectExifOrientation,
+            ColorManagementMode.ColorManageToSRgb);
+        var pixels = data.DetachPixelData();
+
+        var width = checked((int)decoder.OrientedPixelWidth);
+        var height = checked((int)decoder.OrientedPixelHeight);
+        if ((long)width * height * 8 != pixels.Length)
+        {
+            throw new InvalidOperationException(
+                $"the decoder returned {pixels.Length} bytes for an oriented " +
+                $"{width}x{height} 16-bit image");
+        }
+        var samples = new ushort[width * height * 4];
+        Buffer.BlockCopy(pixels, 0, samples, 0, pixels.Length);
+        return new PixelBuffer16(width, height, samples);
     }
 
     public async Task<ImageMetadata> ReadMetadataAsync(string path)
@@ -134,6 +171,58 @@ public sealed class WindowsImageCodec : IImageCodec
             // the same metadata schema, which would silently drop the keys set
             // by the first. The allowlist is exactly the set the headless test
             // proves a JPEG and a TIFF keep.
+            await encoder.BitmapProperties.SetPropertiesAsync(properties);
+        }
+
+        await encoder.FlushAsync();
+    }
+
+    public async Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                    ImageMetadata? metadata = null,
+                                    bool stripPrivacyMetadata = true)
+    {
+        var lower = format.ToLowerInvariant();
+        var container = lower switch
+        {
+            "png" => BitmapEncoder.PngEncoderId,
+            "tiff" or "tif" => BitmapEncoder.TiffEncoderId,
+            _ => throw new NotSupportedException(
+                $"a 16-bit export cannot be written as '{format}'"),
+        };
+
+        var full = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(full)
+            ?? throw new InvalidOperationException("the destination has no directory");
+        var folder = await StorageFolder.GetFolderFromPathAsync(directory);
+        var file = await folder.CreateFileAsync(Path.GetFileName(full),
+                                                CreationCollisionOption.ReplaceExisting);
+        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+
+        var encoder = await BitmapEncoder.CreateAsync(container, stream);
+        var bytes = new byte[image.Pixels.Length * 2];
+        Buffer.BlockCopy(image.Pixels, 0, bytes, 0, bytes.Length);
+        encoder.SetPixelData(
+            BitmapPixelFormat.Rgba16,
+            BitmapAlphaMode.Straight,
+            (uint)image.Width,
+            (uint)image.Height,
+            DpiOr96(metadata?.DpiX),
+            DpiOr96(metadata?.DpiY),
+            bytes);
+
+        var properties = new BitmapPropertySet();
+        if (!stripPrivacyMetadata && metadata is not null)
+        {
+            foreach (var (key, value) in metadata.Properties)
+            {
+                if (ToTypedValue(value) is { } typed)
+                {
+                    properties[key] = typed;
+                }
+            }
+        }
+        if (properties.Count > 0)
+        {
             await encoder.BitmapProperties.SetPropertiesAsync(properties);
         }
 

@@ -36,6 +36,7 @@ internal static class Program
             Codec(root);
             Export(root);
             Corpus(root);
+            BitDepth(root);
             AdjustmentEvidence();
             FormatProbes(root);
             Metadata(root);
@@ -431,9 +432,10 @@ internal static class Program
 
     /// <summary>
     /// Diagnostics, not gates: asks WIC whether it can hold 16-bit pixels and
-    /// whether this machine has a HEIF decoder. The host ships 8-bit output, so
-    /// the answer decides what a future implementation may claim, and no
-    /// capability is asserted here beyond the file being readable.
+    /// whether this machine has a HEIF decoder. The 16-bit answer is already
+    /// used by the export path; the HEIC answer decides whether a read path is
+    /// possible at all. No capability is asserted here beyond the file being
+    /// readable.
     /// </summary>
     private static void FormatProbes(string root)
     {
@@ -689,6 +691,186 @@ internal static class Program
                   && corner.A == 255 && corner.R >= 245 && corner.G >= 245
                   && corner.B >= 245);
         }
+    }
+
+    /// <summary>
+    /// 16-bit export. The shared plan gives PNG and TIFF a 16-bit container, so
+    /// the export decodes at 16 bits, runs the same crop/orientation/adjustment
+    /// order on the 16-bit buffer and writes 16-bit samples. The depth is read
+    /// back from the file header and the precision from samples that are not
+    /// multiples of 257, so neither a plan flag nor a metadata property is
+    /// taken as proof that the pixels are deeper than 8 bits.
+    /// </summary>
+    private static void BitDepth(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var fixtures = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures");
+        var eightBitPath = Path.Combine(fixtures, "F01_portrait_srgb_8.png");
+        var eightBit = codec.DecodeAsync(eightBitPath).GetAwaiter().GetResult();
+        var wide = codec.Decode16Async(eightBitPath).GetAwaiter().GetResult();
+        Check("an 8-bit source promotes to the 16-bit buffer exactly",
+              wide.Width == eightBit.Width && wide.Height == eightBit.Height
+              && MaxDelta(eightBit, wide) == 0);
+
+        using (var session = ProjectSession.Create(eightBitPath))
+        {
+            var png = Path.Combine(root, "depth-16.png");
+            var plan = ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                                   .GetAwaiter().GetResult();
+            Check("the plan asks for 16 bits for a PNG", plan.BitsPerChannel == 16);
+            Check("a PNG export stores 16 bits per sample",
+                  TryPngDepth(File.ReadAllBytes(png), out var pngDepth) && pngDepth == 16);
+
+            var narrowBack = codec.DecodeAsync(png).GetAwaiter().GetResult();
+            Check("a 16-bit no-op export reads back at 8 bits unchanged",
+                  narrowBack.Pixels.AsSpan().SequenceEqual(eightBit.Pixels));
+            var wideBack = codec.Decode16Async(png).GetAwaiter().GetResult();
+            Check("a 16-bit no-op export keeps every 16-bit sample",
+                  wideBack.Pixels.AsSpan().SequenceEqual(wide.Pixels));
+
+            var tiff = Path.Combine(root, "depth-16.tiff");
+            ExportRunner.ExportAsync(session, codec, tiff, "tiff", 1.0, 0)
+                        .GetAwaiter().GetResult();
+            Check("a TIFF export stores 16 bits per sample",
+                  TryTiffDepth(File.ReadAllBytes(tiff), out var tiffDepth) && tiffDepth == 16);
+            var tiffBack = codec.Decode16Async(tiff).GetAwaiter().GetResult();
+            Check("a TIFF export keeps every 16-bit sample",
+                  tiffBack.Width == wide.Width && tiffBack.Height == wide.Height
+                  && tiffBack.Pixels.AsSpan().SequenceEqual(wide.Pixels));
+
+            session.Document.SetAdjustment("exposure", 40);
+            var adjusted = Path.Combine(root, "depth-16-adjusted.png");
+            ExportRunner.ExportAsync(session, codec, adjusted, "png", 1.0, 0)
+                        .GetAwaiter().GetResult();
+            var adjustedBack = codec.Decode16Async(adjusted).GetAwaiter().GetResult();
+            var offGrid = CountOffGrid(adjustedBack);
+            Console.WriteLine($"  adjusted 16-bit export: {offGrid} of " +
+                              $"{adjustedBack.Pixels.Length / 4 * 3} colour samples off the 8-bit grid");
+            Check("an adjusted 16-bit export keeps intermediate precision",
+                  offGrid > adjustedBack.Pixels.Length / 4);
+        }
+
+        var p3Path = Path.Combine(fixtures, "F11_p3_16bit.png");
+        var p3 = codec.Decode16Async(p3Path).GetAwaiter().GetResult();
+        using (var session = ProjectSession.Create(p3Path))
+        {
+            var png = Path.Combine(root, "depth-16-source.png");
+            ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                        .GetAwaiter().GetResult();
+            var back = codec.Decode16Async(png).GetAwaiter().GetResult();
+            Check("a 16-bit source export is sample-exact",
+                  back.Width == p3.Width && back.Height == p3.Height
+                  && back.Pixels.AsSpan().SequenceEqual(p3.Pixels));
+            Check("the 16-bit source carries precision 8 bits cannot hold",
+                  CountOffGrid(p3) > 0);
+        }
+
+        // A buffer the 8-bit path could not have produced, so an exact return
+        // proves the samples are stored, not approximated. PNG carries straight
+        // alpha natively, so this one varies both colour and alpha.
+        var precise = new PixelBuffer16(8, 6);
+        for (var index = 0; index < 8 * 6; index++)
+        {
+            precise.Pixels[index * 4] = (ushort)(1000 + index * 101);
+            precise.Pixels[index * 4 + 1] = (ushort)(2000 + index * 211);
+            precise.Pixels[index * 4 + 2] = (ushort)(3000 + index * 313);
+            precise.Pixels[index * 4 + 3] = (ushort)(40000 + index);
+        }
+        var precisePng = Path.Combine(root, "precision.png");
+        codec.Encode16Async(precise, precisePng, "png").GetAwaiter().GetResult();
+        var preciseBack = codec.Decode16Async(precisePng).GetAwaiter().GetResult();
+        Check("a 16-bit PNG keeps colour and alpha samples off the 8-bit grid",
+              preciseBack.Width == 8 && preciseBack.Height == 6
+              && preciseBack.Pixels.AsSpan().SequenceEqual(precise.Pixels));
+
+        // A TIFF encoder may store associated alpha, which is an alpha
+        // convention rather than a depth problem, so this buffer is opaque and
+        // only the depth is under test.
+        var opaque = new PixelBuffer16(8, 6);
+        for (var index = 0; index < 8 * 6; index++)
+        {
+            opaque.Pixels[index * 4] = (ushort)(1000 + index * 101);
+            opaque.Pixels[index * 4 + 1] = (ushort)(2000 + index * 211);
+            opaque.Pixels[index * 4 + 2] = (ushort)(3000 + index * 313);
+            opaque.Pixels[index * 4 + 3] = 65535;
+        }
+        var preciseTiff = Path.Combine(root, "precision.tiff");
+        codec.Encode16Async(opaque, preciseTiff, "tiff").GetAwaiter().GetResult();
+        var opaqueBack = codec.Decode16Async(preciseTiff).GetAwaiter().GetResult();
+        Check("a 16-bit TIFF keeps samples off the 8-bit grid",
+              opaqueBack.Width == 8 && opaqueBack.Height == 6
+              && opaqueBack.Pixels.AsSpan().SequenceEqual(opaque.Pixels));
+
+        try
+        {
+            codec.Encode16Async(opaque, Path.Combine(root, "refused.jpg"), "jpeg")
+                 .GetAwaiter().GetResult();
+            Fail("a 16-bit encode refuses a JPEG", "no exception");
+        }
+        catch (NotSupportedException)
+        {
+            Pass("a 16-bit encode refuses a JPEG");
+        }
+
+        var adjustments = new GlobalAdjustments(30, 15, 10, -5, 25, 20, 10, 40, 30);
+        var narrow = AdjustmentPipeline.Apply(eightBit, adjustments);
+        var deep = AdjustmentPipeline16.Apply(wide, adjustments);
+        var drift = Drift(narrow, deep);
+        Console.WriteLine($"  8-bit vs 16-bit adjustment drift: {drift} levels max");
+        Check("both depths apply the same adjustment maths", drift <= 1);
+    }
+
+    /// <summary>Largest difference between an 8-bit buffer and its promotion.</summary>
+    private static int MaxDelta(PixelBuffer narrow, PixelBuffer16 wide)
+    {
+        // PixelBuffer is BGRA and PixelBuffer16 is RGBA, so the channels are
+        // matched by name, not by offset.
+        var max = 0;
+        for (var offset = 0; offset < narrow.Pixels.Length; offset += 4)
+        {
+            max = Math.Max(max, Math.Abs(narrow.Pixels[offset] * 257 - wide.Pixels[offset + 2]));
+            max = Math.Max(max, Math.Abs(narrow.Pixels[offset + 1] * 257 - wide.Pixels[offset + 1]));
+            max = Math.Max(max, Math.Abs(narrow.Pixels[offset + 2] * 257 - wide.Pixels[offset]));
+            max = Math.Max(max, Math.Abs(narrow.Pixels[offset + 3] * 257 - wide.Pixels[offset + 3]));
+        }
+        return max;
+    }
+
+    /// <summary>
+    /// Largest per-channel difference between the two pipelines, in 8-bit
+    /// levels. The same input reaches both, so the only difference allowed is
+    /// how each depth rounds the result: one level.
+    /// </summary>
+    private static int Drift(PixelBuffer narrow, PixelBuffer16 wide)
+    {
+        var max = 0;
+        for (var offset = 0; offset < narrow.Pixels.Length; offset += 4)
+        {
+            max = Math.Max(max, Math.Abs(narrow.Pixels[offset] - (wide.Pixels[offset + 2] >> 8)));
+            max = Math.Max(max, Math.Abs(narrow.Pixels[offset + 1] - (wide.Pixels[offset + 1] >> 8)));
+            max = Math.Max(max, Math.Abs(narrow.Pixels[offset + 2] - (wide.Pixels[offset] >> 8)));
+        }
+        return max;
+    }
+
+    /// <summary>
+    /// Colour samples that a 16→8→16 round trip could not have produced. A
+    /// buffer written from the 8-bit pipeline has none.
+    /// </summary>
+    private static int CountOffGrid(PixelBuffer16 buffer)
+    {
+        var count = 0;
+        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        {
+            for (var channel = 0; channel < 3; channel++)
+            {
+                if (buffer.Pixels[offset + channel] % 257 != 0)
+                {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 
     private static (int X, int Y)? FindClear(PixelBuffer buffer)

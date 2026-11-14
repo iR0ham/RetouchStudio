@@ -3,11 +3,11 @@ using RetouchStudio.Core.Project;
 namespace RetouchStudio.Core.Imaging;
 
 /// <summary>
-/// A tightly packed 8-bit BGRA image, top-left origin. This is the only pixel
-/// type the Windows host works in: the decoder produces it, the pipeline edits
-/// it, the encoder writes it and the WPF preview displays it without a copy.
-/// 16-bit sources are reduced at decode time, which is a documented limitation
-/// of this host.
+/// A tightly packed 8-bit BGRA image, top-left origin. The preview and every
+/// 8-bit export work in this buffer: the decoder produces it, the pipeline
+/// edits it, the encoder writes it and the WPF preview displays it without a
+/// copy. A PNG or TIFF export whose plan asks for 16 bits uses
+/// <see cref="PixelBuffer16"/> instead, so a deeper source is not reduced.
 /// </summary>
 public sealed class PixelBuffer
 {

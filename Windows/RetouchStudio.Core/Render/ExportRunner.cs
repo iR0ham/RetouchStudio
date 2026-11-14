@@ -31,6 +31,27 @@ public static class ExportRunner
             image, Imaging.GlobalAdjustments.FromDocument(document));
     }
 
+    /// <summary>
+    /// The same order on the 16-bit export buffer: crop, orientation, then the
+    /// global adjustments.
+    /// </summary>
+    public static Imaging.PixelBuffer16 RenderDocument16(Imaging.PixelBuffer16 source,
+                                                         DocumentModel document)
+    {
+        var image = source;
+        if (document.Crop is { } crop)
+        {
+            image = image.Crop(crop);
+        }
+        var orientation = document.Orientation;
+        if (!orientation.IsIdentity)
+        {
+            image = image.ApplyOrientation(orientation);
+        }
+        return Imaging.AdjustmentPipeline16.Apply(
+            image, Imaging.GlobalAdjustments.FromDocument(document));
+    }
+
     public static async Task<ExportPlan> ExportAsync(ProjectSession session,
                                                      Imaging.IImageCodec codec,
                                                      string destination,
@@ -51,8 +72,11 @@ public static class ExportRunner
                 "the export destination is the opened photo; refusing to overwrite it");
         }
 
-        var decoded = await codec.DecodeAsync(sourcePath);
-        var plan = RenderRequests.Plan(document, decoded.Width, decoded.Height,
+        // The size is read from the header so the plan — including its bit
+        // depth — is known before a buffer is allocated. Decoding first would
+        // mean either guessing the depth from the format or decoding twice.
+        var size = await codec.ReadSizeAsync(sourcePath);
+        var plan = RenderRequests.Plan(document, size.Width, size.Height,
                                        format, quality, longEdge,
                                        stripsPrivacyMetadata: stripPrivacyMetadata);
         if (plan.Upscales)
@@ -63,22 +87,6 @@ public static class ExportRunner
             throw new NotSupportedException("this host has no AI upscaler");
         }
 
-        var rendered = RenderDocument(decoded, document);
-
-        if (document.Crop is null && document.Orientation.IsIdentity && plan.Width > 0)
-        {
-            // No geometry transform: the plan's size is the photo scaled to the
-            // requested long edge, so it can be honoured exactly.
-            rendered = rendered.ResizeLongEdge(Math.Max(plan.Width, plan.Height));
-        }
-        else if (longEdge > 0)
-        {
-            // A crop or a turn changes the frame's aspect, so the plan's pixel
-            // size describes the whole photo, not this frame. The owner's
-            // request is the long edge, and this host keeps the frame's aspect.
-            rendered = rendered.ResizeLongEdge(longEdge);
-        }
-
         // The plan says whether this export is a photograph. The metadata is
         // read even when stripping is on, because the resolution travels with
         // the pixels either way; the codec copies the identity keys only when
@@ -86,10 +94,56 @@ public static class ExportRunner
         var metadata = plan.CarriesSourceMetadata
             ? await codec.ReadMetadataAsync(sourcePath)
             : Imaging.ImageMetadata.Empty;
-        await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,
-                                destination, plan.Format, quality,
-                                metadata, stripPrivacyMetadata);
+
+        // The plan decides the depth. PNG and TIFF are 16-bit containers in the
+        // shared contract, so an export to either keeps 16-bit pixels instead
+        // of reducing them to the preview's 8-bit buffer.
+        if (plan.BitsPerChannel >= 16)
+        {
+            var decoded = await codec.Decode16Async(sourcePath);
+            var rendered = RenderDocument16(decoded, document);
+            var edge = FitLongEdge(document, plan, longEdge);
+            if (edge > 0)
+            {
+                rendered = rendered.ResizeLongEdge(edge);
+            }
+            if (plan.FlattensAlpha)
+            {
+                rendered = rendered.FlattenOntoWhite();
+            }
+            await codec.Encode16Async(rendered, destination, plan.Format,
+                                      metadata, stripPrivacyMetadata);
+        }
+        else
+        {
+            var decoded = await codec.DecodeAsync(sourcePath);
+            var rendered = RenderDocument(decoded, document);
+            var edge = FitLongEdge(document, plan, longEdge);
+            if (edge > 0)
+            {
+                rendered = rendered.ResizeLongEdge(edge);
+            }
+            await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,
+                                    destination, plan.Format, quality,
+                                    metadata, stripPrivacyMetadata);
+        }
         return plan;
+    }
+
+    /// <summary>
+    /// The long edge to resize to, or zero to keep the frame's own size.
+    /// Without a crop or a turn the plan's pixel size is the photo scaled to
+    /// the requested long edge, so it can be honoured exactly. A crop or a turn
+    /// changes the frame's aspect, so the plan's size describes the whole photo
+    /// and only the owner's long edge applies; the frame keeps its aspect.
+    /// </summary>
+    private static int FitLongEdge(DocumentModel document, ExportPlan plan, int longEdge)
+    {
+        if (document.Crop is null && document.Orientation.IsIdentity && plan.Width > 0)
+        {
+            return Math.Max(plan.Width, plan.Height);
+        }
+        return longEdge > 0 ? longEdge : 0;
     }
 
     private static bool SameFile(string first, string second)
