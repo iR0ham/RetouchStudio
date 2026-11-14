@@ -66,6 +66,17 @@
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
+    <Style x:Key="CropBody" TargetType="Thumb">
+      <Setter Property="Cursor" Value="SizeAll" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border Background="Transparent" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="CropHandle" TargetType="Thumb">
       <Setter Property="Width" Value="14" />
       <Setter Property="Height" Value="14" />

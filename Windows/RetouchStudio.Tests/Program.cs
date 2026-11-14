@@ -1646,6 +1646,14 @@ internal static class Program
         Check("the original preset has no crop",
               CropGeometry.Preset("original", 4000, 3000, 0) is null);
 
+        var readout = CropGeometry.PixelSize(new CropValue(0, 0, 0.5, 0.5), 4000, 3000, 0);
+        var readoutTurned = CropGeometry.PixelSize(new CropValue(0, 0, 0.5, 0.5), 4000, 3000, 1);
+        Check("the crop readout follows the upright frame",
+              readout == (2000, 1500) && readoutTurned == (1500, 2000));
+        Check("the crop readout never shows a zero side",
+              CropGeometry.PixelSize(new CropValue(0, 0, CropGeometry.MinimumSide, 1),
+                                     10, 10, 0) == (1, 10));
+
         var source = new PixelBuffer(256, 192);
         var document = new DocumentModel(new JsonObject())
         {

@@ -92,6 +92,21 @@ public static class CropGeometry
     }
 
     /// <summary>
+    /// Pixel size of a normalized crop in the upright frame, for the overlay's
+    /// live readout. The crop is applied after the orientation is baked, so an
+    /// odd quarter turn swaps the source's sides.
+    /// </summary>
+    public static (int Width, int Height) PixelSize(CropValue crop, int sourceWidth,
+                                                    int sourceHeight, int quarterTurns)
+    {
+        var turned = ((quarterTurns % 4) + 4) % 4 % 2 != 0;
+        var width = turned ? sourceHeight : sourceWidth;
+        var height = turned ? sourceWidth : sourceHeight;
+        return (Math.Max(1, (int)Math.Round(crop.Width * width)),
+                Math.Max(1, (int)Math.Round(crop.Height * height)));
+    }
+
+    /// <summary>
     /// The centred crop that makes the finished frame a preset aspect. The crop
     /// is applied to the upright frame (the orientation is baked in first), so
     /// the frame's aspect is the photo's, swapped on an odd quarter turn.
