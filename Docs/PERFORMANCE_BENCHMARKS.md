@@ -142,6 +142,17 @@ does not. These numbers were recorded on run `43598349755` (CI workflow,
 |---|---|---|
 | preview render | 1600×1067 pre-decoded source, all nine sliders at 40, crop and turn off; one untimed warm-up, median of five | **1187 ms** (1189 / 1187 / 1189 / 1166 / 1137) |
 | 16-bit PNG export | same document at original size — decode from disk, crop, orientation, adjustments, 16-bit PNG encode, write | **1594 ms** |
+| time to first window — published folder | process start to the window's `Loaded` marker, 100 ms poll | **974 ms** |
+| time to first window — zipped and extracted folder | same | **1230 ms** |
+| time to first window — MSI-installed copy | same, first launch of the installed copy | **3851 ms** |
+| time to first window — upgraded copy | same, first launch after an in-place upgrade | **5740 ms** |
+
+The four start-up figures were recorded on run `43609703310` (CI workflow,
+`windows-2025`, x64, head `9269692`) and printed by the same smoke step that
+already proved each copy opens a window. They measure process start to the
+window reporting itself loaded, on a hosted runner with no GPU and a cold file
+cache for the installed copies, so the installed and upgraded numbers include
+first-launch disk and antivirus cost; they are recorded evidence, not budgets.
 
 The preview figure is a full 1:1 render of a 1.7 MP frame with every adjustment
 pass applied; clarity's linear-luminance Gaussian dominates. The decode happens
