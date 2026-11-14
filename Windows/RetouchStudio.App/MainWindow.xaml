@@ -34,6 +34,7 @@
         <ToggleButton x:Name="CompareToggle" Content="Compare" IsChecked="True"
                       Style="{StaticResource ToolToggle}" Click="CompareToggle_Click"
                       IsEnabled="{Binding HasDocument}"
+                      AutomationProperties.Name="Compare before and after"
                       ToolTip="Show the untouched photo left of the split" />
       </StackPanel>
     </Border>
@@ -114,6 +115,7 @@
               <TextBlock Text="AFTER" Foreground="{StaticResource AccentBrush}" FontSize="9" />
             </Border>
             <Thumb x:Name="CompareThumb" Style="{StaticResource CompareHandle}"
+                   AutomationProperties.Name="Compare split"
                    DragDelta="CompareThumb_Drag" />
           </Canvas>
           <Border x:Name="ZoomDock" Background="#B30B0D0F" CornerRadius="5"
@@ -133,15 +135,18 @@
             <StackPanel Orientation="Horizontal">
               <Button x:Name="ZoomFitButton" Content="Fit" Style="{StaticResource ToolButton}"
                       Padding="7,2" FontSize="11" Click="ZoomFit_Click"
+                      AutomationProperties.Name="Fit to window"
                       ToolTip="Fit to window (Ctrl+0)" />
               <Button x:Name="ZoomOutButton" Content="−" Style="{StaticResource ToolButton}"
                       Padding="7,2" FontSize="12" Click="ZoomOut_Click"
+                      AutomationProperties.Name="Zoom out"
                       ToolTip="Zoom out (Ctrl+-)" />
               <TextBlock x:Name="ZoomText" Text="Fit" Foreground="{StaticResource TextBrush}"
                          FontSize="11" MinWidth="40" TextAlignment="Center"
                          VerticalAlignment="Center" />
               <Button x:Name="ZoomInButton" Content="+" Style="{StaticResource ToolButton}"
                       Padding="7,2" FontSize="12" Click="ZoomIn_Click"
+                      AutomationProperties.Name="Zoom in"
                       ToolTip="Zoom in (Ctrl++)" />
             </StackPanel>
           </Border>
@@ -161,19 +166,20 @@
             <Line x:Name="CropThirdH2" Stroke="#57FFFFFF" StrokeThickness="0.5"
                   IsHitTestVisible="False" />
             <Thumb x:Name="CropBody" Style="{StaticResource CropBody}"
+                   AutomationProperties.Name="Crop frame"
                    DragDelta="CropBody_Drag" />
             <Border x:Name="CropBadge" Background="#CC0B0D0F" CornerRadius="3"
                     Padding="7,3" IsHitTestVisible="False">
               <TextBlock x:Name="CropBadgeText" Foreground="{StaticResource TextBrush}"
                          FontSize="10" />
             </Border>
-            <Thumb x:Name="CropTopLeft" Tag="TopLeft" Style="{StaticResource CropHandle}"
+            <Thumb x:Name="CropTopLeft" AutomationProperties.Name="Crop corner handle" Tag="TopLeft" Style="{StaticResource CropHandle}"
                    Cursor="SizeNWSE" DragDelta="CropHandle_Drag" />
-            <Thumb x:Name="CropTopRight" Tag="TopRight" Style="{StaticResource CropHandle}"
+            <Thumb x:Name="CropTopRight" AutomationProperties.Name="Crop corner handle" Tag="TopRight" Style="{StaticResource CropHandle}"
                    Cursor="SizeNESW" DragDelta="CropHandle_Drag" />
-            <Thumb x:Name="CropBottomLeft" Tag="BottomLeft" Style="{StaticResource CropHandle}"
+            <Thumb x:Name="CropBottomLeft" AutomationProperties.Name="Crop corner handle" Tag="BottomLeft" Style="{StaticResource CropHandle}"
                    Cursor="SizeNESW" DragDelta="CropHandle_Drag" />
-            <Thumb x:Name="CropBottomRight" Tag="BottomRight" Style="{StaticResource CropHandle}"
+            <Thumb x:Name="CropBottomRight" AutomationProperties.Name="Crop corner handle" Tag="BottomRight" Style="{StaticResource CropHandle}"
                    Cursor="SizeNWSE" DragDelta="CropHandle_Drag" />
           </Canvas>
           <StackPanel x:Name="CropBar" Visibility="Collapsed" Orientation="Horizontal"
@@ -221,6 +227,7 @@
                       <TextBlock Text="{Binding Label}" Style="{StaticResource SliderText}" />
                     </DockPanel>
                     <Slider Minimum="-100" Maximum="100" Margin="0,2,0,0"
+                            AutomationProperties.Name="{Binding Label}"
                             Value="{Binding Value, Mode=TwoWay}" />
                   </StackPanel>
                 </DataTemplate>
@@ -238,7 +245,8 @@
               <TextBlock Text="Angle" Style="{StaticResource SliderText}" />
             </DockPanel>
             <Slider Minimum="-45" Maximum="45" TickFrequency="0.5"
-                    Margin="0,2,0,0" Value="{Binding StraightenAngle, Mode=TwoWay}" />
+                    Margin="0,2,0,0" AutomationProperties.Name="Straighten angle"
+                    Value="{Binding StraightenAngle, Mode=TwoWay}" />
 
             <TextBlock Text="CROP" Style="{StaticResource SectionTitle}" />
             <WrapPanel>
