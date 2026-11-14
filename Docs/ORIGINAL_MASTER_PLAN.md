@@ -6,6 +6,12 @@ text below is copied verbatim, including its amendment and live checkpoint.
 Earlier plan versions are not present in this repository and cannot be
 recovered from accessible records, so this file does not reconstruct them.
 
+**Workflow supersession (2026-11-14):** the owner replaced PR-per-change
+development with a local-first, milestone-based workflow. The plan text below
+is kept verbatim; the process it describes is superseded by
+[`WORKFLOW.md`](WORKFLOW.md) wherever the two differ. Priorities, scope and
+evidence rules are unchanged.
+
 **Authority:** the owner's later instructions take precedence over this plan.
 Current state, evidence and gaps are kept in
 [`MASTER_PRODUCT_COMPLETION_STATUS.md`](MASTER_PRODUCT_COMPLETION_STATUS.md),

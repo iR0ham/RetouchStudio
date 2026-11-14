@@ -9,6 +9,17 @@ entry is not verified.
 Status vocabulary follows the plan: VERIFIED, IMPLEMENTED, PARTIALLY
 IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 
+**Workflow (2026-11-14 steering):** development is local-first and
+milestone-based, per [`WORKFLOW.md`](WORKFLOW.md). Work accumulates on the
+shared `develop` branch with local commits and periodic backup pushes; the full
+five-context matrix runs at a milestone (dispatch on `develop`, then the
+milestone PR); routine changes do not get their own PR. Rows below keep their
+old evidence links, which remain valid history.
+
+**Current integration state:** `develop` folds the W4 metadata workstream —
+batch cancellation, EXIF/XMP carry, the sRGB export declaration and the
+crop/turn/resize read-back checks — pending full-matrix validation.
+
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
 | ID | Item | Status | Evidence |
@@ -105,10 +116,11 @@ IMPLEMENTED, NOT IMPLEMENTED, FAILED, BLOCKED, NOT VERIFIED, NOT APPLICABLE.
 
 ## Queue order
 
-1. WS-1 (W4 Windows metadata/colour/format), the next implementation batch.
-2. WS-3 items that are verifiable without a UI harness (batch cancellation,
-   recovery, project lifecycle).
-3. WS-2 after the landmark-model decision.
+1. Close WS-1 (W4): validate the metadata/colour workstream on `develop`,
+   then the format audit and the remaining RenderPlan pass-through.
+2. WS-3 items that are verifiable without a UI harness (crash recovery,
+   project lifecycle).
+3. WS-2 after the landmark-model decision (a measured Lead decision).
 4. WS-5 R-4 and R-5 inside the reliability batch.
 5. WS-6 after a signing decision.
 6. WS-4 only when the runtime package exists.

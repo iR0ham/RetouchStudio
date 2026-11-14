@@ -415,6 +415,10 @@ What replaces it:
 - The full matrix runs once per coherent merge candidate. Intermediate commits
   are validated with focused local suites; a red or missing required check
   still blocks the merge.
+- Since the 2026-11-14 steering ([`WORKFLOW.md`](WORKFLOW.md)) the default is
+  local-first: work accumulates on the shared `develop` branch, a dispatch on
+  `develop` runs the full matrix at a milestone, and a milestone PR is the only
+  PR that reaches `main`. Pushes to `develop` are backups and do not open PRs.
 
 If GitHub's settings ever require a post-merge run again, re-add `main` to the
 `push.branches` list in `ci.yml`; the rest of the gate is unchanged.
