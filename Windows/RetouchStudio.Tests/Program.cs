@@ -860,7 +860,7 @@ internal static class Program
             ExportRunner.ExportAsync(session, codec, cropped, "png", 1.0, 0)
                         .GetAwaiter().GetResult();
             var croppedBack = codec.Decode16Async(cropped).GetAwaiter().GetResult();
-            var expected = p3.Crop(session.Document.Crop!)
+            var expected = p3.Crop(session.Document.Crop!.Value)
                              .ApplyOrientation(session.Document.Orientation);
             Check("a 16-bit export crops in photo coordinates before the turn",
                   croppedBack.Width == 205 && croppedBack.Height == 256
