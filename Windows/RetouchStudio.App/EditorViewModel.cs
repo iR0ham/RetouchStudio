@@ -90,6 +90,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private readonly DispatcherTimer _commitTimer;
     private ProjectSession? _session;
     private PixelBuffer? _previewSource;
+    private PixelBuffer16? _previewSource16;
     private int _sourceWidth;
     private int _sourceHeight;
     private int _renderToken;
@@ -426,7 +427,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// </summary>
     public void ApplyCrop(string preset)
     {
-        if (_session is null || _previewSource is null)
+        if (_session is null || (_previewSource is null && _previewSource16 is null))
         {
             return;
         }
@@ -499,10 +500,21 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     private async Task AdoptAsync(ProjectSession session)
     {
-        PixelBuffer decoded;
+        PixelBuffer? decoded = null;
+        PixelBuffer16? decoded16 = null;
         try
         {
-            decoded = await _codec.DecodeAsync(session.ImagePath);
+            // A file that stores 16-bit samples previews through the 16-bit
+            // pipeline, so the preview does not lose what the source has before
+            // an adjustment can amplify it. Everything else stays 8-bit.
+            if (await _codec.ReadBitDepthAsync(session.ImagePath) >= 16)
+            {
+                decoded16 = await _codec.Decode16Async(session.ImagePath);
+            }
+            else
+            {
+                decoded = await _codec.DecodeAsync(session.ImagePath);
+            }
         }
         catch
         {
@@ -512,9 +524,20 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             throw;
         }
 
-        _sourceWidth = decoded.Width;
-        _sourceHeight = decoded.Height;
-        _previewSource = await Task.Run(() => decoded.ResizeLongEdge(PreviewLongEdge));
+        _sourceWidth = decoded?.Width ?? decoded16!.Width;
+        _sourceHeight = decoded?.Height ?? decoded16!.Height;
+        if (decoded16 is not null)
+        {
+            var wide = decoded16;
+            _previewSource16 = await Task.Run(() => wide.ResizeLongEdge(PreviewLongEdge));
+            _previewSource = null;
+        }
+        else
+        {
+            var narrow = decoded!;
+            _previewSource = await Task.Run(() => narrow.ResizeLongEdge(PreviewLongEdge));
+            _previewSource16 = null;
+        }
 
         _loading = true;
         try
@@ -553,6 +576,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _session?.Dispose();
         _session = null;
         _previewSource = null;
+        _previewSource16 = null;
         _sourceWidth = 0;
         _sourceHeight = 0;
         Preview = null;
@@ -602,18 +626,23 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     private async Task RenderPreviewAsync()
     {
-        if (_session is null || _previewSource is null)
+        var source = _previewSource;
+        var source16 = _previewSource16;
+        if (_session is null || (source is null && source16 is null))
         {
             return;
         }
         var token = ++_renderToken;
-        var source = _previewSource;
         var document = _session.Document;
 
         var bitmap = await Task.Run(() =>
         {
-            var rendered = ExportRunner.RenderDocument(source, document);
-            return ToBitmap(rendered);
+            if (source16 is not null)
+            {
+                return ToBitmap(
+                    ExportRunner.RenderDocument16(source16, document).ToBgra8());
+            }
+            return ToBitmap(ExportRunner.RenderDocument(source!, document));
         });
 
         if (token != _renderToken)
@@ -621,7 +650,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             return;
         }
         Preview = bitmap;
-        DimensionText = $"{source.Width}×{source.Height} preview";
+        var width = source?.Width ?? source16!.Width;
+        var height = source?.Height ?? source16!.Height;
+        DimensionText = $"{width}×{height} preview";
     }
 
     private void LoadFromDocument()

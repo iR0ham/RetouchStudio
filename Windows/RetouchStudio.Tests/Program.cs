@@ -37,6 +37,7 @@ internal static class Program
             Export(root);
             Corpus(root);
             BitDepth(root);
+            SixteenBitPreview(root);
             BatchExport(root);
             AdjustmentEvidence();
             FormatProbes(root);
@@ -915,6 +916,65 @@ internal static class Program
         Console.WriteLine($"  8-bit vs 16-bit clarity drift: {sharpDrift} levels max");
         Check("clarity at both depths stays inside the 8-bit blur's truncation",
               sharpDrift <= 3);
+    }
+
+    /// <summary>
+    /// The preview keeps 16 bits for a file that stores them. The depth comes
+    /// from the container header — PNG's IHDR and TIFF's BitsPerSample — and
+    /// the 16-bit render reaches the display through the same rounding the
+    /// 8-bit preview uses, so the picture on screen does not shift when the
+    /// pipeline changes depth.
+    /// </summary>
+    private static void SixteenBitPreview(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var fixtures = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures");
+        var p3Path = Path.Combine(fixtures, "F11_p3_16bit.png");
+        var depth = codec.ReadBitDepthAsync(p3Path).GetAwaiter().GetResult();
+        Console.WriteLine($"  16-bit fixture depth probe: {depth}");
+        Check("the PNG header reports the 16-bit fixture's depth", depth == 16);
+        Check("the PNG header reports an 8-bit fixture's depth",
+              codec.ReadBitDepthAsync(Path.Combine(fixtures, "F01_portrait_srgb_8.png"))
+                   .GetAwaiter().GetResult() == 8);
+        Check("a JPEG reports 8 bits",
+              codec.ReadBitDepthAsync(Path.Combine(fixtures, "F10_exif_orient6.jpg"))
+                   .GetAwaiter().GetResult() == 8);
+
+        using (var session = ProjectSession.Create(
+                   Path.Combine(fixtures, "F01_portrait_srgb_8.png")))
+        {
+            var tiff = Path.Combine(root, "preview-depth.tiff");
+            ExportRunner.ExportAsync(session, codec, tiff, "tiff", 1.0, 0)
+                        .GetAwaiter().GetResult();
+            var tiffDepth = codec.ReadBitDepthAsync(tiff).GetAwaiter().GetResult();
+            Console.WriteLine($"  exported TIFF depth probe: {tiffDepth}");
+            Check("the TIFF header reports the export's 16 bits", tiffDepth == 16);
+        }
+
+        // Exact 8-bit levels, so the reduction must return them unchanged and
+        // in BGRA order.
+        var exact = new PixelBuffer16(3, 1);
+        exact.Pixels[0] = 255 * 257;
+        exact.Pixels[1] = 128 * 257;
+        exact.Pixels[2] = 0;
+        exact.Pixels[3] = 65535;
+        var reduced = exact.ToBgra8();
+        Check("the 16-to-8 reduction keeps exact levels and swaps to BGRA",
+              reduced.Pixels[0] == 0 && reduced.Pixels[1] == 128
+              && reduced.Pixels[2] == 255 && reduced.Pixels[3] == 255);
+
+        var narrow = codec.DecodeAsync(p3Path).GetAwaiter().GetResult();
+        var wide = codec.Decode16Async(p3Path).GetAwaiter().GetResult();
+        var adjustments = new GlobalAdjustments(30, 20, 10, 0, 20, 15, 10, 45, 25);
+        var preview8 = AdjustmentPipeline.Apply(narrow, adjustments);
+        var preview16 = AdjustmentPipeline16.Apply(wide, adjustments).ToBgra8();
+        var delta = 0;
+        for (var offset = 0; offset < preview8.Pixels.Length; offset++)
+        {
+            delta = Math.Max(delta, Math.Abs(preview8.Pixels[offset] - preview16.Pixels[offset]));
+        }
+        Console.WriteLine($"  8-bit vs 16-bit preview delta: {delta} levels max");
+        Check("the 16-bit preview shows the same picture as the 8-bit one", delta <= 2);
     }
 
     /// <summary>
