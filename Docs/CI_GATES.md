@@ -169,7 +169,7 @@ The Windows gap and the intended implementation are analysed in
 `windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
 `windows-2025` and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 118
+`.def` export list, publishes the WPF host self-contained for x64, runs the 122
 headless host checks against the real DLL and the real WIC codec, starts the
 published app until the loaded window writes its own marker file, zips the
 folder and starts the extracted copy, then builds an MSI with WiX v3, installs
@@ -209,6 +209,8 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `1199210` (merge of PR #23) | `CI` run 43565828542, `main` | all five jobs green |
 | 2026-11-14 | `42a3b65` (merge of PR #24) | `CI` run 43568795622, `main` | all five jobs green |
 | 2026-11-14 | `04defe0` (PR #26, Windows vignette parity) | `CI` run 43573329343 | five jobs green; `Windows App` reports `PASS (118 checks)`; `G11_VIGNETTE: mae 0.473` (was 5.2) now gated at one level; a negative vignette is a no-op, as on macOS |
+| 2026-11-14 | `a7d478e6` (merge of PR #26) | `CI` run 43575818731, `main` | all five jobs green |
+| 2026-11-14 | `528c597` (PR #27, Windows clarity parity) | `CI` run 43576450870 | five jobs green; `Windows App` reports `PASS (122 checks)`; `G09_CLARITY_UP: mae 0.06` (was 5.8) now gated at one level; positive clarity leaves a flat field untouched and a step edge gains contrast, negative clarity softens it; `G11_VIGNETTE` unchanged at 0.473 |
 
 
 PR #13 was merged with a normal merge commit after every required context and
