@@ -360,8 +360,10 @@ function Get-NextPackageVersion([string]$Version) {
 }
 
 function Build-Msi([string]$Wix, [string]$Version) {
+    # heat, candle and light write their progress to stdout; Out-Host keeps that
+    # in the log without mixing it into this function's return value.
     & (Join-Path $root 'Tools/package-windows-msi.ps1') `
-        -AppDir $appDir -Version $Version -OutputDir $distDir -WixDir $Wix
+        -AppDir $appDir -Version $Version -OutputDir $distDir -WixDir $Wix | Out-Host
     Assert-ExitCode 'MSI packaging'
     $name = "RetouchStudio-$Version-windows-x64.msi"
     $path = Join-Path $distDir $name
@@ -390,6 +392,9 @@ if (-not $SkipPackage -and -not $SkipPublish) {
         Step 'building the MSI installer'
         Write-Host "   WiX at $wix"
         $msi = Build-Msi $wix $PackageVersion
+        if ($msi -isnot [string] -or -not (Test-Path $msi -PathType Leaf)) {
+            throw "the MSI build did not return one file; it returned '$msi'"
+        }
 
         if (-not $SkipGuiSmoke) {
             Step 'installing, starting and uninstalling the MSI'
@@ -405,6 +410,9 @@ if (-not $SkipPackage -and -not $SkipPublish) {
             Step 'upgrading an installed version'
             $upgradeVersion = Get-NextPackageVersion $PackageVersion
             $upgradeMsi = Build-Msi $wix $upgradeVersion
+            if ($upgradeMsi -isnot [string] -or -not (Test-Path $upgradeMsi -PathType Leaf)) {
+                throw "the upgrade MSI build did not return one file; it returned '$upgradeMsi'"
+            }
             Install-Msi $msi (Get-MsiVersion $PackageVersion)
             Install-Msi $upgradeMsi (Get-MsiVersion $upgradeVersion)
             Invoke-GuiSmoke ((Get-InstallPaths).Exe) 'upgraded'
