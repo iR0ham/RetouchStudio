@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Nodes;
 using RetouchStudio.Core.Imaging;
@@ -46,6 +47,8 @@ internal static class Program
             FormatProbes(root);
             Metadata(root);
             Carry(root);
+            CarryTransforms(root);
+            Colour(root);
             Interchange(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard();
@@ -1441,6 +1444,267 @@ internal static class Program
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
 
     /// <summary>
+    /// Every pixel on this host is converted to sRGB at decode, so an export
+    /// that declares nothing is read back as sRGB by convention rather than by
+    /// contract. The shipping writer now embeds a generated sRGB profile in
+    /// JPEG and PNG; each container is read back and the profile bytes must be
+    /// identical in both. TIFF stays untagged until a TIFF writer exists and is
+    /// printed, not asserted, so the gap is visible in the log.
+    /// </summary>
+    private static void Colour(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(16, 12);
+        for (var y = 0; y < 12; y++)
+        {
+            for (var x = 0; x < 16; x++)
+            {
+                Put(image, x, y, r: (byte)(x * 15), g: (byte)(y * 20), b: (byte)(255 - x * 12));
+            }
+        }
+
+        var source = Path.Combine(root, "colour-source.jpg");
+        codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
+        Console.WriteLine($"  colour source JPEG: {DescribeColourProfile(source)}");
+
+        using var session = ProjectSession.Create(source);
+        var jpeg = Path.Combine(root, "colour-export.jpg");
+        ExportRunner.ExportAsync(session, codec, jpeg, "jpeg", 0.9, 0)
+                     .GetAwaiter().GetResult();
+        var png = Path.Combine(root, "colour-export.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                     .GetAwaiter().GetResult();
+        var tiff = Path.Combine(root, "colour-export.tiff");
+        ExportRunner.ExportAsync(session, codec, tiff, "tiff", 1.0, 0)
+                     .GetAwaiter().GetResult();
+        var stripped = Path.Combine(root, "colour-export-stripped.jpg");
+        ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
+                     .GetAwaiter().GetResult();
+
+        var jpegProfile = ColourProfileBytes(jpeg);
+        Check("an exported JPEG declares an RGB display profile",
+              jpegProfile is { Length: > 1024 }
+              && Encoding.ASCII.GetString(jpegProfile, 16, 4) == "RGB "
+              && Encoding.ASCII.GetString(jpegProfile, 12, 4) == "mntr");
+        Check("the JPEG profile carries the generated description",
+              jpegProfile is not null
+              && IccDescription(jpegProfile) == SrgbProfile.Description);
+        var pngProfile = ColourProfileBytes(png);
+        Check("an exported PNG declares the same profile bytes",
+              pngProfile is not null && jpegProfile is not null
+              && pngProfile.SequenceEqual(jpegProfile));
+        Check("stripping the source identity keeps the colour profile",
+              ColourProfileBytes(stripped) is not null);
+        Console.WriteLine($"  colour TIFF (documented gap): {DescribeColourProfile(tiff)}");
+    }
+
+    private static byte[]? ColourProfileBytes(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        return bytes.Length > 8 && bytes[0] == 0xFF && bytes[1] == 0xD8
+            ? JpegColourProfile(bytes)
+            : bytes.Length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50
+                ? PngColourProfile(bytes)
+                : TiffColourProfile(bytes);
+    }
+
+    private static string DescribeColourProfile(string path)
+    {
+        byte[]? profile;
+        try
+        {
+            profile = ColourProfileBytes(path);
+        }
+        catch (Exception error)
+        {
+            return $"unreadable ({error.Message})";
+        }
+        if (profile is null)
+        {
+            return "no embedded profile (readers assume sRGB)";
+        }
+        if (profile.Length < 132)
+        {
+            return $"embedded profile too short ({profile.Length} bytes)";
+        }
+        var space = Encoding.ASCII.GetString(profile, 16, 4).TrimEnd('\0', ' ');
+        var profileClass = Encoding.ASCII.GetString(profile, 12, 4).TrimEnd('\0', ' ');
+        var description = IccDescription(profile) ?? "unnamed";
+        return "embedded " + space + " " + profileClass + " profile, \"" +
+               description + "\", " + profile.Length + " bytes";
+    }
+
+    private static byte[]? JpegColourProfile(byte[] bytes)
+    {
+        var segments = new SortedDictionary<byte, byte[]>();
+        var at = 2;
+        while (at + 4 <= bytes.Length && bytes[at] == 0xFF)
+        {
+            var marker = bytes[at + 1];
+            if (marker == 0xDA || marker == 0xD9)
+            {
+                break;
+            }
+            if (marker is >= 0xD0 and <= 0xD8)
+            {
+                at += 2;
+                continue;
+            }
+            var length = (bytes[at + 2] << 8) | bytes[at + 3];
+            if (length < 2 || at + 2 + length > bytes.Length)
+            {
+                break;
+            }
+            if (marker == 0xE2 && length >= 16)
+            {
+                var payload = at + 4;
+                // "ICC_PROFILE\0" then the segment number and the segment count.
+                if (Encoding.ASCII.GetString(bytes, payload, 11) == "ICC_PROFILE"
+                    && bytes[payload + 11] == 0)
+                {
+                    segments[bytes[payload + 12]] = bytes[(payload + 14)..(at + 2 + length)];
+                }
+            }
+            at += 2 + length;
+        }
+        return segments.Count == 0 ? null : segments.Values.SelectMany(part => part).ToArray();
+    }
+
+    private static byte[]? PngColourProfile(byte[] bytes)
+    {
+        var at = 8;
+        while (at + 12 <= bytes.Length)
+        {
+            var length = (bytes[at] << 24) | (bytes[at + 1] << 16)
+                       | (bytes[at + 2] << 8) | bytes[at + 3];
+            if (length < 0 || at + 12 + length > bytes.Length)
+            {
+                return null;
+            }
+            var type = Encoding.ASCII.GetString(bytes, at + 4, 4);
+            if (type == "iCCP")
+            {
+                var data = new ReadOnlySpan<byte>(bytes, at + 8, length);
+                var zero = data.IndexOf((byte)0);
+                if (zero < 0 || zero + 2 > data.Length)
+                {
+                    return null;
+                }
+                // A profile name, a compression method byte, then the profile.
+                using var compressed = new MemoryStream(data[(zero + 2)..].ToArray());
+                using var zlib = new ZLibStream(compressed, CompressionMode.Decompress);
+                using var plain = new MemoryStream();
+                zlib.CopyTo(plain);
+                return plain.ToArray();
+            }
+            if (type == "IEND")
+            {
+                break;
+            }
+            at += 12 + length;
+        }
+        return null;
+    }
+
+    private static byte[]? TiffColourProfile(byte[] bytes)
+    {
+        if (bytes.Length < 8)
+        {
+            return null;
+        }
+        var little = bytes[0] == 0x49;
+        var offset = (int)ColourTiffU32(bytes, 4, little);
+        if (offset < 8 || offset + 2 > bytes.Length)
+        {
+            return null;
+        }
+        var count = ColourTiffU16(bytes, offset, little);
+        for (var i = 0; i < count; i++)
+        {
+            var entry = offset + 2 + i * 12;
+            if (entry + 12 > bytes.Length)
+            {
+                return null;
+            }
+            if (ColourTiffU16(bytes, entry, little) != 34675)
+            {
+                continue;
+            }
+            var length = (int)ColourTiffU32(bytes, entry + 4, little);
+            if (length < 0 || length > bytes.Length)
+            {
+                return null;
+            }
+            var start = length <= 4 ? entry + 8 : (int)ColourTiffU32(bytes, entry + 8, little);
+            if (start + length > bytes.Length)
+            {
+                return null;
+            }
+            return bytes[start..(start + length)];
+        }
+        return null;
+    }
+
+    private static ushort ColourTiffU16(byte[] bytes, int at, bool little) =>
+        little
+            ? (ushort)(bytes[at] | (bytes[at + 1] << 8))
+            : (ushort)((bytes[at] << 8) | bytes[at + 1]);
+
+    private static uint ColourTiffU32(byte[] bytes, int at, bool little) =>
+        little
+            ? (uint)bytes[at] | ((uint)bytes[at + 1] << 8)
+              | ((uint)bytes[at + 2] << 16) | ((uint)bytes[at + 3] << 24)
+            : ((uint)bytes[at] << 24) | ((uint)bytes[at + 1] << 16)
+              | ((uint)bytes[at + 2] << 8) | bytes[at + 3];
+
+    /// <summary>
+    /// The human description of an ICC profile, from a v2 `desc` tag or a v4
+    /// `mluc` tag. A profile without a readable description still counts as
+    /// embedded; the header fields carry the colour space either way.
+    /// </summary>
+    private static string? IccDescription(byte[] profile)
+    {
+        var count = (int)ColourTiffU32(profile, 128, little: false);
+        if (count < 0 || count > 64 || 132 + count * 12 > profile.Length)
+        {
+            return null;
+        }
+        for (var i = 0; i < count; i++)
+        {
+            var entry = 132 + i * 12;
+            var signature = Encoding.ASCII.GetString(profile, entry, 4);
+            var offset = (int)ColourTiffU32(profile, entry + 4, little: false);
+            if (offset < 0 || offset + 12 > profile.Length)
+            {
+                continue;
+            }
+            if (signature == "desc")
+            {
+                var length = (int)ColourTiffU32(profile, offset + 8, little: false);
+                if (length > 0 && length <= 256 && offset + 12 + length <= profile.Length)
+                {
+                    return Encoding.ASCII.GetString(profile, offset + 12, length).TrimEnd('\0');
+                }
+            }
+            if (signature == "mluc")
+            {
+                var records = (int)ColourTiffU32(profile, offset + 8, little: false);
+                if (records < 1 || records > 8 || offset + 28 > profile.Length)
+                {
+                    continue;
+                }
+                var length = (int)ColourTiffU32(profile, offset + 20, little: false);
+                var start = offset + (int)ColourTiffU32(profile, offset + 24, little: false);
+                if (length > 0 && length <= 512 && start + length <= profile.Length)
+                {
+                    return Encoding.BigEndianUnicode.GetString(profile, start, length).TrimEnd('\0');
+                }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Metadata the WinRT writer cannot express: the source EXIF block and XMP
     /// packet are carried at the container level, the orientation is made
     /// upright, the frame dimensions are replaced and the thumbnail is unlinked.
@@ -1531,6 +1795,91 @@ internal static class Program
         var brokenSize = codec.ReadSizeAsync(brokenOut).GetAwaiter().GetResult();
         Check("an invalid EXIF block is skipped without failing the export",
               brokenSize.Width == 8 && brokenSize.Height == 6);
+    }
+
+    /// <summary>
+    /// The carried metadata describes the pixels the writer produced, not the
+    /// photo that was opened. A crop, a quarter turn and a long-edge resize each
+    /// change the frame through the shipping export path; every transformed
+    /// export must stay upright, name the exported frame and leave no camera
+    /// thumbnail.
+    /// </summary>
+    private static void CarryTransforms(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(40, 30);
+        for (var y = 0; y < 30; y++)
+        {
+            for (var x = 0; x < 40; x++)
+            {
+                Put(image, x, y, r: (byte)(x * 6), g: (byte)(y * 8), b: 120);
+            }
+        }
+
+        var source = Path.Combine(root, "transform-source.jpg");
+        codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
+        MetadataCarry.WriteJpeg(
+            source,
+            BuildExif(orientation: 6, width: 40, height: 30),
+            Encoding.UTF8.GetBytes(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF>"
+                + "<rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+                + "xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" "
+                + "dc:title=\"Transform test\" tiff:Orientation=\"6\"/>"
+                + "</rdf:RDF></x:xmpmeta>"));
+
+        // The source decodes upright as 30x40, so a half-size crop is exactly
+        // 15x20 and no rounding can hide behind it.
+        using (var session = ProjectSession.Create(source))
+        {
+            session.Document.Crop = new CropValue(0.5, 0.5, 0.5, 0.5);
+            var path = Path.Combine(root, "transform-cropped.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 0,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            var xmp = MetadataCarry.ReadXmp(path);
+            Check("a crop exports the cropped frame", size.Width == 15 && size.Height == 20);
+            Check("a cropped export names the cropped frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a cropped export is upright", TiffNumber(exif, 0x0112) == 1);
+            Check("a cropped export keeps the XMP title",
+                  xmp is not null && Encoding.UTF8.GetString(xmp).Contains("Transform test"));
+            Check("a cropped export leaves no camera thumbnail",
+                  (TiffNumber(exif, 0x0201) ?? 0) == 0);
+        }
+
+        using (var session = ProjectSession.Create(source))
+        {
+            session.Document.Orientation = session.Document.Orientation.WithQuarterTurn(1);
+            var path = Path.Combine(root, "transform-turned.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 0,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            Check("a quarter turn exports the turned frame",
+                  size.Width == 40 && size.Height == 30);
+            Check("a turned export names the turned frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a turned export is upright", TiffNumber(exif, 0x0112) == 1);
+        }
+
+        using (var session = ProjectSession.Create(source))
+        {
+            var path = Path.Combine(root, "transform-resized.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 20,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            Check("a long-edge resize exports the resized frame",
+                  size.Width == 15 && size.Height == 20);
+            Check("a resized export names the resized frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a resized export is upright", TiffNumber(exif, 0x0112) == 1);
+        }
     }
 
     private static byte[] BuildExif(ushort orientation, int width, int height)
@@ -1923,6 +2272,16 @@ internal static class Program
         Console.WriteLine($"  stress heap growth {growth:0.0} MB over twenty " +
                           $"preview renders");
         Check("twenty photo-sized renders keep the managed heap flat", growth < 150);
+
+        // The managed heap says nothing about the decoder's native buffers, so
+        // the process totals are printed next to it. They are recorded, not
+        // gated: the runner's own baseline and the JIT move them run to run,
+        // and a ceiling tight enough to catch a leak would fail on noise.
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        Console.WriteLine($"  memory working set {process.WorkingSet64 / 1048576.0:0} MB, " +
+                          $"peak {process.PeakWorkingSet64 / 1048576.0:0} MB " +
+                          $"after sixty renders");
     }
 
     /// <summary>
