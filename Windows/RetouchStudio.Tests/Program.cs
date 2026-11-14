@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using RetouchStudio.Core.Imaging;
@@ -43,6 +44,7 @@ internal static class Program
             FormatProbes(root);
             Metadata(root);
             Interchange(root);
+            PerformanceAndStress(root);
         }
         catch (Exception error)
         {
@@ -1402,6 +1404,110 @@ internal static class Program
             Check("a v3 save keeps the unkeyed geometry", saved["crop"] is JsonArray);
             Check("a v3 save keeps every record", JsonNode.DeepEquals(saved, v3Fixture));
         }
+    }
+
+    /// <summary>
+    /// W5 on Windows: a photo-sized preview render, the same document exported
+    /// through the 16-bit path, and a stress loop across crops, turns and both
+    /// clarity signs. Budgets are safety nets for a pathological regression,
+    /// not targets; every measured time is printed so a real slowdown shows in
+    /// the CI log even when the budget still passes.
+    /// </summary>
+    private static void PerformanceAndStress(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var fixture = Path.Combine(RepoRoot(),
+                                   "Tests/Corpus/Fixtures/F08_highres_portrait.png");
+        using var session = ProjectSession.Create(fixture);
+        foreach (var name in DocumentModel.GlobalAdjustmentNames)
+        {
+            session.Document.SetAdjustment(name, 40);
+        }
+        var previewSource = codec.DecodeAsync(fixture).GetAwaiter().GetResult()
+                                 .ResizeLongEdge(1600);
+
+        // Outside the measurement: the first call pays JIT and page-in.
+        ExportRunner.RenderDocument(previewSource, session.Document);
+
+        var runs = new List<double>();
+        PixelBuffer? first = null;
+        for (var run = 0; run < 5; run++)
+        {
+            var watch = Stopwatch.StartNew();
+            var rendered = ExportRunner.RenderDocument(previewSource, session.Document);
+            watch.Stop();
+            runs.Add(watch.Elapsed.TotalMilliseconds);
+            first ??= rendered;
+        }
+        var median = runs.OrderBy(value => value).ElementAt(runs.Count / 2);
+        Console.WriteLine($"  perf preview {previewSource.Width}x{previewSource.Height} " +
+                          $"nine sliders: median {median:0} ms " +
+                          $"({string.Join(" ", runs.Select(value => value.ToString("0")))})");
+        Check("a photo-sized adjusted preview renders inside 3 s", median < 3000);
+
+        var again = ExportRunner.RenderDocument(previewSource, session.Document);
+        Check("the same document renders the same pixels twice",
+              again.Pixels.AsSpan().SequenceEqual(first!.Pixels));
+
+        var exportPath = Path.Combine(root, "perf-export.png");
+        var exportWatch = Stopwatch.StartNew();
+        ExportRunner.ExportAsync(session, codec, exportPath, "png", 1.0, 0)
+                     .GetAwaiter().GetResult();
+        exportWatch.Stop();
+        Console.WriteLine($"  perf 16-bit PNG export " +
+                          $"{exportWatch.Elapsed.TotalMilliseconds:0} ms");
+        Check("a 16-bit PNG export of the same document finishes inside 30 s",
+              exportWatch.Elapsed.TotalSeconds < 30);
+
+        // Forty documents that differ by crop, turn, straighten and the sign
+        // of clarity, rendered one after another: no pass may fail on any of
+        // them, and the last document must still be deterministic.
+        var small = new PixelBuffer(256, 192);
+        for (var y = 0; y < small.Height; y++)
+        {
+            for (var x = 0; x < small.Width; x++)
+            {
+                Put(small, x, y, (byte)x, (byte)(y * 255 / 191),
+                    (byte)((x + y) % 256));
+            }
+        }
+        var stress = new DocumentModel(new JsonObject());
+        DocumentModel Prepare(int iteration)
+        {
+            var document = new DocumentModel(new JsonObject());
+            for (var index = 0; index < DocumentModel.GlobalAdjustmentNames.Count; index++)
+            {
+                var value = (index * 53 + index * index * 11 + iteration * 17) % 201 - 100;
+                document.SetAdjustment(DocumentModel.GlobalAdjustmentNames[index], value);
+            }
+            document.SetAdjustment("clarity", iteration % 2 == 0 ? 80 : -80);
+            document.Crop = iteration % 3 == 0
+                ? new CropValue(0.1, 0.1, 0.8, 0.7)
+                : null;
+            document.Orientation = iteration % 4 switch
+            {
+                1 => OrientationValue.Identity.WithQuarterTurn(1),
+                3 => OrientationValue.Identity.WithFlip(),
+                _ => OrientationValue.Identity.WithAngle(iteration % 5 == 0 ? 3.5 : 0),
+            };
+            return document;
+        }
+        var intact = true;
+        for (var iteration = 0; iteration < 40; iteration++)
+        {
+            stress = Prepare(iteration);
+            var rendered = ExportRunner.RenderDocument(small, stress);
+            intact &= rendered.Width > 0 && rendered.Height > 0
+                      && rendered.Width * rendered.Height <= small.Width * small.Height;
+        }
+        Check("forty successive crop/turn/clarity documents all render", intact);
+        var last = ExportRunner.RenderDocument(small, stress);
+        var lastAgain = ExportRunner.RenderDocument(small, stress);
+        Check("the last stress document renders the same pixels twice",
+              last.Pixels.AsSpan().SequenceEqual(lastAgain.Pixels));
+        var plain = ExportRunner.RenderDocument(small, Prepare(2));
+        Check("an uncropped, unturned stress document keeps the photo size",
+              plain.Width == small.Width && plain.Height == small.Height);
     }
 
     /// <summary>
