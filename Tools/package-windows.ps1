@@ -7,8 +7,9 @@
 # The output is unsigned. Publishing an unsigned binary is free and is the
 # documented default; no paid certificate or notarization is involved.
 #
-# NOT VERIFIED: this script has not been executed on Windows from this
-# repository, and pwsh is not installed on the macOS development host.
+# Verified on Windows: CI run 43537354813 (2026-11-14, head 6882246) built
+# RetouchStudio-0.0.0-ci-windows-x64.zip, matched its SHA-256 manifest and
+# started the extracted app to a loaded window.
 
 param(
     [Parameter(Mandatory = $true)][string]$AppDir,

@@ -1,10 +1,13 @@
 # Builds the Windows host end to end on a native Windows machine: the StudioCore
 # C ABI as studioscore_core.dll, a self-contained x64 publish of the WPF app,
 # the headless host tests against the real DLL and Windows Imaging Component,
-# and a GUI liveness check that the published exe opens a window.
+# a GUI liveness check that the published exe opens a window, and the same check
+# from the extracted release zip.
 #
 #   pwsh -File Tools/build-windows.ps1
 #   pwsh -File Tools/build-windows.ps1 -SkipGuiSmoke     # no interactive desktop
+#   pwsh -File Tools/build-windows.ps1 -SkipPackage      # no zip artifact
+#   pwsh -File Tools/build-windows.ps1 -PackageVersion 1.2.3
 #
 # Requires a Swift toolchain for Windows (swiftc.exe plus its clang.exe and lld)
 # and the .NET 10 SDK, both on PATH. Intel and AMD machines run the same x64
@@ -14,7 +17,9 @@ param(
     [string]$Configuration = 'Release',
     [switch]$SkipTests,
     [switch]$SkipGuiSmoke,
-    [switch]$SkipPublish
+    [switch]$SkipPublish,
+    [switch]$SkipPackage,
+    [string]$PackageVersion = '0.0.0-ci'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -156,12 +161,10 @@ if (-not $SkipTests) {
 #    XAML and the native core all start together. A hosted runner session does
 #    not always report MainWindowHandle, so the window writes a marker from its
 #    Loaded handler; a window handle is still reported when the session has one.
-if (-not $SkipGuiSmoke -and -not $SkipPublish) {
-    $exe = Join-Path $appDir 'RetouchStudio.exe'
-    if (-not (Test-Path $exe)) {
-        throw "$exe was not published"
+function Invoke-GuiSmoke([string]$Exe, [string]$Label) {
+    if (-not (Test-Path $Exe)) {
+        throw "$Exe was not published"
     }
-    Step 'smoke-running the published app'
     $temp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
     $marker = Join-Path $temp 'retouchstudio-smoke.txt'
     $stdout = Join-Path $temp 'retouchstudio-smoke.out'
@@ -171,7 +174,7 @@ if (-not $SkipGuiSmoke -and -not $SkipPublish) {
     # to stderr instead of showing one during the smoke run.
     $env:RETOUCHSTUDIO_NO_DIALOG = '1'
     $env:RETOUCHSTUDIO_SMOKE = $marker
-    $process = Start-Process -FilePath $exe -PassThru `
+    $process = Start-Process -FilePath $Exe -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $title = $null
     $exitCode = $null
@@ -200,7 +203,42 @@ if (-not $SkipGuiSmoke -and -not $SkipPublish) {
         }
         throw "the app ran but its window never loaded (handle $handle). stderr: $errors"
     }
-    Write-Host "   the published app loaded its window: '$title' (native handle $handle)"
+    Write-Host "   the $Label app loaded its window: '$title' (native handle $handle)"
+}
+
+if (-not $SkipGuiSmoke -and -not $SkipPublish) {
+    Step 'smoke-running the published app'
+    Invoke-GuiSmoke (Join-Path $appDir 'RetouchStudio.exe') 'published'
+}
+
+# 7. The zip is what a release would ship, so the artifact itself is extracted
+#    and started, not just the publish folder it was made from.
+if (-not $SkipPackage -and -not $SkipGuiSmoke -and -not $SkipPublish) {
+    Step 'packaging the published app'
+    $distDir = Join-Path $root 'build/windows/dist'
+    & (Join-Path $root 'Tools/package-windows.ps1') `
+        -AppDir $appDir -Version $PackageVersion -OutputDir $distDir
+    Assert-ExitCode 'packaging'
+
+    $zipName = "RetouchStudio-$PackageVersion-windows-x64.zip"
+    $zip = Join-Path $distDir $zipName
+    $manifest = "$zip.sha256"
+    if (-not (Test-Path $zip -PathType Leaf)) { throw "$zip was not written" }
+    if (-not (Test-Path $manifest -PathType Leaf)) { throw "$manifest was not written" }
+    $recorded = (Get-Content $manifest -Raw).Trim()
+    $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($recorded -ne "$hash  $zipName") {
+        throw "the zip manifest does not match the zip: '$recorded'"
+    }
+    $size = (Get-Item $zip).Length
+    Write-Host "   $zipName ($size bytes), sha256 $hash"
+
+    Step 'smoke-running the packaged zip'
+    $temp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+    $extracted = Join-Path $temp 'retouchstudio-packaged'
+    Remove-Item $extracted -Recurse -Force -ErrorAction SilentlyContinue
+    Expand-Archive -Path $zip -DestinationPath $extracted
+    Invoke-GuiSmoke (Join-Path $extracted 'RetouchStudio.exe') 'packaged'
 }
 
 Write-Host 'WINDOWS APP BUILD: PASS'

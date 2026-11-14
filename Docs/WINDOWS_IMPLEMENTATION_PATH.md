@@ -226,7 +226,7 @@ The host in `Windows/` is a C#/.NET 10 solution published as one x64 folder:
 | WPF window and view model | `Windows/RetouchStudio.App/` |
 | Headless checks | `Windows/RetouchStudio.Tests/Program.cs` |
 | Build, test and smoke run | `Tools/build-windows.ps1` |
-| Packaging | `Tools/package-windows.ps1` (written, **NOT VERIFIED**) |
+| Packaging | `Tools/package-windows.ps1` (verified 2026-11-14, run 43537354813) |
 
 Proven on `windows-2025`, head `28f8462`: `all 13 exports present`,
 `copied 142 runtime DLLs`, `WINDOWS HOST TESTS: PASS (55 checks)`,
@@ -241,10 +241,31 @@ Open, and therefore still **NOT VERIFIED**:
 - no byte-level or visual comparison against the render-plan fixtures; the
   macOS Core Image pipeline is not reproduced stage for stage;
 - 8-bit output only, no metadata in exports, no HEIC write;
-- no installer, zip artifact verification, signing or updater;
+- no installer, signing or updater; the zip is unsigned;
 - no AI, analysis, masks, healing, presets or watermark.
 
 W3–W6 are untouched.
+
+### Packaging status (2026-11-14)
+
+`Tools/build-windows.ps1` now packages the published host and starts the app
+from the extracted zip. CI run 43537354813 (`workflow_dispatch`, head `6882246`)
+on `windows-2025` ended with:
+
+```
+-> packaging the published app
+built RetouchStudio-0.0.0-ci-windows-x64.zip (410328181 bytes)
+sha256 090e66d2cdcfce65afb75273d6cb6ceae1e1bae1255bfb9796656a5d08cc0b01
+   RetouchStudio-0.0.0-ci-windows-x64.zip (410328181 bytes), sha256 090e66d…
+-> smoke-running the packaged zip
+   the packaged app loaded its window: 'Retouch Studio' (native handle 459082)
+WINDOWS APP BUILD: PASS
+```
+
+The manifest is recomputed and compared, so a wrong hash fails the build. The
+zip is unsigned and large because it carries the self-contained .NET runtime and
+the Swift runtime; trimming it is a distribution decision, not a correctness
+one. This verifies the artifact, not an installer or an update feed.
 
 ## 6. Distribution
 
