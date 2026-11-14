@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Runtime.CompilerServices;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -98,6 +99,12 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private bool _commitPending;
     private bool _loading;
     private BitmapSource? _preview;
+    private BitmapSource? _originalPreview;
+    private bool _isPeekingOriginal;
+    private PointCollection? _histogramRed;
+    private PointCollection? _histogramGreen;
+    private PointCollection? _histogramBlue;
+    private PointCollection? _histogramLuma;
     private string _status = "Open a photo to begin.";
     private string _dimensionText = "";
     private bool _canUndo;
@@ -136,10 +143,66 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public ObservableCollection<AdjustmentItem> Adjustments { get; }
 
-    public BitmapSource? Preview
+    /// <summary>
+    /// The bitmap on the canvas: the edited preview, or the untouched photo
+    /// while the owner holds the compare key.
+    /// </summary>
+    public BitmapSource? Preview =>
+        _isPeekingOriginal && _originalPreview is not null ? _originalPreview : _preview;
+
+    /// <summary>
+    /// Hold-to-compare, as the macOS canvas does with the space bar. The
+    /// original is the photo as decoded — no crop, no turn, no adjustments.
+    /// </summary>
+    public bool IsPeekingOriginal
     {
-        get => _preview;
-        private set => Set(ref _preview, value);
+        get => _isPeekingOriginal;
+        set
+        {
+            if (_isPeekingOriginal == value)
+            {
+                return;
+            }
+            if (value && _originalPreview is null)
+            {
+                return;
+            }
+            _isPeekingOriginal = value;
+            Raise(nameof(Preview));
+            Raise(nameof(IsPeekingOriginal));
+        }
+    }
+
+    /// <summary>Whether a compare peek is available right now.</summary>
+    public bool CanPeekOriginal =>
+        _session is not null && _originalPreview is not null && !_isCropping;
+    /// <summary>
+    /// The live histogram of the rendered preview, one normalized curve per
+    /// channel plus luma, in a 256-wide 100-high drawing space the panel
+    /// stretches to its own width.
+    /// </summary>
+    public PointCollection? HistogramRed
+    {
+        get => _histogramRed;
+        private set => Set(ref _histogramRed, value);
+    }
+
+    public PointCollection? HistogramGreen
+    {
+        get => _histogramGreen;
+        private set => Set(ref _histogramGreen, value);
+    }
+
+    public PointCollection? HistogramBlue
+    {
+        get => _histogramBlue;
+        private set => Set(ref _histogramBlue, value);
+    }
+
+    public PointCollection? HistogramLuma
+    {
+        get => _histogramLuma;
+        private set => Set(ref _histogramLuma, value);
     }
 
     public string Status
@@ -338,12 +401,26 @@ public sealed class EditorViewModel : INotifyPropertyChanged
                 return;
             }
             _isCropping = value;
+            if (value)
+            {
+                _isPeekingOriginal = false;
+            }
             Raise(nameof(IsCropping));
+            Raise(nameof(Preview));
+            Raise(nameof(CanPeekOriginal));
             ScheduleRender();
         }
     }
 
     public CropValue? CurrentCrop => _session?.Document.Crop;
+
+    /// <summary>Pixel size of a draft crop, for the overlay's live readout.</summary>
+    public string CropPixelText(CropValue crop)
+    {
+        var size = CropGeometry.PixelSize(crop, _sourceWidth, _sourceHeight,
+                             _session?.Document.Orientation.QuarterTurns ?? 0);
+        return $"{size.Width:N0} × {size.Height:N0}";
+    }
 
     /// <summary>Writes a crop the owner drew; the preview returns to it.</summary>
     public void ApplyCustomCrop(CropValue crop)
@@ -503,11 +580,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// A centred crop at a fixed aspect. Freeform crop handles are not part of
-    /// this host yet; the presets cover the common portrait and print ratios and
-    /// write the same normalized frame crop the macOS app reads. The preset
-    /// names the finished frame's aspect, so where the frame is turned its
-    /// aspect is the turned one.
+    /// A centred crop at a fixed aspect; the freeform overlay is separate. The
+    /// preset covers the common portrait and print ratios and writes the same
+    /// normalized frame crop the macOS app reads. The preset names the finished
+    /// frame's aspect, so where the frame is turned its aspect is the turned one.
     /// </summary>
     public void ApplyCrop(string preset)
     {
@@ -623,6 +699,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
 
         await RenderPreviewAsync();
+        await RenderOriginalPreviewAsync();
         RefreshState();
     }
 
@@ -637,7 +714,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         _previewSource16 = null;
         _sourceWidth = 0;
         _sourceHeight = 0;
-        Preview = null;
+        Set(ref _preview, null, nameof(Preview));
+        _originalPreview = null;
+        _isPeekingOriginal = false;
+        SetHistogram(HistogramBins.Empty);
         DimensionText = "";
         Raise(nameof(HasDocument));
         Raise(nameof(Title));
@@ -693,21 +773,20 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         var token = ++_renderToken;
         var document = _isCropping ? WithoutCrop(_session.Document) : _session.Document;
 
-        var bitmap = await Task.Run(() =>
+        var rendered = await Task.Run(() =>
         {
-            if (source16 is not null)
-            {
-                return ToBitmap(
-                    ExportRunner.RenderDocument16(source16, document).ToBgra8());
-            }
-            return ToBitmap(ExportRunner.RenderDocument(source!, document));
+            var buffer = source16 is not null
+                ? ExportRunner.RenderDocument16(source16, document).ToBgra8()
+                : ExportRunner.RenderDocument(source!, document);
+            return (Bitmap: ToBitmap(buffer), Bins: HistogramSampler.Sample(buffer));
         });
 
         if (token != _renderToken)
         {
             return;
         }
-        Preview = bitmap;
+        Set(ref _preview, rendered.Bitmap, nameof(Preview));
+        SetHistogram(rendered.Bins);
         var width = source?.Width ?? source16!.Width;
         var height = source?.Height ?? source16!.Height;
         DimensionText = $"{width}×{height} preview";
@@ -762,6 +841,74 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         CanRedo = canRedo;
         IsDirty = _session.IsDirty();
         Raise(nameof(Title));
+    }
+
+    /// <summary>
+    /// Renders the compare original once per open: the preview-sized source
+    /// with no orientation, crop or adjustment, which is the photo as the
+    /// decoder delivered it (EXIF rotation baked in).
+    /// </summary>
+    private async Task RenderOriginalPreviewAsync()
+    {
+        var source = _previewSource;
+        var source16 = _previewSource16;
+        var session = _session;
+        if (session is null || (source is null && source16 is null))
+        {
+            _originalPreview = null;
+            return;
+        }
+        var plain = new DocumentModel(new JsonObject());
+        var bitmap = await Task.Run(() =>
+        {
+            if (source16 is not null)
+            {
+                return ToBitmap(ExportRunner.RenderDocument16(source16, plain).ToBgra8());
+            }
+            return ToBitmap(ExportRunner.RenderDocument(source!, plain));
+        });
+        if (!ReferenceEquals(_session, session))
+        {
+            return;
+        }
+        _originalPreview = bitmap;
+        Raise(nameof(CanPeekOriginal));
+    }
+
+    /// <summary>
+    /// Turns the sampled bins into curves for the panel. The drawing space is
+    /// fixed at 256 wide by 100 high so the view only has to stretch it.
+    /// </summary>
+    private void SetHistogram(HistogramBins bins)
+    {
+        if (bins.IsEmpty)
+        {
+            HistogramRed = null;
+            HistogramGreen = null;
+            HistogramBlue = null;
+            HistogramLuma = null;
+            return;
+        }
+        HistogramRed = Curve(bins.Red);
+        HistogramGreen = Curve(bins.Green);
+        HistogramBlue = Curve(bins.Blue);
+        HistogramLuma = Curve(bins.Luma);
+    }
+
+    private static PointCollection? Curve(double[] values)
+    {
+        if (values.Length < 2)
+        {
+            return null;
+        }
+        var step = 256.0 / (values.Length - 1);
+        var points = new PointCollection(values.Length);
+        for (var index = 0; index < values.Length; index++)
+        {
+            points.Add(new Point(index * step, 100 - values[index] * 100));
+        }
+        points.Freeze();
+        return points;
     }
 
     private static BitmapSource ToBitmap(PixelBuffer buffer)

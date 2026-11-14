@@ -8,7 +8,9 @@
         FontFamily="Segoe UI"
         Loaded="Window_Loaded"
         Closing="Window_Closing"
-        PreviewKeyDown="Window_PreviewKeyDown">
+        PreviewKeyDown="Window_PreviewKeyDown"
+        PreviewKeyUp="Window_PreviewKeyUp"
+        Deactivated="Window_Deactivated">
   <DockPanel>
     <Border DockPanel.Dock="Top" Background="{StaticResource PanelBrush}"
             BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1"
@@ -37,6 +39,20 @@
       <DockPanel>
         <TextBlock DockPanel.Dock="Right" Text="{Binding DimensionText}"
                    Foreground="{StaticResource MutedBrush}" FontSize="11" />
+        <TextBlock DockPanel.Dock="Right" Text="·  hold Space to compare  ·"
+                   Foreground="{StaticResource MutedBrush}" FontSize="11"
+                   Margin="0,0,10,0">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Setter Property="Visibility" Value="Collapsed" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding HasDocument}" Value="True">
+                  <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
         <TextBlock Text="{Binding Status}" Foreground="{StaticResource TextBrush}"
                    FontSize="11" TextTrimming="CharacterEllipsis" />
       </DockPanel>
@@ -72,14 +88,29 @@
             <Rectangle x:Name="CropShadeRight" Fill="#8C0B0D0F" IsHitTestVisible="False" />
             <Rectangle x:Name="CropFrame" Stroke="{StaticResource AccentBrush}"
                        StrokeThickness="1.5" StrokeDashArray="5 3" IsHitTestVisible="False" />
+            <Line x:Name="CropThirdV1" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Line x:Name="CropThirdV2" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Line x:Name="CropThirdH1" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Line x:Name="CropThirdH2" Stroke="#57FFFFFF" StrokeThickness="0.5"
+                  IsHitTestVisible="False" />
+            <Thumb x:Name="CropBody" Style="{StaticResource CropBody}"
+                   DragDelta="CropBody_Drag" />
+            <Border x:Name="CropBadge" Background="#CC0B0D0F" CornerRadius="3"
+                    Padding="7,3" IsHitTestVisible="False">
+              <TextBlock x:Name="CropBadgeText" Foreground="{StaticResource TextBrush}"
+                         FontSize="10" />
+            </Border>
             <Thumb x:Name="CropTopLeft" Tag="TopLeft" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNWSE" DragDelta="CropHandle_Drag" />
             <Thumb x:Name="CropTopRight" Tag="TopRight" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNESW" DragDelta="CropHandle_Drag" />
             <Thumb x:Name="CropBottomLeft" Tag="BottomLeft" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNESW" DragDelta="CropHandle_Drag" />
             <Thumb x:Name="CropBottomRight" Tag="BottomRight" Style="{StaticResource CropHandle}"
-                   DragDelta="CropHandle_Drag" />
+                   Cursor="SizeNWSE" DragDelta="CropHandle_Drag" />
           </Canvas>
           <StackPanel x:Name="CropBar" Visibility="Collapsed" Orientation="Horizontal"
                       HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,14">
@@ -95,6 +126,26 @@
               BorderBrush="{StaticResource LineBrush}" BorderThickness="1,0,0,0">
         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
           <StackPanel>
+            <TextBlock Text="HISTOGRAM" Style="{StaticResource SectionTitle}" Margin="0,0,0,6" />
+            <Border Height="92" Background="#101214" CornerRadius="4"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                    Padding="1">
+              <Viewbox Stretch="Fill">
+                <Canvas Width="256" Height="100">
+                  <Line X1="0" Y1="50" X2="256" Y2="50" Stroke="#1E242A"
+                        StrokeThickness="1" />
+                  <Polyline Points="{Binding HistogramRed}" Stroke="#E2564F"
+                            StrokeThickness="1.1" />
+                  <Polyline Points="{Binding HistogramGreen}" Stroke="#6FD08C"
+                            StrokeThickness="1.1" />
+                  <Polyline Points="{Binding HistogramBlue}" Stroke="#6FA8F0"
+                            StrokeThickness="1.1" />
+                  <Polyline Points="{Binding HistogramLuma}" Stroke="#DDE3E8"
+                            StrokeThickness="1.1" Opacity="0.65" />
+                </Canvas>
+              </Viewbox>
+            </Border>
+
             <TextBlock Text="LIGHT &amp; COLOR" Style="{StaticResource SectionTitle}" />
             <ItemsControl ItemsSource="{Binding Adjustments}">
               <ItemsControl.ItemTemplate>

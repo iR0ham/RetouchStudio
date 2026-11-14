@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using Line = System.Windows.Shapes.Line;
 using Microsoft.Win32;
 using RetouchStudio.Core.Project;
 
@@ -96,8 +97,32 @@ public partial class MainWindow : Window
                 EndCrop();
                 e.Handled = true;
                 break;
+            case Key.Space when _vm.HasDocument:
+                // Handled even while the original is still rendering, so the
+                // key cannot fall through and click a focused button.
+                _vm.IsPeekingOriginal = true;
+                e.Handled = true;
+                break;
         }
     }
+
+    /// <summary>
+    /// Releasing the compare key returns to the edit. Doing it on key-up (not
+    /// a toggle) keeps the "before" visible only while the key is held, as
+    /// macOS peeks with the space bar.
+    /// </summary>
+    private void Window_PreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space && _vm.IsPeekingOriginal)
+        {
+            _vm.IsPeekingOriginal = false;
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>A peek held while the window loses focus must not stick.</summary>
+    private void Window_Deactivated(object sender, EventArgs e) =>
+        _vm.IsPeekingOriginal = false;
 
     private async void OpenPhoto_Click(object sender, RoutedEventArgs e)
     {
@@ -355,6 +380,22 @@ public partial class MainWindow : Window
         UpdateCropOverlay();
     }
 
+    /// <summary>
+    /// Dragging inside the frame slides the crop: the size is kept and the
+    /// rectangle stays on the photo, as in the macOS overlay.
+    /// </summary>
+    private void CropBody_Drag(object sender, DragDeltaEventArgs e)
+    {
+        var fit = CurrentImageRect();
+        if (fit.Width <= 0 || fit.Height <= 0)
+        {
+            return;
+        }
+        _pendingCrop = CropGeometry.Move(_pendingCrop, e.HorizontalChange / fit.Width,
+                                         e.VerticalChange / fit.Height);
+        UpdateCropOverlay();
+    }
+
     /// <summary>Where the shown bitmap sits inside the overlay's canvas.</summary>
     private DisplayRect CurrentImageRect()
     {
@@ -394,6 +435,26 @@ public partial class MainWindow : Window
         Place(CropShadeLeft, 0, y, x, height);
         Place(CropShadeRight, x + width, y, Math.Max(0, canvasWidth - x - width), height);
 
+        Place(CropBody, x, y, width, height);
+
+        SetLine(CropThirdV1, x + width / 3, y, x + width / 3, y + height);
+        SetLine(CropThirdV2, x + width * 2 / 3, y, x + width * 2 / 3, y + height);
+        SetLine(CropThirdH1, x, y + height / 3, x + width, y + height / 3);
+        SetLine(CropThirdH2, x, y + height * 2 / 3, x + width, y + height * 2 / 3);
+
+        CropBadgeText.Text = _vm.CropPixelText(_pendingCrop);
+        CropBadge.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var badgeWidth = CropBadge.DesiredSize.Width;
+        var badgeHeight = CropBadge.DesiredSize.Height;
+        var badgeY = y + height + 8;
+        if (badgeY + badgeHeight > canvasHeight)
+        {
+            badgeY = Math.Max(0, y - badgeHeight - 8);
+        }
+        Canvas.SetLeft(CropBadge, Math.Clamp(x + (width - badgeWidth) / 2, 0,
+                                             Math.Max(0, canvasWidth - badgeWidth)));
+        Canvas.SetTop(CropBadge, badgeY);
+
         Centre(CropTopLeft, x, y);
         Centre(CropTopRight, x + width, y);
         Centre(CropBottomLeft, x, y + height);
@@ -407,6 +468,14 @@ public partial class MainWindow : Window
         element.Height = Math.Max(0, height);
         Canvas.SetLeft(element, x);
         Canvas.SetTop(element, y);
+    }
+
+    private static void SetLine(Line line, double x1, double y1, double x2, double y2)
+    {
+        line.X1 = x1;
+        line.Y1 = y1;
+        line.X2 = x2;
+        line.Y2 = y2;
     }
 
     private static void Centre(FrameworkElement element, double x, double y)
