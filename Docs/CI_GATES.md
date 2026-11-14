@@ -286,9 +286,11 @@ WINDOWS HOST TESTS: PASS (69 checks)
 
 The 14 new checks open the shared macOS fixtures
 (`Tests/Fixtures/ProjectV3/project-v3-full.retouch` and
-`ProjectV4/project-v4-full.retouch`), save them back and compare bytes, prove
-the unknown top-level key and required feature survive, and prove a v3 save
-stays v3 with unkeyed geometry. The unknown key is asserted on the save after a
+`ProjectV4/project-v4-full.retouch`), save them back, and compare the parsed
+JSON with the fixture (key order and whitespace are not part of the portable
+contract, so this is structural equality, not byte identity), prove the unknown
+top-level key and required feature survive, and prove a v3 save stays v3 with
+unkeyed geometry. The unknown key is asserted on the save after a
 reopen: the C ABI returns the typed record and carries unknown top-level keys
 in the write context, so checking the reopened record was a wrong assertion and
 failed the first run of this job before it was corrected in `d0673d8`.

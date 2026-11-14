@@ -128,8 +128,10 @@ first layout; both were fixed on the branch before this run.
 Since `d0673d8` the job also opens the fixture projects that the macOS app and
 the shared conformance suite use, and reports `PASS (69 checks)` on CI run
 43534410772. Those 14 checks are the interchange gate: the v3 and v4 fixtures
-open here, save back byte-identically, keep the unknown top-level key and the
-required feature, and a v3 file still saves as v3. The unknown key is asserted
+open here, save back to structurally identical JSON, keep the unknown top-level
+key and the required feature, and a v3 file still saves as v3. The comparison is
+over parsed JSON, not bytes: key order and whitespace are not part of the
+portable contract. The unknown key is asserted
 on the save *after* a reopen, because the C ABI hands the host the typed record
 and keeps unknown top-level keys in the write context; checking the record
 itself would have asserted the wrong thing, which is what the first run caught.
