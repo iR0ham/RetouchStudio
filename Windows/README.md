@@ -125,6 +125,15 @@ handle. The first runs of this job exposed a wrong assertion about the shared
 undo rule and a missing culture lookup that would have crashed the window on
 first layout; both were fixed on the branch before this run.
 
+Since `d0673d8` the job also opens the fixture projects that the macOS app and
+the shared conformance suite use, and reports `PASS (69 checks)` on CI run
+43534410772. Those 14 checks are the interchange gate: the v3 and v4 fixtures
+open here, save back byte-identically, keep the unknown top-level key and the
+required feature, and a v3 file still saves as v3. The unknown key is asserted
+on the save *after* a reopen, because the C ABI hands the host the typed record
+and keeps unknown top-level keys in the write context; checking the record
+itself would have asserted the wrong thing, which is what the first run caught.
+
 What this does not prove: pixel parity with the macOS renderer, HEIC, 16-bit
 output, metadata, packaging, an installer, or anything on a real desktop session.
 The run is also recorded in [`Docs/CI_GATES.md`](../Docs/CI_GATES.md#verified-runs).
