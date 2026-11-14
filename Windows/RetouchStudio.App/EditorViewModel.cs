@@ -117,6 +117,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private bool _keepSourceMetadata;
     private string _cropLabel = "Original";
     private bool _isCropping;
+    private CancellationTokenSource? _batchCancellation;
+    private bool _isBatchRunning;
 
     public EditorViewModel()
     {
@@ -215,6 +217,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         get => _status;
         private set => Set(ref _status, value);
+    }
+
+    /// <summary>True while a batch export is running; enables its Cancel button.</summary>
+    public bool IsBatchRunning
+    {
+        get => _isBatchRunning;
+        private set => Set(ref _isBatchRunning, value);
     }
 
     public string DimensionText
@@ -495,7 +504,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>
     /// Exports a selection with the open document's edits. Every file takes the
     /// single-export path and the results are reported one by one, so a file
-    /// that fails does not stop the rest.
+    /// that fails does not stop the rest. A cancel takes effect before the next
+    /// file starts, because the file in flight is already being written.
     /// </summary>
     public async Task<IReadOnlyList<BatchExportItem>> BatchExportAsync(
         IReadOnlyList<string> sources, string destinationDirectory)
@@ -509,17 +519,41 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             throw new InvalidOperationException("no photos were selected");
         }
         FlushCommit();
-        var results = await BatchExporter.ExportAsync(
-            _session.Document, _codec,
-            new BatchExportRequest(sources, destinationDirectory, _exportFormat,
-                                   _exportQuality, _exportLongEdge,
-                                   !_keepSourceMetadata));
-        var exported = results.Count(item => item.Error is null);
-        var folder = Path.GetFileName(destinationDirectory.TrimEnd(
-            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        Status = $"Exported {exported} of {results.Count} photos to {folder}.";
-        return results;
+        var total = sources.Count;
+        var done = 0;
+        using var cancellation = new CancellationTokenSource();
+        _batchCancellation = cancellation;
+        IsBatchRunning = true;
+        try
+        {
+            var results = await BatchExporter.ExportAsync(
+                _session.Document, _codec,
+                new BatchExportRequest(sources, destinationDirectory, _exportFormat,
+                                       _exportQuality, _exportLongEdge,
+                                       !_keepSourceMetadata),
+                new Progress<BatchExportItem>(_ =>
+                {
+                    done++;
+                    Status = $"Exported {done} of {total}…";
+                }),
+                cancellation.Token);
+            var exported = results.Count(item => item.Error is null);
+            var folder = Path.GetFileName(destinationDirectory.TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            Status = results.Count < total
+                ? $"Export cancelled after {results.Count} of {total} photos."
+                : $"Exported {exported} of {results.Count} photos to {folder}.";
+            return results;
+        }
+        finally
+        {
+            IsBatchRunning = false;
+            _batchCancellation = null;
+        }
     }
+
+    /// <summary>Stops a running batch before its next file.</summary>
+    public void CancelBatch() => _batchCancellation?.Cancel();
 
     public void Undo()
     {

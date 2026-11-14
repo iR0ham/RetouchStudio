@@ -1132,6 +1132,49 @@ internal static class Program
               mixed[0].Destination is null && mixed[0].Error is not null
               && mixed[1].Destination is not null && mixed[1].Error is null
               && File.Exists(mixed[1].Destination));
+
+        // Cancellation is cooperative between files: the one being written is
+        // finished, so no half-written result is left behind.
+        var cancelDir = Path.Combine(root, "batch-cancel");
+        using var cancelToken = new CancellationTokenSource();
+        var cancelling = new CancelAfterFirst(cancelToken);
+        var cancelled = BatchExporter.ExportAsync(session.Document, codec,
+            new BatchExportRequest(sources, cancelDir, "png", 1.0, 0, true),
+            cancelling, cancelToken.Token).GetAwaiter().GetResult();
+        Check("cancelling a batch stops after the file in flight",
+              cancelled.Count == 1 && cancelling.Count == 1);
+        Check("a cancelled batch keeps the file it finished",
+              cancelled[0].Error is null && cancelled[0].Destination is not null
+              && File.Exists(cancelled[0].Destination));
+        Check("a cancelled batch starts no later file",
+              !File.Exists(Path.Combine(cancelDir, "two-retouched.png"))
+              && !File.Exists(Path.Combine(cancelDir, "three-retouched.png")));
+
+        using var alreadyCancelled = new CancellationTokenSource();
+        alreadyCancelled.Cancel();
+        var preCancelledDir = Path.Combine(root, "batch-precancel");
+        var preCancelled = BatchExporter.ExportAsync(session.Document, codec,
+            new BatchExportRequest(sources, preCancelledDir, "png", 1.0, 0, true),
+            null, alreadyCancelled.Token).GetAwaiter().GetResult();
+        Check("a batch cancelled before it starts writes nothing",
+              preCancelled.Count == 0
+              && !Directory.EnumerateFiles(preCancelledDir).Any());
+    }
+
+    /// <summary>Cancels its batch as soon as the first file has been reported.</summary>
+    private sealed class CancelAfterFirst(CancellationTokenSource source)
+        : IProgress<BatchExportItem>
+    {
+        public int Count { get; private set; }
+
+        public void Report(BatchExportItem value)
+        {
+            Count++;
+            if (Count == 1)
+            {
+                source.Cancel();
+            }
+        }
     }
 
     private static string Sha256(string path) =>

@@ -21,6 +21,9 @@
         <Button Content="Save Project" Style="{StaticResource ToolButton}" Click="Save_Click" />
         <Button Content="Export" Style="{StaticResource ToolButton}" Click="Export_Click" />
         <Button Content="Batch Export…" Style="{StaticResource ToolButton}" Click="BatchExport_Click" />
+        <Button Content="Cancel Batch" Style="{StaticResource ToolButton}" Click="CancelBatch_Click"
+                IsEnabled="{Binding IsBatchRunning}"
+                ToolTip="Stop the batch before its next photo" />
         <Border Width="1" Background="{StaticResource LineBrush}" Margin="6,2,12,2" />
         <Button Content="Undo" Style="{StaticResource ToolButton}" Click="Undo_Click"
                 IsEnabled="{Binding CanUndo}" />
