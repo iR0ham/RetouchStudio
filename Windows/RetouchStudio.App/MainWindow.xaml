@@ -95,6 +95,26 @@
               BorderBrush="{StaticResource LineBrush}" BorderThickness="1,0,0,0">
         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,4,16,16">
           <StackPanel>
+            <TextBlock Text="HISTOGRAM" Style="{StaticResource SectionTitle}" Margin="0,0,0,6" />
+            <Border Height="92" Background="#101214" CornerRadius="4"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                    Padding="1">
+              <Viewbox Stretch="Fill">
+                <Canvas Width="256" Height="100">
+                  <Line X1="0" Y1="50" X2="256" Y2="50" Stroke="#1E242A"
+                        StrokeThickness="1" />
+                  <Polyline Points="{Binding HistogramRed}" Stroke="#E2564F"
+                            StrokeThickness="1.1" />
+                  <Polyline Points="{Binding HistogramGreen}" Stroke="#6FD08C"
+                            StrokeThickness="1.1" />
+                  <Polyline Points="{Binding HistogramBlue}" Stroke="#6FA8F0"
+                            StrokeThickness="1.1" />
+                  <Polyline Points="{Binding HistogramLuma}" Stroke="#DDE3E8"
+                            StrokeThickness="1.1" Opacity="0.65" />
+                </Canvas>
+              </Viewbox>
+            </Border>
+
             <TextBlock Text="LIGHT &amp; COLOR" Style="{StaticResource SectionTitle}" />
             <ItemsControl ItemsSource="{Binding Adjustments}">
               <ItemsControl.ItemTemplate>
