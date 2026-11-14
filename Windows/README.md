@@ -87,6 +87,11 @@ before upload, so a release carries one installer version, not two.
   coordinates that macOS reads, and a turn or a mirror moves the stored crop
   with the frame, as macOS does, so a crop chosen before the turn keeps the
   same region of the photo.
+- Compare: holding Space shows the photo as the decoder delivered it — EXIF
+  rotation applied, no crop, no turn, no adjustments — and releasing it returns
+  to the edit, the way the macOS canvas peeks with the space bar. The original
+  is rendered once per open at preview size, so the peek does not wait on a
+  render, and the window drops it when focus is lost so it cannot stick.
 - Export to JPEG, PNG or TIFF at a chosen long edge, following the `RenderPlan`
   that StudioCore returns: format, pixel size, 8/16-bit depth, alpha flattening
   and colour space are the shared decision, not the host's. A PNG or TIFF plan
@@ -116,6 +121,8 @@ before upload, so a release carries one installer version, not two.
   checks cover the placement, resize, slide and readout arithmetic
   (`CropGeometry`), and the smoke run proves the window loads, but no automated
   check moves a handle or drags the frame.
+- Compare is a whole-frame peek only: the macOS split handle that wipes
+  between original and edit is not part of this host.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
   16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
   encoder is 8-bit.

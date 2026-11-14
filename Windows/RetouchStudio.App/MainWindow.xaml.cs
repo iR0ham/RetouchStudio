@@ -97,8 +97,32 @@ public partial class MainWindow : Window
                 EndCrop();
                 e.Handled = true;
                 break;
+            case Key.Space when _vm.HasDocument:
+                // Handled even while the original is still rendering, so the
+                // key cannot fall through and click a focused button.
+                _vm.IsPeekingOriginal = true;
+                e.Handled = true;
+                break;
         }
     }
+
+    /// <summary>
+    /// Releasing the compare key returns to the edit. Doing it on key-up (not
+    /// a toggle) keeps the "before" visible only while the key is held, as
+    /// macOS peeks with the space bar.
+    /// </summary>
+    private void Window_PreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space && _vm.IsPeekingOriginal)
+        {
+            _vm.IsPeekingOriginal = false;
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>A peek held while the window loses focus must not stick.</summary>
+    private void Window_Deactivated(object sender, EventArgs e) =>
+        _vm.IsPeekingOriginal = false;
 
     private async void OpenPhoto_Click(object sender, RoutedEventArgs e)
     {
