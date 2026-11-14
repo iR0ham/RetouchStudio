@@ -35,11 +35,11 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard]");
+                "[golden|recovery|guard|project]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
-        if (mode is not ("golden" or "recovery" or "guard"))
+        if (mode is not ("golden" or "recovery" or "guard" or "project"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -88,6 +88,10 @@ internal static class Program
             else if (mode == "guard")
             {
                 RunGuard(process, photo, output);
+            }
+            else if (mode == "project")
+            {
+                RunProject(process, photo, output);
             }
             else
             {
@@ -309,6 +313,106 @@ internal static class Program
             throw new InvalidOperationException($"the app exited with {process.ExitCode}");
         }
         Ok("the app closed cleanly after the guard prompt");
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Saves the edited photo as a project through its dialog, then proves the
+    /// Undo button reaches the same history the headless checks measure.
+    /// </summary>
+    private static void RunProject(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+
+        var open = FindButton(window, "Open Photo")
+            ?? throw new InvalidOperationException("the Open Photo button is missing");
+        Invoke(open);
+        var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        SetFileName(openDialog, photo);
+        PressDefaultButton(openDialog, "Open");
+        var photoName = Path.GetFileName(photo);
+        if (!WaitFor(() => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+                     TimeSpan.FromSeconds(90)))
+        {
+            throw new InvalidOperationException(
+                $"the photo did not open; the title is '{window.Current.Name}'");
+        }
+        Ok($"the photo opened: '{window.Current.Name}'");
+
+        var slider = FindSlider(window, "Exposure")
+            ?? throw new InvalidOperationException("the Exposure slider is missing");
+        SetRange(slider, 40);
+        if (!WaitFor(() => Math.Abs(SliderValue(slider) - 40) < 0.5, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException("the Exposure slider did not reach 40");
+        }
+
+        var save = FindButton(window, "Save Project")
+            ?? throw new InvalidOperationException("the Save Project button is missing");
+        Invoke(save);
+        var dialogHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Save Project click opened no window");
+        var saveDialog = AutomationElement.FromHandle(dialogHandle);
+        var project = Path.ChangeExtension(output, ".retouch");
+        var edit = SetFileName(saveDialog, project);
+        if (!WaitFor(() => ReadValue(edit) == project, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the file-name box holds '{ReadValue(edit)}' instead of '{project}'");
+        }
+        CommitFileName(edit);
+        if (!WaitFor(() => !IsWindowVisible(dialogHandle), TimeSpan.FromSeconds(30)))
+        {
+            PressDefaultButton(saveDialog, "Save", "Open");
+            if (!WaitFor(() => !IsWindowVisible(dialogHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the Save Project dialog stayed open; " + DescribeWindow(saveDialog));
+            }
+        }
+        if (!WaitFor(() => File.Exists(project) && new FileInfo(project).Length > 0,
+                     TimeSpan.FromSeconds(60)))
+        {
+            throw new InvalidOperationException(
+                "Save Project wrote no file; the status says " + DescribeTexts(window));
+        }
+        Ok($"Save Project wrote {new FileInfo(project).Length} bytes through its dialog");
+
+        if (!WaitFor(() => !window.Current.Name.Contains('•'), TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the title still shows unsaved changes: '{window.Current.Name}'");
+        }
+        Ok("the saved title shows no unsaved marker");
+
+        var undo = FindButton(window, "Undo")
+            ?? throw new InvalidOperationException("the Undo button is missing");
+        Invoke(undo);
+        if (!WaitFor(() => Math.Abs(SliderValue(slider)) < 0.5, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"Undo left Exposure at {SliderValue(slider)}");
+        }
+        Ok("Undo returned Exposure to 0 through the UI");
+
+        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
+        close.Close();
+        if (!process.WaitForExit(30_000))
+        {
+            DismissClosePrompt(process.Id);
+            if (!process.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the app did not close");
+            }
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"the app exited with {process.ExitCode}");
+        }
+        Ok("the app closed cleanly after the project checks");
         Console.WriteLine("UI HOST TESTS: PASS");
     }
 
@@ -694,6 +798,12 @@ internal static class Program
         ((RangeValuePattern)element.GetCurrentPattern(RangeValuePattern.Pattern))
             .SetValue(value);
     }
+
+    private static double SliderValue(AutomationElement element) =>
+        element.TryGetCurrentPattern(RangeValuePattern.Pattern, out var pattern)
+        && pattern is RangeValuePattern range
+            ? range.Current.Value
+            : double.NaN;
 
     /// <summary>
     /// Types an absolute path into the file-name edit one character at a time.
