@@ -210,6 +210,7 @@ internal static class Program
         var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
             ?? throw new InvalidOperationException(
                 "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
         Ok("the app opened a window UIA can see");
 
         var open = FindButton(window, "Open Photo")
@@ -265,18 +266,31 @@ internal static class Program
         var export = FindButton(window, "Export")
             ?? throw new InvalidOperationException("the Export button is missing");
         Invoke(export);
-        var saveDialog = WaitWindow(process.Id, "Export Photo", TimeSpan.FromSeconds(30))
-            ?? throw new InvalidOperationException("the Export dialog never appeared");
-        Ok("Export opened its dialog");
+        // The dialog is the new window the click opened. Its caption is not
+        // asserted: on this host the common dialog carries the app title, so
+        // the evidence is the window itself plus the export it writes.
+        var dialogHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Export click opened no window");
+        var saveDialog = AutomationElement.FromHandle(dialogHandle);
+        var caption = saveDialog.Current.Name;
+        if (FindFirstEdit(saveDialog) is null)
+        {
+            throw new InvalidOperationException(
+                $"the Export window '{caption}' has no file-name box: " +
+                DescribeWindow(saveDialog));
+        }
+        Ok($"Export opened its window '{caption}'");
 
         SetFileName(saveDialog, output);
-        PressDefaultButton(saveDialog, "Save");
+        PressDefaultButton(saveDialog, "Save", "Open");
         var wrote = WaitFor(
             () => File.Exists(output) && new FileInfo(output).Length > 1024,
             TimeSpan.FromMinutes(2));
         if (!wrote)
         {
-            throw new InvalidOperationException("the export never wrote a file");
+            throw new InvalidOperationException(
+                "the export never wrote a file; the app's windows are " +
+                DescribeAppWindows(process.Id));
         }
         Ok($"the export wrote {new FileInfo(output).Length} bytes");
 
@@ -419,6 +433,55 @@ internal static class Program
         return handles;
     }
 
+    /// <summary>
+    /// The first visible top-level window of the app other than the one named.
+    /// A click that opens a dialog has to produce such a window; the caption is
+    /// the dialog's own choice and is reported, not asserted.
+    /// </summary>
+    private static IntPtr? WaitNewWindow(int processId, IntPtr except, TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var handle in VisibleWindows(processId))
+            {
+                if (handle != except)
+                {
+                    return handle;
+                }
+            }
+            Thread.Sleep(250);
+        }
+        return null;
+    }
+
+    private static string DescribeWindow(AutomationElement window)
+    {
+        var text = new StringBuilder();
+        foreach (AutomationElement item in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            text.Append('\'').Append(item.Current.Name).Append("' ");
+        }
+        return $"texts are {text}".TrimEnd();
+    }
+
+    private static string DescribeAppWindows(int processId)
+    {
+        var described = new List<string>();
+        foreach (var handle in VisibleWindows(processId))
+        {
+            var text = new StringBuilder(256);
+            GetWindowTextW(handle, text, text.Capacity);
+            var name = new StringBuilder(128);
+            GetClassNameW(handle, name, name.Capacity);
+            described.Add($"'{text}' [{name}]");
+        }
+        return string.Join(", ", described);
+    }
+
     private static bool WaitFor(Func<bool> probe, TimeSpan patience)
     {
         var deadline = DateTime.UtcNow + patience;
@@ -504,47 +567,46 @@ internal static class Program
     /// </summary>
     private static void SetFileName(AutomationElement dialog, string path)
     {
+        var edit = FindFirstEdit(dialog)
+            ?? throw new InvalidOperationException("the dialog has no file-name box");
+        ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).SetValue(path);
+    }
+
+    /// <summary>The file-name box of a standard dialog, found by id, label, then order.</summary>
+    private static AutomationElement? FindFirstEdit(AutomationElement dialog)
+    {
         var edit = dialog.FindFirst(
             TreeScope.Descendants,
             new AndCondition(
                 new PropertyCondition(AutomationElement.ControlTypeProperty,
                                       ControlType.Edit),
                 new PropertyCondition(AutomationElement.AutomationIdProperty, "1148")));
-        if (edit is null)
+        if (edit is not null)
         {
-            // The label carries the colon in some builds and not in others.
-            foreach (AutomationElement candidate in dialog.FindAll(
-                         TreeScope.Descendants,
-                         new PropertyCondition(AutomationElement.ControlTypeProperty,
-                                               ControlType.Edit)))
+            return edit;
+        }
+        // The label carries the colon in some builds and not in others.
+        foreach (AutomationElement candidate in dialog.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Edit)))
+        {
+            if (candidate.Current.Name.StartsWith("File name",
+                                                 StringComparison.OrdinalIgnoreCase))
             {
-                if (candidate.Current.Name.StartsWith("File name",
-                                                     StringComparison.OrdinalIgnoreCase))
-                {
-                    edit = candidate;
-                    break;
-                }
+                return candidate;
             }
         }
-        if (edit is null)
-        {
-            edit = dialog.FindFirst(
-                TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.ControlTypeProperty,
-                                      ControlType.Edit));
-        }
-        if (edit is null)
-        {
-            throw new InvalidOperationException("the dialog has no file-name box");
-        }
-        ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).SetValue(path);
+        return dialog.FindFirst(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
     }
 
     /// <summary>
     /// The default button of the standard dialog is button 1; the name is the
     /// fallback, with the accelerator ampersand removed.
     /// </summary>
-    private static void PressDefaultButton(AutomationElement dialog, string name)
+    private static void PressDefaultButton(AutomationElement dialog, params string[] names)
     {
         var button = dialog.FindFirst(
             TreeScope.Descendants,
@@ -552,11 +614,18 @@ internal static class Program
                 new PropertyCondition(AutomationElement.ControlTypeProperty,
                                       ControlType.Button),
                 new PropertyCondition(AutomationElement.AutomationIdProperty, "1")));
-        button ??= FindButton(dialog, name);
+        foreach (var name in names)
+        {
+            if (button is not null)
+            {
+                break;
+            }
+            button = FindButton(dialog, name);
+        }
         if (button is null)
         {
             throw new InvalidOperationException(
-                $"the dialog has no '{name}' button");
+                $"the dialog has no '{string.Join("' or '", names)}' button");
         }
         Invoke(button);
     }
@@ -566,6 +635,9 @@ internal static class Program
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowTextW(IntPtr window, StringBuilder text, int count);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassNameW(IntPtr window, StringBuilder name, int count);
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
