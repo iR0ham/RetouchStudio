@@ -47,6 +47,7 @@ internal static class Program
             FormatProbes(root);
             Metadata(root);
             Carry(root);
+            CarryTransforms(root);
             Colour(root);
             Interchange(root);
             PerformanceAndStress(root);
@@ -1732,6 +1733,91 @@ internal static class Program
         var brokenSize = codec.ReadSizeAsync(brokenOut).GetAwaiter().GetResult();
         Check("an invalid EXIF block is skipped without failing the export",
               brokenSize.Width == 8 && brokenSize.Height == 6);
+    }
+
+    /// <summary>
+    /// The carried metadata describes the pixels the writer produced, not the
+    /// photo that was opened. A crop, a quarter turn and a long-edge resize each
+    /// change the frame through the shipping export path; every transformed
+    /// export must stay upright, name the exported frame and leave no camera
+    /// thumbnail.
+    /// </summary>
+    private static void CarryTransforms(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(40, 30);
+        for (var y = 0; y < 30; y++)
+        {
+            for (var x = 0; x < 40; x++)
+            {
+                Put(image, x, y, r: (byte)(x * 6), g: (byte)(y * 8), b: 120);
+            }
+        }
+
+        var source = Path.Combine(root, "transform-source.jpg");
+        codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
+        MetadataCarry.WriteJpeg(
+            source,
+            BuildExif(orientation: 6, width: 40, height: 30),
+            Encoding.UTF8.GetBytes(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF>"
+                + "<rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+                + "xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" "
+                + "dc:title=\"Transform test\" tiff:Orientation=\"6\"/>"
+                + "</rdf:RDF></x:xmpmeta>"));
+
+        // The source decodes upright as 30x40, so a half-size crop is exactly
+        // 15x20 and no rounding can hide behind it.
+        using (var session = ProjectSession.Create(source))
+        {
+            session.Document.Crop = new CropValue(0.5, 0.5, 0.5, 0.5);
+            var path = Path.Combine(root, "transform-cropped.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 0,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            var xmp = MetadataCarry.ReadXmp(path);
+            Check("a crop exports the cropped frame", size.Width == 15 && size.Height == 20);
+            Check("a cropped export names the cropped frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a cropped export is upright", TiffNumber(exif, 0x0112) == 1);
+            Check("a cropped export keeps the XMP title",
+                  xmp is not null && Encoding.UTF8.GetString(xmp).Contains("Transform test"));
+            Check("a cropped export leaves no camera thumbnail",
+                  (TiffNumber(exif, 0x0201) ?? 0) == 0);
+        }
+
+        using (var session = ProjectSession.Create(source))
+        {
+            session.Document.Orientation = session.Document.Orientation.WithQuarterTurn(1);
+            var path = Path.Combine(root, "transform-turned.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 0,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            Check("a quarter turn exports the turned frame",
+                  size.Width == 40 && size.Height == 30);
+            Check("a turned export names the turned frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a turned export is upright", TiffNumber(exif, 0x0112) == 1);
+        }
+
+        using (var session = ProjectSession.Create(source))
+        {
+            var path = Path.Combine(root, "transform-resized.jpg");
+            ExportRunner.ExportAsync(session, codec, path, "jpeg", 0.9, 20,
+                                     stripPrivacyMetadata: false).GetAwaiter().GetResult();
+            var size = codec.ReadSizeAsync(path).GetAwaiter().GetResult();
+            var exif = MetadataCarry.ReadExif(path);
+            Check("a long-edge resize exports the resized frame",
+                  size.Width == 15 && size.Height == 20);
+            Check("a resized export names the resized frame in EXIF",
+                  TiffNumber(exif, 0xA002) == size.Width
+                  && TiffNumber(exif, 0xA003) == size.Height);
+            Check("a resized export is upright", TiffNumber(exif, 0x0112) == 1);
+        }
     }
 
     private static byte[] BuildExif(ushort orientation, int width, int height)
