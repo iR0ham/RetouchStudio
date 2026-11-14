@@ -49,7 +49,7 @@
       </Grid.ColumnDefinitions>
 
       <Border Grid.Column="0" Background="#0E1012" Margin="10" CornerRadius="6">
-        <Grid>
+        <Grid x:Name="PreviewHost" ClipToBounds="True">
           <TextBlock Text="Open a photo, or a project made on either platform."
                      Foreground="{StaticResource MutedBrush}" FontSize="13"
                      HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -64,7 +64,30 @@
               </Style>
             </TextBlock.Style>
           </TextBlock>
-          <Image Source="{Binding Preview}" Stretch="Uniform" Margin="18" />
+          <Image x:Name="PreviewImage" Source="{Binding Preview}" Stretch="Uniform" Margin="18" />
+          <Canvas x:Name="CropOverlay" Visibility="Collapsed" ClipToBounds="True">
+            <Rectangle x:Name="CropShadeTop" Fill="#8C0B0D0F" IsHitTestVisible="False" />
+            <Rectangle x:Name="CropShadeBottom" Fill="#8C0B0D0F" IsHitTestVisible="False" />
+            <Rectangle x:Name="CropShadeLeft" Fill="#8C0B0D0F" IsHitTestVisible="False" />
+            <Rectangle x:Name="CropShadeRight" Fill="#8C0B0D0F" IsHitTestVisible="False" />
+            <Rectangle x:Name="CropFrame" Stroke="{StaticResource AccentBrush}"
+                       StrokeThickness="1.5" StrokeDashArray="5 3" IsHitTestVisible="False" />
+            <Thumb x:Name="CropTopLeft" Tag="TopLeft" Style="{StaticResource CropHandle}"
+                   DragDelta="CropHandle_Drag" />
+            <Thumb x:Name="CropTopRight" Tag="TopRight" Style="{StaticResource CropHandle}"
+                   DragDelta="CropHandle_Drag" />
+            <Thumb x:Name="CropBottomLeft" Tag="BottomLeft" Style="{StaticResource CropHandle}"
+                   DragDelta="CropHandle_Drag" />
+            <Thumb x:Name="CropBottomRight" Tag="BottomRight" Style="{StaticResource CropHandle}"
+                   DragDelta="CropHandle_Drag" />
+          </Canvas>
+          <StackPanel x:Name="CropBar" Visibility="Collapsed" Orientation="Horizontal"
+                      HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,14">
+            <Button Content="Apply crop" Style="{StaticResource PrimaryButton}"
+                    Click="CropApply_Click" />
+            <Button Content="Cancel" Style="{StaticResource ToolButton}"
+                    Click="CropCancel_Click" />
+          </StackPanel>
         </Grid>
       </Border>
 
@@ -114,6 +137,8 @@
                       Margin="0,0,6,6" Click="Crop_Click" />
               <Button Content="16:9" Tag="16:9" Style="{StaticResource ToolButton}"
                       Margin="0,0,6,6" Click="Crop_Click" />
+              <Button Content="Custom…" Style="{StaticResource ToolButton}"
+                      Margin="0,0,6,6" Click="CropCustom_Click" />
             </WrapPanel>
             <TextBlock Text="{Binding CropLabel}" Foreground="{StaticResource MutedBrush}"
                        FontSize="11" Margin="0,2,0,0" />
