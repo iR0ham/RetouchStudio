@@ -35,11 +35,11 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery]");
+                "[golden|recovery|guard]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
-        if (mode is not ("golden" or "recovery"))
+        if (mode is not ("golden" or "recovery" or "guard"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -84,6 +84,10 @@ internal static class Program
             if (mode == "recovery")
             {
                 RunRecovery(process, photo);
+            }
+            else if (mode == "guard")
+            {
+                RunGuard(process, photo, output);
             }
             else
             {
@@ -202,6 +206,109 @@ internal static class Program
             throw new InvalidOperationException($"the app exited with {process.ExitCode}");
         }
         Ok("the app closed cleanly after a recovery");
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Opens a project whose edits this host cannot render and proves Export
+    /// names them before writing anything. "No" must leave the photo unwritten
+    /// and the document open, which is the whole point of the guard.
+    /// </summary>
+    private static void RunGuard(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+
+        var project = Path.ChangeExtension(output, ".retouch");
+        // The project is written by the same codec the app opens, so the
+        // seeded file cannot differ from a project the host itself saved.
+        using (var session = ProjectSession.Create(photo))
+        {
+            session.Document.SetAdjustment("smooth", 30);
+            session.Commit();
+            session.Save(project);
+        }
+        Ok("seeded a project carrying skin retouching");
+
+        var open = FindButton(window, "Open Project")
+            ?? throw new InvalidOperationException("the Open Project button is missing");
+        Invoke(open);
+        var dialogHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Open Project click opened no window");
+        var openDialog = AutomationElement.FromHandle(dialogHandle);
+        var openEdit = SetFileName(openDialog, project);
+        if (!WaitFor(() => ReadValue(openEdit) == project, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the file-name box holds '{ReadValue(openEdit)}' instead of '{project}'");
+        }
+        CommitFileName(openEdit);
+        if (!WaitFor(() => !IsWindowVisible(dialogHandle), TimeSpan.FromSeconds(30)))
+        {
+            PressDefaultButton(openDialog, "Open");
+            if (!WaitFor(() => !IsWindowVisible(dialogHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the Open Project dialog stayed open; " + DescribeWindow(openDialog));
+            }
+        }
+        var photoName = Path.GetFileName(photo);
+        if (!WaitFor(() => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+                     TimeSpan.FromSeconds(90)))
+        {
+            throw new InvalidOperationException(
+                $"the project did not open; the title is '{window.Current.Name}'; " +
+                $"the windows are {DescribeAppWindows(process.Id)}; the texts are " +
+                DescribeTexts(window));
+        }
+        Ok($"the project opened with its photo: '{window.Current.Name}'");
+
+        var export = FindButton(window, "Export")
+            ?? throw new InvalidOperationException("the Export button is missing");
+        Invoke(export);
+        var promptHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Export click opened no window");
+        var prompt = AutomationElement.FromHandle(promptHandle);
+        var texts = AllTexts(prompt);
+        if (!texts.Contains("cannot render", StringComparison.Ordinal)
+            || !texts.Contains("skin retouching", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"the Export click did not raise the unsupported-edit prompt; " +
+                $"'{prompt.Current.Name}' says '{texts}'");
+        }
+        Ok("Export named the skin retouching this host cannot render");
+
+        var no = FindButton(prompt, "No")
+            ?? throw new InvalidOperationException("the prompt has no No button");
+        Invoke(no);
+        if (!WaitFor(() => !IsWindowVisible(promptHandle), TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException("the unsupported-edit prompt stayed open after No");
+        }
+        Thread.Sleep(1500);
+        if (File.Exists(output))
+        {
+            throw new InvalidOperationException("the export wrote a file after No");
+        }
+        Ok("No dismissed the prompt and wrote nothing");
+
+        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
+        close.Close();
+        if (!process.WaitForExit(30_000))
+        {
+            DismissClosePrompt(process.Id);
+            if (!process.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the app did not close");
+            }
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"the app exited with {process.ExitCode}");
+        }
+        Ok("the app closed cleanly after the guard prompt");
         Console.WriteLine("UI HOST TESTS: PASS");
     }
 
@@ -733,6 +840,14 @@ internal static class Program
         }
         return texts.Count == 0 ? "nothing" : string.Join(" | ", texts);
     }
+
+    /// <summary>Every text the window shows, however long — a prompt's body included.</summary>
+    private static string AllTexts(AutomationElement window) =>
+        string.Join(" ", window.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text))
+            .Cast<AutomationElement>()
+            .Select(item => item.Current.Name));
 
     private static string AppDirectory(Process process)
     {

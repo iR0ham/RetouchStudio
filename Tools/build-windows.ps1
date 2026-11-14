@@ -245,6 +245,12 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiRecoveryOutput recovery
     Assert-ExitCode 'UI recovery tests'
+
+    # Export must name the edits this host cannot render; "No" writes nothing.
+    $uiGuardOutput = Join-Path $uiTemp 'retouchstudio-ui-guard.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiGuardOutput guard
+    Assert-ExitCode 'UI guard tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted
