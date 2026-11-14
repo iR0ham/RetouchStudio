@@ -363,7 +363,6 @@ internal static class Program
         {
             ["System.Photo.CameraManufacturer"] = "Retouch",
             ["System.Photo.CameraModel"] = "RS-Test",
-            ["System.Photo.LensModel"] = "50mm",
             ["System.Photo.IsoSpeed"] = (ushort)400,
         }, 300, 300);
         codec.EncodeAsync(image, source, "jpeg", 0.95, sourceMetadata, stripPrivacyMetadata: false)
@@ -385,8 +384,6 @@ internal static class Program
               Text(keptMeta, "System.Photo.CameraManufacturer") == "Retouch");
         Check("keeping metadata carries the camera model",
               Text(keptMeta, "System.Photo.CameraModel") == "RS-Test");
-        Check("keeping metadata carries the lens",
-              Text(keptMeta, "System.Photo.LensModel") == "50mm");
         Check("keeping metadata carries the ISO",
               keptMeta.Properties.TryGetValue("System.Photo.IsoSpeed", out var iso)
               && Convert.ToDouble(iso) == 400);

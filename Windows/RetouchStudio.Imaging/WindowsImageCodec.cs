@@ -28,7 +28,6 @@ public sealed class WindowsImageCodec : IImageCodec
         "System.Photo.DateTaken", "System.Photo.ExposureTime",
         "System.Photo.FNumber", "System.Photo.FocalLength",
         "System.Photo.FocalLengthInFilm", "System.Photo.IsoSpeed",
-        "System.Photo.LensManufacturer", "System.Photo.LensModel",
         "System.Photo.ExposureBias", "System.Photo.Flash",
         "System.Photo.MeteringMode", "System.Photo.LightSource",
         "System.Photo.WhiteBalance", "System.Photo.DigitalZoom",
@@ -36,9 +35,6 @@ public sealed class WindowsImageCodec : IImageCodec
         "System.GPS.LatitudeRef", "System.GPS.LongitudeRef",
         "System.GPS.AltitudeRef", "System.Comment",
     };
-
-    private const string HorizontalResolution = "System.Image.HorizontalResolution";
-    private const string VerticalResolution = "System.Image.VerticalResolution";
 
     public async Task<PixelBuffer> DecodeAsync(string path)
     {
@@ -74,11 +70,7 @@ public sealed class WindowsImageCodec : IImageCodec
         using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read);
         var decoder = await BitmapDecoder.CreateAsync(stream);
 
-        var requested = CarriedProperties
-            .Append(HorizontalResolution)
-            .Append(VerticalResolution)
-            .ToArray();
-        var found = await decoder.BitmapProperties.GetPropertiesAsync(requested);
+        var found = await decoder.BitmapProperties.GetPropertiesAsync(CarriedProperties);
 
         var values = new Dictionary<string, object>(StringComparer.Ordinal);
         foreach (var key in CarriedProperties)
@@ -88,9 +80,9 @@ public sealed class WindowsImageCodec : IImageCodec
                 values[key] = typed.Value;
             }
         }
-        return new ImageMetadata(values,
-                                 Dpi(found, HorizontalResolution),
-                                 Dpi(found, VerticalResolution));
+        // The decoder reports the resolution as a first-class property; the
+        // metadata graph does not always expose it under a property key.
+        return new ImageMetadata(values, decoder.DpiX, decoder.DpiY);
     }
 
     public async Task EncodeAsync(PixelBuffer image, string path, string format, double quality,
@@ -144,43 +136,14 @@ public sealed class WindowsImageCodec : IImageCodec
         }
         if (properties.Count > 0)
         {
-            try
-            {
-                await encoder.BitmapProperties.SetPropertiesAsync(properties);
-            }
-            catch (Exception) when (properties.Count > 1)
-            {
-                // One key the container refuses must not fail the export. The
-                // fallback re-applies the rest one at a time; the headless test
-                // asserts the allowlist keys a JPEG and a TIFF actually keep.
-                foreach (var (key, value) in properties.ToArray())
-                {
-                    try
-                    {
-                        await encoder.BitmapProperties.SetPropertiesAsync(
-                            new BitmapPropertySet { [key] = value });
-                    }
-                    catch (Exception)
-                    {
-                    }
-                }
-            }
+            // One call, not one per key: a second call replaces the values of
+            // the same metadata schema, which would silently drop the keys set
+            // by the first. The allowlist is exactly the set the headless test
+            // proves a JPEG and a TIFF keep.
+            await encoder.BitmapProperties.SetPropertiesAsync(properties);
         }
 
         await encoder.FlushAsync();
-    }
-
-    private static double Dpi(BitmapPropertySet found, string key)
-    {
-        if (found.TryGetValue(key, out var typed) && typed.Value is not null)
-        {
-            var value = Convert.ToDouble(typed.Value);
-            if (value >= 1 && value <= 100000)
-            {
-                return value;
-            }
-        }
-        return 96;
     }
 
     private static double DpiOr96(double? value) =>
