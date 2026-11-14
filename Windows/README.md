@@ -53,7 +53,12 @@ installer contains exactly what was built. `msiexec /i` with `/qn` installs and
 signing needs a code-signing certificate this project does not have.
 
 There is no updater and no auto-update feed: a new version is a new MSI that
-replaces the old one through the same `UpgradeCode`.
+replaces the old one through the same `UpgradeCode`. The release workflow
+(`.github/workflows/release.yml`) builds the two per-arch DMGs and this zip and
+MSI on a version tag and publishes them; a manual dispatch builds the same
+artifacts and uploads them to the run without publishing, which is how the
+whole path was verified on run 43598113385. The upgrade-test MSI is deleted
+before upload, so a release carries one installer version, not two.
 
 ## What it does
 
