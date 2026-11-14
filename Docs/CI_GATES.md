@@ -167,15 +167,20 @@ The Windows gap and the intended implementation are analysed in
 ## Windows application job
 
 `windows-app` in `ci.yml` installs Swift 6.4.2 and the .NET 10 SDK on
-`windows-2025` and runs `Tools/build-windows.ps1`, which builds the
+`windows-2025` and runs `Tools/build-windows.ps1 -RequireMsi`, which builds the
 Foundation-only core, links it into `studioscore_core.dll` with the 13-entry
-`.def` export list, publishes the WPF host self-contained for x64, runs the 69
-headless host checks against the real DLL and the real WIC codec, and starts the
-published app until the loaded window writes its own marker file. On failure it
-uploads the published folder (`windows-app-publish`), so a broken build can be
-inspected. The job is not a required check: it is a light editor, and a required
-Windows context would block `main` on a runner image that is still proving
-itself.
+`.def` export list, publishes the WPF host self-contained for x64, runs the 108
+headless host checks against the real DLL and the real WIC codec, starts the
+published app until the loaded window writes its own marker file, zips the
+folder and starts the extracted copy, then builds an MSI with WiX v3, installs
+it silently, starts the copy in `Program Files`, and uninstalls it with the
+folder, shortcut and Programs-and-Features entry gone. `-RequireMsi` makes a
+missing WiX toolset fail the job instead of silently skipping the installer.
+The job uploads `build/windows/dist/**` so the zip and the MSI can be
+inspected. On failure it uploads the published folder (`windows-app-publish`),
+so a broken build can be inspected. The job is not a required check: it is a
+light editor, and a required Windows context would block `main` on a runner
+image that is still proving itself.
 
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
@@ -194,6 +199,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `d0673d8` (PR #15, push and pull request) | `CI` run 43534410772 | five jobs green; `Windows App` reports `PASS (69 checks)` including the interchange gate |
 | 2026-11-14 | `2c50802` (PR #15, documentation only) | `CI` run 43535723386 | five jobs green on the PR head |
 | 2026-11-14 | `20d3a8c` (PR #21, Windows 16-bit export) | `CI` run 43557855311 | five jobs green; `Windows App` reports `PASS (108 checks)`, including 16-bit PNG/TIFF depth read from the file headers and sample-exact round trips |
+| 2026-11-14 | `2488ae4` (PR #22, Windows MSI) | `CI` run 43561151628 | five jobs green; `Windows App` builds a 398 MB MSI, installs it silently to `Program Files\Retouch Studio`, starts the installed copy into a loaded window, and uninstalls with the folder, shortcut and Programs-and-Features entry gone |
 
 PR #13 was merged with a normal merge commit after every required context and
 the non-required `Windows StudioCore` job reported success on the final head.

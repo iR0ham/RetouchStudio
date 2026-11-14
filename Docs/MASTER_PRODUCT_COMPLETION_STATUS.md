@@ -2,9 +2,10 @@
 
 **Basis:** `main` at PR #20 (`1d2673c`, merged 2026-11-14). PR #21 (16-bit
 export) is verified by CI run
-[43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311),
-green across all five jobs. The original audit ran on `1d32842` (CI run
-43531081160, also green).
+[43557855311](https://github.com/iR0ham/RetouchStudio/actions/runs/43557855311)
+and merged as `18d4e46`; PR #22 (Windows MSI) is verified by run
+[43561151628](https://github.com/iR0ham/RetouchStudio/actions/runs/43561151628).
+The original audit ran on `1d32842` (CI run 43531081160, also green).
 **Updated:** 2026-11-14.
 
 This is the single progress and evidence record for the cross-platform
@@ -59,8 +60,9 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | AI runtime install | `AIRuntime` | disabled (`package == nil`) | ABSENT | runtime v2 suites | BLOCKED — no approved package |
 | Signed update feed | `UpdatePolicy` | prepared, no feed shipped | ABSENT | update tests | IMPLEMENTED, not published |
 | macOS packaging + DMG | — | per-arch, ad-hoc signed | — | `Tools/make-dmg.sh` | VERIFIED locally; clean-machine install NOT VERIFIED |
-| Windows packaging | — | — | `Tools/package-windows.ps1` | none | NOT VERIFIED |
-| Windows installer/updater | — | — | ABSENT | — | NOT STARTED |
+| Windows packaging | — | — | zip + SHA-256, built and re-checked on CI | zip manifest check, extracted-app smoke | VERIFIED |
+| Windows installer | — | — | WiX v3 MSI, per-machine, Start menu, fixed `UpgradeCode` | silent install → window from `Program Files` → uninstall, CI run 43561151628 | VERIFIED per host; install over a previous version NOT VERIFIED |
+| Windows updater | — | — | ABSENT | — | NOT STARTED |
 | Notarization | — | pipeline ready | — | — | BLOCKED — no Apple Developer membership |
 | CI matrix | — | 3 required + Windows core | `windows-2025` app job | §5 | VERIFIED |
 
@@ -75,9 +77,9 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | 4 | W5 AI runtime and model management | BLOCKED | Runtime installer disabled by design (`AIRuntime.package` nil); model weights and official package unavailable |
 | 5 | Performance, stability, reliability | PARTIAL | macOS benchmarks recorded in `Docs/PERFORMANCE_BENCHMARKS.md`; no Windows benchmark; no stress suite |
 | 6 | macOS product completion | PARTIAL | Native app builds, self-tests, corpus and engine suites pass; signing is ad-hoc and notarization is BLOCKED |
-| 7 | Windows product completion | PARTIAL | Light native editor builds, runs 108 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export; no installer, face analysis, AI, batch or packaging proof |
+| 7 | Windows product completion | PARTIAL | Light native editor builds, runs 108 headless checks and opens a window on `windows-2025`, with verified 16-bit PNG/TIFF export and an MSI that installs into `Program Files` and uninstalls cleanly on CI; no updater, face analysis, AI or batch |
 | 8 | Cross-platform project interchange | VERIFIED | macOS v3 and v4 fixtures open on Windows, round-trip with structurally identical JSON, keep the unknown key and required feature, and a v3 save stays v3 (CI run 43534410772) |
-| 9 | Distribution, installers, updates | NOT STARTED | macOS DMGs exist; Windows installer absent; no update feed published |
+| 9 | Distribution, installers, updates | PARTIAL | macOS DMGs exist; Windows ships a zip and an unsigned per-machine MSI whose silent install, start from `Program Files` and clean uninstall are proved on CI (run 43561151628); no updater, no update feed, no signing |
 | 10 | CI/CD and release engineering | VERIFIED (CI) / NOT VERIFIED (release) | Five jobs green; the dormant release `windows-app` job has never executed |
 | 11 | Documentation and product definition | IN PROGRESS | This record plus the existing Windows, CI, release and StudioCore documents |
 
@@ -146,7 +148,9 @@ must not claim them.
 | 2026-11-14 | `516f549` | CI run 43553381673, Windows App job | `WINDOWS HOST TESTS: PASS (91 checks)`; against the macOS references: G01 MAE 0.01, G04 MAE 0.007, G09 MAE 5.80, G11 MAE 5.22 |
 | 2026-11-14 | `3824b80` | PR #20 checks, all five jobs | success; merged as `1d2673c`; adjustments follow the shared scales |
 | 2026-11-14 | `20d3a8c` | CI run 43557855311, Windows App job | `WINDOWS HOST TESTS: PASS (108 checks)`; PNG IHDR and TIFF `BitsPerSample` read back 16; 8-bit source promotes exactly; 16-bit no-op export sample-exact and 8-bit re-decode byte-identical; the 16-bit P3 fixture exports sample-exact; 766 310 of 786 432 colour samples off the 8-bit grid after an adjustment; pipelines drift 1 level (tone/colour) and 2 (clarity, 8-bit blur truncation); a kept 16-bit PNG carries the camera model and nothing outside the allowlist, a stripped one carries neither |
-| 2026-11-14 | `20d3a8c` | PR #21 checks, all five jobs | success; merge pending owner-authorized merge commit |
+| 2026-11-14 | `20d3a8c` | PR #21 checks, all five jobs | success; merged with a merge commit as `18d4e46` |
+| 2026-11-14 | `18d4e46` | CI run 43560222549 (post-merge `main`) | all five jobs green |
+| 2026-11-14 | `2488ae4` | CI run 43561151628, Windows App job | MSI 398 086 490 bytes, msi version 0.0.0.0; silent install registered in Programs and Features; the installed copy in `Program Files\Retouch Studio` loaded a window; uninstall left no folder, shortcut or entry |
 
 That run is the Windows leg of PR #15: all five jobs green on the exact head
 commit `d0673d8`, including the macOS Integration and Platform-neutral
@@ -177,5 +181,6 @@ the write context (`Sources/StudioCoreABI/ProjectABI.swift`).
 2. W3 on Windows is BLOCKED on an approved, distributable landmark model.
    The in-box detector gives boxes only, which cannot drive masks.
 3. W5: only after an approved runtime package exists.
-4. W6: installer, then updater, each with a clean-install proof on CI.
+4. W6: the Windows MSI exists and CI proves install, start and uninstall; next
+   is the updater plus an install over a previous version, each with a CI proof.
 5. Notarization stays BLOCKED until credentials exist; never simulate it.
