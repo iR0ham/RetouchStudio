@@ -174,6 +174,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public bool HasDocument => _session is not null;
 
+    /// <summary>Edits from a macOS project that this host would drop on export.</summary>
+    public IReadOnlyList<string> UnsupportedEdits =>
+        _session?.Document.UnsupportedEdits ?? Array.Empty<string>();
+
     public string? ProjectPath => _session?.ProjectPath;
 
     /// <summary>File name without extension, for save and export defaults.</summary>
@@ -348,7 +352,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
         CloseSession();
         await AdoptAsync(session);
-        Status = $"{Path.GetFileName(projectPath)} opened.";
+        var unrendered = session.Document.UnsupportedEdits;
+        Status = unrendered.Count == 0
+            ? $"{Path.GetFileName(projectPath)} opened."
+            : $"{Path.GetFileName(projectPath)} opened; this host cannot render " +
+              $"{string.Join(", ", unrendered)}.";
     }
 
     public void Save(string projectPath)
