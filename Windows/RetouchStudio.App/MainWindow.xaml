@@ -157,7 +157,7 @@
             <DockPanel Margin="0,0,0,8">
               <TextBlock Text="Long edge" Style="{StaticResource SliderText}" />
               <ComboBox x:Name="LongEdgeBox" DockPanel.Dock="Right" Width="130"
-                        SelectedIndex="0" SelectionChanged="LongEdge_Changed">
+                        SelectedIndex="{Binding LongEdgeIndex, Mode=TwoWay}">
                 <ComboBoxItem Content="Original" />
                 <ComboBoxItem Content="4096 px" />
                 <ComboBoxItem Content="2048 px" />
