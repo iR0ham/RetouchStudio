@@ -105,6 +105,7 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private string _exportFormat = "jpeg";
     private double _exportQuality = 0.92;
     private int _exportLongEdge;
+    private bool _keepSourceMetadata;
     private string _cropLabel = "Original";
 
     public EditorViewModel()
@@ -264,6 +265,26 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Off by default: an export carries only the resolution unless the owner
+    /// asks for the camera, capture and GPS keys. It is a per-export choice,
+    /// not a project field, so the shared document does not grow a key that
+    /// macOS would have to preserve.
+    /// </summary>
+    public bool KeepSourceMetadata
+    {
+        get => _keepSourceMetadata;
+        set
+        {
+            if (_keepSourceMetadata == value)
+            {
+                return;
+            }
+            _keepSourceMetadata = value;
+            Raise(nameof(KeepSourceMetadata));
+        }
+    }
+
     public string CropLabel
     {
         get => _cropLabel;
@@ -310,7 +331,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         FlushCommit();
         var plan = await ExportRunner.ExportAsync(_session, _codec, destination,
                                                  _exportFormat, _exportQuality,
-                                                 _exportLongEdge);
+                                                 _exportLongEdge,
+                                                 stripPrivacyMetadata: !_keepSourceMetadata);
         Status = $"Exported {Path.GetFileName(destination)} " +
                  $"({plan.Format}, {plan.BitsPerChannel}-bit).";
         return destination;

@@ -1,5 +1,3 @@
-using RetouchStudio.Core.Project;
-
 namespace RetouchStudio.Core.Imaging;
 
 /// <summary>
@@ -11,5 +9,18 @@ public interface IImageCodec
 {
     Task<PixelBuffer> DecodeAsync(string path);
 
-    Task EncodeAsync(PixelBuffer image, string path, string format, double quality);
+    /// <summary>
+    /// The carryable source metadata for <paramref name="path"/>, read without
+    /// decoding pixels. Empty when the file has none.
+    /// </summary>
+    Task<ImageMetadata> ReadMetadataAsync(string path);
+
+    /// <summary>
+    /// Writes <paramref name="image"/>. With
+    /// <paramref name="stripPrivacyMetadata"/> on, the file keeps only the
+    /// resolution the pixels were written with; with it off, the carryable
+    /// keys in <paramref name="metadata"/> are copied to the destination.
+    /// </summary>
+    Task EncodeAsync(PixelBuffer image, string path, string format, double quality,
+                     ImageMetadata? metadata = null, bool stripPrivacyMetadata = true);
 }

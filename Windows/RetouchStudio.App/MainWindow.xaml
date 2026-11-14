@@ -146,8 +146,12 @@
             </DockPanel>
             <Slider Minimum="0.4" Maximum="1" SmallChange="0.01" Margin="0,2,0,0"
                     Value="{Binding ExportQuality, Mode=TwoWay}" />
+            <CheckBox Content="Keep camera metadata (includes GPS)"
+                      Margin="0,10,0,0" FontSize="12"
+                      Foreground="{StaticResource MutedBrush}"
+                      IsChecked="{Binding KeepSourceMetadata, Mode=TwoWay}" />
 
-            <TextBlock Text="The Windows host writes 8-bit JPEG, PNG and TIFF, applies the nine global sliders, crop and orientation, and keeps the project file format shared with macOS. AI tools, healing and stickers are not part of this host yet."
+            <TextBlock Text="The Windows host writes 8-bit JPEG, PNG and TIFF, applies the nine global sliders, crop and orientation, and keeps the project file format shared with macOS. Exports keep only the resolution unless you choose to keep camera metadata; PNG carries no EXIF on this host. AI tools, healing and stickers are not part of this host yet."
                        TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"
                        FontSize="11" Margin="0,16,0,0" LineHeight="16" />
           </StackPanel>

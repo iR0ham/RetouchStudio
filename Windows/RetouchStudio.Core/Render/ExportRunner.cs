@@ -36,7 +36,8 @@ public static class ExportRunner
                                                      string destination,
                                                      string format,
                                                      double quality,
-                                                     int longEdge)
+                                                     int longEdge,
+                                                     bool stripPrivacyMetadata = true)
     {
         var document = session.Document;
         var sourcePath = document.ImagePath;
@@ -52,7 +53,8 @@ public static class ExportRunner
 
         var decoded = await codec.DecodeAsync(sourcePath);
         var plan = RenderRequests.Plan(document, decoded.Width, decoded.Height,
-                                       format, quality, longEdge);
+                                       format, quality, longEdge,
+                                       stripsPrivacyMetadata: stripPrivacyMetadata);
         if (plan.Upscales)
         {
             // The planner can only ask for an upscale when aiUpscale is true,
@@ -77,8 +79,14 @@ public static class ExportRunner
             rendered = rendered.ResizeLongEdge(longEdge);
         }
 
+        // The plan says whether this export is a photograph that may carry the
+        // source metadata; the caller decides whether privacy stripping is on.
+        var metadata = plan.CarriesSourceMetadata && !stripPrivacyMetadata
+            ? await codec.ReadMetadataAsync(sourcePath)
+            : Imaging.ImageMetadata.Empty;
         await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,
-                                destination, plan.Format, quality);
+                                destination, plan.Format, quality,
+                                metadata, stripPrivacyMetadata);
         return plan;
     }
 

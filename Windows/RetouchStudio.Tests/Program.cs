@@ -32,6 +32,7 @@ internal static class Program
             Adjustments();
             Codec(root);
             Export(root);
+            Metadata(root);
         }
         catch (Exception error)
         {
@@ -336,6 +337,88 @@ internal static class Program
             Pass("the export refuses to overwrite the opened photo");
         }
     }
+
+    /// <summary>
+    /// The metadata policy: a photograph keeps its camera keys when the caller
+    /// turns stripping off, keeps only the resolution when it is on, and PNG
+    /// carries no EXIF on this host because the Windows metadata API does not
+    /// map EXIF onto PNG chunks.
+    /// </summary>
+    private static void Metadata(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(8, 6);
+        for (var y = 0; y < 6; y++)
+        {
+            for (var x = 0; x < 8; x++)
+            {
+                Put(image, x, y, r: 90, g: 110, b: 130);
+            }
+        }
+
+        var source = Path.Combine(root, "metadata-source.jpg");
+        var sourceMetadata = new ImageMetadata(new Dictionary<string, object>
+        {
+            ["System.Photo.CameraManufacturer"] = "Retouch",
+            ["System.Photo.CameraModel"] = "RS-Test",
+            ["System.Photo.LensModel"] = "50mm",
+            ["System.Photo.IsoSpeed"] = (ushort)400,
+        }, 300, 300);
+        codec.EncodeAsync(image, source, "jpeg", 0.95, sourceMetadata, stripPrivacyMetadata: false)
+             .GetAwaiter().GetResult();
+
+        var read = codec.ReadMetadataAsync(source).GetAwaiter().GetResult();
+        Check("the decoder reads the camera model",
+              Text(read, "System.Photo.CameraModel") == "RS-Test");
+        Check("the decoder reports the source resolution",
+              Math.Abs(read.DpiX - 300) < 1);
+
+        using var session = ProjectSession.Create(source);
+
+        var kept = Path.Combine(root, "metadata-kept.jpg");
+        ExportRunner.ExportAsync(session, codec, kept, "jpeg", 0.9, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var keptMeta = codec.ReadMetadataAsync(kept).GetAwaiter().GetResult();
+        Check("keeping metadata carries the camera manufacturer",
+              Text(keptMeta, "System.Photo.CameraManufacturer") == "Retouch");
+        Check("keeping metadata carries the camera model",
+              Text(keptMeta, "System.Photo.CameraModel") == "RS-Test");
+        Check("keeping metadata carries the lens",
+              Text(keptMeta, "System.Photo.LensModel") == "50mm");
+        Check("keeping metadata carries the ISO",
+              keptMeta.Properties.TryGetValue("System.Photo.IsoSpeed", out var iso)
+              && Convert.ToDouble(iso) == 400);
+        Check("keeping metadata keeps the resolution",
+              Math.Abs(keptMeta.DpiX - 300) < 1);
+
+        var stripped = Path.Combine(root, "metadata-stripped.jpg");
+        ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
+                             .GetAwaiter().GetResult();
+        var strippedMeta = codec.ReadMetadataAsync(stripped).GetAwaiter().GetResult();
+        Check("stripping drops the camera model",
+              !strippedMeta.Properties.ContainsKey("System.Photo.CameraModel"));
+        Check("stripping drops the GPS block",
+              !strippedMeta.Properties.Keys.Any(key => key.StartsWith("System.GPS.", StringComparison.Ordinal)));
+        Check("stripping keeps the resolution",
+              Math.Abs(strippedMeta.DpiX - 300) < 1);
+
+        var tiff = Path.Combine(root, "metadata-kept.tiff");
+        ExportRunner.ExportAsync(session, codec, tiff, "tiff", 1.0, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var tiffMeta = codec.ReadMetadataAsync(tiff).GetAwaiter().GetResult();
+        Check("keeping metadata works for TIFF",
+              Text(tiffMeta, "System.Photo.CameraModel") == "RS-Test");
+
+        var png = Path.Combine(root, "metadata-kept.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var pngMeta = codec.ReadMetadataAsync(png).GetAwaiter().GetResult();
+        Check("PNG carries no EXIF on this host",
+              !pngMeta.Properties.ContainsKey("System.Photo.CameraModel"));
+    }
+
+    private static string Text(ImageMetadata metadata, string key) =>
+        metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
 
     private static void Put(PixelBuffer buffer, int x, int y,
                             byte r = 0, byte g = 0, byte b = 0, byte a = 255)
