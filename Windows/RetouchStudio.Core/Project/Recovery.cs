@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RetouchStudio.Core.IO;
 
 namespace RetouchStudio.Core.Project;
 
@@ -231,7 +232,7 @@ public sealed class RecoveryStore
             Source = snapshot.Source,
         };
         var bytes = current.ToUtf8();
-        var temporary = WorkingPath + ".tmp";
+        var temporary = TemporaryFiles.SiblingTempPath(WorkingPath);
         try
         {
             System.IO.Directory.CreateDirectory(Directory);
@@ -240,6 +241,15 @@ public sealed class RecoveryStore
         }
         catch (Exception)
         {
+            // The failed bytes only ever lived in the sibling; removing it
+            // leaves the previous working copy whole.
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (Exception)
+            {
+            }
             return false;
         }
         _lastSavedAt = savedAt;
@@ -287,6 +297,10 @@ public sealed class RecoveryStore
     public IReadOnlyList<Candidate> PrepareForLaunch()
     {
         System.IO.Directory.CreateDirectory(Directory);
+        // A crash during an autosave can leave its sibling temp behind. Only
+        // those old temps are removed: the working slot, candidates and
+        // quarantine are never swept.
+        TemporaryFiles.SweepStaleSiblings(WorkingPath);
         if (File.Exists(WorkingPath))
         {
             if (TryReadFile(WorkingPath) is { } working)
