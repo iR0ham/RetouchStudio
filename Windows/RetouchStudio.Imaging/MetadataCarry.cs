@@ -415,15 +415,11 @@ public static class MetadataCarry
                 return null;
             }
             var size = ReadU32Big(payload, dataStart);
-            if (size > int.MaxValue)
+            if (size > (uint)(payload.Length - dataStart - 4))
             {
                 return null;
             }
             var end = dataStart + 4 + (int)size;
-            if (end > payload.Length)
-            {
-                return null;
-            }
             var next = end + ((int)size % 2);
             if (next > payload.Length)
             {
