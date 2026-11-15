@@ -246,6 +246,15 @@ Open, and therefore still **NOT VERIFIED**:
 
 W3–W6 are untouched.
 
+**2026-11-15 correction** (the 2026-11-13 records above are kept): a Windows
+installer and published artifacts now exist — the zip and MSI are built on CI,
+with the MSI install, in-place upgrade and uninstall proven in run 43563787267,
+and the manual Release run 43598113385 uploaded both. Kept exports now carry
+metadata (EXIF/XMP, an IPTC resource in JPEG, 16-bit PNG/TIFF), W2 has shipped as
+the WPF host (283 host checks, run 43696215085), and W5 packaging is done without
+an updater. W3 face analysis and masks, AI, signing and the updater remain absent,
+and no tag-triggered release has been published.
+
 ### Packaging status (2026-11-14)
 
 `Tools/build-windows.ps1` now packages the published host and starts the app

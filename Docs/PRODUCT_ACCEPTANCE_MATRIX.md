@@ -6,6 +6,15 @@ in [`MASTER_PRODUCT_COMPLETION_STATUS.md`](MASTER_PRODUCT_COMPLETION_STATUS.md)
 physical Windows machine, and only the interactions the UiTests harness drives
 are proven interactively.
 
+**Addendum 2026-11-15 (runs on `develop`).** The basis line above is kept as
+written. Pointer-driven UI automation has since merged: the crop corner drag and
+Apply (run 43681175327), the compare divider drag (run 43681175327), pointer
+zoom/pan with Fit restore, batch progress and Cancel Batch, multi-select in the
+photo picker, and the open/export failure reports (run 43696215085). Drop-to-open
+is also driven by merged branch `windows/drop-open-test` (run 43712286626); the
+hold-Space peek is still not driven. The rows and the list below are corrected in
+place.
+
 Statuses: VERIFIED, TESTED (measured but narrower than the capability), PARTIAL,
 NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 
@@ -17,7 +26,7 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 | Unknown fields | VERIFIED | VERIFIED | VERIFIED | Top-level across save and reopen; modelled records preserved; unmodelled nested records dropped by documented design. |
 | Undo/redo | VERIFIED | VERIFIED | N/A | `DocumentHistory`, 55 Windows host checks; the Undo and Redo buttons move a slider through UIA (runs 43654765580, 43658018867). |
 | Image import and adjustments | VERIFIED | TESTED | PARTIAL | Nine adjustments render on Windows (preview median 721 ms, run 43618132157); the Open Photo dialog and all nine sliders are driven end to end through UIA (runs 43647604771, 43659238621); cross-host MAE: exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47, each gated at one level. |
-| Crop/rotation/mirror/straighten | VERIFIED | TESTED | PARTIAL | Windows crop arithmetic, orientation order and turn/straighten/mirror composition are tested pixel for pixel; the overlay drag is not driven by CI; no cross-host straighten pixel reference (corpus protected). |
+| Crop/rotation/mirror/straighten | VERIFIED | TESTED | PARTIAL | Windows crop arithmetic, orientation order and turn/straighten/mirror composition are tested pixel for pixel; the overlay drag is not driven by CI (2026-11-15: superseded — the corner drag, Apply and the exported frame are driven through injected pointer input, run 43681175327); no cross-host straighten pixel reference (corpus protected). |
 | Face detection/landmarks/regions | VERIFIED | ABSENT | N/A | macOS Vision, ≥0.35 confidence, largest-first, ~76 points plus derived regions. In-box Windows detector returns boxes only, which cannot drive masks. |
 | Mask generation/edit/persistence | VERIFIED | ABSENT | N/A | macOS geometric masks, 1024 px preview, 4096 px export, feather and gates; no standalone mask layers or stable per-face identities anywhere. |
 | Heal/stamps/stickers/watermarks | VERIFIED | ABSENT | N/A | macOS edits exist; Windows keeps the records and asks before exporting pixels without them. The export guard names every macOS-only adjustment group (skin, face, makeup, look, grain, curves, HSL, body, background, hair, lens) and the prompt itself is driven through UIA: a project with `smooth` 30 names skin retouching, and No writes nothing (run 43653664500). |
@@ -25,7 +34,7 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 | JPEG/PNG/TIFF/HEIC | VERIFIED | PARTIAL | PARTIAL | Windows: JPEG/PNG/TIFF import/export verified, 16-bit PNG/TIFF verified, HEIC decode unavailable on `windows-2025` (`0x88982F8B`), HEIC export explicitly refused. macOS supports all four. |
 | 16-bit and ICC/colour | VERIFIED | PARTIAL | NOT VERIFIED | Windows 16-bit PNG/TIFF export sample-exact and 16-bit source preview tested; decode converts P3 to sRGB within one level of ColorSync at four in-gamut points; exports declare a generated sRGB ICC profile (JPEG APP2, PNG iCCP) and a no-op export is pixel-identical; wide-gamut colours still clip, TIFF is untagged and output is always sRGB. |
 | Metadata keep/strip | VERIFIED | TESTED | PARTIAL | Windows writes the allowlist into JPEG/TIFF/16-bit PNG, carries the source EXIF block and XMP into JPEG/PNG at container level, carries the source IPTC resource (Photoshop APP13, 8BIM 0x0404) into JPEG byte for byte, and composes an EXIF block (make, model, date, exposure, aperture, ISO, flash, focal length, white balance, lens) when the source has none to carry, all normalised to the exported frame through crop, turn and resize; stripping removes all of it; TIFF keeps only the allowlist and PNG/TIFF carry no IPTC. WIC exposes no GPS through its WinRT properties, so a composed block carries no position. |
-| Batch export/cancellation | VERIFIED | TESTED | N/A | Windows batch shares the single-export path, output sample-exact, collision-safe, per-file failures isolated; a page-one batch runs from the UI through both pickers and its JPEG decodes (run 43655814761); progress/cancel UI and mid-render cancellation not exercised. |
+| Batch export/cancellation | VERIFIED | TESTED | N/A | Windows batch shares the single-export path, output sample-exact, collision-safe, per-file failures isolated; a page-one batch runs from the UI through both pickers and its JPEG decodes (run 43655814761); progress/cancel UI and mid-render cancellation not exercised (2026-11-15: the progress count and Cancel Batch are driven on a 64-photo batch, run 43696215085; a cancel during the file in flight is still unproven). |
 | Recovery | VERIFIED | TESTED | TESTED | Windows candidate store mirrors the macOS rules (one working slot, immutable candidates, quarantine, restore write→verify→delete, monotonic savedAt, source identity) with injected failures; the launch prompt is driven through UIA — the seeded copy raises it, Yes restores the unsaved Exposure value and the app closes cleanly (run 43647604771); parity is proven by matching checks, not shared code. |
 | Installer/updater | PARTIAL (DMG verified; notarization BLOCKED) | PARTIAL (MSI verified; updater ABSENT) | N/A | Windows MSI silent install, start from `Program Files`, in-place upgrade and clean uninstall proven on CI; macOS DMGs build and verify, Gatekeeper rejects until notarized, credentials unavailable. |
 | Security/performance | PARTIAL | PARTIAL | NOT VERIFIED | Windows has measured preview/export/start-up, a flat managed heap over twenty renders, an export guard and a printed native working set after sixty renders (300 MB, peak 328 MB in run 43631106819); no cross-host performance comparison. |
@@ -33,10 +42,8 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 
 ## What a green CI run does not prove
 
-- Interactive Windows behaviour the harness does not yet drive: crop overlay
-  drag, compare divider drag, pointer zoom/pan, multi-select in the batch
-  picker, batch progress and cancellation, and the failure paths of project
-  open/save.
+- Interactive Windows behaviour the harness does not yet drive: a cancel during
+  the file in flight, and the failure paths of project open/save.
 - macOS window launch and clean-machine installation.
 - Rendering parity for straighten and freeform crop across hosts.
 - Real AI inference, notarization, or an update feed.

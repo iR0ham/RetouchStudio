@@ -151,19 +151,28 @@ before upload, so a release carries one installer version, not two.
 - The custom crop overlay's drag wiring is not exercised by CI: the headless
   checks cover the placement, resize, slide and readout arithmetic
   (`CropGeometry`), and the smoke run proves the window loads, but no automated
-  check moves a handle or drags the frame.
+  check moves a handle or drags the frame. 2026-11-15: superseded — the corner
+  handle is dragged through injected pointer input, Apply commits the frame and
+  the exported file decodes at the drawn 449×472 (run 43681175327).
 - The zoom and pan wiring is likewise not driven by CI: `CanvasView`'s limits,
   anchoring and pan clamps are checked headlessly, but no automated check spins
   a wheel or drags the photo. There are no pinch or touch gestures — WPF would
   turn them into pans — so zoom is the wheel, the dock and the shortcuts.
+  2026-11-15: superseded — pointer zoom to 150%, a drag that pans without
+  changing the zoom, and Fit restoring the opening view are driven (run
+  43696215085).
 - The compare split's drag is not driven by CI either: `CompareSplit`'s fraction
   arithmetic is checked headlessly, and the divider is drawn by the window, but
   no automated check drags the handle. The split position is not remembered
-  between sessions, and macOS keeps it in settings.
+  between sessions, and macOS keeps it in settings. 2026-11-15: superseded — the
+  Compare button is clicked with the pointer and the divider dragged 80 px right
+  and back within 6 px (run 43681175327).
 - The Cancel Batch button's click is not driven by CI: the exporter's
   cancellation is checked headlessly, but no automated check presses the
   button. Cancellation is cooperative between files, so a very large photo in
-  flight finishes before the batch stops.
+  flight finishes before the batch stops. 2026-11-15: superseded — Cancel Batch
+  is pressed on a 64-photo batch and stops after 10 written files (run
+  43696215085); cancellation is still cooperative between files.
 - No drag-out of the app, no recent-files list and no settings window. The
   drop-in open is the only drag gesture, and the UI harness now performs it: a
   helper WPF window starts a real `DragDrop.DoDragDrop` from a press on its own
@@ -178,12 +187,19 @@ before upload, so a release carries one installer version, not two.
 - No IPTC: a kept JPEG or PNG carries the source EXIF block and XMP packet,
   but not an IPTC block. A kept TIFF keeps only the measured WinRT allowlist
   (camera model and ISO), because the WinRT TIFF writer drops the rest.
+  2026-11-15: corrected — a kept JPEG also carries the source IPTC resource
+  (Photoshop APP13, 8BIM 0x0404) byte for byte (run 43663201459); PNG and TIFF
+  carry none.
 - No HEIC write (the HEIF codec is an optional system component) and no HEIC
   read path beyond whatever WIC happens to install. The `windows-2025` runner
   has no HEIF decoder, so the probe on the corpus HEIC export fails with
   `0x88982F8B`.
 - No recovery store, updater or signing. Distribution is a zip plus an unsigned
-  MSI; both are built from the same publish folder.
+  MSI; both are built from the same publish folder. 2026-11-15: corrected — a
+  recovery store exists (`RetouchStudio.Core/Project/Recovery.cs`, used by
+  `EditorViewModel` and `MainWindow`), and its launch prompt and decline are
+  driven through UIA (runs 43647604771 and 43696215085); the updater and signing
+  are still absent.
 - No macOS pixel parity claim. Exposure, blacks, whites, contrast and saturation
   now use the shared scales: against the macOS reference PNGs the host measures
   MAE 0.01 for exposure +40 and 0.007 for blacks +60. The vignette follows

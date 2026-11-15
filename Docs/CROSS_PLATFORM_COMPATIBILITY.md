@@ -13,7 +13,7 @@ the three distribution artifacts match their published SHA-256 files.
 | --- | --- | --- | --- | --- |
 | macOS 14+ | arm64 (native) | `build.sh release` PASS | `Tests/run.sh` PASS; corpus PASS; benchmarks PASS | shipping |
 | macOS 14+ | x86_64 (Rosetta on Apple silicon) | universal build PASS; `--selftest` runs the Intel slice | `RETOUCH_ARCH=x86_64 Tests/run.sh` PASS | shipping (Intel slice not tested on native Intel hardware) |
-| Windows | x64 | `StudioCore` built with Swift 6.4.2; no application | `Windows StudioCore` CI job on `windows-2025` PASS (260 core checks, 86 C ABI checks, conformance PASS), 2026-11-13 | **not a shipping target in 1.0.0** |
+| Windows | x64 | `StudioCore` built with Swift 6.4.2; no application — 2026-11-15: a WPF host and an MSI exist (`Windows/README.md`); the core is still the portable verified piece | `Windows StudioCore` CI job on `windows-2025` PASS (260 core checks, 86 C ABI checks, conformance PASS), 2026-11-13; `Windows App` job PASS (283 host checks, run 43696215085), 2026-11-15 | **not a shipping target in 1.0.0** |
 | Linux | any | not built | `Tests/run-studiocore-linux.sh` prepared, smoke-tested on macOS only | long-term, after a verified Windows RC |
 
 No native Intel Mac, Windows machine or Linux machine is attached to this
@@ -68,9 +68,13 @@ Exists and is verified:
 - the installed release workflow (`.github/workflows/release.yml`) that builds
   both macOS DMGs, runs the Windows core job and verifies the SHA-256 manifests
   before publishing; its Windows application job is gated behind the repository
-  variable `WINDOWS_APP_READY` and is skipped until an application exists;
+  variable `WINDOWS_APP_READY` and is skipped until an application exists
+  (2026-11-15: `WINDOWS_APP_READY` has been `true` since 2026-11-14, so the job
+  is active in the release workflow and uploads the zip and MSI);
 - a prepared packaging script that writes the Windows zip and SHA-256
-  (`Tools/package-windows.ps1`); it has not been executed on Windows;
+  (`Tools/package-windows.ps1`); it has not been executed on Windows
+  (2026-11-15: it runs inside the Windows App job, which passes `-RequireMsi`
+  and built the zip and MSI on the manual Release run 43598113385);
 - a code-level Windows implementation audit with the reusable surfaces, the
   macOS-only replacements, the recommended host stack and milestones W0–W6
   (`Docs/WINDOWS_IMPLEMENTATION_PATH.md`);
@@ -81,16 +85,26 @@ Not implemented:
 
 1. **No Windows renderer, UI or installer exists.** The green portability run
    proves only that the shared module and its C ABI work with a native Windows
-   toolchain.
+   toolchain. (2026-11-15: stale — a WPF renderer and UI and an unsigned MSI now
+   exist; the portability evidence is unchanged.)
 2. **No Windows artifact has been built or run.** The release workflow never
    publishes a Windows product, and `Tools/package-windows.ps1` is untested.
+   (2026-11-15: a zip and an MSI are built and run on `windows-2025` — MSI
+   install, in-place upgrade and uninstall in run 43563787267 — but no
+   tag-triggered release has published them.)
 3. The Windows application work (W2–W6: C#/.NET host, WIC decode/encode, crop,
    orientation, global adjustments, masks, editor shell, packaging) is designed
-   but not started.
+   but not started. (2026-11-15: W2 shipped as the WPF host with 283 host checks
+   (run 43696215085); W4 is partial (16-bit PNG/TIFF and metadata carry); W5
+   packaging is done with no updater; W3 face analysis and masks remain absent.)
 
 Result: the shared core is **verified portable** on a real Windows runner, while
 Windows is **0% product-ready**. It is not a 1.0.0 shipping target. Linux is
 unimplemented and stays on the long-term roadmap after a verified Windows RC.
+
+2026-11-15: that result is stale. Windows is no longer 0% product-ready — the
+WPF host edits, exports and installs on CI — but it remains not a 1.0.0
+shipping target.
 
 ## Update compatibility
 

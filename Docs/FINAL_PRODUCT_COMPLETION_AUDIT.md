@@ -35,6 +35,15 @@ Windows evidence is CI-only; there is no physical Windows machine.
 | H — Cross-platform projects and feature data | PARTIAL | v3/v4 interchange, unknown keys, feature records (run 43534410772) | feature rendering parity (face, masks, heal, stickers, AI) impossible on Windows while the renderers are absent; straighten/crop lacks a cross-host pixel reference |
 | I — Release readiness | NOT MET | required CI green, artifacts verified at the dry run | Windows product gaps above, macOS notarization blocked, no updater, no authorized public release |
 
+**2026-11-15 addendum** (this audit is point-in-time; the table above is kept).
+Gate C's "no XMP/IPTC" is stale for JPEG: a kept JPEG carries the source IPTC
+resource byte for byte, while PNG and TIFF carry none (run 43663201459). Gate F's
+"interactive Windows UI actions are not driven by CI" is stale: pointer crop,
+compare divider, zoom/pan, batch progress and Cancel Batch, multi-select in the
+picker and the photo open/export failure reports are driven (runs 43681175327,
+43696215085), as is drop-to-open through a helper drag source (run 43712286626);
+the failure paths of project open/save are still not driven.
+
 ## 3. Requirement audit against the plan
 
 | Plan area | Verdict | Notes |
