@@ -19,6 +19,15 @@ public static class TemporaryFiles
     private const string Suffix = ".tmp";
 
     /// <summary>
+    /// The tail the codec's metadata splice adds to a temp while it rewrites
+    /// the container (<c>MetadataCarry</c> writes <c>&lt;temp&gt;.metadata-&lt;guid&gt;</c>).
+    /// </summary>
+    private const string MetadataMarker = ".metadata-";
+
+    /// <summary>The length of a <c>"N"</c>-format GUID: 32 hex digits, either case.</summary>
+    private const int GuidTextLength = 32;
+
+    /// <summary>
     /// A hidden sibling of <paramref name="destination"/> with a unique name, so
     /// two writers into one folder cannot collide and a stale temp is never
     /// reused.
@@ -35,7 +44,10 @@ public static class TemporaryFiles
 
     /// <summary>
     /// True only when <paramref name="candidateFileName"/> is exactly
-    /// <c>.&lt;destination&gt;.&lt;32 hex digits&gt;.tmp</c>.
+    /// <c>.&lt;destination&gt;.&lt;32 hex digits&gt;.tmp</c>, optionally with one
+    /// <c>.metadata-&lt;32 hex digits&gt;</c> tail — the second sibling the
+    /// codec's metadata splice writes next to a temp, which a crash there can
+    /// also leave behind.
     /// </summary>
     public static bool IsSiblingTemp(string candidateFileName, string destinationFileName)
     {
@@ -45,14 +57,27 @@ public static class TemporaryFiles
         }
         var prefix = "." + destinationFileName + ".";
         if (!candidateFileName.StartsWith(prefix, StringComparison.Ordinal) ||
-            !candidateFileName.EndsWith(Suffix, StringComparison.Ordinal) ||
-            candidateFileName.Length < prefix.Length + Suffix.Length)
+            candidateFileName.Length < prefix.Length + GuidTextLength + Suffix.Length)
         {
             return false;
         }
-        var middle = candidateFileName.Substring(
-            prefix.Length, candidateFileName.Length - prefix.Length - Suffix.Length);
-        return Guid.TryParseExact(middle, "N", out _);
+        var tail = candidateFileName.Substring(prefix.Length);
+        if (!Guid.TryParseExact(tail.Substring(0, GuidTextLength), "N", out _))
+        {
+            return false;
+        }
+        var afterGuid = tail.Substring(GuidTextLength);
+        if (string.Equals(afterGuid, Suffix, StringComparison.Ordinal))
+        {
+            return true;
+        }
+        if (afterGuid.Length != Suffix.Length + MetadataMarker.Length + GuidTextLength ||
+            !afterGuid.StartsWith(Suffix + MetadataMarker, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        return Guid.TryParseExact(
+            afterGuid.Substring(Suffix.Length + MetadataMarker.Length), "N", out _);
     }
 
     /// <summary>
