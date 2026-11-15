@@ -10,7 +10,7 @@ using RetouchStudio.Core.View;
 using RetouchStudio.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
-using Windows.Storage.Streams;
+using IRandomAccessStream = Windows.Storage.Streams.IRandomAccessStream;
 
 namespace RetouchStudio.Tests;
 
