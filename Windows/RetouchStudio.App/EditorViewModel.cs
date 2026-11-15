@@ -120,6 +120,8 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     private bool _isCropping;
     private CancellationTokenSource? _batchCancellation;
     private bool _isBatchRunning;
+    private CancellationTokenSource? _exportCancellation;
+    private bool _isExportRunning;
 
     public EditorViewModel()
     {
@@ -225,6 +227,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     {
         get => _isBatchRunning;
         private set => Set(ref _isBatchRunning, value);
+    }
+
+    /// <summary>True while a single export is running; enables its Cancel button.</summary>
+    public bool IsExportRunning
+    {
+        get => _isExportRunning;
+        private set => Set(ref _isExportRunning, value);
     }
 
     public string DimensionText
@@ -545,13 +554,30 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             throw new InvalidOperationException("there is no open document");
         }
         FlushCommit();
-        var plan = await ExportRunner.ExportAsync(_session, _codec, destination,
-                                                 _exportFormat, _exportQuality,
-                                                 _exportLongEdge,
-                                                 stripPrivacyMetadata: !_keepSourceMetadata);
-        Status = $"Exported {Path.GetFileName(destination)} " +
-                 $"({plan.Format}, {plan.BitsPerChannel}-bit).";
-        return destination;
+        using var cancellation = new CancellationTokenSource();
+        _exportCancellation = cancellation;
+        IsExportRunning = true;
+        try
+        {
+            var plan = await ExportRunner.ExportAsync(_session, _codec, destination,
+                                                     _exportFormat, _exportQuality,
+                                                     _exportLongEdge,
+                                                     stripPrivacyMetadata: !_keepSourceMetadata,
+                                                     cancellationToken: cancellation.Token);
+            Status = $"Exported {Path.GetFileName(destination)} " +
+                     $"({plan.Format}, {plan.BitsPerChannel}-bit).";
+            return destination;
+        }
+        catch (OperationCanceledException)
+        {
+            Status = "Export cancelled.";
+            throw;
+        }
+        finally
+        {
+            IsExportRunning = false;
+            _exportCancellation = null;
+        }
     }
 
     /// <summary>
@@ -607,6 +633,9 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     /// <summary>Stops a running batch before its next file.</summary>
     public void CancelBatch() => _batchCancellation?.Cancel();
+
+    /// <summary>Stops a running single export before it writes its file.</summary>
+    public void CancelExport() => _exportCancellation?.Cancel();
 
     public void Undo()
     {

@@ -24,6 +24,9 @@
         <Button Content="Cancel Batch" Style="{StaticResource ToolButton}" Click="CancelBatch_Click"
                 IsEnabled="{Binding IsBatchRunning}"
                 ToolTip="Stop the batch before its next photo" />
+        <Button Content="Cancel Export" Style="{StaticResource ToolButton}" Click="CancelExport_Click"
+                IsEnabled="{Binding IsExportRunning}"
+                ToolTip="Stop the export before it writes the photo" />
         <Border Width="1" Background="{StaticResource LineBrush}" Margin="6,2,12,2" />
         <Button Content="Undo" Style="{StaticResource ToolButton}" Click="Undo_Click"
                 IsEnabled="{Binding CanUndo}" />
