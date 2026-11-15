@@ -48,6 +48,7 @@ internal static class Program
             Metadata(root);
             Carry(root);
             CarryTransforms(root);
+            Compose(root);
             Colour(root);
             Interchange(root);
             Recovery(root);
@@ -1502,6 +1503,15 @@ internal static class Program
     private static string Text(ImageMetadata metadata, string key) =>
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
 
+    /// <summary>Reads chosen properties straight from the platform decoder.</summary>
+    private static async Task<BitmapPropertySet> DecodeProperties(string path, string[] keys)
+    {
+        var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
+        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read);
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+        return await decoder.BitmapProperties.GetPropertiesAsync(keys);
+    }
+
     /// <summary>
     /// Every pixel on this host is converted to sRGB at decode, so an export
     /// that declares nothing is read back as sRGB by convention rather than by
@@ -1963,6 +1973,109 @@ internal static class Program
                   && TiffNumber(exif, 0xA003) == size.Height);
             Check("a resized export is upright", TiffNumber(exif, 0x0112) == 1);
         }
+    }
+
+    /// <summary>
+    /// A source whose EXIF cannot be spliced — a TIFF photo, or a broken
+    /// segment — still knows how it was taken. The composer rebuilds the tags
+    /// the WinRT writer drops from the decoded properties, and the same decoder
+    /// that produced the properties reads the composed block back.
+    /// </summary>
+    private static void Compose(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(8, 6);
+        for (var y = 0; y < 6; y++)
+        {
+            for (var x = 0; x < 8; x++)
+            {
+                Put(image, x, y, r: 40, g: 60, b: 80);
+            }
+        }
+
+        var properties = new Dictionary<string, object>
+        {
+            ["System.Photo.CameraManufacturer"] = "Retouch",
+            ["System.Photo.CameraModel"] = "RS-Compose",
+            ["System.Photo.DateTaken"] = new DateTime(2024, 5, 17, 10, 30, 0),
+            ["System.Photo.ExposureTime"] = 0.008,
+            ["System.Photo.FNumber"] = 2.8,
+            ["System.Photo.IsoSpeed"] = (ushort)400,
+            ["System.Photo.Flash"] = (ushort)16,
+            ["System.Photo.WhiteBalance"] = (ushort)1,
+            ["System.Photo.FocalLength"] = 50.0,
+            ["System.Photo.LensModel"] = "RF 50mm F1.8",
+            ["System.GPS.Latitude"] = new[] { 35.0, 41.0, 12.0 },
+            ["System.GPS.LatitudeRef"] = "N",
+            ["System.GPS.Longitude"] = new[] { 51.0, 25.0, 3.0 },
+            ["System.GPS.LongitudeRef"] = "E",
+            ["System.GPS.Altitude"] = 1200.0,
+        };
+        var composed = ExifComposer.Build(properties, 300, 300);
+        Check("the composer builds an EXIF block", composed is not null);
+        Check("the composed block names the camera", TiffText(composed, 0x0110) == "RS-Compose");
+        Check("the composed block is upright", TiffNumber(composed, 0x0112) == 1);
+        Check("a source with nothing to describe composes no block",
+              ExifComposer.Build(new Dictionary<string, object>(), 72, 72) is null);
+
+        var spliced = Path.Combine(root, "compose-spliced.jpg");
+        codec.EncodeAsync(image, spliced, "jpeg", 0.95).GetAwaiter().GetResult();
+        MetadataCarry.WriteJpeg(spliced, composed, null);
+        var read = codec.ReadMetadataAsync(spliced).GetAwaiter().GetResult();
+        Check("the decoder reads the composed model",
+              Text(read, "System.Photo.CameraModel") == "RS-Compose");
+        // The codec only asks for the allowlist, so the rest is read from the
+        // same decoder directly: the block must satisfy a real EXIF reader,
+        // not only the parser that wrote it.
+        var decoded = DecodeProperties(spliced, new[]
+        {
+            "System.Photo.DateTaken",
+            "System.Photo.ExposureTime",
+            "System.Photo.FNumber",
+            "System.Photo.LensModel",
+            "System.GPS.Latitude",
+            "System.GPS.Longitude",
+        }).GetAwaiter().GetResult();
+        Check("the decoder reads the composed capture date",
+              decoded.TryGetValue("System.Photo.DateTaken", out var taken)
+              && taken.Value is DateTime date
+              && date.Year == 2024 && date.Month == 5 && date.Day == 17
+              && date.Hour == 10 && date.Minute == 30);
+        Check("the decoder reads the composed exposure",
+              decoded.TryGetValue("System.Photo.ExposureTime", out var exposure)
+              && exposure.Value is double seconds && Math.Abs(seconds - 0.008) < 0.0001);
+        Check("the decoder reads the composed aperture",
+              decoded.TryGetValue("System.Photo.FNumber", out var aperture)
+              && aperture.Value is double fNumber && Math.Abs(fNumber - 2.8) < 0.01);
+        Check("the decoder reads the composed lens",
+              decoded.TryGetValue("System.Photo.LensModel", out var lens)
+              && lens.Value is string name && name == "RF 50mm F1.8");
+        Check("the decoder reads the composed GPS latitude",
+              decoded.TryGetValue("System.GPS.Latitude", out var latitude)
+              && latitude.Value is double[] { Length: 3 } parts
+              && Math.Abs(parts[0] - 35) < 0.001
+              && Math.Abs(parts[1] - 41) < 0.001
+              && Math.Abs(parts[2] - 12) < 0.001);
+
+        // A TIFF source has no APP1 or eXIf block to copy, so the export path
+        // must compose one from the properties the decoder reports for it.
+        var tiff = Path.Combine(root, "compose-source.tiff");
+        codec.EncodeAsync(image, tiff, "tiff", 1.0,
+                          new ImageMetadata(new Dictionary<string, object>
+                          {
+                              ["System.Photo.CameraModel"] = "RS-Tiff",
+                          }), stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        using var session = ProjectSession.Create(tiff);
+        var exported = Path.Combine(root, "compose-export.jpg");
+        ExportRunner.ExportAsync(session, codec, exported, "jpeg", 0.9, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var carried = MetadataCarry.ReadExif(exported);
+        var carriedSize = codec.ReadSizeAsync(exported).GetAwaiter().GetResult();
+        Check("a TIFF source exports a composed EXIF block",
+              TiffText(carried, 0x0110) == "RS-Tiff");
+        Check("the composed EXIF names the exported frame",
+              TiffNumber(carried, 0xA002) == carriedSize.Width
+              && TiffNumber(carried, 0xA003) == carriedSize.Height);
     }
 
     /// <summary>

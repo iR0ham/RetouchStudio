@@ -14,10 +14,12 @@ namespace RetouchStudio.Imaging;
 ///
 /// Encoding writes 8-bit JPEG/PNG/TIFF, and 16-bit PNG/TIFF when the export
 /// plan asks for that depth. With stripping off it carries the source EXIF
-/// block and XMP packet into JPEG and PNG at the container level
+/// block, XMP packet and IPTC resource into JPEG and PNG at the container level
 /// (<see cref="MetadataCarry"/>), because the WinRT metadata writer drops most
-/// EXIF keys; TIFF keeps the measured WinRT allowlist. With stripping on, only
-/// the resolution the pixels were written with travels.
+/// EXIF keys; a source with no block to splice — a TIFF or HEIC photo, or a
+/// broken segment — gets one composed from the decoded properties
+/// (<see cref="ExifComposer"/>), and TIFF keeps the measured WinRT allowlist.
+/// With stripping on, only the resolution the pixels were written with travels.
 /// </summary>
 public sealed class WindowsImageCodec : IImageCodec
 {
@@ -30,6 +32,30 @@ public sealed class WindowsImageCodec : IImageCodec
     {
         "System.Photo.CameraModel",
         "System.Photo.IsoSpeed",
+    };
+
+    // The wider set the decoder is asked for. These values are not written
+    // through the WinRT writer; they feed <see cref="ExifComposer"/> when the
+    // source has no EXIF block to splice (a TIFF or HEIC photo), so the tags
+    // WIC drops on the way out are rebuilt from what WIC itself decoded.
+    private static readonly string[] ReadProperties =
+    {
+        "System.Photo.CameraManufacturer",
+        "System.Photo.CameraModel",
+        "System.Photo.DateTaken",
+        "System.Photo.ExposureTime",
+        "System.Photo.FNumber",
+        "System.Photo.IsoSpeed",
+        "System.Photo.Flash",
+        "System.Photo.WhiteBalance",
+        "System.Photo.FocalLength",
+        "System.Photo.LensModel",
+        "System.GPS.Latitude",
+        "System.GPS.LatitudeRef",
+        "System.GPS.Longitude",
+        "System.GPS.LongitudeRef",
+        "System.GPS.Altitude",
+        "System.GPS.AltitudeRef",
     };
 
     public async Task<ImageSize> ReadSizeAsync(string path)
@@ -226,7 +252,7 @@ public sealed class WindowsImageCodec : IImageCodec
         using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read);
         var decoder = await BitmapDecoder.CreateAsync(stream);
 
-        var found = await decoder.BitmapProperties.GetPropertiesAsync(CarriedProperties);
+        var found = await decoder.BitmapProperties.GetPropertiesAsync(ReadProperties);
 
         var values = new Dictionary<string, object>(StringComparer.Ordinal);
         foreach (var key in CarriedProperties)
@@ -239,6 +265,19 @@ public sealed class WindowsImageCodec : IImageCodec
         // The decoder reports the resolution as a first-class property; the
         // metadata graph does not always expose it under a property key.
         var exif = MetadataCarry.ReadExif(Path.GetFullPath(path));
+        if (exif is null)
+        {
+            var decoded = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var key in ReadProperties)
+            {
+                if (found.TryGetValue(key, out var typed) && typed.Value is not null)
+                {
+                    decoded[key] = typed.Value;
+                }
+            }
+            exif = ExifComposer.Build(decoded, decoder.DpiX >= 1 ? decoder.DpiX : 96,
+                                      decoder.DpiY >= 1 ? decoder.DpiY : 96);
+        }
         var xmp = MetadataCarry.ReadXmp(Path.GetFullPath(path));
         var iptc = MetadataCarry.ReadIptc(Path.GetFullPath(path));
         return new ImageMetadata(values, decoder.DpiX, decoder.DpiY, exif, xmp, iptc);
