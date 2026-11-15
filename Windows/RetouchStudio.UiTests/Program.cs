@@ -1633,14 +1633,18 @@ internal static class Program
     /// already. A picker that starts elsewhere is navigated by typing the
     /// folder and pressing Enter for real: a posted key message leaves the
     /// shell's own file-name state unchanged, which is why a posted Enter
-    /// never moves the view.
+    /// never moves the view. The view itself is virtualised and exposes only
+    /// the rows on screen, so one file is clicked and Ctrl+A takes the rest.
     /// </summary>
     private static void SelectAllInPicker(AutomationElement dialog, string folder,
                                           string namePrefix, string pattern, int expected)
     {
         var handle = (IntPtr)dialog.Current.NativeWindowHandle;
-        var items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(3));
-        if (items.Count < expected)
+        // A file view that shows any of the sources is in the right folder;
+        // the rest may be scrolled out of UIA's reach, so their presence is
+        // proved by the batch that later reports 'of 16'.
+        var items = PollPickerItems(dialog, namePrefix, 1, TimeSpan.FromSeconds(3));
+        if (items.Count == 0)
         {
             var edit = SetFileName(dialog, folder + Path.DirectorySeparatorChar);
             SetForegroundWindow(handle);
@@ -1654,9 +1658,9 @@ internal static class Program
             Thread.Sleep(200);
             keybd_event(VkReturn, 0, 0, IntPtr.Zero);
             keybd_event(VkReturn, 0, KeyUp, IntPtr.Zero);
-            items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(20));
+            items = PollPickerItems(dialog, namePrefix, 1, TimeSpan.FromSeconds(20));
         }
-        if (items.Count < expected)
+        if (items.Count == 0)
         {
             // Last resort: the shell expands a wildcard path into every match.
             SetFileName(dialog, Path.Combine(folder, pattern));
@@ -1669,14 +1673,14 @@ internal static class Program
             // The wildcard stays in the box and would win over a ticked list,
             // so it is cleared before the list becomes the selection.
             SetFileName(dialog, "");
-            items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(5));
+            items = PollPickerItems(dialog, namePrefix, 1, TimeSpan.FromSeconds(5));
         }
-        if (items.Count < expected)
+        if (items.Count == 0)
         {
             throw new InvalidOperationException(
-                $"the picker shows {items.Count} files instead of {expected} in " +
-                $"{folder}; the items are {DescribePickerItems(dialog)}; the editors are " +
-                $"{DescribeEditors(dialog)}; the texts are " + DescribeWindow(dialog));
+                $"the picker shows none of the {expected} files in {folder}; the items are " +
+                $"{DescribePickerItems(dialog)}; the editors are {DescribeEditors(dialog)}; " +
+                "the texts are " + DescribeWindow(dialog));
         }
         var first = items[0].Current.BoundingRectangle;
         if (first.IsEmpty)
@@ -1689,15 +1693,18 @@ internal static class Program
         keybd_event(VkA, 0, KeyUp, IntPtr.Zero);
         keybd_event(VkControl, 0, KeyUp, IntPtr.Zero);
         Thread.Sleep(300);
-        var selected = PickerItems(dialog, namePrefix).Count(item =>
+        // Ctrl+A selects every file, not only the rows the view exposes.
+        var exposed = PickerItems(dialog, namePrefix);
+        var selected = exposed.Count(item =>
             item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var tick)
             && tick is SelectionItemPattern selection
             && selection.Current.IsSelected);
-        if (selected != expected)
+        if (selected != exposed.Count)
         {
             throw new InvalidOperationException(
-                $"Ctrl+A selected {selected} of {expected} files in the picker");
+                $"Ctrl+A left {selected} of the {exposed.Count} visible files selected");
         }
+        Ok($"Ctrl+A selected all {exposed.Count} visible files of {expected}");
         var open = FindButton(dialog, "Open")
             ?? throw new InvalidOperationException(
                 "the photo picker has no Open button: " + DescribeWindow(dialog));
