@@ -1629,22 +1629,37 @@ internal static class Program
 
     /// <summary>
     /// Hands the picker every file of a folder. The shell remembers the folder
-    /// the single-photo dialog last opened, so the files are usually in view
-    /// already and are ticked through the list. A picker that starts elsewhere
-    /// is navigated into the folder and offered a wildcard, which the shell
-    /// expands into every match.
+    /// the single-photo dialog last opened, so the files are sometimes in view
+    /// already. A picker that starts elsewhere is navigated by typing the
+    /// folder and pressing Enter for real: a posted key message leaves the
+    /// shell's own file-name state unchanged, which is why a posted Enter
+    /// never moves the view.
     /// </summary>
     private static void SelectAllInPicker(AutomationElement dialog, string folder,
                                           string namePrefix, string pattern, int expected)
     {
         var handle = (IntPtr)dialog.Current.NativeWindowHandle;
-        var items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(5));
+        var items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(3));
         if (items.Count < expected)
         {
             var edit = SetFileName(dialog, folder + Path.DirectorySeparatorChar);
-            CommitFileName(edit);
-            Thread.Sleep(500);
-            SetFileName(dialog, pattern);
+            SetForegroundWindow(handle);
+            try
+            {
+                edit.SetFocus();
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+            Thread.Sleep(200);
+            keybd_event(VkReturn, 0, 0, IntPtr.Zero);
+            keybd_event(VkReturn, 0, KeyUp, IntPtr.Zero);
+            items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(20));
+        }
+        if (items.Count < expected)
+        {
+            // Last resort: the shell expands a wildcard path into every match.
+            SetFileName(dialog, Path.Combine(folder, pattern));
             PressDefaultButton(dialog, "Open");
             if (WaitFor(() => !IsWindowVisible(handle), TimeSpan.FromSeconds(10)))
             {
@@ -1654,14 +1669,14 @@ internal static class Program
             // The wildcard stays in the box and would win over a ticked list,
             // so it is cleared before the list becomes the selection.
             SetFileName(dialog, "");
-            items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(20));
+            items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(5));
         }
         if (items.Count < expected)
         {
             throw new InvalidOperationException(
                 $"the picker shows {items.Count} files instead of {expected} in " +
-                $"{folder}; the items are {DescribePickerItems(dialog)}; the texts are " +
-                DescribeWindow(dialog));
+                $"{folder}; the items are {DescribePickerItems(dialog)}; the editors are " +
+                $"{DescribeEditors(dialog)}; the texts are " + DescribeWindow(dialog));
         }
         var first = items[0].Current.BoundingRectangle;
         if (first.IsEmpty)
@@ -2670,6 +2685,7 @@ internal static class Program
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
     private const uint KeyUp = 0x0002;
+    private const byte VkReturn = 0x0D;
     private const byte VkControl = 0x11;
     private const byte VkA = 0x41;
 
