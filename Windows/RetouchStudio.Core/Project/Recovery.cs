@@ -244,11 +244,16 @@ public sealed class RecoveryStore
         {
             System.IO.Directory.CreateDirectory(Directory);
             File.WriteAllBytes(temporary, bytes);
-            // Hidden for the moment the sibling exists on disk; the move
-            // below carries the source's attributes, so it is cleared first.
-            TemporaryFiles.Hide(temporary);
-            TemporaryFiles.Unhide(temporary);
-            File.Move(temporary, WorkingPath, overwrite: true);
+            if (File.Exists(WorkingPath))
+            {
+                // Replace renames over the old slot, so a failed commit leaves
+                // the previous autosave whole; a plain move covers the first one.
+                File.Replace(temporary, WorkingPath, null);
+            }
+            else
+            {
+                File.Move(temporary, WorkingPath);
+            }
         }
         catch (Exception)
         {
@@ -272,11 +277,16 @@ public sealed class RecoveryStore
 
     /// <summary>
     /// Drops the working copy. A caller that only owns one document passes its
-    /// photo path, so a slot another document already wrote survives.
+    /// photo path, so a slot another document already wrote survives. A slot
+    /// that could not be lifted is never removed: it is the only copy of an
+    /// unresolved document until the owner restores or discards it.
     /// </summary>
     public bool RemoveWorking(string? ifSourcePath = null)
     {
-        if (InjectedFailures.Contains(Failure.WorkingRemove))
+        // The macOS store refuses this outright (Recovery.swift's
+        // removeWorking): an unresolved slot outlives the document that is
+        // open, so closing or replacing that document cannot delete it.
+        if (_workingLocked || InjectedFailures.Contains(Failure.WorkingRemove))
         {
             return false;
         }
