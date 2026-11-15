@@ -1374,9 +1374,11 @@ internal static class Program
     /// STA thread is the drag source: a WPF DataObject hands the photo over as
     /// CF_HDROP and an IOleDropSource ends the drag on the button release, both
     /// passed to ole32's DoDragDrop. The test thread performs the gesture the
-    /// drag loop watches for — press inside PreviewHost, move, release — and
-    /// the opened title plus the exported file prove the drop reached the same
-    /// open path the dialogs use.
+    /// drag loop watches for — press inside PreviewHost, move, release. If the
+    /// loop still asks the source to continue once the pointer is verifiably on
+    /// the preview, the source drops there itself and records that end, so the
+    /// log says which end ran; the opened title plus the exported file prove
+    /// the drop reached the same open path the dialogs use.
     /// </summary>
     private static void RunDrop(Process process, string photo, string output)
     {
@@ -1416,6 +1418,7 @@ internal static class Program
         var ready = new ManualResetEventSlim(false);
         var begin = new ManualResetEventSlim(false);
         var finished = new ManualResetEventSlim(false);
+        var dropSource = new FileDropSource();
         string? dragFailure = null;
         var dragResult = -1;
         uint dropEffect = 0;
@@ -1439,9 +1442,9 @@ internal static class Program
                         "the test thread never began the drag");
                 }
                 // DoDragDrop pumps the pointer loop and calls back into the
-                // source; it returns once the button is released.
+                // source; it returns once the drag ends.
                 dragResult = DoDragDrop(
-                    (ComTypes.IDataObject)data, new FileDropSource(),
+                    (ComTypes.IDataObject)data, dropSource,
                     DropEffectCopy, out dropEffect);
             }
             catch (Exception error)
@@ -1503,19 +1506,42 @@ internal static class Program
         const int steps = 12;
         for (var step = 1; step <= steps; step++)
         {
-            SetCursorPos(
-                (int)Math.Round(start.X + (target.X - start.X) * step / steps),
-                (int)Math.Round(start.Y + (target.Y - start.Y) * step / steps));
+            MovePointer(start.X + (target.X - start.X) * step / steps,
+                        start.Y + (target.Y - start.Y) * step / steps);
             Thread.Sleep(50);
         }
-        Thread.Sleep(300);
+        var arrival = new NativePoint
+        {
+            X = (int)Math.Round(target.X),
+            Y = (int)Math.Round(target.Y),
+        };
+        if (!PointBelongsToProcess(arrival, process.Id))
+        {
+            mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+            throw new InvalidOperationException(
+                $"the drag left the preview: ({arrival.X},{arrival.Y}) is not over " +
+                $"the app; the window is {windowRect}");
+        }
+        // The pointer is verifiably on PreviewHost. A loop that still asks to
+        // continue past this point lets the source end the drop itself; these
+        // small moves give it calls to answer while the button is still held.
+        dropSource.Arrive();
+        for (var nudge = 0; nudge < 8 && !finished.IsSet; nudge++)
+        {
+            var offset = nudge % 2 == 0 ? 2 : -2;
+            MovePointer(target.X + offset, target.Y + offset);
+            Thread.Sleep(150);
+        }
         mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
 
         if (!finished.Wait(TimeSpan.FromSeconds(30)))
         {
-            throw new InvalidOperationException(
-                "DoDragDrop did not return after the button was released; " +
-                "the OLE drag loop never saw the release");
+            throw new InvalidOperationException(dropSource.QueryCount == 0
+                ? "the drag loop received no mouse input from the injected gesture; " +
+                  "DoDragDrop is still waiting although the button was released"
+                : $"DoDragDrop did not return after the button was released; the " +
+                  $"source answered {dropSource.QueryCount} queries and " +
+                  $"{dropSource.FeedbackCount} feedback calls without a drop");
         }
         if (dragFailure is not null)
         {
@@ -1530,10 +1556,13 @@ internal static class Program
         if (dropEffect != DropEffectCopy)
         {
             throw new InvalidOperationException(
-                $"the drop ended with effect 0x{dropEffect:X8}, not DROPEFFECT_COPY; " +
+                $"the drop ended with effect 0x{dropEffect:X8} (ended by: " +
+                $"{dropSource.EndReason ?? "unknown"}), not DROPEFFECT_COPY; " +
                 "PreviewHost never accepted the file drop");
         }
         Ok("PreviewHost accepted the drag and dropped with DROPEFFECT_COPY");
+        Ok($"the drag ended by: {dropSource.EndReason ?? "unknown"} after " +
+           $"{dropSource.QueryCount} queries and {dropSource.FeedbackCount} feedback calls");
 
         var photoName = Path.GetFileName(photo);
         var opened = WaitFor(
@@ -2879,6 +2908,27 @@ internal static class Program
         Thread.Sleep(250);
     }
 
+    /// <summary>
+    /// Moves the pointer with SetCursorPos and then with an absolute
+    /// mouse_event move. The cursor move alone may not be delivered as input
+    /// while OLE's drag loop owns the mouse; the injected move is the input
+    /// message a drag loop sees, carrying the button state with it.
+    /// </summary>
+    private static void MovePointer(double x, double y)
+    {
+        var screenWidth = Math.Max(2, GetSystemMetrics(SmCxScreen));
+        var screenHeight = Math.Max(2, GetSystemMetrics(SmCyScreen));
+        SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
+        // MOUSEEVENTF_ABSOLUTE takes 0..65535 across the primary screen.
+        mouse_event(
+            MouseMoveAbsolute,
+            (uint)Math.Round(Math.Clamp(x, 0, screenWidth - 1) * 65535.0
+                             / (screenWidth - 1)),
+            (uint)Math.Round(Math.Clamp(y, 0, screenHeight - 1) * 65535.0
+                             / (screenHeight - 1)),
+            0, IntPtr.Zero);
+    }
+
     [DllImport("user32.dll")]
     private static extern bool SetCursorPos(int x, int y);
 
@@ -2930,6 +2980,7 @@ internal static class Program
 
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
+    private const uint MouseMoveAbsolute = 0x0001 | 0x8000;
     private const uint KeyUp = 0x0002;
     private const byte VkControl = 0x11;
     private const byte VkA = 0x41;
@@ -3041,7 +3092,11 @@ public interface IOleDropSource
     int GiveFeedback(int effect);
 }
 
-/// <summary>An OLE drop source that drops as soon as the button is released.</summary>
+/// <summary>
+/// An OLE drop source that ends the drag on the button release, or from this
+/// side one second after the test proved the pointer is over the drop target,
+/// and counts every callback so a silent drag loop is visible in the log.
+/// </summary>
 [ComVisible(true)]
 public sealed class FileDropSource : IOleDropSource
 {
@@ -3050,15 +3105,86 @@ public sealed class FileDropSource : IOleDropSource
     private const int DragDropCancel = 0x00040101;
     private const int DragDropUseDefaultCursors = 0x00040102;
     private const int MkLeftButton = 0x0001;
+    private const long SettleAfterArrival = 1000;
+
+    private readonly object _log = new();
+    private readonly HashSet<int> _logged = new();
+    private int _queries;
+    private int _feedbacks;
+    private string? _end;
+    private long _arrivedAt;
+
+    public int QueryCount => Volatile.Read(ref _queries);
+
+    public int FeedbackCount => Volatile.Read(ref _feedbacks);
+
+    public string? EndReason => Volatile.Read(ref _end);
+
+    /// <summary>
+    /// Called by the test once the pointer is verifiably over the drop target.
+    /// A loop that still asks to continue a second later is ended by the source
+    /// instead of leaving DoDragDrop waiting for input it never gets; where the
+    /// pointer is at that moment is where OLE performs the drop.
+    /// </summary>
+    public void Arrive() => Interlocked.CompareExchange(
+        ref _arrivedAt, Environment.TickCount64, 0);
 
     public int QueryContinueDrag(int escapePressed, int keyState)
     {
-        if (escapePressed != 0)
+        var call = Interlocked.Increment(ref _queries);
+        var escape = escapePressed != 0;
+        var buttonDown = (keyState & MkLeftButton) != 0;
+        string? end = null;
+        var answer = SOk;
+        if (escape)
         {
-            return DragDropCancel;
+            end = "escape";
+            answer = DragDropCancel;
         }
-        return (keyState & MkLeftButton) != 0 ? SOk : DragDropDrop;
+        else if (!buttonDown)
+        {
+            end = "button released";
+            answer = DragDropDrop;
+        }
+        else if (ArrivedLongEnough())
+        {
+            end = "source-after-moves";
+            answer = DragDropDrop;
+        }
+        if (end is not null)
+        {
+            Interlocked.CompareExchange(ref _end, end, null);
+        }
+        // The first call for each key state is logged, and so is the one that
+        // ends the drag, so a silent loop and a loop that never drops are
+        // distinguishable from the CI log alone.
+        lock (_log)
+        {
+            if (end is not null || _logged.Add(keyState))
+            {
+                Console.WriteLine(
+                    $"  drop source: query #{call} keyState=0x{keyState:X4} " +
+                    $"escape={(escape ? 1 : 0)} -> " +
+                    (end is null ? "S_OK" : $"DROP ({end})"));
+            }
+        }
+        return answer;
     }
 
-    public int GiveFeedback(int effect) => DragDropUseDefaultCursors;
+    public int GiveFeedback(int effect)
+    {
+        var call = Interlocked.Increment(ref _feedbacks);
+        if (call == 1)
+        {
+            Console.WriteLine($"  drop source: feedback #{call} effect=0x{effect:X8}");
+        }
+        return DragDropUseDefaultCursors;
+    }
+
+    private bool ArrivedLongEnough()
+    {
+        var arrived = Volatile.Read(ref _arrivedAt);
+        return arrived != 0
+            && Environment.TickCount64 - arrived >= SettleAfterArrival;
+    }
 }
