@@ -29,9 +29,10 @@ public readonly record struct OrientationValue(int QuarterTurns, bool Flipped, d
 }
 
 /// <summary>
-/// The current v4 document record, edited in place. Only fields this host
+/// The current v4/v5 document record, edited in place. Only fields this host
 /// understands are touched; every other key from the file is carried through
-/// untouched, exactly as the C ABI returned it.
+/// untouched, exactly as the C ABI returned it. A v5 file arrives as v5 — its
+/// masks and face identities ride through this raw tree on a save.
 /// </summary>
 public sealed class DocumentModel
 {
@@ -229,6 +230,12 @@ public sealed class DocumentModel
             if (HasItems("aiEdits"))
             {
                 found.Add("AI patches");
+            }
+            // A mask is user data this host cannot render; an export that
+            // ignored it would change the edit the owner drew.
+            if (HasItems("masks"))
+            {
+                found.Add("masked selections");
             }
             if (AnalysisEnabled)
             {

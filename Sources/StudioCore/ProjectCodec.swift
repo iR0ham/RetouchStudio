@@ -72,10 +72,10 @@ public enum ProjectCodecError: Error, Equatable {
 /// `ProjectSourceAccess` and `ProjectBookmarkStore`.
 public enum ProjectCodec {
     /// Highest project file version this build reads.
-    public static let currentVersion = ProjectV4.currentVersion
+    public static let currentVersion = ProjectV5.currentVersion
 
     /// The capabilities this build can honor when a file requires them.
-    public static let supportedFeatures: Set<String> = ProjectV4.supportedFeatures
+    public static let supportedFeatures: Set<String> = ProjectV5.supportedFeatures
 
     /// Required features this build cannot honor, sorted so the message a host
     /// shows does not depend on the file's key order.
@@ -111,9 +111,17 @@ public enum ProjectCodec {
     }
 
     /// Writes the version the document was read as. A v3 file never silently
-    /// becomes v4, and a v4 file keeps its keyed geometry and unknown keys.
+    /// becomes v4, and a v4 file keeps its keyed geometry and unknown keys. The
+    /// one deliberate upgrade: a document that carries masks saves as v5,
+    /// because no earlier version has a key that could hold them.
     public static func encode(_ project: RetouchProject,
                               context: ProjectWriteContext) throws -> Data {
+        if writeVersion(for: project, context: context) >= ProjectV5.currentVersion {
+            return try encodeV5(project,
+                                unknownFields: context.unknownFields,
+                                requiredFeatures: context.requiredFeatures,
+                                nestedUnknowns: context.nestedUnknowns)
+        }
         if context.isV4 {
             return try encodeV4(project,
                                 unknownFields: context.unknownFields,
@@ -124,6 +132,26 @@ public enum ProjectCodec {
         guard !context.unknownFields.isEmpty else { return base }
         return try merging(base, unknown: context.unknownFields,
                            known: RetouchProject.knownJSONKeys)
+    }
+
+    /// The version a save has to write: the file's own version, raised to v5
+    /// when the document carries data no earlier version can express.
+    public static func writeVersion(for project: RetouchProject,
+                                    context: ProjectWriteContext) -> Int {
+        let carriesV5 = !(project.masks ?? []).isEmpty
+            || !(project.faceIdentities ?? []).isEmpty
+        return carriesV5 ? max(context.version, ProjectV5.currentVersion) : context.version
+    }
+
+    /// The canonical document a host edits. The version is the file's own when
+    /// it is v4 or v5, because a v5 document has to reach a host that only
+    /// edits the fields it knows; a v1–v3 file keeps the v4 shape it was always
+    /// given.
+    public static func canonicalDocument(_ file: ProjectFile) throws -> Data {
+        if file.context.version >= ProjectV5.currentVersion {
+            return try encodeV5(file.project)
+        }
+        return try encodeV4(file.project)
     }
 
     /// The portable v4 document: named geometry records and a stable key order.
@@ -142,17 +170,50 @@ public enum ProjectCodec {
         return try merging(typed, unknown: unknownFields, known: ProjectV4.knownKeys)
     }
 
+    /// The v5 document: the v4 record plus the masks the owner drew and the
+    /// people they are attached to.
+    public static func encodeV5(_ project: RetouchProject,
+                                unknownFields: [String: ProjectJSONValue] = [:],
+                                requiredFeatures: [String] = [],
+                                nestedUnknowns: ProjectUnknownFields? = nil) throws -> Data {
+        let record = ProjectV5(project: project, requiredFeatures: requiredFeatures)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var typed = try encoder.encode(record)
+        if let nestedUnknowns {
+            typed = try applying(nestedUnknowns, to: typed)
+        }
+        guard !unknownFields.isEmpty else { return typed }
+        return try merging(typed, unknown: unknownFields, known: ProjectV5.knownKeys)
+    }
+
     public static func decode(_ data: Data) throws -> RetouchProject {
         try read(data).project
     }
 
-    /// Reads a v3 or v4 file and keeps what a later save needs.
+    /// Reads a v3, v4 or v5 file and keeps what a later save needs.
     public static func read(_ data: Data) throws -> ProjectFile {
         let decoder = JSONDecoder()
         let object = try decoder.decode([String: ProjectJSONValue].self, from: data)
         let version = object["version"]?.integerValue ?? RetouchProject.currentVersion
         guard version <= currentVersion else {
             throw ProjectCodecError.tooNew(version)
+        }
+        if version >= ProjectV5.currentVersion {
+            let record = try decoder.decode(ProjectV5.self, from: data)
+            let required = record.requiredFeatures ?? []
+            let unsupported = unsupportedFeatures(required)
+            guard unsupported.isEmpty else {
+                throw ProjectCodecError.unsupportedFeatures(unsupported)
+            }
+            return ProjectFile(
+                project: record.project,
+                context: ProjectWriteContext(
+                    version: version,
+                    unknownFields: object.filter { !ProjectV5.knownKeys.contains($0.key) },
+                    requiredFeatures: required,
+                    nestedUnknowns: try nestedUnknownFields(in: object, of: record,
+                                                            known: ProjectV5.knownKeys)))
         }
         if version >= ProjectV4.currentVersion {
             let record = try decoder.decode(ProjectV4.self, from: data)
@@ -167,7 +228,8 @@ public enum ProjectCodec {
                     version: version,
                     unknownFields: object.filter { !ProjectV4.knownKeys.contains($0.key) },
                     requiredFeatures: required,
-                    nestedUnknowns: try nestedUnknownFields(in: object, of: record)))
+                    nestedUnknowns: try nestedUnknownFields(in: object, of: record,
+                                                            known: ProjectV4.knownKeys)))
         }
         let project = try decoder.decode(RetouchProject.self, from: data)
         return ProjectFile(
@@ -191,17 +253,18 @@ public enum ProjectCodec {
         return try encoder.encode(object)
     }
 
-    /// The difference between a v4 file and the record this build writes back,
+    /// The difference between a file and the record this build writes back,
     /// captured per known key so a save can keep it.
-    private static func nestedUnknownFields(in raw: [String: ProjectJSONValue],
-                                            of record: ProjectV4) throws -> ProjectUnknownFields? {
+    private static func nestedUnknownFields<Record: Encodable>(
+        in raw: [String: ProjectJSONValue], of record: Record,
+        known: Set<String>) throws -> ProjectUnknownFields? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let typedData = try encoder.encode(record)
         guard let typed = try? JSONDecoder().decode(ProjectJSONValue.self, from: typedData),
               case .object(let typedFields) = typed else { return nil }
         var children: [String: ProjectUnknownFields] = [:]
-        for key in ProjectV4.knownKeys {
+        for key in known {
             guard let rawValue = raw[key], let typedValue = typedFields[key] else { continue }
             if let nested = ProjectUnknownFieldCapture.capture(raw: rawValue, typed: typedValue) {
                 children[key] = nested
@@ -486,6 +549,8 @@ public struct ProjectWriteContext: Equatable {
 
     public var isV4: Bool { version >= ProjectV4.currentVersion }
 
+    public var isV5: Bool { version >= ProjectV5.currentVersion }
+
     /// True when the file carries data a plain v3 rewrite would drop. A context
     /// that carries nothing is not stored in a recovery snapshot at all, which
     /// keeps a v3 snapshot byte-identical to what earlier builds wrote.
@@ -612,6 +677,93 @@ struct ProjectV4: Codable, Equatable {
                        orientation: orientation)
     }
 }
+
+/// The v5 project document: the v4 record plus persistent masks and the people
+/// they are attached to. Every v4 key keeps its meaning and its shape, so a v4
+/// file is a valid prefix of v5 and no earlier field moves.
+struct ProjectV5: Codable, Equatable {
+    static let currentVersion = 5
+
+    /// The capabilities this build can honor when a file requires them. Masks
+    /// are additive: a v5 reader always understands them, and a v4 reader is
+    /// refused by the version guard instead of silently dropping them.
+    static let supportedFeatures: Set<String> = ["portable_geometry"]
+
+    static let knownKeys: Set<String> = [
+        "version", "imagePath", "imageBookmark", "adjustments", "exportFormat",
+        "exportQuality", "exportLongEdge", "autoRetouchStrength",
+        "autoColorStrength", "crop", "orientation", "healSpots", "stickers",
+        "aiEdits", "analysis", "selectedFace", "requiredFeatures", "masks",
+        "faceIdentities"
+    ]
+
+    var version = ProjectV5.currentVersion
+    var imagePath: String
+    var imageBookmark: Data?
+    var adjustments: Adjustments
+    var exportFormat: String
+    var exportQuality: Double
+    var exportLongEdge: Int?
+    var autoRetouchStrength: Double
+    var autoColorStrength: Double?
+    var crop: StudioRect?
+    var orientation: DocumentOrientation?
+    var healSpots: [HealSpot]?
+    var stickers: [Sticker]?
+    var aiEdits: [AIEdit]?
+    var analysis: AnalysisSettingsV5?
+    var selectedFace: Int?
+    var requiredFeatures: [String]?
+    var masks: [MaskRecord]?
+    var faceIdentities: [FaceIdentityRecord]?
+
+    init(project: RetouchProject, requiredFeatures: [String] = []) {
+        imagePath = project.imagePath
+        imageBookmark = project.imageBookmark
+        adjustments = project.adjustments
+        exportFormat = project.exportFormat
+        exportQuality = project.exportQuality
+        exportLongEdge = project.exportLongEdge
+        autoRetouchStrength = project.autoRetouchStrength
+        autoColorStrength = project.autoColorStrength
+        crop = project.crop
+        orientation = project.orientation
+        healSpots = project.healSpots
+        stickers = project.stickers
+        aiEdits = project.aiEdits
+        analysis = project.analysis.map(AnalysisSettingsV5.init)
+        selectedFace = project.selectedFace
+        self.requiredFeatures = requiredFeatures.isEmpty ? nil : requiredFeatures
+        masks = project.masks
+        faceIdentities = project.faceIdentities
+    }
+
+    /// The in-memory project this file describes. Like v4, v5 is a file format,
+    /// so the returned project stays at the v3 model's version.
+    var project: RetouchProject {
+        RetouchProject(imagePath: imagePath,
+                       imageBookmark: imageBookmark,
+                       adjustments: adjustments,
+                       exportFormat: exportFormat,
+                       exportQuality: exportQuality,
+                       exportLongEdge: exportLongEdge,
+                       autoRetouchStrength: autoRetouchStrength,
+                       autoColorStrength: autoColorStrength,
+                       crop: crop,
+                       healSpots: healSpots,
+                       stickers: stickers,
+                       aiEdits: aiEdits,
+                       analysis: analysis?.settings,
+                       selectedFace: selectedFace,
+                       orientation: orientation,
+                       masks: masks,
+                       faceIdentities: faceIdentities)
+    }
+}
+
+/// v5 stores analysis exactly as v4 does. The alias keeps a future divergence
+/// from having to reinterpret files already written.
+typealias AnalysisSettingsV5 = AnalysisSettingsV4
 
 struct AnalysisSettingsV4: Codable, Equatable {
     var isEnabled: Bool

@@ -45,9 +45,10 @@ public func scProjectRead(_ bytes: UnsafePointer<UInt8>?, _ length: Int,
     }
     do {
         let file = try ProjectCodec.read(data)
-        // v4 is a file format, not a second model: the host always edits the
-        // current record, and the context decides how the save is written.
-        write(outDocument, try ProjectCodec.encodeV4(file.project))
+        // The host always edits the current record, and the context decides how
+        // the save is written. A v5 file has to reach the host as v5, or masks
+        // would never leave this side of the boundary.
+        write(outDocument, try ProjectCodec.canonicalDocument(file))
         write(outContext, try canonicalJSON(file.context))
         return CoreStatus.ok
     } catch {
