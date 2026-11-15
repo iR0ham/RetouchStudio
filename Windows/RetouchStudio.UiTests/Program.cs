@@ -35,11 +35,11 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard]");
+                "[golden|recovery|guard|project|batch]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
-        if (mode is not ("golden" or "recovery" or "guard"))
+        if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -88,6 +88,14 @@ internal static class Program
             else if (mode == "guard")
             {
                 RunGuard(process, photo, output);
+            }
+            else if (mode == "project")
+            {
+                RunProject(process, photo, output);
+            }
+            else if (mode == "batch")
+            {
+                RunBatch(process, photo, output);
             }
             else
             {
@@ -309,6 +317,233 @@ internal static class Program
             throw new InvalidOperationException($"the app exited with {process.ExitCode}");
         }
         Ok("the app closed cleanly after the guard prompt");
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Saves the edited photo as a project through its dialog, then proves the
+    /// Undo button reaches the same history the headless checks measure.
+    /// </summary>
+    private static void RunProject(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+
+        var open = FindButton(window, "Open Photo")
+            ?? throw new InvalidOperationException("the Open Photo button is missing");
+        Invoke(open);
+        var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        SetFileName(openDialog, photo);
+        PressDefaultButton(openDialog, "Open");
+        var photoName = Path.GetFileName(photo);
+        if (!WaitFor(() => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+                     TimeSpan.FromSeconds(90)))
+        {
+            throw new InvalidOperationException(
+                $"the photo did not open; the title is '{window.Current.Name}'");
+        }
+        Ok($"the photo opened: '{window.Current.Name}'");
+
+        var slider = FindSlider(window, "Exposure")
+            ?? throw new InvalidOperationException("the Exposure slider is missing");
+        SetRange(slider, 40);
+        if (!WaitFor(() => Math.Abs(SliderValue(slider) - 40) < 0.5, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException("the Exposure slider did not reach 40");
+        }
+
+        var save = FindButton(window, "Save Project")
+            ?? throw new InvalidOperationException("the Save Project button is missing");
+        Invoke(save);
+        var dialogHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Save Project click opened no window");
+        var saveDialog = AutomationElement.FromHandle(dialogHandle);
+        var project = Path.ChangeExtension(output, ".retouch");
+        var edit = SetFileName(saveDialog, project);
+        if (!WaitFor(() => ReadValue(edit) == project, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the file-name box holds '{ReadValue(edit)}' instead of '{project}'");
+        }
+        CommitFileName(edit);
+        if (!WaitFor(() => !IsWindowVisible(dialogHandle), TimeSpan.FromSeconds(30)))
+        {
+            PressDefaultButton(saveDialog, "Save", "Open");
+            if (!WaitFor(() => !IsWindowVisible(dialogHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the Save Project dialog stayed open; " + DescribeWindow(saveDialog));
+            }
+        }
+        if (!WaitFor(() => File.Exists(project) && new FileInfo(project).Length > 0,
+                     TimeSpan.FromSeconds(60)))
+        {
+            throw new InvalidOperationException(
+                "Save Project wrote no file; the status says " + DescribeTexts(window));
+        }
+        Ok($"Save Project wrote {new FileInfo(project).Length} bytes through its dialog");
+
+        if (!WaitFor(() => !window.Current.Name.Contains('•'), TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the title still shows unsaved changes: '{window.Current.Name}'");
+        }
+        Ok("the saved title shows no unsaved marker");
+
+        var undo = FindButton(window, "Undo")
+            ?? throw new InvalidOperationException("the Undo button is missing");
+        Invoke(undo);
+        if (!WaitFor(() => Math.Abs(SliderValue(slider)) < 0.5, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"Undo left Exposure at {SliderValue(slider)}");
+        }
+        Ok("Undo returned Exposure to 0 through the UI");
+
+        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
+        close.Close();
+        if (!process.WaitForExit(30_000))
+        {
+            DismissClosePrompt(process.Id);
+            if (!process.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the app did not close");
+            }
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"the app exited with {process.ExitCode}");
+        }
+        Ok("the app closed cleanly after the project checks");
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Runs a batch of one photo from the UI: the photo picker, the folder
+    /// picker, and the written file decoded back. The selection is one photo
+    /// because a multi-select tick is a pointer gesture UIA does not model.
+    /// </summary>
+    private static void RunBatch(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+
+        var open = FindButton(window, "Open Photo")
+            ?? throw new InvalidOperationException("the Open Photo button is missing");
+        Invoke(open);
+        var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        SetFileName(openDialog, photo);
+        PressDefaultButton(openDialog, "Open");
+        var photoName = Path.GetFileName(photo);
+        if (!WaitFor(() => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+                     TimeSpan.FromSeconds(90)))
+        {
+            throw new InvalidOperationException(
+                $"the photo did not open; the title is '{window.Current.Name}'");
+        }
+
+        var folder = Path.Combine(
+            Path.GetDirectoryName(output)!, "retouchstudio-ui-batch");
+        if (Directory.Exists(folder))
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+        Directory.CreateDirectory(folder);
+
+        var batch = FindButton(window, "Batch Export…")
+            ?? throw new InvalidOperationException("the Batch Export button is missing");
+        Invoke(batch);
+        var photosHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Batch Export click opened no window");
+        var photosDialog = AutomationElement.FromHandle(photosHandle);
+        var photosEdit = SetFileName(photosDialog, photo);
+        if (!WaitFor(() => ReadValue(photosEdit) == photo, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the photo box holds '{ReadValue(photosEdit)}' instead of '{photo}'");
+        }
+        CommitFileName(photosEdit);
+        if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
+        {
+            PressDefaultButton(photosDialog, "Open");
+            if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the photo picker stayed open; " + DescribeWindow(photosDialog));
+            }
+        }
+        Ok("the batch photo picker took the photo");
+
+        var folderHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the folder picker never appeared");
+        var folderDialog = AutomationElement.FromHandle(folderHandle);
+        var folderEdit = FindFolderEdit(folderDialog);
+        if (folderEdit is null || !TypeInto(folderEdit, folder))
+        {
+            throw new InvalidOperationException(
+                "the folder picker has no Folder box: " + DescribeEditors(folderDialog));
+        }
+        if (!WaitFor(() => ReadValue(folderEdit) == folder, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the Folder box holds '{ReadValue(folderEdit)}' instead of '{folder}'");
+        }
+        CommitFileName(folderEdit);
+        if (!WaitFor(() => !IsWindowVisible(folderHandle), TimeSpan.FromSeconds(30)))
+        {
+            var select = FindButton(folderDialog, "Select Folder")
+                ?? throw new InvalidOperationException(
+                    "the folder picker has no Select Folder button: " +
+                    DescribeWindow(folderDialog));
+            Invoke(select);
+            if (!WaitFor(() => !IsWindowVisible(folderHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the folder picker stayed open; " + DescribeWindow(folderDialog));
+            }
+        }
+        Ok($"the folder picker took '{folder}'");
+
+        var written = Path.Combine(
+            folder, Path.GetFileNameWithoutExtension(photo) + "-retouched.jpg");
+        if (!WaitFor(() => File.Exists(written) && new FileInfo(written).Length > 1024,
+                     TimeSpan.FromMinutes(2)))
+        {
+            throw new InvalidOperationException(
+                "the batch wrote no file; the status says " + DescribeTexts(window) +
+                "; the folder holds " + RecentFiles(folder));
+        }
+        var codec = new WindowsImageCodec();
+        var source = codec.ReadSizeAsync(photo).GetAwaiter().GetResult();
+        var decoded = codec.ReadSizeAsync(written).GetAwaiter().GetResult();
+        if (decoded.Width != source.Width || decoded.Height != source.Height)
+        {
+            throw new InvalidOperationException(
+                $"the batch photo is {decoded.Width}x{decoded.Height}, the source is " +
+                $"{source.Width}x{source.Height}");
+        }
+        Ok($"the batch wrote and decoded {new FileInfo(written).Length} bytes at " +
+           $"{decoded.Width}x{decoded.Height}");
+
+        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
+        close.Close();
+        if (!process.WaitForExit(30_000))
+        {
+            DismissClosePrompt(process.Id);
+            if (!process.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the app did not close");
+            }
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"the app exited with {process.ExitCode}");
+        }
+        Ok("the app closed cleanly after the batch");
         Console.WriteLine("UI HOST TESTS: PASS");
     }
 
@@ -695,6 +930,12 @@ internal static class Program
             .SetValue(value);
     }
 
+    private static double SliderValue(AutomationElement element) =>
+        element.TryGetCurrentPattern(RangeValuePattern.Pattern, out var pattern)
+        && pattern is RangeValuePattern range
+            ? range.Current.Value
+            : double.NaN;
+
     /// <summary>
     /// Types an absolute path into the file-name edit one character at a time.
     /// The common dialog mirrors the name from the edit's keystroke
@@ -707,21 +948,54 @@ internal static class Program
         var target = FindFileNameControl(dialog)
             ?? throw new InvalidOperationException("the dialog has no file-name box");
         var edit = FindFileNameEdit(dialog);
-        var handle = edit is null ? IntPtr.Zero : (IntPtr)edit.Current.NativeWindowHandle;
-        if (handle != IntPtr.Zero)
+        if (edit is null)
         {
-            SendMessageW(handle, WmSetText, IntPtr.Zero, "");
-            foreach (var character in path)
+            if (target.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)
+                && pattern is ValuePattern value)
             {
-                SendMessageW(handle, WmChar, (IntPtr)(int)character, IntPtr.Zero);
+                value.SetValue(path);
+            }
+            return target;
+        }
+        if (!TypeInto(edit, path))
+        {
+            target.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern);
+            (pattern as ValuePattern)?.SetValue(path);
+        }
+        return edit;
+    }
+
+    /// <summary>Clears an edit and types the text as keystrokes, as a person would.</summary>
+    private static bool TypeInto(AutomationElement edit, string text)
+    {
+        var handle = (IntPtr)edit.Current.NativeWindowHandle;
+        if (handle == IntPtr.Zero)
+        {
+            return false;
+        }
+        SendMessageW(handle, WmSetText, IntPtr.Zero, "");
+        foreach (var character in text)
+        {
+            SendMessageW(handle, WmChar, (IntPtr)(int)character, IntPtr.Zero);
+        }
+        return true;
+    }
+
+    /// <summary>The edit the common dialogs label "Folder:" in the folder picker.</summary>
+    private static AutomationElement? FindFolderEdit(AutomationElement dialog)
+    {
+        foreach (AutomationElement edit in dialog.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Edit)))
+        {
+            if (edit.Current.Name.StartsWith("Folder", StringComparison.OrdinalIgnoreCase)
+                && (IntPtr)edit.Current.NativeWindowHandle != IntPtr.Zero)
+            {
+                return edit;
             }
         }
-        else if (target.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)
-                 && pattern is ValuePattern value)
-        {
-            value.SetValue(path);
-        }
-        return edit ?? target;
+        return null;
     }
 
     /// <summary>
