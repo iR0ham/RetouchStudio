@@ -185,6 +185,8 @@ These exclusions are intentional. They keep the corpus small enough to regenerat
 
 `baselines.geometry.v1.json` has schema version 1 and its own `fixture` + `cases` arrays. `baselines.json` is not modified by this set; verify mode merges the two case lists for the ID-matrix and digest checks. A fixture may be added to `MANIFEST.json` without a recapture only when an approved versioned baseline names it first.
 
+The R1 conformance gate pins the additive set as deliberately as the original corpus: `Tests/Conformance/Fixtures/corpus-lock.json` records the manifest hash, the 13-fixture count, the SHA-256 of `baselines.geometry.v1.json`, its 7 case ids and the SHA-256 of each of its 7 reference PNGs. Changing a geometry reference byte fails the gate (`corpus geometry reference hash mismatch`) until the lock is reviewed and updated; this was verified locally on 2026-11-15.
+
 ---
 
 ## 8. Layout and schema
