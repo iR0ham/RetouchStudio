@@ -827,7 +827,7 @@ internal static class Program
         {
             Invoke(undo);
         }
-        var close = (WindowPattern)window.Current.GetCurrentPattern(WindowPattern.Pattern);
+        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
         close.Close();
         if (!process.WaitForExit(30_000))
         {
