@@ -82,6 +82,31 @@ public static class TemporaryFiles
     }
 
     /// <summary>
+    /// Renames a finished temp over its destination. Replace is atomic and
+    /// leaves the destination intact when it fails, but it needs ReplaceFile,
+    /// which exFAT, FAT32 and some network shares lack, so an unsupported
+    /// filesystem falls back to the overwrite move those drives do support.
+    /// </summary>
+    public static void Publish(string temporary, string destination)
+    {
+        if (!File.Exists(destination))
+        {
+            File.Move(temporary, destination);
+            return;
+        }
+        try
+        {
+            File.Replace(temporary, destination, null);
+        }
+        catch (Exception error) when (error is IOException
+                                      or PlatformNotSupportedException
+                                      or UnauthorizedAccessException)
+        {
+            File.Move(temporary, destination, overwrite: true);
+        }
+    }
+
+    /// <summary>
     /// Deletes the leftover siblings of <paramref name="destination"/> whose
     /// write ended before <paramref name="utcNow"/> minus
     /// <paramref name="minAge"/>. Only regular files in the destination's own

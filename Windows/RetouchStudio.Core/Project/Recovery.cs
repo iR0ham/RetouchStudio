@@ -244,16 +244,7 @@ public sealed class RecoveryStore
         {
             System.IO.Directory.CreateDirectory(Directory);
             File.WriteAllBytes(temporary, bytes);
-            if (File.Exists(WorkingPath))
-            {
-                // Replace renames over the old slot, so a failed commit leaves
-                // the previous autosave whole; a plain move covers the first one.
-                File.Replace(temporary, WorkingPath, null);
-            }
-            else
-            {
-                File.Move(temporary, WorkingPath);
-            }
+            TemporaryFiles.Publish(temporary, WorkingPath);
         }
         catch (Exception)
         {
