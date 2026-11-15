@@ -2015,7 +2015,7 @@ internal static class Program
     }
 
     /// <summary>Splices an APP13 segment after the JPEG's APP0, where a reader looks.</summary>
-    private static void InsertApp13(string path, byte[] photoshop)
+    private static void InsertApp13(string path, byte[] resources)
     {
         var file = File.ReadAllBytes(path);
         var at = 2;
@@ -2023,14 +2023,16 @@ internal static class Program
         {
             at = 4 + ((file[4] << 8) | file[5]);
         }
-        var segment = photoshop.Length + 2;
+        var signature = Encoding.ASCII.GetBytes("Photoshop 3.0\0");
+        var segment = signature.Length + resources.Length + 2;
         using var output = new MemoryStream();
         output.Write(file, 0, at);
         output.WriteByte(0xFF);
         output.WriteByte(0xED);
         output.WriteByte((byte)(segment >> 8));
         output.WriteByte((byte)segment);
-        output.Write(photoshop, 0, photoshop.Length);
+        output.Write(signature, 0, signature.Length);
+        output.Write(resources, 0, resources.Length);
         output.Write(file, at, file.Length - at);
         File.WriteAllBytes(path, output.ToArray());
     }
