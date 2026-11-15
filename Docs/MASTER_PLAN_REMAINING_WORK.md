@@ -31,7 +31,9 @@ merged into `develop` at `63fdbd3` as `00a48d6`. The three commits `main` held
 that `develop` did not are merge commits with an empty net diff, so the merged
 tree equals the pre-merge develop tree; five checks are green on `develop` in
 run 43660568463. The same day, JPEG exports gained the source IPTC resource
-(`windows/iptc-carry`, `04dac17`, green run 43663201459, 268 checks).
+(`windows/iptc-carry`, `04dac17`, green run 43663201459, 268 checks), and a
+source with no EXIF block to splice gained a composed one
+(`windows/exif-compose`, `431783b`, green run 43671478242, 283 checks).
 The next milestone PR carries that work plus these documents.
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
@@ -48,11 +50,11 @@ The next milestone PR carries that work plus these documents.
 |---|---|---|---|---|
 | W4-1 | Metadata keep-safe / strip / allowlist for JPEG, TIFF, 16-bit PNG | TESTED (camera model + ISO, resolution; EXIF/XMP carry read back after crop, quarter turn and resize; a JPEG also carries the source IPTC resource byte for byte, run 43663201459) | TIFF keeps only the WinRT allowlist; PNG and TIFF carry no IPTC; unsupported keys are documented in `WINDOWS_FORMAT_AUDIT.md` | none |
 | W4-2 | XMP write, IPTC write | Carry IMPLEMENTED for macOS parity (JPEG IPTC, EXIF/XMP in JPEG and PNG; macOS also only carries); composing new records NOT IMPLEMENTED | a source with no splice-able block (TIFF, HEIC) still loses these records; composing them needs a writer because WIC exposes no write path | library choice (Lead decision), licence review |
-| W4-3 | Full EXIF rewrite (GPS, date, exposure, lens) | NOT IMPLEMENTED | WIC drops most keys; needs an EXIF writer outside WIC | library choice (Lead decision) |
+| W4-3 | Full EXIF rewrite (GPS, date, exposure, lens) | IMPLEMENTED for sources a decoder can describe (composed EXIF, run 43671478242): a TIFF source exports make, model, capture time, exposure, aperture, ISO, flash, focal length, white balance and lens, rewritten to the written frame and upright | WIC's WinRT properties report no GPS, so a composed block carries no position in practice (a macOS ImageIO control JPEG reads the same absent), and tags WIC does not decode are not composed; carried EXIF still travels whole for JPEG/PNG sources | none for the composed path; a new field needs a decoder that reports it |
 | W4-4 | ICC preservation on write / wide-gamut output | PARTIAL | exports declare the generated sRGB profile (JPEG APP2, PNG iCCP) even when stripping, and the decoder skips re-conversion for its own profile; the source's wide gamut is still clipped on decode and its profile is not carried | carrying wide gamut is an owner-visible colour trade-off |
 | W4-5 | HEIC read on CI | BLOCKED | no HEIF decoder on `windows-2025` (`0x88982F8B`) | install the HEIF extension or accept and document the gap |
 | W4-6 | Format audit document (import, decode, orientation, colour, metadata, bit depth, export, batch) | DONE as a document (`Docs/WINDOWS_FORMAT_AUDIT.md`) | records the gaps it cannot close: HEIC needs the optional codec, RAW is absent, TIFF is untagged | none |
-| W4-7 | RenderPlan consumed end to end (dimensions, depth, alpha, profile, compression, quality, metadata, orientation) | PARTIAL | dimensions, depth, alpha, orientation, quality and the strip policy are honoured; the profile is fixed sRGB rather than passed through | W4-4 (wide-gamut carry) |
+| W4-7 | RenderPlan consumed end to end (dimensions, depth, alpha, profile, compression, quality, metadata, orientation) | PARTIAL | dimensions, depth, alpha, orientation, quality and the strip policy are honoured; the profile is fixed sRGB rather than passed through | W4-4 decision |
 | W4-8 | Deterministic cross-host corpus comparisons (MAE, max error, SSIM, colour difference) | PARTIAL | adjustments compared to macOS references (exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47 MAE); straighten/crop lacks a cross-host pixel reference | golden-corpus fixture needs owner approval |
 
 ## WS-2 — W3 face analysis and masks
@@ -128,10 +130,22 @@ The next milestone PR carries that work plus these documents.
 | No physical Windows machine | interactive UI acceptance | CI-only evidence remains the standard |
 | Golden corpus may not be regenerated | cross-host straighten/crop pixel reference | owner-approved fixtures |
 
+## Owner decisions needed (WS-1)
+
+Product decisions, not engineering choices. Each states what the code does now,
+the options and their impact. Work that does not depend on them continues.
+
+| Decision | Options | Impact | Current behaviour / recommendation |
+|---|---|---|---|
+| W4-4 — output colour space | (A) keep sRGB output for 1.0; (B) pass the source profile through to the render and the written file; (C) target Display P3 for every export | (B) and (C) change every exported pixel for a wide-gamut source, change the preview/render comparison and the cross-host corpus references, and need a P3 fixture set; (A) keeps today's comparable output | sRGB today, with the profile declared in JPEG and PNG. Recommendation: (A) for 1.0, P3 as a next-milestone feature with its own fixtures |
+| W4-5 — HEIC on Windows CI | (A) accept and document the gap; (B) install the HEIF extension in the CI job; (C) vendor a third-party decoder | (B) adds a network dependency and licence acceptance to every Windows run; (C) adds a licence and patent review; (A) leaves HEIC read unverified on CI | no decoder on `windows-2025` (`0x88982F8B`). Recommendation: (A) now, revisit if HEIC import becomes a requirement |
+| W4-2 — composing XMP/IPTC and vendor blocks | (A) stay carry-only, as macOS does; (B) adopt a metadata-writing library and compose new records | (B) adds a library choice, licence review and a new source of writes for records no current feature edits; (A) matches the macOS host | carry-only. Recommendation: (A) unless an editing feature must set those fields |
+| W4-8 — straighten/crop cross-host reference | (A) add owner-approved fixtures and references; (B) keep the current adjustment-only comparison | (A) grows the golden corpus, which is otherwise frozen; (B) leaves straighten/crop compared by arithmetic, not by pixels across hosts | adjustment references only. Recommendation: (A) when the corpus may be extended |
+
 ## Queue order
 
-1. Close WS-1 (W4): validate the metadata/colour workstream on `develop`,
-   then the format audit and the remaining RenderPlan pass-through.
+1. Close WS-1 (W4): the metadata and format-audit work is done; the
+   RenderPlan profile pass-through waits on the W4-4 decision above.
 2. WS-3 items that are verifiable without a UI harness (crash recovery,
    project lifecycle).
 3. WS-2 after the landmark-model decision (a measured Lead decision).
