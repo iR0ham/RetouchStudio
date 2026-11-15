@@ -23,6 +23,10 @@ public partial class MainWindow : Window
 
     private readonly EditorViewModel _vm = new();
 
+    // Set when a close was deferred so the in-flight export or batch could be
+    // cancelled and unwind; the second closing pass then closes.
+    private bool _closingAfterWork;
+
     // The crop overlay remembers the frame being dragged until Apply. The
     // preview underneath is rendered without a crop while the overlay is open.
     private CropValue _pendingCrop = new(0, 0, 1, 1);
@@ -136,11 +140,39 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
     {
+        // A close during an export is deferred once: the work is cancelled and
+        // awaited, so its temp is removed and its destination is either whole
+        // or absent. The second pass closes even if the encode outlasts the
+        // wait; that residue is the documented limit.
+        if (!_closingAfterWork && (_vm.IsExportRunning || _vm.IsBatchRunning))
+        {
+            e.Cancel = true;
+            _closingAfterWork = true;
+            _ = CancelWorkAndCloseAsync();
+            return;
+        }
         _vm.FlushCommit();
         if (!_vm.CanClose())
         {
             e.Cancel = true;
+            _closingAfterWork = false;
         }
+    }
+
+    private async Task CancelWorkAndCloseAsync()
+    {
+        _vm.CancelExport();
+        _vm.CancelBatch();
+        // The flags are set before the first await and cleared after the
+        // runner has removed its temp, so waiting on them is what proves the
+        // unwind finished. An encode that cannot be interrupted may outlast
+        // the wait; the second pass then closes anyway.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while ((_vm.IsExportRunning || _vm.IsBatchRunning) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+        await Dispatcher.InvokeAsync(Close);
     }
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -619,9 +651,10 @@ public partial class MainWindow : Window
         {
             return;
         }
+        var work = _vm.ExportAsync(dialog.FileName);
         try
         {
-            await _vm.ExportAsync(dialog.FileName);
+            await work;
         }
         catch (OperationCanceledException)
         {
@@ -630,7 +663,10 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            Report("The photo could not be exported", error);
+            if (!_closingAfterWork)
+            {
+                Report("The photo could not be exported", error);
+            }
         }
     }
 
@@ -660,11 +696,14 @@ public partial class MainWindow : Window
         {
             return;
         }
+        var work = _vm.BatchExportAsync(photos.FileNames, folder.FolderName);
         try
         {
-            var results = await _vm.BatchExportAsync(photos.FileNames, folder.FolderName);
+            var results = await work;
             var failed = results.Where(item => item.Error is not null).ToList();
-            if (failed.Count > 0)
+            // A close cancelled the batch on purpose; a modal report here
+            // would block the close it already agreed to.
+            if (failed.Count > 0 && !_closingAfterWork)
             {
                 var lines = string.Join("\n", failed.Select(
                     item => $"{Path.GetFileName(item.Source)}: {item.Error}"));
@@ -675,7 +714,10 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            Report("The photos could not be exported", error);
+            if (!_closingAfterWork)
+            {
+                Report("The photos could not be exported", error);
+            }
         }
     }
 

@@ -55,6 +55,7 @@ internal static class Program
             ExportCancellation(root);
             ExportDestination(root);
             ExportRefusals(root);
+            ExportDeniedByAcl(root);
             StaleSweep(root);
             AdjustmentEvidence();
             GeometryEvidence();
@@ -1577,6 +1578,91 @@ internal static class Program
               && Directory.GetFileSystemEntries(occupied).Length == 0);
         Check("an export onto a folder leaves no temp sibling",
               Siblings(folder, "occupied.jpg").Count == 0);
+    }
+
+    /// <summary>
+    /// The OS itself refusing the write, not a held handle: the current account
+    /// is denied write on the destination folder through an ACL, so creating the
+    /// temp file fails with UnauthorizedAccessException before any byte is
+    /// staged. A probe write proves the deny is in force, so a skipped or
+    /// ineffective ACE can never be mistaken for a passing refusal.
+    /// </summary>
+    private static void ExportDeniedByAcl(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "export-acl-denied");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+        var account = string.IsNullOrEmpty(Environment.UserDomainName)
+            ? Environment.UserName
+            : $"{Environment.UserDomainName}\\{Environment.UserName}";
+
+        var denied = RunIcacls($"{Quote(folder)} /deny \"{account}:(OI)(CI)W\"");
+        Check("the deny ACE is installed on the destination folder", denied);
+        if (!denied)
+        {
+            Directory.Delete(folder, recursive: true);
+            return;
+        }
+        try
+        {
+            var probe = Path.Combine(folder, "probe.txt");
+            var probeRefused = false;
+            try
+            {
+                File.WriteAllText(probe, "x");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                probeRefused = true;
+            }
+            Check("the deny ACE blocks this process from writing into the folder",
+                  probeRefused);
+            var destination = Path.Combine(folder, "refused.jpg");
+            var error = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+                session.Document, codec, source, destination, "jpeg", 0.9, 0));
+            Check("an export into a write-denied folder fails",
+                  error is UnauthorizedAccessException or IOException);
+            Check("a write-denied folder holds no destination and no temp",
+                  Directory.GetFileSystemEntries(folder).Length == 0);
+        }
+        finally
+        {
+            RunIcacls($"{Quote(folder)} /remove:d \"{account}\"");
+        }
+        Directory.Delete(folder, recursive: true);
+    }
+
+    private static string Quote(string path) => $"\"{path}\"";
+
+    private static bool RunIcacls(string arguments)
+    {
+        try
+        {
+            var info = new ProcessStartInfo("icacls", arguments)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            using var process = Process.Start(info);
+            if (process is null)
+            {
+                return false;
+            }
+            if (!process.WaitForExit(30000))
+            {
+                process.Kill(entireProcessTree: true);
+                return false;
+            }
+            return process.ExitCode == 0;
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or IOException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

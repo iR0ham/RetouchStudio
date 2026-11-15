@@ -11,6 +11,8 @@ using System.Windows.Automation;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using RetouchStudio.Core.Imaging;
+using RetouchStudio.Core.IO;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Imaging;
 
@@ -25,7 +27,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop]
+///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop|exportcancel|exportclose]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -42,13 +44,13 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop]");
+                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop|exportcancel|exportclose]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "recoveryno" or "guard" or "project"
                         or "batch" or "crop" or "compare" or "zoom" or "batchcancel"
-                        or "errors" or "drop"))
+                        or "errors" or "drop" or "exportcancel" or "exportclose"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -133,6 +135,14 @@ internal static class Program
             else if (mode == "drop")
             {
                 RunDrop(process, photo, output);
+            }
+            else if (mode == "exportcancel")
+            {
+                RunExportCancel(process, output);
+            }
+            else if (mode == "exportclose")
+            {
+                RunExportClose(process, output);
             }
             else
             {
@@ -2073,6 +2083,281 @@ internal static class Program
     }
 
     /// <summary>
+    /// A photo large enough that its export is still running when the harness
+    /// acts. Sixteen-bit samples with per-pixel noise: the PNG is both slow to
+    /// decode and slow to encode, so the cancel and the close land inside the
+    /// work instead of after it.
+    /// </summary>
+    private static string MakeBusyPhoto(string folder)
+    {
+        const int width = 4000;
+        const int height = 3000;
+        var buffer = new PixelBuffer16(width, height);
+        var pixels = buffer.Pixels;
+        var state = 0x2F6E2B1u;
+        for (var index = 0; index < width * height; index++)
+        {
+            state = state * 1664525u + 1013904223u;
+            var red = (ushort)(state >> 16);
+            state = state * 1664525u + 1013904223u;
+            var green = (ushort)(state >> 16);
+            state = state * 1664525u + 1013904223u;
+            var blue = (ushort)(state >> 16);
+            var offset = index * 4;
+            pixels[offset] = red;
+            pixels[offset + 1] = green;
+            pixels[offset + 2] = blue;
+            pixels[offset + 3] = ushort.MaxValue;
+        }
+        var path = Path.Combine(folder, "busy-4000x3000.png");
+        new WindowsImageCodec().Encode16Async(buffer, path, "png")
+            .GetAwaiter().GetResult();
+        return path;
+    }
+
+    /// <summary>
+    /// The format is a bound ComboBox with no automation name; its AutomationId
+    /// is the x:Name the XAML declares. Arrow keys change the selection of a
+    /// closed WPF ComboBox and raise the same change the mouse would, and the
+    /// selection pattern reads back what the app now holds.
+    /// </summary>
+    private static void SelectFormat(AutomationElement window, string name, IntPtr mainHandle)
+    {
+        var box = window.FindFirst(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.AutomationIdProperty, "FormatBox"))
+            ?? throw new InvalidOperationException("the Format box is missing");
+        SetForegroundWindow(mainHandle);
+        box.SetFocus();
+        for (var attempt = 0; attempt < 4 && SelectedFormat(box) != name; attempt++)
+        {
+            keybd_event(VkDown, 0, 0, IntPtr.Zero);
+            keybd_event(VkDown, 0, KeyUp, IntPtr.Zero);
+            Thread.Sleep(300);
+        }
+        var selected = SelectedFormat(box);
+        if (selected != name)
+        {
+            throw new InvalidOperationException(
+                $"the Format box shows '{selected}', not '{name}'");
+        }
+    }
+
+    private static string? SelectedFormat(AutomationElement box)
+    {
+        if (!box.TryGetCurrentPattern(SelectionPattern.Pattern, out var pattern)
+            || pattern is not SelectionPattern selection)
+        {
+            return null;
+        }
+        return selection.Current.GetSelection().FirstOrDefault()?.Current.Name;
+    }
+
+    /// <summary>
+    /// The single-export cancel, clicked while a 24-megapixel 16-bit PNG is
+    /// still being encoded. The token the button sets is read between the
+    /// finished encode and the publish, so nothing may appear at the
+    /// destination and the temp sibling must be gone.
+    /// </summary>
+    private static void RunExportCancel(Process process, string output)
+    {
+        var busy = Directory.CreateTempSubdirectory("retouchstudio-ui-export-cancel-");
+        try
+        {
+            var (window, mainHandle, _, destination) =
+                PrepareBusyExport(process, busy, output);
+            var cancel = FindButton(window, "Cancel Export")
+                ?? throw new InvalidOperationException("the Cancel Export button is missing");
+            if (cancel.Current.IsEnabled)
+            {
+                throw new InvalidOperationException(
+                    "Cancel Export is enabled before an export starts");
+            }
+            SelectFormat(window, "PNG", mainHandle);
+            Ok("the export format is PNG, so the export takes the 16-bit path");
+            DriveExportDialog(window, process, mainHandle, destination);
+            if (!WaitFor(() => cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the export never showed itself as running; the status says " +
+                    DescribeTexts(window) + "; the folder holds " +
+                    RecentFiles(Path.GetDirectoryName(destination)!));
+            }
+            try
+            {
+                Invoke(cancel);
+            }
+            catch (ElementNotEnabledException)
+            {
+                throw new InvalidOperationException(
+                    "the export ended before the cancel was clicked; the status says " +
+                    DescribeTexts(window) + "; the folder holds " +
+                    RecentFiles(Path.GetDirectoryName(destination)!));
+            }
+            var stopped = WaitFor(
+                () => ExportStatus(window) == "Export cancelled.",
+                TimeSpan.FromSeconds(120));
+            if (!stopped)
+            {
+                throw new InvalidOperationException(
+                    "the button left no cancelled verdict; the status says " +
+                    DescribeTexts(window) + "; the folder holds " +
+                    RecentFiles(Path.GetDirectoryName(destination)!));
+            }
+            Ok("Cancel Export stopped the export");
+            if (!WaitFor(() => !cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "Cancel Export stayed enabled after the export stopped");
+            }
+            if (File.Exists(destination))
+            {
+                throw new InvalidOperationException(
+                    $"a cancelled export left {new FileInfo(destination).Length} bytes " +
+                    "at the destination");
+            }
+            var leftovers = TempSiblings(destination);
+            if (leftovers.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    "a cancelled export left a temp sibling: " +
+                    string.Join(", ", leftovers.Select(Path.GetFileName)));
+            }
+            Ok("a cancelled export left no destination and no temp sibling");
+            CloseCleanly(window, process);
+        }
+        finally
+        {
+            try
+            {
+                busy.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// The window closed while the same export is running. The closing handler
+    /// must cancel the work and let it unwind before the process exits, so the
+    /// destination is untouched and the temp sibling is removed.
+    /// </summary>
+    private static void RunExportClose(Process process, string output)
+    {
+        var busy = Directory.CreateTempSubdirectory("retouchstudio-ui-export-close-");
+        try
+        {
+            var (window, mainHandle, _, destination) =
+                PrepareBusyExport(process, busy, output);
+            var cancel = FindButton(window, "Cancel Export")
+                ?? throw new InvalidOperationException("the Cancel Export button is missing");
+            SelectFormat(window, "PNG", mainHandle);
+            DriveExportDialog(window, process, mainHandle, destination);
+            if (!WaitFor(() => cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the export never showed itself as running; the status says " +
+                    DescribeTexts(window));
+            }
+            ((WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern)).Close();
+            if (!WaitFor(() => process.HasExited, TimeSpan.FromSeconds(120)))
+            {
+                throw new InvalidOperationException(
+                    "the app did not close while an export was running; the status says " +
+                    DescribeTexts(window));
+            }
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"the app exited with {process.ExitCode} after closing during an export");
+            }
+            Ok("the app closed during an export and exited cleanly");
+            if (File.Exists(destination))
+            {
+                throw new InvalidOperationException(
+                    $"a close during an export left {new FileInfo(destination).Length} " +
+                    "bytes at the destination");
+            }
+            var leftovers = TempSiblings(destination);
+            if (leftovers.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    "a close during an export left a temp sibling: " +
+                    string.Join(", ", leftovers.Select(Path.GetFileName)));
+            }
+            Ok("the close cancelled the export: no destination and no temp sibling");
+        }
+        finally
+        {
+            try
+            {
+                busy.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Opens the big source and answers with the window and the paths the two
+    /// close/cancel scenarios share.
+    /// </summary>
+    private static (AutomationElement Window, IntPtr MainHandle, string Photo, string Destination)
+        PrepareBusyExport(Process process, DirectoryInfo folder, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        var photo = MakeBusyPhoto(folder.FullName);
+        var size = PhotoSize(photo);
+        Ok($"a {size.Width}x{size.Height} 16-bit source is ready");
+        OpenPhoto(window, process, photo);
+        var destination = Path.ChangeExtension(output, ".png");
+        if (File.Exists(destination))
+        {
+            File.Delete(destination);
+        }
+        return (window, mainHandle, photo, destination);
+    }
+
+    private static List<string> TempSiblings(string destination)
+    {
+        var folder = Path.GetDirectoryName(destination);
+        if (folder is null || !Directory.Exists(folder))
+        {
+            return new List<string>();
+        }
+        return Directory.GetFiles(folder)
+            .Where(file => TemporaryFiles.IsSiblingTemp(
+                Path.GetFileName(file), Path.GetFileName(destination)))
+            .ToList();
+    }
+
+    private static string? ExportStatus(AutomationElement window)
+    {
+        foreach (AutomationElement candidate in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var text = candidate.Current.Name;
+            if (text == "Export cancelled."
+                || text.StartsWith("Exported ", StringComparison.Ordinal))
+            {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Hands the picker every file of a folder. The shell remembers the folder
     /// the single-photo dialog last opened, so the files are sometimes in view
     /// already. A picker that starts elsewhere is navigated by typing the
@@ -2350,12 +2635,12 @@ internal static class Program
     }
 
     /// <summary>
-    /// Exports through the Export button and its Save dialog, waits for the
-    /// file, and decodes what was written. The caller decides what the size
-    /// must mean: the whole photo, or the crop the overlay shows.
+    /// Drives the Export button and its Save dialog and returns once the dialog
+    /// has closed, which is when the export starts. A caller that intends to
+    /// stop the export drives this and then acts on the running window.
     /// </summary>
-    private static (int Width, int Height) ExportTo(AutomationElement window, Process process,
-                                                    IntPtr mainHandle, string output)
+    private static void DriveExportDialog(AutomationElement window, Process process,
+                                          IntPtr mainHandle, string output)
     {
         var export = FindButton(window, "Export")
             ?? throw new InvalidOperationException("the Export button is missing");
@@ -2402,6 +2687,17 @@ internal static class Program
             throw new InvalidOperationException(
                 "the Export dialog stayed open after Save; " + DescribeWindow(saveDialog));
         }
+    }
+
+    /// <summary>
+    /// Exports through the Export button and its Save dialog, waits for the
+    /// file, and decodes what was written. The caller decides what the size
+    /// must mean: the whole photo, or the crop the overlay shows.
+    /// </summary>
+    private static (int Width, int Height) ExportTo(AutomationElement window, Process process,
+                                                    IntPtr mainHandle, string output)
+    {
+        DriveExportDialog(window, process, mainHandle, output);
         var wrote = WaitFor(
             () => File.Exists(output) && new FileInfo(output).Length > 1024,
             TimeSpan.FromMinutes(2));
@@ -3200,6 +3496,7 @@ internal static class Program
     private const uint WmKeyDown = 0x0100;
     private const uint WmKeyUp = 0x0101;
     private const int VkReturn = 0x0D;
+    private const int VkDown = 0x28;
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);

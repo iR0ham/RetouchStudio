@@ -325,6 +325,22 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiDropOutput drop
     Assert-ExitCode 'UI drop tests'
+
+    # The single-export Cancel button is clicked while a 24-megapixel 16-bit
+    # PNG is still being encoded: nothing may land at the destination and the
+    # temp sibling must be gone. The output name is a placeholder; the mode
+    # switches it to .png where the export's 16-bit path lives.
+    $uiExportCancelOutput = Join-Path $uiTemp 'retouchstudio-ui-export-cancel.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiExportCancelOutput exportcancel
+    Assert-ExitCode 'UI export cancel tests'
+
+    # Closing the window mid-export must cancel the work and let it unwind
+    # before the process exits, with the same whole-or-absent destination.
+    $uiExportCloseOutput = Join-Path $uiTemp 'retouchstudio-ui-export-close.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiExportCloseOutput exportclose
+    Assert-ExitCode 'UI export close tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted
