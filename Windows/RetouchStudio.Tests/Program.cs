@@ -1713,25 +1713,42 @@ internal static class Program
     /// A single export and a batch are two writes of the same document, so
     /// neither may start while the other runs; the refusal has to arrive
     /// before either destination is touched. The guard lives in the window's
-    /// view model, whose WPF types want an STA thread.
+    /// view model, whose WPF types want an STA thread. That thread also gets a
+    /// dispatcher context, so the checks run as work posted into a pumping
+    /// loop; awaiting them from a bare STA thread would wait for a queue
+    /// nothing drains.
     /// </summary>
     private static void ExportExclusion(string root)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
         {
-            try
+            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            async void Run()
             {
-                ExportExclusionOnSta(root);
+                try
+                {
+                    await ExportExclusionOnSta(root);
+                }
+                catch (Exception error)
+                {
+                    failure = error;
+                }
+                finally
+                {
+                    dispatcher.InvokeShutdown();
+                }
             }
-            catch (Exception error)
-            {
-                failure = error;
-            }
+            dispatcher.InvokeAsync(Run);
+            System.Windows.Threading.Dispatcher.Run();
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        thread.Join();
+        if (!thread.Join(TimeSpan.FromMinutes(5)))
+        {
+            throw new TimeoutException(
+                "the export exclusion checks did not finish within five minutes");
+        }
         if (failure is not null)
         {
             throw new InvalidOperationException(
@@ -1739,7 +1756,7 @@ internal static class Program
         }
     }
 
-    private static void ExportExclusionOnSta(string root)
+    private static async Task ExportExclusionOnSta(string root)
     {
         var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
         var folder = Path.Combine(root, "export-exclusion");
@@ -1756,7 +1773,7 @@ internal static class Program
         try
         {
             var viewModel = new EditorViewModel();
-            viewModel.OpenImageAsync(source).GetAwaiter().GetResult();
+            await viewModel.OpenImageAsync(source);
             Check("the editor holds the photo before the exclusion checks",
                   viewModel.HasDocument);
 
@@ -1768,7 +1785,7 @@ internal static class Program
             Check("a refused single export writes nothing", !File.Exists(singleTarget));
             Check("a refused single export does not claim the single slot",
                   !viewModel.IsExportRunning);
-            batch.GetAwaiter().GetResult();
+            await batch;
             Check("the batch that held the lock still exported",
                   Directory.Exists(batchFolder)
                   && Directory.GetFiles(batchFolder, "*.jpg").Length == 1);
@@ -1784,7 +1801,7 @@ internal static class Program
                   !Directory.Exists(otherBatchFolder));
             Check("a refused batch does not claim the batch slot",
                   !viewModel.IsBatchRunning);
-            single.GetAwaiter().GetResult();
+            await single;
             Check("the single export that held the lock still wrote its file",
                   File.Exists(otherTarget));
         }
