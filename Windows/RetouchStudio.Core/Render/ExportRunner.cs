@@ -114,37 +114,67 @@ public static class ExportRunner
             ? await codec.ReadMetadataAsync(sourcePath)
             : Imaging.ImageMetadata.Empty;
 
-        // The plan decides the depth. PNG and TIFF are 16-bit containers in the
-        // shared contract, so an export to either keeps 16-bit pixels instead
-        // of reducing them to the preview's 8-bit buffer.
-        if (plan.BitsPerChannel >= 16)
+        var fullDestination = Path.GetFullPath(destination);
+        var directory = Path.GetDirectoryName(fullDestination)
+            ?? throw new InvalidOperationException("the destination has no directory");
+        // A hidden sibling with a unique name: two exports into the same folder
+        // cannot collide, and a stale temp from a crash is neither reused nor
+        // swept here.
+        var temporary = Path.Combine(
+            directory,
+            "." + Path.GetFileName(fullDestination) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
         {
-            var decoded = await codec.Decode16Async(sourcePath);
-            var rendered = RenderDocument16(decoded, document);
-            var edge = FitLongEdge(document, plan, longEdge);
-            if (edge > 0)
+            // The plan decides the depth. PNG and TIFF are 16-bit containers in
+            // the shared contract, so an export to either keeps 16-bit pixels
+            // instead of reducing them to the preview's 8-bit buffer.
+            if (plan.BitsPerChannel >= 16)
             {
-                rendered = rendered.ResizeLongEdge(edge);
+                var decoded = await codec.Decode16Async(sourcePath);
+                var rendered = RenderDocument16(decoded, document);
+                var edge = FitLongEdge(document, plan, longEdge);
+                if (edge > 0)
+                {
+                    rendered = rendered.ResizeLongEdge(edge);
+                }
+                if (plan.FlattensAlpha)
+                {
+                    rendered = rendered.FlattenOntoWhite();
+                }
+                await codec.Encode16Async(rendered, temporary, plan.Format,
+                                          metadata, stripPrivacyMetadata);
             }
-            if (plan.FlattensAlpha)
+            else
             {
-                rendered = rendered.FlattenOntoWhite();
+                var decoded = await codec.DecodeAsync(sourcePath);
+                var rendered = RenderDocument(decoded, document);
+                var edge = FitLongEdge(document, plan, longEdge);
+                if (edge > 0)
+                {
+                    rendered = rendered.ResizeLongEdge(edge);
+                }
+                await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,
+                                        temporary, plan.Format, quality,
+                                        metadata, stripPrivacyMetadata);
             }
-            await codec.Encode16Async(rendered, destination, plan.Format,
-                                      metadata, stripPrivacyMetadata);
+
+            // Encode to the temp file, then rename it into place, so a codec
+            // failure, a full disk or a crash cannot leave a partial destination.
+            File.Move(temporary, fullDestination, overwrite: true);
         }
-        else
+        catch
         {
-            var decoded = await codec.DecodeAsync(sourcePath);
-            var rendered = RenderDocument(decoded, document);
-            var edge = FitLongEdge(document, plan, longEdge);
-            if (edge > 0)
+            try
             {
-                rendered = rendered.ResizeLongEdge(edge);
+                File.Delete(temporary);
             }
-            await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,
-                                    destination, plan.Format, quality,
-                                    metadata, stripPrivacyMetadata);
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+            throw;
         }
         return plan;
     }

@@ -44,6 +44,7 @@ internal static class Program
             BitDepth(root);
             SixteenBitPreview(root);
             BatchExport(root);
+            AtomicExport(root);
             AdjustmentEvidence();
             FormatProbes(root);
             Metadata(root);
@@ -1184,6 +1185,90 @@ internal static class Program
               && midDepth == 16);
         Check("a mid-render cancel starts no later file",
               !File.Exists(Path.Combine(midDir, "two-retouched.png")));
+    }
+
+    /// <summary>
+    /// An encode that fails must not leave a partial photo at the destination:
+    /// the write goes through a sibling temp file that is removed on failure,
+    /// and an existing destination is only replaced by the final move.
+    /// </summary>
+    private static void AtomicExport(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var failing = new FailAfterWriting(codec);
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "atomic-export");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+
+        var missing = Path.Combine(folder, "never-written.png");
+        var threw = false;
+        try
+        {
+            ExportRunner.ExportSourceAsync(session.Document, failing, source, missing,
+                                           "png", 1.0, 0).GetAwaiter().GetResult();
+        }
+        catch (IOException)
+        {
+            threw = true;
+        }
+        Check("a failed 16-bit export throws", threw);
+        Check("a failed 16-bit export leaves no destination", !File.Exists(missing));
+        Check("a failed 16-bit export leaves no temp file",
+              Directory.GetFiles(folder, "*.tmp").Length == 0);
+
+        var existing = Path.Combine(folder, "kept.jpg");
+        var sentinel = new byte[] { 7, 7, 7, 7 };
+        File.WriteAllBytes(existing, sentinel);
+        threw = false;
+        try
+        {
+            ExportRunner.ExportSourceAsync(session.Document, failing, source, existing,
+                                           "jpeg", 0.9, 0).GetAwaiter().GetResult();
+        }
+        catch (IOException)
+        {
+            threw = true;
+        }
+        Check("a failed 8-bit export throws", threw);
+        Check("a failed export keeps an existing destination byte-for-byte",
+              File.ReadAllBytes(existing).SequenceEqual(sentinel));
+        Check("a failed 8-bit export leaves no temp file",
+              Directory.GetFiles(folder, "*.tmp").Length == 0);
+    }
+
+    /// <summary>
+    /// Writes a few bytes to the path it is given — the runner's temp file —
+    /// then fails, like a codec that hits a full disk or a broken container.
+    /// </summary>
+    private sealed class FailAfterWriting(IImageCodec inner) : IImageCodec
+    {
+        public Task<ImageSize> ReadSizeAsync(string path) => inner.ReadSizeAsync(path);
+
+        public Task<int> ReadBitDepthAsync(string path) => inner.ReadBitDepthAsync(path);
+
+        public Task<PixelBuffer> DecodeAsync(string path) => inner.DecodeAsync(path);
+
+        public Task<PixelBuffer16> Decode16Async(string path) => inner.Decode16Async(path);
+
+        public Task<ImageMetadata> ReadMetadataAsync(string path) =>
+            inner.ReadMetadataAsync(path);
+
+        public Task EncodeAsync(PixelBuffer image, string path, string format,
+                                double quality, ImageMetadata? metadata = null,
+                                bool stripPrivacyMetadata = true) =>
+            FailAsync(path);
+
+        public Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                  ImageMetadata? metadata = null,
+                                  bool stripPrivacyMetadata = true) =>
+            FailAsync(path);
+
+        private static async Task FailAsync(string path)
+        {
+            await File.WriteAllBytesAsync(path, new byte[] { 0x42, 0x42, 0x42 });
+            throw new IOException("the encoder failed");
+        }
     }
 
     /// <summary>Cancels its batch from inside the first file's pipeline.</summary>
