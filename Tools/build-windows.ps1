@@ -134,9 +134,12 @@ if ($dumpbin) {
 Step 'collecting the Swift runtime'
 $targetInfo = & swiftc -print-target-info | ConvertFrom-Json
 Assert-ExitCode 'swiftc -print-target-info'
+# Only ship Swift's redistributable runtime locations. The directory containing
+# swiftc.exe is the compiler toolchain (LLVM, LLDB, SourceKit, SwiftSyntax,
+# build-system and indexing tools), not an application runtime directory.
+# Copying every DLL from that directory bloats the app by hundreds of MiB.
 $runtimeDirs = @($targetInfo.paths.runtimeLibraryPaths) +
-    @($targetInfo.paths.runtimeResourcePaths) +
-    @(Split-Path (Get-Command swiftc).Source)
+    @($targetInfo.paths.runtimeResourcePaths)
 $copied = @{}
 foreach ($directory in $runtimeDirs) {
     if ($directory -and (Test-Path $directory)) {
@@ -165,6 +168,22 @@ if (-not $SkipPublish) {
     Get-ChildItem $nativeDir -Filter *.dll -File | ForEach-Object {
         Copy-Item $_.FullName $appDir -Force
     }
+
+    # Guard against accidentally shipping compiler/debugger tooling again.
+    # These are not part of the StudioCore runtime dependency closure.
+    $forbiddenToolchainDlls = @(
+        'liblldb.dll', 'sourcekitdInProc.dll', '_InternalSwiftScan.dll',
+        'libclang.dll', 'LTO.dll', 'libIndexStore.dll',
+        '_InternalSwiftStaticMirror.dll'
+    )
+    foreach ($name in $forbiddenToolchainDlls) {
+        if (Test-Path (Join-Path $appDir $name) -PathType Leaf) {
+            throw "Unexpected Swift toolchain DLL in app payload: $name"
+        }
+    }
+
+    $appBytes = (Get-ChildItem $appDir -File -Recurse | Measure-Object -Property Length -Sum).Sum
+    Write-Host ("   app payload: {0:N1} MiB" -f ($appBytes / 1MB))
     Write-Host "   app published to $appDir"
 }
 
