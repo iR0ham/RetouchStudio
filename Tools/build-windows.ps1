@@ -304,6 +304,13 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiCancelOutput batchcancel
     Assert-ExitCode 'UI batch cancel tests'
+
+    # A corrupt photo and a locked destination must each end in a message the
+    # person reads, and the failed export must leave the locked file alone.
+    $uiErrorOutput = Join-Path $uiTemp 'retouchstudio-ui-errors.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiErrorOutput errors
+    Assert-ExitCode 'UI error tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted

@@ -22,7 +22,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|guard|project|batch|crop|compare]
+///       [golden|recovery|guard|project|batch|crop|compare|zoom|batchcancel|errors]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,12 +39,12 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch|crop|compare|zoom|batchcancel]");
+                "[golden|recovery|guard|project|batch|crop|compare|zoom|batchcancel|errors]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"
-                        or "crop" or "compare" or "zoom" or "batchcancel"))
+                        or "crop" or "compare" or "zoom" or "batchcancel" or "errors"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -117,6 +117,10 @@ internal static class Program
             else if (mode == "batchcancel")
             {
                 RunBatchCancel(process, photo, output);
+            }
+            else if (mode == "errors")
+            {
+                RunErrors(process, photo, output);
             }
             else
             {
@@ -339,6 +343,217 @@ internal static class Program
         }
         Ok("the app closed cleanly after the guard prompt");
         Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Both failure paths end in a message box a person can read: a corrupt
+    /// photo must be named as unopenable, and a destination another program
+    /// holds open must fail the export without touching that file. The app
+    /// must stay open and usable after each one.
+    /// </summary>
+    private static void RunErrors(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+
+        var broken = Path.ChangeExtension(output, ".broken" + Path.GetExtension(photo));
+        File.WriteAllText(broken, "this is not a photo");
+        var open = FindButton(window, "Open Photo")
+            ?? throw new InvalidOperationException("the Open Photo button is missing");
+        Invoke(open);
+        var openDialogHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        var openDialog = AutomationElement.FromHandle(openDialogHandle);
+        SetFileName(openDialog, broken);
+        PressDefaultButton(openDialog, "Open");
+
+        var openError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (openError is null || !openError.Contains("could not be opened", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"opening a corrupt photo said {openError ?? "nothing"}; the app's windows are " +
+                DescribeAppWindows(process.Id));
+        }
+        Ok($"a corrupt photo is reported: {openError}");
+        if (process.HasExited || !window.Current.Name.StartsWith("Retouch Studio", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"the app did not survive the failed open; the title is " +
+                $"'{window.Current.Name}'");
+        }
+
+        OpenPhoto(window, process, photo);
+
+        // A file another program holds with no sharing cannot be written. The
+        // Save dialog still offers to replace it, which is the moment the write
+        // is attempted and fails.
+        var locked = Path.ChangeExtension(output, ".locked.jpg");
+        var placeholder = new byte[1024];
+        File.WriteAllBytes(locked, placeholder);
+        using var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite,
+                                        FileShare.None);
+        var export = FindButton(window, "Export")
+            ?? throw new InvalidOperationException("the Export button is missing");
+        Invoke(export);
+        var saveHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Export click opened no dialog");
+        var saveDialog = AutomationElement.FromHandle(saveHandle);
+        var saveEdit = SetFileName(saveDialog, locked);
+        CommitFileName(saveEdit);
+        // An existing name first raises the dialog's own replace question. The
+        // Enter can be swallowed by an auto-complete suggestion, so Save is
+        // pressed when nothing has happened yet.
+        var replace = WaitForReplacePrompt(process.Id, saveHandle, TimeSpan.FromSeconds(10));
+        if (replace is null && IsWindowVisible(saveHandle))
+        {
+            PressDefaultButton(saveDialog, "Save");
+            replace = WaitForReplacePrompt(process.Id, saveHandle, TimeSpan.FromSeconds(20));
+            if (replace is null && IsWindowVisible(saveHandle))
+            {
+                throw new InvalidOperationException(
+                    "the Export dialog never offered to replace the locked file; " +
+                    DescribeWindow(saveDialog));
+            }
+        }
+        if (replace is not null)
+        {
+            Invoke(replace);
+        }
+        if (!WaitFor(() => !IsWindowVisible(saveHandle), TimeSpan.FromSeconds(30)))
+        {
+            throw new InvalidOperationException(
+                "the Export dialog stayed open; " + DescribeWindow(saveDialog));
+        }
+
+        var exportError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (exportError is null
+            || !exportError.Contains("could not be exported", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"exporting onto a locked file said {exportError ?? "nothing"}; " +
+                "the app's windows are " + DescribeAppWindows(process.Id));
+        }
+        Ok($"a locked destination is reported: {exportError}");
+        if (new FileInfo(locked).Length != placeholder.Length)
+        {
+            throw new InvalidOperationException(
+                "the failed export changed the locked file");
+        }
+        Ok("the failed export left the locked file untouched");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Waits for the next message box, reads the text it shows, and answers OK.
+    /// Returns null when no box appears inside the patience.
+    /// </summary>
+    private static string? DismissMessageBox(int processId, IntPtr mainHandle,
+                                             TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var handle in VisibleWindows(processId))
+            {
+                if (handle == mainHandle)
+                {
+                    continue;
+                }
+                try
+                {
+                    var box = AutomationElement.FromHandle(handle);
+                    var ok = FindButton(box, "OK");
+                    if (ok is null)
+                    {
+                        continue;
+                    }
+                    var text = DescribeWindow(box);
+                    Invoke(ok);
+                    return text;
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+            Thread.Sleep(250);
+        }
+        return null;
+    }
+
+    /// <summary>A button by name in any of the process's visible windows.</summary>
+    private static AutomationElement? TryFindButton(int processId, string name)
+    {
+        foreach (var handle in VisibleWindows(processId))
+        {
+            try
+            {
+                var button = FindButton(AutomationElement.FromHandle(handle), name);
+                if (button is not null)
+                {
+                    return button;
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The Save dialog's replace question, unless the dialog has already
+    /// closed, which means it committed without asking.
+    /// </summary>
+    private static AutomationElement? WaitForReplacePrompt(int processId, IntPtr dialog,
+                                                           TimeSpan patience)
+    {
+        AutomationElement? found = null;
+        WaitFor(() =>
+        {
+            if (!IsWindowVisible(dialog))
+            {
+                return true;
+            }
+            found = TryFindButton(processId, "Yes");
+            return found is not null;
+        }, patience);
+        return found;
+    }
+
+    /// <summary>
+    /// The next visible window that is a file dialog. A plain "new window" can
+    /// be a transient shell popup with no controls, so the dialog is the one
+    /// whose tree holds a File name box.
+    /// </summary>
+    private static IntPtr? WaitFileDialog(int processId, IntPtr except, TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var handle in VisibleWindows(processId))
+            {
+                if (handle == except)
+                {
+                    continue;
+                }
+                try
+                {
+                    if (FindFileNameControl(AutomationElement.FromHandle(handle)) is not null)
+                    {
+                        return handle;
+                    }
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+            Thread.Sleep(200);
+        }
+        return null;
     }
 
     /// <summary>
@@ -570,8 +785,8 @@ internal static class Program
         var batch = FindButton(window, "Batch Export…")
             ?? throw new InvalidOperationException("the Batch Export button is missing");
         Invoke(batch);
-        var photosHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
-            ?? throw new InvalidOperationException("the Batch Export click opened no window");
+        var photosHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Batch Export click opened no dialog");
         var photosDialog = AutomationElement.FromHandle(photosHandle);
         var photosEdit = SetFileName(photosDialog, photo);
         if (!WaitFor(() => ReadValue(photosEdit) == photo, TimeSpan.FromSeconds(10)))
@@ -1228,9 +1443,9 @@ internal static class Program
             var batch = FindButton(window, "Batch Export…")
                 ?? throw new InvalidOperationException("the Batch Export button is missing");
             Invoke(batch);
-            var photosHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            var photosHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
                 ?? throw new InvalidOperationException(
-                    "the Batch Export click opened no window");
+                    "the Batch Export click opened no dialog");
             var photosDialog = AutomationElement.FromHandle(photosHandle);
             // The common dialog takes several quoted paths in its File name box.
             var photosEdit = SetFileName(photosDialog,
@@ -1480,8 +1695,8 @@ internal static class Program
         // The dialog is the new window the click opened. Its caption is not
         // asserted: on this host the common dialog carries the app title, so
         // the evidence is the window itself plus the export it writes.
-        var dialogHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
-            ?? throw new InvalidOperationException("the Export click opened no window");
+        var dialogHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Export click opened no dialog");
         var saveDialog = AutomationElement.FromHandle(dialogHandle);
         var caption = saveDialog.Current.Name;
         if (FindFileNameControl(saveDialog) is null)
