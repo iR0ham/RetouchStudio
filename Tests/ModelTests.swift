@@ -6578,6 +6578,7 @@ func runAll() async {
     testMaskGeometryCrossesTheCrop()
     testMaskStoreKeepsTheRasterHonest()
     testDocumentRestorationCarriesMasks()
+    testRecoverySnapshotCarriesMasks()
     await testModelStoresMaskBesideEdit()
 
     // Invalidate any debounced write left by the last scenario: the scratch
@@ -6847,6 +6848,73 @@ func testDocumentRestorationCarriesMasks() {
     let m5Plain = DocumentRestoration.photo()
     check(m5Plain.state.masks.isEmpty && m5Plain.state.faceIdentities.isEmpty,
           "a plain photo starts with no masks and no people")
+}
+
+/// Autosave is a save too: a crash copy carries masks and the people they
+/// name, while the frozen v3 body it wraps stays v3.
+@MainActor
+func testRecoverySnapshotCarriesMasks() {
+    print("\n[v5] a crash copy keeps masks and the people they name")
+
+    let m5Person = FaceIdentityRecord(box: StudioRect(x: 0.2, y: 0.2,
+                                                      width: 0.3, height: 0.3))
+    let m5Mask = MaskRecord(
+        frame: MaskSourceFrame(width: 480, height: 600),
+        strokes: [MaskStroke(points: [StudioPoint(x: 0.3, y: 0.4)],
+                             width: 0.05, erase: false)],
+        box: StudioRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4),
+        faceId: m5Person.id)
+    let m5Project = RetouchProject(imagePath: "/codec/photo.jpg",
+                                   adjustments: .zero, exportFormat: "jpeg",
+                                   exportQuality: 0.9, autoRetouchStrength: 0,
+                                   masks: [m5Mask], faceIdentities: [m5Person])
+
+    let m5Snapshot = RecoverySnapshot.capture(m5Project,
+                                              savedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    check(m5Snapshot.masks == [m5Mask] && m5Snapshot.faceIdentities == [m5Person],
+          "capture keeps them beside the project body")
+
+    let m5Encoder = JSONEncoder()
+    m5Encoder.outputFormatting = [.sortedKeys]
+    guard let m5Data = try? m5Encoder.encode(m5Snapshot),
+          let m5Object = try? JSONSerialization.jsonObject(with: m5Data) as? [String: Any],
+          let m5Body = m5Object["project"] as? [String: Any] else {
+        check(false, "the snapshot encodes")
+        return
+    }
+    check(m5Object["masks"] != nil && m5Object["faceIdentities"] != nil,
+          "they are in the bytes, which the frozen v3 body cannot write")
+    check(m5Body["masks"] == nil && m5Body["faceIdentities"] == nil,
+          "the wrapped project body stays v3")
+
+    let m5Decoded = RecoveryPolicy.snapshot(from: m5Data, modified: nil)
+    check(m5Decoded?.project.masks == [m5Mask],
+          "a restore hands the mask back to the document")
+    check(m5Decoded?.project.faceIdentities == [m5Person],
+          "and the person the mask names")
+
+    let m5Plain = RecoverySnapshot.capture(
+        RetouchProject(imagePath: "/codec/photo.jpg", adjustments: .zero,
+                       exportFormat: "jpeg", exportQuality: 0.9,
+                       autoRetouchStrength: 0))
+    guard let m5PlainData = try? m5Encoder.encode(m5Plain),
+          let m5PlainObject = try? JSONSerialization.jsonObject(
+              with: m5PlainData) as? [String: Any] else {
+        check(false, "a document without masks encodes")
+        return
+    }
+    check(m5PlainObject["masks"] == nil && m5PlainObject["faceIdentities"] == nil,
+          "a v3 snapshot keeps its exact shape")
+
+    // The bare project older releases wrote still decodes; the v3 body never
+    // carried masks, so a legacy copy restores with none.
+    guard let m5Bare = try? JSONEncoder().encode(m5Project) else {
+        check(false, "a bare project encodes")
+        return
+    }
+    let m5BareSnapshot = RecoveryPolicy.snapshot(from: m5Bare, modified: nil)
+    check(m5BareSnapshot?.version == 0 && m5BareSnapshot?.project.masks == nil,
+          "a bare project still decodes as a legacy copy")
 }
 
 /// The model records the mask beside the edit as one undo step, so ⌘Z takes

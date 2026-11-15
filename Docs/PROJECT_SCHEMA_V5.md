@@ -2,10 +2,12 @@
 
 **Status:** codec, ABI and macOS app wiring IMPLEMENTED and locally tested
 (2026-11-15, branch `schema/v5-masks`; codec committed as `a675078`, app wiring
-uncommitted on the same branch). A Quick Edit now stores the mask it was drawn
-from beside the edit as one undo step, a reopened project shows its mask again
-when the pixels still match, and the refined raster lives in a cache keyed by
-the mask id. Nothing here is CI verified yet and nothing is merged.
+as `b0a8676` plus the recovery snapshot fix on top). A Quick Edit now stores
+the mask it was drawn from beside the edit as one undo step, a reopened project
+shows its mask again when the pixels still match, the refined raster lives in a
+cache keyed by the mask id, and an autosave keeps masks and face identities so a
+crash restore does not lose them. Nothing here is CI verified yet and nothing
+is merged.
 
 Evidence so far, all local on this Mac:
 
@@ -13,7 +15,7 @@ Evidence so far, all local on this Mac:
 |---|---|
 | `Tests/run-studiocore.sh` (arm64 and x86_64) | 287 checks passed |
 | `Tests/run-abi.sh` (arm64 and x86_64) | ABI TESTS: PASS (104 checks) |
-| `Tests/run.sh` (arm64: engine, model, runtime process, runtime v2) | all four suites PASS, exit 0; the model suite carries the new `[v5]` checks |
+| `Tests/run.sh` (arm64: engine, model, runtime process, runtime v2) | all four suites PASS, exit 0; the model suite carries the new `[v5]` checks, including the recovery snapshot |
 | Windows suite | NOT RUN — runs only on a Windows runner; the new cases compile in CI |
 
 ## 1. Three concepts, kept apart
@@ -78,6 +80,11 @@ already use (`Sources/StudioCore/StudioGeometry.swift`).
   missing file or a digest mismatch means "recompute or redraw", never "apply
   anyway". The geometry alone is a complete mask; `hasContent` is true without
   any raster.
+- **Crash recovery**: an autosave is a save, so `RecoverySnapshot` stores the
+  masks and face identities beside the project body, which the frozen v3 writer
+  cannot express, and a restore puts them back on the document before load. A
+  snapshot without them omits both keys, so unchanged v3 snapshots keep their
+  exact bytes and the wrapper stays version 1.
 
 ## 5. Determinism and cross-host bytes
 
@@ -137,6 +144,11 @@ and only when the document carries data the older version cannot express.
 | 10 | Cache delete + regenerate | M8: a mask is complete without `refined`; `[v5]` model check adopts, reloads, refuses changed bytes and removes the folder | LOCAL PASS (contract and store) |
 | 11 | Deterministic serialization | M8: encode-twice and read-modify-write byte identity; fixture byte identity | LOCAL PASS |
 | 12 | Backward compatibility | M8: v4 fixture resaves byte for byte; v6 refused as `tooNew` | LOCAL PASS |
+
+Recovery is a second save path: the `[v5]` model check
+`testRecoverySnapshotCarriesMasks` proves a crash copy carries masks and face
+identities beside the frozen v3 body, a restore hands them back, an unchanged v3
+snapshot keeps its shape, and a bare project still decodes as a legacy copy.
 
 ## 10. Limitations and open work
 
