@@ -254,9 +254,13 @@ enum ExportService {
                       protecting protectedURL: URL? = nil) -> Bool {
         writeResult(rendered, snapshot: snapshot, to: url,
                     colorSpace: colorSpace, metadata: metadata, xmp: xmp,
-                    protecting: protectedURL) == .written
+                    protecting: protectedURL,
+                    isCancelled: { false }) == .written
     }
 
+    /// `isCancelled` defaults to false on purpose: a caller that does not name
+    /// its cancellation state (harnesses, self-check) must never lose a file it
+    /// asked to write. Export jobs pass their own state explicitly.
     static func writeResult(_ rendered: RenderedExport,
                             snapshot: ExportSnapshot,
                             to url: URL,
@@ -264,7 +268,7 @@ enum ExportService {
                             metadata: [CFString: Any],
                             xmp: CGImageMetadata? = nil,
                             protecting protectedURL: URL?,
-                            isCancelled: () -> Bool = { Task.isCancelled }) -> WriteResult {
+                            isCancelled: () -> Bool = { false }) -> WriteResult {
         if let protectedURL, referencesSameFile(url, protectedURL) {
             return .refusedOriginal
         }
@@ -310,9 +314,12 @@ enum ExportService {
     }
 
     /// Removes temp siblings a crashed or force-quit export left behind: files
-    /// named exactly ".<destination>.<UUID>.tmp" in the destination folder,
-    /// regular files, untouched for at least `olderThan`. Nothing else in the
-    /// folder is considered. Returns how many entries were removed.
+    /// named exactly ".<destination>.<stamp>.tmp" in the destination folder,
+    /// regular files, untouched for more than `olderThan`. The stamp is the
+    /// dashed UUID `writeResult` creates, or a compact 32-hex spelling of one;
+    /// dots in the destination name are matched literally, the folder is not
+    /// searched recursively, and nothing else is considered. Returns how many
+    /// entries were removed.
     @discardableResult
     static func sweepStaleSiblingTemps(for url: URL,
                                        now: Date = Date(),
@@ -326,7 +333,7 @@ enum ExportService {
         for name in names {
             guard name.hasPrefix(prefix), name.hasSuffix(".tmp") else { continue }
             let stamp = name.dropFirst(prefix.count).dropLast(".tmp".count)
-            guard stamp.count == 36, UUID(uuidString: String(stamp)) != nil else { continue }
+            guard isTempStamp(stamp) else { continue }
             let candidate = folder.appendingPathComponent(name)
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: candidate.path),
                   attributes[.type] as? FileAttributeType == .typeRegular,
@@ -336,6 +343,19 @@ enum ExportService {
             removed += 1
         }
         return removed
+    }
+
+    /// A UUID as `UUID().uuidString` writes it (8-4-4-4-12, hex, either case),
+    /// or the same value as 32 hex digits.
+    private static func isTempStamp(_ stamp: Substring) -> Bool {
+        let text = String(stamp)
+        if text.count == 32 {
+            return text.allSatisfy { $0.isHexDigit }
+        }
+        guard text.count == 36 else { return false }
+        let groups = text.split(separator: "-", omittingEmptySubsequences: false)
+        guard groups.map(\.count) == [8, 4, 4, 4, 12] else { return false }
+        return text.allSatisfy { $0 == "-" || $0.isHexDigit }
     }
 
     /// True when writing to `destination` would replace `source`, including a

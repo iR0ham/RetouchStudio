@@ -2391,6 +2391,107 @@ func testExportCancelsBeforeCommit() async {
         .filter { $0.hasPrefix(".\(destination.lastPathComponent).") && $0.hasSuffix(".tmp") } ?? []
     check(leftovers.isEmpty, "a commit-point cancel leaves no temp sibling",
           leftovers.joined(separator: ", "))
+
+    // A cancel that arrives after the commit is ignored: the writer asks once,
+    // before the replace/move, and a "yes" afterwards must not undo the file.
+    var asks = 0
+    let lateDestination = scratch.appendingPathComponent("late.png")
+    let committed = ExportService.writeResult(rendered, snapshot: snapshot, to: lateDestination,
+                                              colorSpace: source.colorSpace,
+                                              metadata: source.metadata, xmp: source.xmp,
+                                              protecting: sourceURL,
+                                              isCancelled: { asks += 1; return asks > 1 })
+    check(committed == .written, "a cancel after the commit is ignored", "\(committed)")
+    check(asks == 1, "the writer asks about cancellation once", "\(asks)")
+    check(FileManager.default.fileExists(atPath: lateDestination.path),
+          "the committed export is on disk")
+}
+
+@MainActor
+func testBatchWriteKeepsFileInFlight() async {
+    print("\n[R6-X] a batch cancel at the commit point keeps the file in flight")
+
+    let prefix = "batch-commit-\(UUID().uuidString.prefix(8))"
+    let sourceURL = workDir.appendingPathComponent("\(prefix)-source.png")
+    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: sourceURL) else {
+        check(false, "batch-commit fixture")
+        return
+    }
+    let model = EditorModel()
+    model.load(url: sourceURL)
+    model.exportFormat = .png
+    check(await waitUntil { model.hasImage && !model.isBusy }, "batch-commit fixture loads")
+
+    guard let snapshot = model.makeExportSnapshot(),
+          let loaded = ImageProcessor.shared.load(from: sourceURL,
+                                                  previewMaxDimension: 1024) else {
+        check(false, "the render request and its source exist")
+        return
+    }
+    let source = ExportSource(image: loaded.sourceFull,
+                              masks: nil,
+                              faces: loaded.faces,
+                              photoAspect: loaded.pixelSize.width / loaded.pixelSize.height,
+                              colorSpace: loaded.colorSpace,
+                              metadata: loaded.metadata,
+                              xmp: loaded.xmp)
+
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("rs-batch-commit-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    let destination = scratch.appendingPathComponent("in-flight.png")
+
+    guard let rendered = try? MacDocumentRenderer().render(snapshot, source: source,
+                                                           progress: nil) else {
+        check(false, "the batch file renders before its commit")
+        return
+    }
+
+    // The batch's writer never consults the task: its own closure reports "not
+    // cancelled" even when the task is cancelled exactly at the commit point,
+    // so the in-flight file lands and the loop stops before the next one.
+    var batch = MacDocumentRenderer()
+    batch.commitCancellation = {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return false
+    }
+    let committed = await Task { () -> Bool in
+        do {
+            _ = try batch.write(rendered, request: snapshot, source: source,
+                                to: destination, protecting: sourceURL)
+            return true
+        } catch {
+            return false
+        }
+    }.value
+    check(committed, "a cancelled batch still commits the file in flight")
+    check(FileManager.default.fileExists(atPath: destination.path),
+          "the in-flight output is complete on disk")
+
+    // The same entry point does stop at the commit point when the batch's
+    // answer is yes; nothing is left behind.
+    var stopping = MacDocumentRenderer()
+    stopping.commitCancellation = { true }
+    let stopped = scratch.appendingPathComponent("stopped.png")
+    let cancelledOutcome = await Task { () -> Bool in
+        do {
+            _ = try stopping.write(rendered, request: snapshot, source: source,
+                                   to: stopped, protecting: sourceURL)
+            return false
+        } catch RenderError.cancelled {
+            return true
+        } catch {
+            return false
+        }
+    }.value
+    check(cancelledOutcome, "a commit-point cancel stops the batch write")
+    check(!FileManager.default.fileExists(atPath: stopped.path),
+          "the stopped batch write leaves no destination")
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: scratch.path))?
+        .filter { $0.hasSuffix(".tmp") } ?? []
+    check(leftovers.isEmpty, "the stopped batch write leaves no temp sibling",
+          leftovers.joined(separator: ", "))
 }
 
 @MainActor
@@ -2403,20 +2504,30 @@ func testStaleExportTempsAreSweptSafely() async {
     try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
     defer { try? fm.removeItem(at: scratch) }
 
-    let destination = scratch.appendingPathComponent("photo.jpg")
-    let oldTemp = scratch.appendingPathComponent(".photo.jpg.\(UUID().uuidString).tmp")
-    let freshTemp = scratch.appendingPathComponent(".photo.jpg.\(UUID().uuidString).tmp")
+    // The destination has a dot in it, so the match must anchor on the whole
+    // name: ".photo.jpg.…" is another destination's temp, not this one's.
+    let destination = scratch.appendingPathComponent("photo.final.jpg")
+    let oldTemp = scratch.appendingPathComponent(".photo.final.jpg.\(UUID().uuidString).tmp")
+    let compactHex = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    let oldCompact = scratch.appendingPathComponent(".photo.final.jpg.\(compactHex).tmp")
+    let freshTemp = scratch.appendingPathComponent(".photo.final.jpg.\(UUID().uuidString).tmp")
+    let otherBasename = scratch.appendingPathComponent(".photo.jpg.\(UUID().uuidString).tmp")
+    let metadataDecoy = scratch.appendingPathComponent(".photo.final.jpg.metadata.tmp")
     let unrelatedTemp = scratch.appendingPathComponent(".notes.tmp")
-    let userFile = scratch.appendingPathComponent("photo.jpg")
-    for fixture in [oldTemp, freshTemp, unrelatedTemp, userFile] {
+    let userFile = scratch.appendingPathComponent("photo.final.jpg")
+    let fixtures = [oldTemp, oldCompact, freshTemp, otherBasename,
+                    metadataDecoy, unrelatedTemp, userFile]
+    for fixture in fixtures {
         check(fm.createFile(atPath: fixture.path, contents: Data("x".utf8)),
               "fixture written: \(fixture.lastPathComponent)")
     }
 
     let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
     do {
-        try fm.setAttributes([.modificationDate: fixedNow.addingTimeInterval(-25 * 60 * 60)],
-                             ofItemAtPath: oldTemp.path)
+        for stale in [oldTemp, oldCompact, otherBasename, metadataDecoy, unrelatedTemp, userFile] {
+            try fm.setAttributes([.modificationDate: fixedNow.addingTimeInterval(-25 * 60 * 60)],
+                                 ofItemAtPath: stale.path)
+        }
         try fm.setAttributes([.modificationDate: fixedNow.addingTimeInterval(-60)],
                              ofItemAtPath: freshTemp.path)
     } catch {
@@ -2424,9 +2535,13 @@ func testStaleExportTempsAreSweptSafely() async {
     }
 
     let removed = ExportService.sweepStaleSiblingTemps(for: destination, now: fixedNow)
-    check(removed == 1, "exactly the stale matching temp is swept", "\(removed)")
-    check(!fm.fileExists(atPath: oldTemp.path), "the 25-hour-old matching temp is gone")
+    check(removed == 2, "only the two stale exact matches are swept", "\(removed)")
+    check(!fm.fileExists(atPath: oldTemp.path), "the 25-hour-old dashed match is gone")
+    check(!fm.fileExists(atPath: oldCompact.path), "the 25-hour-old compact-hex match is gone")
     check(fm.fileExists(atPath: freshTemp.path), "a fresh matching temp survives")
+    check(fm.fileExists(atPath: otherBasename.path),
+          "another destination's temp survives a dotted name")
+    check(fm.fileExists(atPath: metadataDecoy.path), "a metadata-style decoy survives")
     check(fm.fileExists(atPath: unrelatedTemp.path), "an unrelated .tmp survives")
     check(fm.fileExists(atPath: userFile.path), "the user's own file survives")
 }
@@ -5161,16 +5276,17 @@ func testExportProtectsSource() async {
         snapshot.format = .png
         let direct = ExportService.writeResult(rendered, snapshot: snapshot, to: source,
                                                colorSpace: sRGB, metadata: [:],
-                                               protecting: source)
+                                               protecting: source, isCancelled: { false })
         check(direct == .refusedOriginal, "the writer refuses the source at commit time")
         let directAlias = ExportService.writeResult(rendered, snapshot: snapshot, to: symlink,
                                                     colorSpace: sRGB, metadata: [:],
-                                                    protecting: source)
+                                                    protecting: source, isCancelled: { false })
         check(directAlias == .refusedOriginal, "the writer refuses a symlink at commit time")
         if linked {
             let directHardlink = ExportService.writeResult(rendered, snapshot: snapshot,
                                                            to: hardlink, colorSpace: sRGB,
-                                                           metadata: [:], protecting: source)
+                                                           metadata: [:], protecting: source,
+                                                           isCancelled: { false })
             check(directHardlink == .refusedOriginal,
                   "the writer refuses a hard link at commit time")
         }
@@ -6704,6 +6820,7 @@ func runAll() async {
     await testOperationCoordination()
     await testCancelBetweenRenderAndWrite()
     await testExportCancelsBeforeCommit()
+    await testBatchWriteKeepsFileInFlight()
     await testStaleExportTempsAreSweptSafely()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()
