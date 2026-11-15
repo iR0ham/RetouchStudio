@@ -288,8 +288,9 @@ adapter on Windows ML (ORT-based) with the CPU EP as the only mandatory
 provider, and DirectML as opportunistic acceleration.** The contract allows
 the same ONNX weights; the host's separate worker process is the right shape
 so an ORT fault cannot kill the WPF process. Two real costs: the Windows host
-currently has no package dependency by design, and Windows ML needs a
-Windows-targeted TFM and adds size to the per-machine MSI. Whether Windows
+currently has no package dependency by design, and Windows ML adds a
+Windows-specific package, native runtime payload and size to the per-machine
+MSI. Whether Windows
 ships a Python sidecar, an ONNX adapter or both remains an owner decision in
 W5; no parity claim may be made before a Windows run proves the workflow.
 

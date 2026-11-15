@@ -242,11 +242,12 @@ not be sold as denoise, deblur or restoration, even when a model does some of
 each. Input size is capped by the 40 MP output ceiling (≈2.5 MP input at 4×).
 
 **Colour and bit depth are an open decision.** The 1.0 plan writes every
-export in sRGB (`RenderPolicy.swift:130`), and the upscale source is a PNG at
-native size. Whether a 16-bit or wide-gamut source survives the model round
-trip with more than 8 bits is **NOT VERIFIED**; a photo product must answer
-this before advertising 16-bit upscaling. An ESTIMATE of the working set: a
-40 MP RGBA16 buffer is ≈320 MB, several live at once, plus ≈1 GB of runtime.
+export in sRGB (`RenderPolicy.swift:130`), and the upscale source is an sRGB
+PNG written at native size (a 16-bit container). Wide-gamut is therefore
+already converted before the job; whether more than 8 bits survives the model
+round trip is **NOT VERIFIED**, and a photo product must answer this before
+advertising 16-bit upscaling. An ESTIMATE of the working set: a 40 MP RGBA16
+buffer is ≈320 MB, several live at once, plus ≈1 GB of runtime.
 
 ### 9.2 2× candidates
 
@@ -434,8 +435,8 @@ never GPU quality or speed.
 - RestoreFormer++ weight size; HAT and BSRGAN weight sizes and BSRGAN weight
   licence; SCUNet/NAFNet denoise ONNX exports; any official Core ML
   super-resolution model (conversions found are third-party).
-- 16-bit or wide-gamut preservation through the upscale round trip; the 1.0
-  plan forces sRGB output.
+- 16-bit preservation through the upscale round trip; the 1.0 plan forces sRGB
+  output, so wide-gamut is already converted at the source.
 - Z-Image-Turbo's 16 GB claim; any unreleased Edit checkpoint.
 - All M3 feasibility classes beyond Swin2SR 4×; no latency, peak-memory or
   thermal measurement exists for any other candidate.
