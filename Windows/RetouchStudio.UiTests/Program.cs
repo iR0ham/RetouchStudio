@@ -2622,8 +2622,11 @@ internal static class Program
             TimeSpan.FromSeconds(90));
         if (!opened)
         {
+            var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
             throw new InvalidOperationException(
-                $"the photo did not open; the title is '{window.Current.Name}'");
+                $"the photo did not open; the title is '{window.Current.Name}'; " +
+                $"the status says {DescribeTexts(window)}; " +
+                AppErrorText(process.Id, mainHandle));
         }
         Ok($"the photo opened: '{window.Current.Name}'");
     }
@@ -2869,6 +2872,37 @@ internal static class Program
             text.Append('\'').Append(item.Current.Name).Append("' ");
         }
         return $"texts are {text}".TrimEnd();
+    }
+
+    /// <summary>
+    /// A failing action reports in a message box captioned with the app title.
+    /// Reading its text turns 'the photo did not open' into the reason the app
+    /// gave, instead of a guess about the wait.
+    /// </summary>
+    private static string AppErrorText(int processId, IntPtr mainHandle)
+    {
+        var found = new List<string>();
+        foreach (var handle in VisibleWindows(processId))
+        {
+            if (handle == mainHandle)
+            {
+                continue;
+            }
+            try
+            {
+                var text = AllTexts(AutomationElement.FromHandle(handle));
+                if (text.Length > 0)
+                {
+                    found.Add(text);
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        }
+        return found.Count == 0
+            ? "the app shows no message box"
+            : "the app says " + string.Join(" / ", found);
     }
 
     private static string DescribeAppWindows(int processId)
