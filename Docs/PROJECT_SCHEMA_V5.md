@@ -91,6 +91,9 @@ document. The Windows in-memory compact encoding is history/recovery only.
 
 - Top level: keys outside `ProjectV5.knownKeys` are captured in the write context
   and merged on save; a known key always wins.
+- The v3 writer is frozen and has no nested capture: unknown keys *inside* a
+  v3 array element are not preserved when a v3 file is resaved as v3. v4 and v5
+  preserve them.
 - Nested inside `masks`, `faceIdentities`, geometry and parameters: captured as
   a raw-vs-typed diff and re-applied. Array elements attach by `id` first, then
   by exact known value, then by position only when the length is unchanged — so
