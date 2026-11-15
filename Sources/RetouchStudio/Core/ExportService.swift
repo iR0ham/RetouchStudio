@@ -51,6 +51,8 @@ enum ExportService {
         case written
         case failed
         case refusedOriginal
+        /// The bytes were ready but the caller cancelled before the commit.
+        case cancelled
     }
 
     /// Aspect ratio of the file as the pipeline will decode it, orientation
@@ -261,10 +263,12 @@ enum ExportService {
                             colorSpace: CGColorSpace?,
                             metadata: [CFString: Any],
                             xmp: CGImageMetadata? = nil,
-                            protecting protectedURL: URL?) -> WriteResult {
+                            protecting protectedURL: URL?,
+                            isCancelled: () -> Bool = { Task.isCancelled }) -> WriteResult {
         if let protectedURL, referencesSameFile(url, protectedURL) {
             return .refusedOriginal
         }
+        sweepStaleSiblingTemps(for: url)
         let processor = ImageProcessor.shared
         let temporary = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
@@ -279,6 +283,12 @@ enum ExportService {
         guard wrote else {
             try? FileManager.default.removeItem(at: temporary)
             return .failed
+        }
+        // The bytes exist, but a cancel that arrived while they were written
+        // must win over committing them: the user asked for nothing to land.
+        if isCancelled() {
+            try? FileManager.default.removeItem(at: temporary)
+            return .cancelled
         }
         // Check again at the commit point: the destination could have been
         // replaced or linked to the source while the render was being written.
@@ -297,6 +307,51 @@ enum ExportService {
             try? FileManager.default.removeItem(at: temporary)
             return .failed
         }
+    }
+
+    /// Removes temp siblings a crashed or force-quit export left behind: files
+    /// named exactly ".<destination>.<stamp>.tmp" in the destination folder,
+    /// regular files, untouched for more than `olderThan`. The stamp is the
+    /// dashed UUID `writeResult` creates, or a compact 32-hex spelling of one;
+    /// dots in the destination name are matched literally, the folder is not
+    /// searched recursively, and nothing else is considered. Returns how many
+    /// entries were removed.
+    @discardableResult
+    static func sweepStaleSiblingTemps(for url: URL,
+                                       now: Date = Date(),
+                                       olderThan: TimeInterval = 24 * 60 * 60) -> Int {
+        let folder = url.deletingLastPathComponent()
+        let prefix = ".\(url.lastPathComponent)."
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else {
+            return 0
+        }
+        var removed = 0
+        for name in names {
+            guard name.hasPrefix(prefix), name.hasSuffix(".tmp") else { continue }
+            let stamp = name.dropFirst(prefix.count).dropLast(".tmp".count)
+            guard isTempStamp(stamp) else { continue }
+            let candidate = folder.appendingPathComponent(name)
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: candidate.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let modified = attributes[.modificationDate] as? Date,
+                  now.timeIntervalSince(modified) > olderThan else { continue }
+            guard (try? FileManager.default.removeItem(at: candidate)) != nil else { continue }
+            removed += 1
+        }
+        return removed
+    }
+
+    /// A UUID as `UUID().uuidString` writes it (8-4-4-4-12, hex, either case),
+    /// or the same value as 32 hex digits.
+    private static func isTempStamp(_ stamp: Substring) -> Bool {
+        let text = String(stamp)
+        if text.count == 32 {
+            return text.allSatisfy { $0.isHexDigit }
+        }
+        guard text.count == 36 else { return false }
+        let groups = text.split(separator: "-", omittingEmptySubsequences: false)
+        guard groups.map(\.count) == [8, 4, 4, 4, 12] else { return false }
+        return text.allSatisfy { $0 == "-" || $0.isHexDigit }
     }
 
     /// True when writing to `destination` would replace `source`, including a
