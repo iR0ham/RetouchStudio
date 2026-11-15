@@ -681,6 +681,27 @@ internal static class Program
         }
         Ok("the Exposure slider moved through UIA");
 
+        // Every other global slider must be wired the same way; a missing one
+        // here is a dead control, not a rendering difference.
+        foreach (var (name, value) in new[]
+                 {
+                     ("Contrast", 12.0), ("Blacks", -8.0), ("Whites", 6.0),
+                     ("Saturation", 14.0), ("Vibrance", 10.0), ("Warmth", -6.0),
+                     ("Clarity", 18.0), ("Vignette", 20.0),
+                 })
+        {
+            var control = FindSlider(window, name)
+                ?? throw new InvalidOperationException($"the {name} slider is missing");
+            SetRange(control, value);
+            if (!WaitFor(() => Math.Abs(SliderValue(control) - value) < 0.5,
+                         TimeSpan.FromSeconds(10)))
+            {
+                throw new InvalidOperationException(
+                    $"the {name} slider holds {SliderValue(control)} instead of {value}");
+            }
+        }
+        Ok("the other eight global sliders moved through UIA");
+
         // The zoom dock proves a second kind of wiring: a button whose effect
         // is a text readout, not a value the harness sets itself.
         var zoomIn = FindButton(window, "Zoom in")
