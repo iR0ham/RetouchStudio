@@ -34,6 +34,12 @@ run 43660568463. The same day, JPEG exports gained the source IPTC resource
 (`windows/iptc-carry`, `04dac17`, green run 43663201459, 268 checks), and a
 source with no EXIF block to splice gained a composed one
 (`windows/exif-compose`, `431783b`, green run 43671478242, 283 checks).
+The same day the chosen face learned to follow its person across a crop
+(`windows/face-identity`, `26c59be`, green run 43685429036), and the Windows
+UI harness grew to eleven scenarios (`windows/zoom-pan-ui`, `0c88498`, green
+run 43696215085, 283 checks): pointer zoom and pan, a cancelled batch of 64,
+open and export error reports, and the decline half of the launch prompt.
+Both are merged into `develop` as `ca637ee`.
 The next milestone PR carries that work plus these documents.
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
@@ -81,11 +87,11 @@ fixed: a batch request copies `aiEdits` where macOS clears them per file
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, all nine global sliders, zoom buttons, Export dialog writing a decoded JPEG) in runs 43647604771 and 43659238621, and the crop overlay's corner drag with injected pointer input (512×512 to 449×472), Apply crop and the exported frame in run 43681175327 | pointer zoom/pan, drop-to-open and the failure paths are not driven | extend the harness per interaction |
-| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771); the compare divider is turned on by a pointer click, dragged 80 px right and back within 6 px, and removed on the second click (run 43681175327) | pointer zoom/pan and the peek modifier are not driven by CI | as WP-1 |
-| WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI | as WP-1 |
-| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure); a one-photo batch runs from the UI through the photo and folder pickers and writes a decoded file (run 43655814761) | progress/cancel UI NOT VERIFIED; multi-select and cancellation during a running batch are not exercised | extend the harness |
-| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless and driven through UIA: Open Project with a codec-saved project (run 43653664500), Save Project through its dialog, Undo and Redo on the slider (run 43654765580), a fresh-process reopen keeping Exposure 40 (run 43658018867), and the launch recovery prompt (run 43647604771) | none for the golden paths; failure paths (unreadable project, failed save) are not driven | none |
+| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, all nine global sliders, zoom buttons, Export dialog writing a decoded JPEG) in runs 43647604771 and 43659238621, the crop overlay's corner drag with injected pointer input (512×512 to 449×472) in run 43681175327, and the open/export failure reports (corrupt photo, destination held by another process) in run 43696215085 | drop-to-open is not driven; WPF hosts an OLE drop target that a synthetic `WM_DROPFILES` cannot reach | extend the harness per interaction |
+| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771); pointer zoom takes the dock to 150%, a 70-pixel drag pans the canvas without changing the zoom, and Fit restores the opening view within 0.2% of sampled pixels (run 43696215085); the compare divider is turned on by a pointer click, dragged 80 px right and back within 6 px, and removed on the second click (run 43681175327) | the peek modifier is not driven by CI | as WP-1 |
+| WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI: WPF hosts an OLE `IDropTarget` that `WM_DROPFILES` does not reach, so no synthetic drop has landed | as WP-1 |
+| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure); a one-photo batch runs from the UI through the photo and folder pickers and writes a decoded file (run 43655814761); a 64-source batch reports `Exported 9 of 64…`, Cancel stops it between files (`Export cancelled after 10 of 64 photos.`) and the destination holds exactly those ten files (run 43696215085) | per-file failure isolation is headless only; a cancel during the file in flight is not distinguished from the next-file boundary | extend the harness |
+| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless and driven through UIA: Open Project with a codec-saved project (run 43653664500), Save Project through its dialog, Undo and Redo on the slider (run 43654765580), a fresh-process reopen keeping Exposure 40 (run 43658018867), the launch recovery prompt (run 43647604771), and the decline answer that leaves an empty editor with nothing offered on the next launch (run 43696215085) | unreadable project and failed save are not driven end to end | none |
 | WP-6 | AI edits on Windows | NOT APPLICABLE until a runtime exists | blocked with W5 | W5 |
 
 ## WS-4 — W5 AI runtime
