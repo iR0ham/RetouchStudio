@@ -15,8 +15,8 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 | Project create/open/save | VERIFIED | VERIFIED | VERIFIED | macOS ModelTests and codec fixtures; Windows host checks open/save through the C ABI; interchange fixtures round-trip structurally. |
 | V3/V4 compatibility | VERIFIED | VERIFIED | VERIFIED | v3 fixture re-encodes byte-identically and stays v3; v4 keeps `futureFlag`, `requiredFeatures` and keyed crop; Windows run 43534410772. |
 | Unknown fields | VERIFIED | VERIFIED | VERIFIED | Top-level across save and reopen; modelled records preserved; unmodelled nested records dropped by documented design. |
-| Undo/redo | VERIFIED | VERIFIED | N/A | `DocumentHistory`, 55 Windows host checks; the Undo button reverts a slider through UIA (run 43654765580). |
-| Image import and adjustments | VERIFIED | TESTED | PARTIAL | Nine adjustments render on Windows (preview median 721 ms, run 43618132157); the Exposure slider and the Open Photo dialog are driven end to end through UIA (run 43647604771), while the other eight sliders are not; cross-host MAE: exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47, each gated at one level. |
+| Undo/redo | VERIFIED | VERIFIED | N/A | `DocumentHistory`, 55 Windows host checks; the Undo and Redo buttons move a slider through UIA (runs 43654765580, 43658018867). |
+| Image import and adjustments | VERIFIED | TESTED | PARTIAL | Nine adjustments render on Windows (preview median 721 ms, run 43618132157); the Open Photo dialog and all nine sliders are driven end to end through UIA (runs 43647604771, 43659238621); cross-host MAE: exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47, each gated at one level. |
 | Crop/rotation/mirror/straighten | VERIFIED | TESTED | PARTIAL | Windows crop arithmetic, orientation order and turn/straighten/mirror composition are tested pixel for pixel; the overlay drag is not driven by CI; no cross-host straighten pixel reference (corpus protected). |
 | Face detection/landmarks/regions | VERIFIED | ABSENT | N/A | macOS Vision, ≥0.35 confidence, largest-first, ~76 points plus derived regions. In-box Windows detector returns boxes only, which cannot drive masks. |
 | Mask generation/edit/persistence | VERIFIED | ABSENT | N/A | macOS geometric masks, 1024 px preview, 4096 px export, feather and gates; no standalone mask layers or stable per-face identities anywhere. |
@@ -24,7 +24,7 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 | AI runtime | BLOCKED | ABSENT | N/A | `AIRuntime.package` nil; no approved package or weights; AI edit records are preserved and named, not executed. |
 | JPEG/PNG/TIFF/HEIC | VERIFIED | PARTIAL | PARTIAL | Windows: JPEG/PNG/TIFF import/export verified, 16-bit PNG/TIFF verified, HEIC decode unavailable on `windows-2025` (`0x88982F8B`), HEIC export explicitly refused. macOS supports all four. |
 | 16-bit and ICC/colour | VERIFIED | PARTIAL | NOT VERIFIED | Windows 16-bit PNG/TIFF export sample-exact and 16-bit source preview tested; decode converts P3 to sRGB within one level of ColorSync at four in-gamut points; exports declare a generated sRGB ICC profile (JPEG APP2, PNG iCCP) and a no-op export is pixel-identical; wide-gamut colours still clip, TIFF is untagged and output is always sRGB. |
-| Metadata keep/strip | VERIFIED | TESTED | PARTIAL | Windows writes the allowlist into JPEG/TIFF/16-bit PNG and carries the source EXIF block and XMP into JPEG/PNG at container level, normalised to the exported frame through crop, turn and resize; stripping removes both; TIFF keeps only the allowlist and IPTC is absent. |
+| Metadata keep/strip | VERIFIED | TESTED | PARTIAL | Windows writes the allowlist into JPEG/TIFF/16-bit PNG, carries the source EXIF block and XMP into JPEG/PNG at container level, carries the source IPTC resource (Photoshop APP13, 8BIM 0x0404) into JPEG byte for byte, and composes an EXIF block (make, model, date, exposure, aperture, ISO, flash, focal length, white balance, lens) when the source has none to carry, all normalised to the exported frame through crop, turn and resize; stripping removes all of it; TIFF keeps only the allowlist and PNG/TIFF carry no IPTC. WIC exposes no GPS through its WinRT properties, so a composed block carries no position. |
 | Batch export/cancellation | VERIFIED | TESTED | N/A | Windows batch shares the single-export path, output sample-exact, collision-safe, per-file failures isolated; a page-one batch runs from the UI through both pickers and its JPEG decodes (run 43655814761); progress/cancel UI and mid-render cancellation not exercised. |
 | Recovery | VERIFIED | TESTED | TESTED | Windows candidate store mirrors the macOS rules (one working slot, immutable candidates, quarantine, restore write→verify→delete, monotonic savedAt, source identity) with injected failures; the launch prompt is driven through UIA — the seeded copy raises it, Yes restores the unsaved Exposure value and the app closes cleanly (run 43647604771); parity is proven by matching checks, not shared code. |
 | Installer/updater | PARTIAL (DMG verified; notarization BLOCKED) | PARTIAL (MSI verified; updater ABSENT) | N/A | Windows MSI silent install, start from `Program Files`, in-place upgrade and clean uninstall proven on CI; macOS DMGs build and verify, Gatekeeper rejects until notarized, credentials unavailable. |
@@ -34,9 +34,9 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 ## What a green CI run does not prove
 
 - Interactive Windows behaviour the harness does not yet drive: crop overlay
-  drag, compare divider drag, pointer zoom/pan, drop-to-open, the other eight
-  adjustment sliders, reopening a saved project, multi-select in the batch
-  picker, batch progress and cancellation.
+  drag, compare divider drag, pointer zoom/pan, drop-to-open, multi-select in
+  the batch picker, batch progress and cancellation, and the failure paths of
+  project open/save.
 - macOS window launch and clean-machine installation.
 - Rendering parity for straighten and freeform crop across hosts.
 - Real AI inference, notarization, or an update feed.

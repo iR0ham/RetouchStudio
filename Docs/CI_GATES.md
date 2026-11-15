@@ -21,7 +21,7 @@ status check under its own name. All five are required merge checks:
 | `Platform-neutral Conformance` | `ubuntu-24.04` (x64) | `./Tests/Conformance/run-conformance.sh` |
 | `macOS Integration` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` and `RETOUCH_ARCH=arm64 ./Tests/run.sh` |
 | `Windows StudioCore` (required since 2026-11-14) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
-| `Windows App` (required since 2026-11-14) | `windows-2025` (x64) | `pwsh ./Tools/build-windows.ps1` |
+| `Windows App` (required since 2026-11-14) | `windows-2025` (x64) | `pwsh ./Tools/build-windows.ps1 -RequireMsi` |
 
 ## What each check proves
 
@@ -179,7 +179,13 @@ first: the job requires exactly one Programs-and-Features entry, the new
 version, the shortcut, and an upgraded copy that still loads a window.
 `-RequireMsi` makes a missing WiX toolset fail the job instead of silently
 skipping the installer. The job uploads `build/windows/dist/**` so the zip and
-the MSIs can be inspected. On failure it uploads the published folder
+the MSIs can be inspected. On 2026-11-15 the script gained one version input:
+`-PackageVersion` stamps the published assembly (`Tools/build-windows.ps1:160-162`)
+and names the zip and the MSI, and it defaults to the `Version` in
+`Windows/Directory.Build.props` (`Tools/build-windows.ps1:37-38`). Until then
+`dotnet publish` received no version, so a tag reached the artifact names but the
+executable kept the props value. The release workflow passes the tag version
+(`release.yml:129-132`). On failure it uploads the published folder
 (`windows-app-publish`), so a broken build can be inspected. The job is a
 required check since 2026-11-14, by owner direction: Windows is a first-class
 product, so a Windows regression must be able to block `main`. The job had
@@ -257,6 +263,14 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-14 | `c80a8c1` (`windows/guard-ui`, merged into `develop` as `7af37cf`) | `CI` run 43653664500, `workflow_dispatch` on `windows/guard-ui` | five jobs green; `Windows App` reports `PASS (263 checks)` and three UI-automation passes: golden, recovery and guard — a codec-saved project carrying `smooth` 30 opens through the Open Project dialog, Export raises the unsupported-edit prompt naming skin retouching, No writes nothing, and the app closes cleanly |
 | 2026-11-14 | `39e3cb0` (`windows/project-ui`) | `CI` run 43654765580, `workflow_dispatch` on `windows/project-ui` | five jobs green; `Windows App` reports `PASS (263 checks)` and four UI-automation passes; Save Project writes 2801 bytes through its dialog, the title loses its unsaved marker, and Undo returns Exposure to 0 through the button |
 | 2026-11-15 | `7d3a89b` (`windows/batch-ui`, merged into `develop` as `5cd65a1`) | `CI` run 43655814761, `workflow_dispatch` on `windows/batch-ui` | five jobs green; `Windows App` reports `PASS (263 checks)` and five UI-automation passes; the batch photo picker takes a photo, the folder picker takes a folder, and the batch writes a 48603-byte 512×512 JPEG that decodes back |
+| 2026-11-15 | `6e09cc7` (`windows/reopen-ui`, merged into `develop` as `65b672f`) | `CI` run 43658018867, `workflow_dispatch` on `windows/reopen-ui` | five jobs green; `Windows App` reports `PASS (263 checks)` and six UI-automation passes; Redo reapplies Exposure 40, the second Save writes without a dialog, and a fresh process reopens the saved project with Exposure still at 40 |
+| 2026-11-15 | `15d89fe` (`windows/sliders-ui`, merged into `develop` as `83900a9`) | `CI` run 43659238621, `workflow_dispatch` on `windows/sliders-ui` | five jobs green; `Windows App` reports `PASS (263 checks)` and six UI-automation passes; all nine global sliders take their values through UIA before the export |
+| 2026-11-15 | `00a48d6` (`develop`, reconciliation merge) | `CI` run 43660568463, `workflow_dispatch` on `develop` | five jobs green; `Windows App` reports `PASS (263 checks)` and five UI-automation passes; the merge of `origin/main` (`df289cf`) leaves the develop tree identical to its pre-merge state |
+| 2026-11-15 | `04dac17` (`windows/iptc-carry`, merged into `develop` as `30cb277`) | `CI` run 43663201459, `workflow_dispatch` on `windows/iptc-carry` | five jobs green; `Windows App` reports `PASS (268 checks)` and five UI-automation passes; a JPEG carries the source's Photoshop IPTC resource (8BIM 0x0404) byte for byte, and an overlong resource is skipped instead of read out of bounds |
+| 2026-11-15 | `431783b` (`windows/exif-compose`) | `CI` run 43671478242, `workflow_dispatch` on `windows/exif-compose` | five jobs green; `Windows App` reports `PASS (283 checks)` and five UI-automation passes; a TIFF source exports a composed EXIF block that macOS ImageIO reads in full (GPS, date, lens, model, 35°41′12″N 51°25′3″E), while WIC's WinRT properties report `System.GPS.Latitude` absent for the composed block and for a macOS-written control JPEG |
+| 2026-11-15 | `17ed293` (`windows/crop-ui`, merged into `develop` as `2b56992`) | `CI` run 43681175327, `workflow_dispatch` on `windows/crop-ui` | five jobs green; `Windows App` reports `PASS (283 checks)` and seven UI-automation passes; the bottom-right crop corner is hit-tested and dragged with injected pointer input from 512×512 to 449×472, Apply crop commits it and the exported file decodes at 449×472; the compare toggle is clicked with the pointer, the divider is dragged 80 px right and back within 6 px, and turning Compare off removes it |
+| 2026-11-15 | `26c59be` (merge of `windows/face-identity`) | `CI` run 43685429036, `pull_request` on `develop` (PR #57) | five jobs green; `WINDOWS HOST TESTS: PASS (283 checks)` and seven UI-automation passes; the chosen face keeps its identity across a crop: boxes are mapped into the original photo's normalised bottom-left frame and matched one-to-one at IoU ≥ 0.5, an absent face's box is remembered, and the selection index is re-derived after re-detection. The matching checks run in the macOS Model suite (`testFaceSelectionFollowsIdentity`) |
+| 2026-11-15 | `0c88498` (`windows/zoom-pan-ui`, merged into `develop` as `ca637ee`) | `CI` run 43696215085, `workflow_dispatch` on `windows/zoom-pan-ui` | five jobs green; `Windows App` reports `PASS (283 checks)` and eleven UI-automation passes; pointer zoom reaches 150% and the dock reports it, a drag pans the canvas without changing the zoom, and Fit restores the exact opening view; a 64-source batch reports `Exported 9 of 64…`, Cancel stops it between files (`Export cancelled after 10 of 64 photos.`) and the folder holds exactly those 10; a corrupt photo and a locked destination are each reported, with the locked file left untouched; declining a recovered copy leaves an empty editor and the next launch offers nothing. The file picker's view is virtualised, so the sources are ticked by clicking one row and pressing Ctrl+A; a posted Enter never navigates the shell, so the folder is entered with an injected Return |
 | 2026-11-14 | `be9a46d` (merge of PR #49) | no post-merge run | merge of `675ae0a` after five green required checks; no `main` push matrix was created, which is the behaviour PR #49 introduced. The `pull_request` run had checked out `refs/pull/49/merge`, whose tree is this commit's tree, so no tree went unvalidated |
 
 `ci.yml` runs on `pull_request` targeting `main` and on pushes to
@@ -378,21 +392,39 @@ failed the first run of this job before it was corrected in `d0673d8`.
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds an
 arm64 DMG, an x86_64 DMG, runs the Windows StudioCore portability job, verifies
 every SHA-256 manifest, and publishes a GitHub Release. It triggers on `v*` tag
-pushes and on manual dispatch; a manual dispatch runs only the
-platform-independent Windows job, because every other job carries
-`if: startsWith(github.ref, 'refs/tags/v')`. A manual dispatch therefore cannot
-create a release or a non-versioned artifact.
+pushes and on manual dispatch. Only the `release` job carries
+`if: startsWith(github.ref, 'refs/tags/v')` (`release.yml:160`), so a manual
+dispatch builds and uploads the per-run artifacts to the run but never creates
+a Release.
+
+The release job's conditions were corrected on 2026-11-15
+(`release.yml:151-167`). It used to inherit the skip of a gated job through
+`needs`, so while `WINDOWS_APP_READY` was unset a tag skipped `windows-app`,
+skipped the dependent `release`, and produced no Release at all. The job now
+uses `always()` with explicit result checks: it runs when every macOS and core
+job is `success` and `windows-app` is `success` or `skipped`, and it is skipped
+when any of them is `failure` or `cancelled`; `!cancelled()` keeps an
+explicitly cancelled run from publishing. A skipped Windows application
+therefore publishes the macOS artifacts, and a failed job still blocks the
+release.
+
+The release job also runs `Tools/check-versions.sh` with the tag version
+(`release.yml:174-175`) before downloading artifacts, so a tag that disagrees
+with `Resources/Info.plist` and `Windows/Directory.Build.props` fails the
+release instead of publishing mislabelled files. CI runs the same script
+without a tag (`ci.yml:73-74`), so the two version sources cannot drift between
+releases.
 
 The Windows application job is gated behind the repository variable
-`WINDOWS_APP_READY=true` and is still skipped: the host builds and opens a
-window, but packaging, signing and a release decision are unverified, so the
-variable stays unset. The job now installs the .NET SDK and packages
-`build/windows/app`, but it has never executed, and the release job's `needs`
-list does not yet include it. Treat the job and `Tools/package-windows.ps1` as
-**NOT VERIFIED**; both must be reworked and run before the variable is set. A
-green release therefore never implies a Windows product. A job-level
-`hashFiles()` condition would be read before `actions/checkout`, so it was
-replaced with the repository variable.
+`WINDOWS_APP_READY=true` (`release.yml:111`). With the variable unset a tag run
+skips it, and since 2026-11-15 the release still publishes the macOS artifacts
+without a Windows package. A green release therefore never implies a Windows
+product. The gate is a product decision, not a statement that the job is
+untested: the dispatch recorded on 2026-11-14 (run 43598113385) built and
+uploaded both DMGs and the Windows zip and MSI, and the required `Windows App`
+check runs the same script on every PR. A job-level `hashFiles()` condition
+would be read before `actions/checkout`, so it was replaced with the repository
+variable.
 
 No paid signing certificate or notarization is used; macOS builds are ad-hoc
 signed and Windows output is unsigned.

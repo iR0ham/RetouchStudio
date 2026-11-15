@@ -6375,6 +6375,105 @@ func testDocumentSessionHistoryValue() {
           "a copied session owns its own stacks")
 }
 
+// MARK: - WS-2 face identity
+
+/// A detected face whose only part identity matching reads is the box.
+func identityFace(_ box: CGRect) -> FaceGeometry {
+    FaceGeometry.synthetic(boundingBox: box)
+}
+
+/// The box Vision would report for a face once the crop is applied: face
+/// boxes are normalized with a bottom-left origin, crops with a top-left one.
+func identityBox(_ box: CGRect, in crop: CGRect) -> CGRect {
+    let top = (1 - box.maxY - crop.minY) / crop.height
+    return CGRect(x: (box.minX - crop.minX) / crop.width,
+                  y: 1 - top - box.height / crop.height,
+                  width: box.width / crop.width,
+                  height: box.height / crop.height)
+}
+
+/// The box Vision would report for a face after the orientation is applied.
+func turnedBox(_ box: CGRect, in size: CGSize,
+               orientation: DocumentOrientation) -> CGRect {
+    let topLeft = CGRect(x: box.minX, y: 1 - box.maxY,
+                         width: box.width, height: box.height)
+    let mapped = orientation.mapRect(topLeft, base: size)
+    return CGRect(x: mapped.minX, y: 1 - mapped.maxY,
+                  width: mapped.width, height: mapped.height)
+}
+
+/// The selection used to be re-applied as an index, so cropping away the
+/// chosen face silently selected whoever now held that slot — possibly a
+/// different person. The chosen face is now remembered by identity, which
+/// survives re-detection across a crop or a turn.
+@MainActor
+func testFaceSelectionFollowsIdentity() {
+    print("\n[WS-2] the chosen person survives a crop by identity")
+
+    let size = CGSize(width: 1000, height: 800)
+    let leftBox = CGRect(x: 0.08, y: 0.30, width: 0.32, height: 0.40)
+    let rightBox = CGRect(x: 0.55, y: 0.34, width: 0.26, height: 0.33)
+    let leftCrop = CGRect(x: 0.0, y: 0.10, width: 0.50, height: 0.75)
+    let rightCrop = CGRect(x: 0.45, y: 0.10, width: 0.55, height: 0.80)
+
+    var tracker = FaceIdentityTracker()
+    // Largest first, as FaceAnalyzer reports detections.
+    let originalFaces = [identityFace(leftBox), identityFace(rightBox)]
+    var faces = originalFaces
+    tracker.assign(to: &faces, crop: nil, orientation: .identity, orientedSize: size)
+    let leftIdentity = faces[0].identity
+    let rightIdentity = faces[1].identity
+    check(leftIdentity != nil && rightIdentity != nil && leftIdentity != rightIdentity,
+          "each detection receives its own identity")
+
+    var selection = FaceSelection()
+    selection.choose(faces[0])
+    check(selection.index(in: faces) == 0, "choosing a face remembers that person")
+
+    // (b) A crop that keeps the chosen face keeps the selection, even though
+    // its box now sits at a different place in the frame.
+    var kept = [identityFace(identityBox(leftBox, in: leftCrop))]
+    tracker.assign(to: &kept, crop: leftCrop, orientation: .identity, orientedSize: size)
+    check(kept[0].identity == leftIdentity, "the surviving face keeps its identity")
+    check(selection.index(in: kept) == 0, "a crop that keeps the face keeps the selection")
+
+    // (d) A re-detection nudged inside the remembered box is the same person.
+    let nudgedBox = identityBox(leftBox, in: leftCrop).offsetBy(dx: 0.01, dy: -0.01)
+    var nudged = [identityFace(nudgedBox)]
+    tracker.assign(to: &nudged, crop: leftCrop, orientation: .identity, orientedSize: size)
+    check(nudged[0].identity == leftIdentity, "an overlapping re-detection keeps its identity")
+
+    // A quarter turn re-detects the face in a new frame; the identity follows.
+    let turn = DocumentOrientation(quarterTurns: 1)
+    var turned = [identityFace(turnedBox(leftBox, in: size, orientation: turn))]
+    tracker.assign(to: &turned, crop: nil, orientation: turn,
+                   orientedSize: turn.outputSize(base: size))
+    check(turned[0].identity == leftIdentity, "a quarter turn keeps the identity")
+
+    // (a) Cropping away the chosen (first) face must empty the selection
+    // rather than hand it to the only remaining face.
+    var onlyRight = [identityFace(identityBox(rightBox, in: rightCrop))]
+    tracker.assign(to: &onlyRight, crop: rightCrop, orientation: .identity, orientedSize: size)
+    check(onlyRight[0].identity == rightIdentity, "the remaining face keeps its own identity")
+    check(selection.index(in: onlyRight) == nil,
+          "cropping the chosen face away leaves no selection instead of selecting another person")
+
+    // A detection that overlaps no remembered box is a new person.
+    let strangerBox = CGRect(x: 0.85, y: 0.68, width: 0.08, height: 0.10)
+    var stranger = [identityFace(identityBox(strangerBox, in: rightCrop))]
+    tracker.assign(to: &stranger, crop: rightCrop, orientation: .identity, orientedSize: size)
+    check(stranger[0].identity != leftIdentity && stranger[0].identity != rightIdentity,
+          "an unmatched detection receives a fresh identity")
+
+    // (c) Resetting the crop brings the same person back, and the selection
+    // with them.
+    var restored = originalFaces
+    tracker.assign(to: &restored, crop: nil, orientation: .identity, orientedSize: size)
+    check(restored[0].identity == leftIdentity && restored[1].identity == rightIdentity,
+          "reset detections keep both identities")
+    check(selection.index(in: restored) == 0, "resetting the crop restores the chosen face")
+}
+
 // MARK: - runner
 
 @MainActor
@@ -6470,6 +6569,7 @@ func runAll() async {
     await testDocumentStateExportSnapshot()
     testDocumentStateValueSemantics()
     testDocumentSessionHistoryValue()
+    testFaceSelectionFollowsIdentity()
 
     // Invalidate any debounced write left by the last scenario: the scratch
     // directory is about to disappear, and no timer may outlive it.

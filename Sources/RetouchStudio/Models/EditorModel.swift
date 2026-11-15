@@ -94,8 +94,13 @@ final class EditorModel: ObservableObject {
     @Published private(set) var faces: [FaceGeometry] = []
     /// Which accepted face the owner is working on, as an index into `faces`
     /// (largest first). `nil` means automatic: the largest face for callouts
-    /// and the median width for feature sizes.
+    /// and the median width for feature sizes. The index is what the project
+    /// file stores; `faceSelection` remembers which person it belonged to.
     @Published private(set) var selectedFaceIndex: Int?
+    /// The chosen person, by in-memory identity, so a re-detection after a
+    /// crop or a turn cannot hand the selection to a different face.
+    private var faceSelection = FaceSelection()
+    private var faceIdentities = FaceIdentityTracker()
     /// The makeup palette each accepted face measured, in the same order.
     private var faceFamilies: [MakeupFamily] = []
     @Published private(set) var isBusy = false
@@ -404,7 +409,15 @@ final class EditorModel: ObservableObject {
         stickers = state.stickers
         aiEdits = state.aiEdits
         analysis = state.analysis
-        applyFaceSelection(state.selectedFaceIndex)
+        // History stores an index. Where it resolves it names the chosen
+        // person in the frame on screen; where it does not, automatic is the
+        // honest answer and the remembered identity must not resurface.
+        if let index = state.selectedFaceIndex, faces.indices.contains(index) {
+            applyFaceSelection(index)
+        } else {
+            faceSelection.clear()
+            applyFaceSelection(nil)
+        }
         selectedSticker = nil
         if selectionChanged {
             refreshAnalysisOverlay()
@@ -490,6 +503,8 @@ final class EditorModel: ObservableObject {
         guard hasImage else { return }
         let target = index.flatMap { faces.indices.contains($0) ? $0 : nil }
         guard target != selectedFaceIndex else { return }
+        // Automatic forgets the person on purpose; choosing a face records it.
+        if target == nil { faceSelection.clear() }
         commitAdjustments()
         applyFaceSelection(target)
         commitAdjustments()
@@ -500,11 +515,23 @@ final class EditorModel: ObservableObject {
 
     private func applyFaceSelection(_ index: Int?) {
         selectedFaceIndex = index.flatMap { faces.indices.contains($0) ? $0 : nil }
+        if let selectedFaceIndex {
+            faceSelection.choose(faces[selectedFaceIndex])
+        }
+        // A nil index keeps the remembered identity: the person may simply be
+        // outside the current frame and has to be selected again when back.
         if let selectedFaceIndex, faceFamilies.indices.contains(selectedFaceIndex) {
             makeupFamily = faceFamilies[selectedFaceIndex]
         } else {
             makeupFamily = faceFamilies.first ?? .medium
         }
+    }
+
+    /// A crop or a turn re-detected the faces. The remembered identity, not
+    /// the old slot, decides what stays selected; a face outside the frame
+    /// leaves the selection empty until it comes back.
+    private func followSelectedFace() {
+        applyFaceSelection(faceSelection.index(in: faces))
     }
 
     private func updateCleanState() {
@@ -1019,7 +1046,8 @@ final class EditorModel: ObservableObject {
     /// Updates everything the pipeline needs for a new set of pixels, without
     /// touching adjustments, history or clean baselines. Both a fresh load and
     /// a crop re-load go through here.
-    private func install(_ result: LoadResult) {
+    private func install(_ result: LoadResult, crop: CGRect?,
+                         orientation: DocumentOrientation) {
         sourceFull = result.sourceFull
         sourcePreview = result.sourcePreview
         masksPreview = result.masksPreview
@@ -1027,7 +1055,9 @@ final class EditorModel: ObservableObject {
         sourceMetadata = result.metadata
         sourceXMP = result.xmp
         faces = result.faces
-        faceCount = result.faces.count
+        faceIdentities.assign(to: &faces, crop: crop, orientation: orientation,
+                              orientedSize: result.sourcePixelSize)
+        faceCount = faces.count
         // Each accepted face gets its own palette, so switching the selection
         // switches the makeup family to that face's measured skin.
         faceFamilies = result.faces.map { face in
@@ -1070,10 +1100,15 @@ final class EditorModel: ObservableObject {
         // Loading is not an edit. Every assignment below, including the ones
         // whose observers would schedule an autosave, stays out of the
         // recovery store until the restored document is complete.
-        isLoadingState = true
-        install(result)
         let restoration = project.map { DocumentRestoration.project($0, url: projectURL) }
             ?? DocumentRestoration.photo()
+        // Identity belongs to one document; the stored index selects a face
+        // in the new one.
+        faceIdentities.reset()
+        faceSelection.clear()
+        isLoadingState = true
+        install(result, crop: restoration.state.crop?.cgRect,
+                orientation: restoration.state.orientation)
         self.projectURL = restoration.projectURL
         // A photo, a recovery copy or a v3 project saves as v3. Only the file
         // the document actually came from can keep it on v4.
@@ -1308,7 +1343,6 @@ final class EditorModel: ObservableObject {
         let generation = self.generation
         let crop = appliedCrop
         let orientation = documentOrientation
-        let selection = selectedFaceIndex
         let processor = self.processor
         let previewMaxDimension = self.previewMaxDimension
         let url = imageURL
@@ -1327,17 +1361,18 @@ final class EditorModel: ObservableObject {
                 self.statusToken = .couldNotRead
                 return
             }
-            self.install(result)
-            // The faces are the same people under a smaller frame: cropping
-            // must not silently drop back to the automatic face.
-            self.applyFaceSelection(selection)
+            self.install(result, crop: crop, orientation: orientation)
+            // The frames changed: the detections may be fewer, reordered or
+            // new. The remembered identity decides who stays selected; the old
+            // slot must never be re-applied blindly.
+            self.followSelectedFace()
             self.refreshAnalysisOverlay()
             // The stamps live in original-photo coordinates, so a new crop moves
             // them onto the new frame before the canvas repaints.
             self.rebuildSpotMasks()
             self.updateCleanState()
             self.end(token)
-            let hasEdits = self.adjustments != .zero || selection != nil
+            let hasEdits = self.adjustments != .zero || self.selectedFaceIndex != nil
                 || !self.healSpots.isEmpty || !self.stickers.isEmpty || !self.aiEdits.isEmpty
             if hasEdits { self.schedulePreview() }
             if !restoring {
@@ -2305,6 +2340,7 @@ final class EditorModel: ObservableObject {
         stickers.removeAll()
         selectedSticker = nil
         analysis = AnalysisSettings()
+        faceSelection.clear()
         applyFaceSelection(nil)
         refreshAnalysisOverlay()
         comparePosition = settings.comparePosition

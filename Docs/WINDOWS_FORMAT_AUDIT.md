@@ -64,7 +64,10 @@ Two mechanisms travel, and they are not interchangeable:
    block and XMP packet are spliced into JPEG and PNG at the container level,
    because the WinRT writer silently drops most EXIF keys and throws on
    `DateTaken`. The source's own EXIF and XMP therefore survive an export that
-   the WinRT metadata graph alone could not carry.
+   the WinRT metadata graph alone could not carry. A JPEG also carries the
+   source's IPTC resource (Photoshop APP13, 8BIM 0x0404) byte for byte; the
+   other resources in that Photoshop block are not carried, since digests and
+   resolution describe the old pixels. PNG and TIFF have no IPTC path here.
 
 The carried EXIF is rewritten to describe the pixels actually written:
 
@@ -75,25 +78,53 @@ The carried EXIF is rewritten to describe the pixels actually written:
   export names the cropped frame in EXIF", "a turned export is upright", "a
   resized export is upright").
 
-With stripping on, no EXIF block and no XMP packet are written for either
-container ("stripping leaves no carried EXIF", "stripping leaves no XMP"), and
-no GPS key appears in the allowlist path. An EXIF block that cannot be parsed is
-skipped and the export still succeeds ("an invalid EXIF block is skipped
-without failing the export").
+**Composed EXIF, for a source with nothing to carry.** A TIFF or HEIC photo has
+no APP1 or `eXIf` block to splice, so a JPEG or PNG export composes one from
+the properties the decoder reports: make and model, capture time (IFD0
+`DateTime` plus `DateTimeOriginal` and `DateTimeDigitized`), exposure time,
+f-number, ISO, flash, focal length, white balance and lens model, with the
+resolution, a `Software` tag and the orientation and pixel-dimension
+placeholders that the export order rewrites for the written frame exactly as it
+does for a carried block. Nothing is invented: only decoded properties are
+written, and a source that reports none yields no block ("a source with nothing
+to describe composes no block"). The block is gated on its own bytes, again
+after the JPEG splice, and through the decoder, which reads the date (typed
+`DateTimeOffset`), exposure, aperture and lens back ("the composed block
+records the capture time", "the decoder reads the composed aperture", "a TIFF
+source exports a composed EXIF block", "the composed EXIF names the exported
+frame").
+
+GPS is written when a decoder reports a coordinate, but WIC's WinRT property
+surface never reports one: a control JPEG written by macOS ImageIO with a GPS
+IFD (`Windows/RetouchStudio.Tests/Fixtures/camera-gps.jpg`) reads
+`System.GPS.Latitude` absent, as does the composed block, which is why that
+answer is printed rather than asserted. macOS ImageIO read the composed block
+in full, GPS included (run 43671478242), so the field is supported rather than
+omitted. A TIFF target has no container splice and still keeps the allowlist
+only.
+
+With stripping on, no EXIF block, XMP packet or IPTC resource is written
+("stripping leaves no carried EXIF", "stripping leaves no XMP", "stripping
+leaves no IPTC"), and no GPS key appears in the allowlist path. An EXIF or IPTC
+block that cannot be parsed is skipped and the export still succeeds ("an
+invalid EXIF block is skipped without failing the export", "a malformed IPTC
+block is skipped").
 
 Unsupported by design, and therefore absent rather than half-carried: GPS,
 `DateTaken`, exposure time, f-number, flash and white balance in the WinRT
-metadata graph. Of these, the whole EXIF block (including them) does travel in
-JPEG and PNG when the source is a JPEG or PNG that had them, because the
-container splice bypasses the WinRT writer. TIFF has no such splice and keeps
-only the allowlist.
+metadata graph (the composed block above is a separate path, not that graph).
+Of these, the whole EXIF block (including them) does travel in JPEG and PNG
+when the source is a JPEG or PNG that had them, because the container splice
+bypasses the WinRT writer, and the composer writes the ones a decoder reports
+for a source with no block. TIFF has no such splice and keeps only the
+allowlist.
 
 ## Bit depth and containers
 
 | Format | Export depth | Alpha | Metadata path |
 |---|---|---|---|
-| JPEG | 8, quality from the plan | flattened onto white | WinRT allowlist + EXIF/XMP splice |
-| PNG | 16 | kept straight | WinRT allowlist + EXIF/XMP splice |
+| JPEG | 8, quality from the plan | flattened onto white | WinRT allowlist + EXIF/XMP/IPTC splice, or a composed EXIF when the source has no block |
+| PNG | 16 | kept straight | WinRT allowlist + EXIF/XMP splice, or a composed EXIF when the source has no block |
 | TIFF | 16 | RGBA written; transparency not verified | WinRT allowlist only |
 | HEIC | refused | — | `EncodeAsync` throws `NotSupportedException` |
 

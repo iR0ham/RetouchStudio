@@ -10,6 +10,7 @@ using RetouchStudio.Core.View;
 using RetouchStudio.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
+using IRandomAccessStream = Windows.Storage.Streams.IRandomAccessStream;
 
 namespace RetouchStudio.Tests;
 
@@ -48,6 +49,7 @@ internal static class Program
             Metadata(root);
             Carry(root);
             CarryTransforms(root);
+            Compose(root);
             Colour(root);
             Interchange(root);
             Recovery(root);
@@ -1502,6 +1504,33 @@ internal static class Program
     private static string Text(ImageMetadata metadata, string key) =>
         metadata.Properties.TryGetValue(key, out var value) ? value as string ?? string.Empty : string.Empty;
 
+    /// <summary>Reads chosen properties straight from the platform decoder.</summary>
+    private static async Task<BitmapPropertySet> DecodeProperties(string path, string[] keys)
+    {
+        var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
+        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read);
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+        return await decoder.BitmapProperties.GetPropertiesAsync(keys);
+    }
+
+    /// <summary>Prints what the platform decoder actually returned for a key.</summary>
+    private static void Describe(BitmapPropertySet set, string key)
+    {
+        if (!set.TryGetValue(key, out var typed))
+        {
+            Console.WriteLine($"  decoded {key}: absent");
+            return;
+        }
+        var value = typed.Value;
+        var text = value switch
+        {
+            double[] parts => string.Join(", ", parts),
+            null => "null",
+            _ => value.ToString(),
+        };
+        Console.WriteLine($"  decoded {key}: {value?.GetType().FullName} = {text}");
+    }
+
     /// <summary>
     /// Every pixel on this host is converted to sRGB at decode, so an export
     /// that declares nothing is read back as sRGB by convention rather than by
@@ -1794,12 +1823,22 @@ internal static class Program
         codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
         MetadataCarry.WriteJpeg(source, exif, xmp);
 
+        // An editor's Photoshop block: the IPTC resource this writer must carry
+        // and a resolution resource it must not, since the exported frame has a
+        // different size.
+        var expectedIptc = BuildResource(0x0404, IptcTitle("IPTC carry"));
+        InsertApp13(source, Join(
+            BuildResource(0x03ED, new byte[] { 0, 72, 0, 0, 0, 1, 0, 1, 0, 72, 0, 0, 0, 1, 0, 1 }),
+            expectedIptc));
+
         var sourceRead = codec.ReadMetadataAsync(source).GetAwaiter().GetResult();
         Check("the Windows decoder reads a carried EXIF block",
               Text(sourceRead, "System.Photo.CameraModel") == "RS-Carry");
         Check("the carried XMP packet is readable",
               sourceRead.Xmp is { } sourceXmp
               && Encoding.UTF8.GetString(sourceXmp).Contains("Carry test"));
+        Check("the IPTC resource is read from a Photoshop APP13 block",
+              sourceRead.Iptc is not null && sourceRead.Iptc.SequenceEqual(expectedIptc));
 
         using var session = ProjectSession.Create(source);
         var kept = Path.Combine(root, "carry-kept.jpg");
@@ -1826,12 +1865,16 @@ internal static class Program
         Check("the carried XMP is upright",
               keptXmp is not null
               && Encoding.UTF8.GetString(keptXmp).Contains("tiff:Orientation=\"1\""));
+        var keptIptc = MetadataCarry.ReadIptc(kept);
+        Check("a kept JPEG export carries the source IPTC resource",
+              keptIptc is not null && keptIptc.SequenceEqual(expectedIptc));
 
         var stripped = Path.Combine(root, "carry-stripped.jpg");
         ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
                              .GetAwaiter().GetResult();
         Check("stripping leaves no carried EXIF", MetadataCarry.ReadExif(stripped) is null);
         Check("stripping leaves no XMP", MetadataCarry.ReadXmp(stripped) is null);
+        Check("stripping leaves no IPTC", MetadataCarry.ReadIptc(stripped) is null);
 
         var png = Path.Combine(root, "carry-kept.png");
         ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0,
@@ -1840,6 +1883,16 @@ internal static class Program
         Check("a kept 16-bit PNG carries the EXIF block", pngExif is not null);
         Check("the PNG EXIF is upright", TiffNumber(pngExif, 0x0112) == 1);
         Check("the PNG carries the XMP packet", MetadataCarry.ReadXmp(png) is not null);
+        Check("a PNG export has no IPTC container", MetadataCarry.ReadIptc(png) is null);
+
+        var badIptc = Path.Combine(root, "carry-bad-iptc.jpg");
+        codec.EncodeAsync(image, badIptc, "jpeg", 0.95).GetAwaiter().GetResult();
+        InsertApp13(badIptc, new byte[]
+        {
+            (byte)'8', (byte)'B', (byte)'I', (byte)'M', 0x04, 0x04, 0, 0,
+            0x7F, 0xFF, 0xFF, 0xFF,
+        });
+        Check("a malformed IPTC block is skipped", MetadataCarry.ReadIptc(badIptc) is null);
 
         var broken = Path.Combine(root, "carry-broken.jpg");
         codec.EncodeAsync(image, broken, "jpeg", 0.95).GetAwaiter().GetResult();
@@ -1941,6 +1994,222 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// A source whose EXIF cannot be spliced — a TIFF photo, or a broken
+    /// segment — still knows how it was taken. The composer rebuilds the tags
+    /// the WinRT writer drops from the decoded properties, and the same decoder
+    /// that produced the properties reads the composed block back.
+    /// </summary>
+    private static void Compose(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var image = new PixelBuffer(8, 6);
+        for (var y = 0; y < 6; y++)
+        {
+            for (var x = 0; x < 8; x++)
+            {
+                Put(image, x, y, r: 40, g: 60, b: 80);
+            }
+        }
+
+        var properties = new Dictionary<string, object>
+        {
+            ["System.Photo.CameraManufacturer"] = "Retouch",
+            ["System.Photo.CameraModel"] = "RS-Compose",
+            ["System.Photo.DateTaken"] = new DateTime(2024, 5, 17, 10, 30, 0),
+            ["System.Photo.ExposureTime"] = 0.008,
+            ["System.Photo.FNumber"] = 2.8,
+            ["System.Photo.IsoSpeed"] = (ushort)400,
+            ["System.Photo.Flash"] = (ushort)16,
+            ["System.Photo.WhiteBalance"] = (ushort)1,
+            ["System.Photo.FocalLength"] = 50.0,
+            ["System.Photo.LensModel"] = "RF 50mm F1.8",
+            ["System.GPS.Latitude"] = new[] { 35.0, 41.0, 12.0 },
+            ["System.GPS.LatitudeRef"] = "N",
+            ["System.GPS.Longitude"] = new[] { 51.0, 25.0, 3.0 },
+            ["System.GPS.LongitudeRef"] = "E",
+            ["System.GPS.Altitude"] = 1200.0,
+        };
+        var composed = ExifComposer.Build(properties, 300, 300);
+        Check("the composer builds an EXIF block", composed is not null);
+        Check("the composed block names the camera", TiffText(composed, 0x0110) == "RS-Compose");
+        Check("the composed block is upright", TiffNumber(composed, 0x0112) == 1);
+        Check("a source with nothing to describe composes no block",
+              ExifComposer.Build(new Dictionary<string, object>(), 72, 72) is null);
+
+        Check("the composed block records the capture time",
+              TiffText(composed, ExifComposer.TagDateTimeOriginal) == "2024:05:17 10:30:00");
+        Check("the composed block records the GPS position",
+              composed is not null
+              && FindTiffEntry(composed, ExifComposer.TagGpsLatitude, out var gpsType,
+                               out var gpsCount, out _, out _)
+              && gpsType == 5 && gpsCount == 3);
+
+        var spliced = Path.Combine(root, "compose-spliced.jpg");
+        codec.EncodeAsync(image, spliced, "jpeg", 0.95).GetAwaiter().GetResult();
+        MetadataCarry.WriteJpeg(spliced, composed, null);
+        var splicedBlock = MetadataCarry.ReadExif(spliced);
+        Check("the spliced block keeps the capture time",
+              TiffText(splicedBlock, ExifComposer.TagDateTimeOriginal) == "2024:05:17 10:30:00");
+        Check("the spliced block keeps the GPS position",
+              splicedBlock is not null
+              && FindTiffEntry(splicedBlock, ExifComposer.TagGpsLatitude, out var keptType,
+                               out var keptCount, out _, out _)
+              && keptType == 5 && keptCount == 3);
+        var read = codec.ReadMetadataAsync(spliced).GetAwaiter().GetResult();
+        Check("the decoder reads the composed model",
+              Text(read, "System.Photo.CameraModel") == "RS-Compose");
+        // The codec only asks for the allowlist, so the rest is read from the
+        // same decoder directly: the block must satisfy a real EXIF reader,
+        // not only the parser that wrote it.
+        var decoded = DecodeProperties(spliced, new[]
+        {
+            "System.Photo.DateTaken",
+            "System.Photo.ExposureTime",
+            "System.Photo.FNumber",
+            "System.Photo.LensModel",
+            "System.GPS.Latitude",
+            "System.GPS.Longitude",
+        }).GetAwaiter().GetResult();
+        var capture = decoded.TryGetValue("System.Photo.DateTaken", out var taken)
+            ? taken.Value switch
+            {
+                DateTime date => (DateTime?)date,
+                DateTimeOffset offset => offset.DateTime,
+                _ => null,
+            }
+            : null;
+        Check("the decoder reads the composed capture date",
+              capture is { Year: 2024, Month: 5, Day: 17, Hour: 10, Minute: 30 });
+        Check("the decoder reads the composed exposure",
+              decoded.TryGetValue("System.Photo.ExposureTime", out var exposure)
+              && exposure.Value is double seconds && Math.Abs(seconds - 0.008) < 0.0001);
+        Check("the decoder reads the composed aperture",
+              decoded.TryGetValue("System.Photo.FNumber", out var aperture)
+              && aperture.Value is double fNumber && Math.Abs(fNumber - 2.8) < 0.01);
+        Check("the decoder reads the composed lens",
+              decoded.TryGetValue("System.Photo.LensModel", out var lens)
+              && lens.Value is string name && name == "RF 50mm F1.8");
+        var latitude = decoded.TryGetValue("System.GPS.Latitude", out var rawLatitude)
+            && rawLatitude.Value is double[] { Length: 3 } parts
+            && Math.Abs(parts[0] - 35) < 0.001
+            && Math.Abs(parts[1] - 41) < 0.001
+            && Math.Abs(parts[2] - 12) < 0.001;
+        if (capture is null)
+        {
+            Describe(decoded, "System.Photo.DateTaken");
+        }
+
+        // WIC's WinRT surface exposes no GPS for JPEG at all: this file, and a
+        // JPEG macOS ImageIO wrote with a GPS IFD, both report the property
+        // absent. So the block is gated through the parser above and an
+        // independent reader (see WINDOWS_FORMAT_AUDIT.md), and the WIC answer
+        // is printed as a diagnostic instead of asserted.
+        var foreign = Path.Combine(RepoRoot(),
+                                   "Windows/RetouchStudio.Tests/Fixtures/camera-gps.jpg");
+        var foreignProperties = DecodeProperties(foreign, new[]
+        {
+            "System.GPS.Latitude",
+            "System.Photo.DateTaken",
+        }).GetAwaiter().GetResult();
+        Console.WriteLine($"  composed GPS through WIC: {(latitude ? "kept" : "absent")}");
+        Console.WriteLine("  third-party GPS file:");
+        Describe(foreignProperties, "System.GPS.Latitude");
+        Describe(foreignProperties, "System.Photo.DateTaken");
+
+        // A TIFF source has no APP1 or eXIf block to copy, so the export path
+        // must compose one from the properties the decoder reports for it.
+        var tiff = Path.Combine(root, "compose-source.tiff");
+        codec.EncodeAsync(image, tiff, "tiff", 1.0,
+                          new ImageMetadata(new Dictionary<string, object>
+                          {
+                              ["System.Photo.CameraModel"] = "RS-Tiff",
+                          }), stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        using var session = ProjectSession.Create(tiff);
+        var exported = Path.Combine(root, "compose-export.jpg");
+        ExportRunner.ExportAsync(session, codec, exported, "jpeg", 0.9, 0,
+                                 stripPrivacyMetadata: false).GetAwaiter().GetResult();
+        var carried = MetadataCarry.ReadExif(exported);
+        var carriedSize = codec.ReadSizeAsync(exported).GetAwaiter().GetResult();
+        Check("a TIFF source exports a composed EXIF block",
+              TiffText(carried, 0x0110) == "RS-Tiff");
+        Check("the composed EXIF names the exported frame",
+              TiffNumber(carried, 0xA002) == carriedSize.Width
+              && TiffNumber(carried, 0xA003) == carriedSize.Height);
+    }
+
+    /// <summary>
+    /// One Photoshop image resource: the 8BIM signature, the id, an empty
+    /// Pascal name padded to an even width, the data length and the data,
+    /// padded as the format requires.
+    /// </summary>
+    private static byte[] BuildResource(ushort id, byte[] data)
+    {
+        var resource = new byte[12 + data.Length + (data.Length % 2)];
+        resource[0] = (byte)'8';
+        resource[1] = (byte)'B';
+        resource[2] = (byte)'I';
+        resource[3] = (byte)'M';
+        resource[4] = (byte)(id >> 8);
+        resource[5] = (byte)id;
+        resource[6] = 0;
+        resource[8] = (byte)(data.Length >> 24);
+        resource[9] = (byte)(data.Length >> 16);
+        resource[10] = (byte)(data.Length >> 8);
+        resource[11] = (byte)data.Length;
+        data.CopyTo(resource, 12);
+        return resource;
+    }
+
+    /// <summary>An IPTC IIM dataset: 0x1C, record 2, dataset 5 (Object Name).</summary>
+    private static byte[] IptcTitle(string text)
+    {
+        var bytes = Encoding.ASCII.GetBytes(text);
+        var dataset = new byte[5 + bytes.Length];
+        dataset[0] = 0x1C;
+        dataset[1] = 0x02;
+        dataset[2] = 0x05;
+        dataset[3] = (byte)(bytes.Length >> 8);
+        dataset[4] = (byte)bytes.Length;
+        bytes.CopyTo(dataset, 5);
+        return dataset;
+    }
+
+    private static byte[] Join(params byte[][] parts)
+    {
+        var joined = new byte[parts.Sum(part => part.Length)];
+        var at = 0;
+        foreach (var part in parts)
+        {
+            part.CopyTo(joined, at);
+            at += part.Length;
+        }
+        return joined;
+    }
+
+    /// <summary>Splices an APP13 segment after the JPEG's APP0, where a reader looks.</summary>
+    private static void InsertApp13(string path, byte[] resources)
+    {
+        var file = File.ReadAllBytes(path);
+        var at = 2;
+        if (file.Length >= 6 && file[2] == 0xFF && file[3] == 0xE0)
+        {
+            at = 4 + ((file[4] << 8) | file[5]);
+        }
+        var signature = Encoding.ASCII.GetBytes("Photoshop 3.0\0");
+        var segment = signature.Length + resources.Length + 2;
+        using var output = new MemoryStream();
+        output.Write(file, 0, at);
+        output.WriteByte(0xFF);
+        output.WriteByte(0xED);
+        output.WriteByte((byte)(segment >> 8));
+        output.WriteByte((byte)segment);
+        output.Write(signature, 0, signature.Length);
+        output.Write(resources, 0, resources.Length);
+        output.Write(file, at, file.Length - at);
+        File.WriteAllBytes(path, output.ToArray());
+    }
+
     private static byte[] BuildExif(ushort orientation, int width, int height)
     {
         var make = Encoding.ASCII.GetBytes("Retouch\0");
@@ -2039,20 +2308,24 @@ internal static class Program
         {
             return false;
         }
-        var ifd = ReadTiffU32(tiff, 4, little);
-        for (var pass = 0; pass < 2; pass++)
+        // IFD0, then the Exif and GPS sub-IFDs it points at; no directory is
+        // visited twice, so a self-referential pointer cannot loop.
+        var pending = new Queue<uint>();
+        pending.Enqueue(ReadTiffU32(tiff, 4, little));
+        var visited = new HashSet<uint>();
+        while (pending.Count > 0 && visited.Count < 4)
         {
-            if (ifd > int.MaxValue || (long)ifd + 2 > tiff.Length)
+            var ifd = pending.Dequeue();
+            if (!visited.Add(ifd) || ifd > int.MaxValue || (long)ifd + 2 > tiff.Length)
             {
-                return false;
+                continue;
             }
             var at = (int)ifd;
             var total = ReadTiffU16(tiff, at, little);
             if (total > 4096 || (long)at + 2 + 12L * total > tiff.Length)
             {
-                return false;
+                continue;
             }
-            uint? sub = null;
             for (var index = 0; index < total; index++)
             {
                 var candidate = at + 2 + 12 * index;
@@ -2064,18 +2337,13 @@ internal static class Program
                     entry = candidate;
                     return true;
                 }
-                if (tag == 0x8769
+                if ((tag == 0x8769 || tag == 0x8825)
                     && ReadTiffU16(tiff, candidate + 2, little) == 4
                     && ReadTiffU32(tiff, candidate + 4, little) >= 1)
                 {
-                    sub = ReadTiffU32(tiff, candidate + 8, little);
+                    pending.Enqueue(ReadTiffU32(tiff, candidate + 8, little));
                 }
             }
-            if (sub is not { } next)
-            {
-                return false;
-            }
-            ifd = next;
         }
         return false;
     }

@@ -26,7 +26,21 @@ workstream landed on `windows/ui-automation` (`bb06e28`, green run
 43647604771) and is merged into `develop` as `7af20f2`: the Windows harness now
 drives the golden path (window → Open Photo dialog → Exposure slider → 150%
 zoom → Export dialog → typed path → decoded JPEG) and the launch recovery
-prompt. The next milestone PR carries that work plus these documents.
+prompt. On 2026-11-15 the branches were reconciled: `main` at `df289cf` was
+merged into `develop` at `63fdbd3` as `00a48d6`. The three commits `main` held
+that `develop` did not are merge commits with an empty net diff, so the merged
+tree equals the pre-merge develop tree; five checks are green on `develop` in
+run 43660568463. The same day, JPEG exports gained the source IPTC resource
+(`windows/iptc-carry`, `04dac17`, green run 43663201459, 268 checks), and a
+source with no EXIF block to splice gained a composed one
+(`windows/exif-compose`, `431783b`, green run 43671478242, 283 checks).
+The same day the chosen face learned to follow its person across a crop
+(`windows/face-identity`, `26c59be`, green run 43685429036), and the Windows
+UI harness grew to eleven scenarios (`windows/zoom-pan-ui`, `0c88498`, green
+run 43696215085, 283 checks): pointer zoom and pan, a cancelled batch of 64,
+open and export error reports, and the decline half of the launch prompt.
+Both are merged into `develop` as `ca637ee`.
+The next milestone PR carries that work plus these documents.
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
@@ -40,14 +54,24 @@ prompt. The next milestone PR carries that work plus these documents.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| W4-1 | Metadata keep-safe / strip / allowlist for JPEG, TIFF, 16-bit PNG | TESTED (camera model + ISO, resolution; EXIF/XMP carry read back after crop, quarter turn and resize) | TIFF keeps only the WinRT allowlist; unsupported keys are documented in `WINDOWS_FORMAT_AUDIT.md` | none |
-| W4-2 | XMP write, IPTC write | NOT IMPLEMENTED | evaluate a distributable XMP packet writer; WIC exposes no write path | library choice (Lead decision), licence review |
-| W4-3 | Full EXIF rewrite (GPS, date, exposure, lens) | NOT IMPLEMENTED | WIC drops most keys; needs an EXIF writer outside WIC | library choice (Lead decision) |
+| W4-1 | Metadata keep-safe / strip / allowlist for JPEG, TIFF, 16-bit PNG | TESTED (camera model + ISO, resolution; EXIF/XMP carry read back after crop, quarter turn and resize; a JPEG also carries the source IPTC resource byte for byte, run 43663201459) | TIFF keeps only the WinRT allowlist; PNG and TIFF carry no IPTC; unsupported keys are documented in `WINDOWS_FORMAT_AUDIT.md` | none |
+| W4-2 | XMP write, IPTC write | Carry IMPLEMENTED for macOS parity (JPEG IPTC, EXIF/XMP in JPEG and PNG; macOS also only carries); composing new records NOT IMPLEMENTED | a source with no splice-able block (TIFF, HEIC) still loses these records; composing them needs a writer because WIC exposes no write path | library choice (Lead decision), licence review |
+| W4-3 | Full EXIF rewrite (GPS, date, exposure, lens) | IMPLEMENTED for sources a decoder can describe (composed EXIF, run 43671478242): a TIFF source exports make, model, capture time, exposure, aperture, ISO, flash, focal length, white balance and lens, rewritten to the written frame and upright | WIC's WinRT properties report no GPS, so a composed block carries no position in practice (a macOS ImageIO control JPEG reads the same absent), and tags WIC does not decode are not composed; carried EXIF still travels whole for JPEG/PNG sources | none for the composed path; a new field needs a decoder that reports it |
 | W4-4 | ICC preservation on write / wide-gamut output | PARTIAL | exports declare the generated sRGB profile (JPEG APP2, PNG iCCP) even when stripping, and the decoder skips re-conversion for its own profile; the source's wide gamut is still clipped on decode and its profile is not carried | carrying wide gamut is an owner-visible colour trade-off |
 | W4-5 | HEIC read on CI | BLOCKED | no HEIF decoder on `windows-2025` (`0x88982F8B`) | install the HEIF extension or accept and document the gap |
 | W4-6 | Format audit document (import, decode, orientation, colour, metadata, bit depth, export, batch) | DONE as a document (`Docs/WINDOWS_FORMAT_AUDIT.md`) | records the gaps it cannot close: HEIC needs the optional codec, RAW is absent, TIFF is untagged | none |
-| W4-7 | RenderPlan consumed end to end (dimensions, depth, alpha, profile, compression, quality, metadata, orientation) | PARTIAL | dimensions, depth, alpha, orientation, quality and the strip policy are honoured; the profile is fixed sRGB rather than passed through | W4-4 (wide-gamut carry) |
+| W4-7 | RenderPlan consumed end to end (dimensions, depth, alpha, profile, compression, quality, metadata, orientation) | PARTIAL | dimensions, depth, alpha, orientation, quality and the strip policy are honoured; the profile is fixed sRGB rather than passed through | W4-4 decision |
 | W4-8 | Deterministic cross-host corpus comparisons (MAE, max error, SSIM, colour difference) | PARTIAL | adjustments compared to macOS references (exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47 MAE); straighten/crop lacks a cross-host pixel reference | golden-corpus fixture needs owner approval |
+
+**Backlog correction (2026-11-15, read-only audit).** The Windows request builder's
+hardcoded `includeStamps`/`includeAnalysis`/`aiUpscale` = false and `faceCount` = 0
+are correct-by-design, not gaps: the host has no heal/sticker renderer
+(`ExportRunner.cs:20`), no analysis or face model, and no upscaler toggle; projects
+carrying those edits are named and confirmed before export (`DocumentModel.cs:221,233`,
+`MainWindow.xaml.cs:874`), and the 4096 long edge behaves identically because macOS
+also refuses to enlarge with upscale off (`RenderPolicy.swift:69`). Latent, not
+fixed: a batch request copies `aiEdits` where macOS clears them per file
+(`BatchRenderPolicy.swift:45`), invisible while the plan never reads `aiEdits`.
 
 ## WS-2 — W3 face analysis and masks
 
@@ -63,11 +87,11 @@ prompt. The next milestone PR carries that work plus these documents.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, Exposure slider, zoom buttons, Export dialog writing a decoded JPEG) in run 43647604771 | CI does not drive the crop overlay drag, pointer slider drags, or the other eight sliders; the Save/Open Project dialogs are not driven | extend the harness per interaction |
-| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771) | divider drag, pointer zoom/pan and the peek modifier are not driven by CI | as WP-1 |
-| WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI | as WP-1 |
-| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure); a one-photo batch runs from the UI through the photo and folder pickers and writes a decoded file (run 43655814761) | progress/cancel UI NOT VERIFIED; multi-select and cancellation during a running batch are not exercised | extend the harness |
-| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless; Open Project is driven end to end with a codec-saved project (run 43653664500), Save Project writes through its dialog and the Undo button reverts the slider (run 43654765580), and the launch recovery prompt is driven (run 43647604771) | reopening a saved project through the UI is not driven | none |
+| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, all nine global sliders, zoom buttons, Export dialog writing a decoded JPEG) in runs 43647604771 and 43659238621, the crop overlay's corner drag with injected pointer input (512×512 to 449×472) in run 43681175327, and the open/export failure reports (corrupt photo, destination held by another process) in run 43696215085 | drop-to-open is not driven; WPF hosts an OLE drop target that a synthetic `WM_DROPFILES` cannot reach | extend the harness per interaction |
+| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771); pointer zoom takes the dock to 150%, a 70-pixel drag pans the canvas without changing the zoom, and Fit restores the opening view within 0.2% of sampled pixels (run 43696215085); the compare divider is turned on by a pointer click, dragged 80 px right and back within 6 px, and removed on the second click (run 43681175327) | the peek modifier is not driven by CI | as WP-1 |
+| WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI: WPF hosts an OLE `IDropTarget` that `WM_DROPFILES` does not reach, so no synthetic drop has landed | as WP-1 |
+| WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure); a one-photo batch runs from the UI through the photo and folder pickers and writes a decoded file (run 43655814761); a 64-source batch reports `Exported 9 of 64…`, Cancel stops it between files (`Export cancelled after 10 of 64 photos.`) and the destination holds exactly those ten files (run 43696215085) | per-file failure isolation is headless only; a cancel during the file in flight is not distinguished from the next-file boundary | extend the harness |
+| WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless and driven through UIA: Open Project with a codec-saved project (run 43653664500), Save Project through its dialog, Undo and Redo on the slider (run 43654765580), a fresh-process reopen keeping Exposure 40 (run 43658018867), the launch recovery prompt (run 43647604771), and the decline answer that leaves an empty editor with nothing offered on the next launch (run 43696215085) | unreadable project and failed save are not driven end to end | none |
 | WP-6 | AI edits on Windows | NOT APPLICABLE until a runtime exists | blocked with W5 | W5 |
 
 ## WS-4 — W5 AI runtime
@@ -98,7 +122,7 @@ prompt. The next milestone PR carries that work plus these documents.
 | DS-2 | Windows updater and update feed | NOT IMPLEMENTED | design signed metadata, download verification, rollback, test channels | signing; no public feed without authorization |
 | DS-3 | macOS DMG build | VERIFIED locally and on a release dry run | clean-machine install NOT VERIFIED | none |
 | DS-4 | Developer ID signing, notarization, stapling, Gatekeeper | BLOCKED | pipeline prepared; credentials unavailable | owner Apple Developer membership |
-| DS-5 | Tag release publishing | NOT VERIFIED | a `workflow_dispatch` dry run built and uploaded artifacts without publishing | owner authorization for a release |
+| DS-5 | Tag release publishing | REPAIRED, NOT VERIFIED | a tag used to skip its Release because `release` inherited the `windows-app` skip; the job now uses `always()` with explicit results, `-PackageVersion` stamps the published assembly, and `Tools/check-versions.sh` fails a tag that disagrees with Info.plist and Directory.Build.props. Only a real tag can prove the paths, so they stay unverified; a `workflow_dispatch` dry run built and uploaded artifacts without publishing | owner authorization for a release or a throwaway tag |
 
 ## WS-7 — Cross-platform acceptance
 
@@ -122,10 +146,22 @@ prompt. The next milestone PR carries that work plus these documents.
 | No physical Windows machine | interactive UI acceptance | CI-only evidence remains the standard |
 | Golden corpus may not be regenerated | cross-host straighten/crop pixel reference | owner-approved fixtures |
 
+## Owner decisions needed (WS-1)
+
+Product decisions, not engineering choices. Each states what the code does now,
+the options and their impact. Work that does not depend on them continues.
+
+| Decision | Options | Impact | Current behaviour / recommendation |
+|---|---|---|---|
+| W4-4 — output colour space | (A) keep sRGB output for 1.0; (B) pass the source profile through to the render and the written file; (C) target Display P3 for every export | (B) and (C) change every exported pixel for a wide-gamut source, change the preview/render comparison and the cross-host corpus references, and need a P3 fixture set; (A) keeps today's comparable output | sRGB today, with the profile declared in JPEG and PNG. Recommendation: (A) for 1.0, P3 as a next-milestone feature with its own fixtures |
+| W4-5 — HEIC on Windows CI | (A) accept and document the gap; (B) install the HEIF extension in the CI job; (C) vendor a third-party decoder | (B) adds a network dependency and licence acceptance to every Windows run; (C) adds a licence and patent review; (A) leaves HEIC read unverified on CI | no decoder on `windows-2025` (`0x88982F8B`). Recommendation: (A) now, revisit if HEIC import becomes a requirement |
+| W4-2 — composing XMP/IPTC and vendor blocks | (A) stay carry-only, as macOS does; (B) adopt a metadata-writing library and compose new records | (B) adds a library choice, licence review and a new source of writes for records no current feature edits; (A) matches the macOS host | carry-only. Recommendation: (A) unless an editing feature must set those fields |
+| W4-8 — straighten/crop cross-host reference | (A) add owner-approved fixtures and references; (B) keep the current adjustment-only comparison | (A) grows the golden corpus, which is otherwise frozen; (B) leaves straighten/crop compared by arithmetic, not by pixels across hosts | adjustment references only. Recommendation: (A) when the corpus may be extended |
+
 ## Queue order
 
-1. Close WS-1 (W4): validate the metadata/colour workstream on `develop`,
-   then the format audit and the remaining RenderPlan pass-through.
+1. Close WS-1 (W4): the metadata and format-audit work is done; the
+   RenderPlan profile pass-through waits on the W4-4 decision above.
 2. WS-3 items that are verifiable without a UI harness (crash recovery,
    project lifecycle).
 3. WS-2 after the landmark-model decision (a measured Lead decision).

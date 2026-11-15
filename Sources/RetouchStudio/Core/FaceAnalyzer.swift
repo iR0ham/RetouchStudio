@@ -14,6 +14,12 @@ struct FaceGeometry {
 
     var boundingBox: CGRect
 
+    /// In-memory identity, assigned by `FaceIdentityTracker`. It lets the
+    /// chosen face follow the person across a re-detection instead of the
+    /// list slot. Not encoded anywhere: `FaceGeometry` never reaches the
+    /// project file, and a reopened document selects by index as before.
+    var identity: Int? = nil
+
     // Raw landmark outlines (absolute, normalized to the whole image).
     var faceContour: [CGPoint]
     var leftEye: [CGPoint]
