@@ -4,8 +4,9 @@ namespace RetouchStudio.Core.IO;
 /// The sibling temporary files the save and export paths write next to their
 /// destination. A write lands in a dot-prefixed sibling with a fresh GUID and is
 /// renamed into place, so a crash can only leave the temp behind, never a
-/// half-written destination. The sweep removes those leftovers once they are old
-/// enough that no live write can still own them.
+/// half-written destination. Windows gives the leading dot no special meaning,
+/// so an interrupted write's temp stays visible in the folder until the stale
+/// sweep removes it.
 /// </summary>
 public static class TemporaryFiles
 {
@@ -28,9 +29,9 @@ public static class TemporaryFiles
     private const int GuidTextLength = 32;
 
     /// <summary>
-    /// A hidden sibling of <paramref name="destination"/> with a unique name, so
-    /// two writers into one folder cannot collide and a stale temp is never
-    /// reused.
+    /// A dot-prefixed sibling of <paramref name="destination"/> with a unique
+    /// name, so two writers into one folder cannot collide and a stale temp is
+    /// never reused.
     /// </summary>
     public static string SiblingTempPath(string destination)
     {
@@ -79,21 +80,6 @@ public static class TemporaryFiles
         return Guid.TryParseExact(
             afterGuid.Substring(Suffix.Length + MetadataMarker.Length), "N", out _);
     }
-
-    /// <summary>
-    /// Marks a written temp hidden. Windows ignores the leading dot, so the
-    /// attribute is what actually keeps a leftover out of the folder's normal
-    /// view.
-    /// </summary>
-    public static void Hide(string path)
-        => File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden);
-
-    /// <summary>
-    /// Clears the hidden flag before a temp is published. Renames carry the
-    /// source's attributes, so the final file must go in unhidden.
-    /// </summary>
-    public static void Unhide(string path)
-        => File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.Hidden);
 
     /// <summary>
     /// Deletes the leftover siblings of <paramref name="destination"/> whose

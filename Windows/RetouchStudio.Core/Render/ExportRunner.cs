@@ -122,9 +122,9 @@ public static class ExportRunner
         cancellationToken.ThrowIfCancellationRequested();
 
         var fullDestination = Path.GetFullPath(destination);
-        // A hidden sibling with a unique name: two exports into the same folder
-        // cannot collide. A temp left behind by a crash is swept first, so the
-        // folder does not grow one stale file per interrupted export.
+        // A dot-prefixed sibling with a unique name: two exports into the same
+        // folder cannot collide. A temp left behind by a crash is swept first,
+        // so the folder does not grow one stale file per interrupted export.
         var temporary = TemporaryFiles.SiblingTempPath(fullDestination);
         TemporaryFiles.SweepStaleSiblings(fullDestination);
         try
@@ -149,7 +149,6 @@ public static class ExportRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 await codec.Encode16Async(rendered, temporary, plan.Format,
                                           metadata, stripPrivacyMetadata);
-                TemporaryFiles.Hide(temporary);
             }
             else
             {
@@ -165,13 +164,11 @@ public static class ExportRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 await codec.EncodeAsync(output, temporary, plan.Format, quality,
                                         metadata, stripPrivacyMetadata);
-                TemporaryFiles.Hide(temporary);
             }
 
             // A cancel that arrives after the encode must not publish the file:
             // the check sits between the finished encode and the rename.
             cancellationToken.ThrowIfCancellationRequested();
-            TemporaryFiles.Unhide(temporary);
             // Publish the temp by rename, so a codec failure, a full disk or a
             // crash cannot leave a partial destination. Replace renames over an
             // existing file without unlinking it first, so a failed publish
