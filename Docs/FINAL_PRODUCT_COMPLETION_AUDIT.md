@@ -108,3 +108,33 @@ The next implementation milestone is W4 on Windows (metadata, colour, formats),
 followed by the verifiable reliability items and the face-landmark decision.
 The queue, dependencies and blockers are in
 [`MASTER_PLAN_REMAINING_WORK.md`](MASTER_PLAN_REMAINING_WORK.md).
+
+## 7. Addendum, 2026-11-16
+
+This section is dated and additive. The audit above stands as written for its
+date; two statements in it were later found to overstate what had been tested.
+
+**A critical defect found after the audit.** Runs 43753549854 and 43755442595
+failed the Windows `exportcancel` UI mode because the app could not open a
+4000×3000 16-bit PNG: `IndexOutOfRangeException`, reported by the app itself
+once the harness was made to read its message box (`94c304a`). The cause was in
+`Windows/RetouchStudio.Core/Imaging/PixelBuffer16.cs`: `RotateDegrees` and
+`ResizeLongEdge` passed a byte offset (`pixel * 8`) to `Sample`, which indexes
+`ushort[]` by sample (`* 4`). Every 16-bit source was resized for the preview at
+open time, so this stopped 16-bit photos from opening at all, and a 16-bit
+export with a long-edge limit or a straighten would have written garbage or
+failed. Fixed in `59b4287`, with headless checks (`SixteenBitGeometry`) that
+drive both resamplers and a real 16-bit straighten export.
+
+**What §2 Gate C's "16-bit preview tested" meant.** At audit time the evidence
+was the headless check that decodes a 16-bit source, reduces it and compares
+samples; the application's own preview path, which resizes the source to the
+panel before rendering, was not driven by that check. The gate was therefore
+weaker than its wording suggested, and the wording is corrected here rather
+than left to stand.
+
+**Close during an export.** Run 43757022542 showed the window asking "The
+document has unsaved changes. Close anyway?" only after the running export had
+already been cancelled, and then re-prompting instead of closing. The question
+is now asked first: No leaves the window and the export untouched, Yes cancels,
+waits and closes (`5fec82d`), and the `exportclose` UI mode answers it.
