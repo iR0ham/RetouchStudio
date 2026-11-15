@@ -10,6 +10,7 @@ using RetouchStudio.Core.View;
 using RetouchStudio.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
+using Windows.Storage.Streams;
 
 namespace RetouchStudio.Tests;
 
