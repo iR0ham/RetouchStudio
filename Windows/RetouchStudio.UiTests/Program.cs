@@ -892,7 +892,7 @@ internal static class Program
         if (handles is null || handles[0].Current.BoundingRectangle.IsEmpty)
         {
             throw new InvalidOperationException(
-                $"the compare divider did not appear; the toggle reads {ToggleState(compare)}; " +
+                $"the compare divider did not appear; the toggle reads {ToggleStateText(compare)}; " +
                 "the texts are " + DescribeTexts(window));
         }
         var thumb = handles[0];
@@ -986,7 +986,7 @@ internal static class Program
             $"'{element.Current.Name}' exposes neither Invoke nor Toggle");
     }
 
-    private static string ToggleState(AutomationElement element) =>
+    private static string ToggleStateText(AutomationElement element) =>
         element.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
         && pattern is TogglePattern toggle
             ? toggle.Current.ToggleState.ToString()
