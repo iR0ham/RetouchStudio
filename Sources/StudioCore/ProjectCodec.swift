@@ -100,7 +100,10 @@ public enum ProjectCodec {
                               aiEdits: state.aiEdits.isEmpty ? nil : state.aiEdits,
                               analysis: state.analysis == AnalysisSettings() ? nil : state.analysis,
                               selectedFace: state.selectedFaceIndex,
-                              orientation: state.orientation.isIdentity ? nil : state.orientation)
+                              orientation: state.orientation.isIdentity ? nil : state.orientation,
+                              masks: state.masks.isEmpty ? nil : state.masks,
+                              faceIdentities: state.faceIdentities.isEmpty
+                                  ? nil : state.faceIdentities)
     }
 
     /// v3 bytes, unchanged. The baseline fixture proves this.
