@@ -876,12 +876,18 @@ internal static class Program
 
         var compare = FindButton(window, "Compare before and after")
             ?? throw new InvalidOperationException("the Compare toggle is missing");
+        bool IsOn() =>
+            compare.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
+            && pattern is TogglePattern toggle
+            && toggle.Current.ToggleState == ToggleState.On;
         ClickControl(compare, mainHandle);
-        var turnedOn = WaitFor(
-            () => compare.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
-                  && pattern is TogglePattern toggle
-                  && toggle.Current.ToggleState == ToggleState.On,
-            TimeSpan.FromSeconds(10));
+        var turnedOn = WaitFor(IsOn, TimeSpan.FromSeconds(8));
+        if (!turnedOn)
+        {
+            Console.WriteLine("  the first click left Compare off; clicking again");
+            ClickControl(compare, mainHandle);
+            turnedOn = WaitFor(IsOn, TimeSpan.FromSeconds(8));
+        }
         if (!turnedOn)
         {
             throw new InvalidOperationException(
@@ -980,16 +986,23 @@ internal static class Program
         }
         SetForegroundWindow(mainHandle);
         Thread.Sleep(200);
-        var x = rect.X + rect.Width / 2;
-        var y = rect.Y + rect.Height / 2;
         var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
                               GetSystemMetrics(SmCyScreen));
-        if (!screen.Contains(new Point(x, y)))
+        // A maximized window keeps a frame past the screen edge, and the top
+        // bar can overflow it; a user clicks the visible part, so the pointer
+        // is aimed at the centre of the control's on-screen intersection.
+        var left = Math.Max(rect.Left, screen.Left);
+        var right = Math.Min(rect.Right, screen.Right);
+        var top = Math.Max(rect.Top, screen.Top);
+        var bottom = Math.Min(rect.Bottom, screen.Bottom);
+        if (right - left < 4 || bottom - top < 4)
         {
             throw new InvalidOperationException(
                 $"'{control.Current.Name}' sits at {rect}, outside the screen {screen}; " +
                 "the injected pointer cannot reach it");
         }
+        var x = (left + right) / 2;
+        var y = (top + bottom) / 2;
         Console.WriteLine($"  clicking '{control.Current.Name}' at {x:0},{y:0}");
         SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
         Thread.Sleep(120);
