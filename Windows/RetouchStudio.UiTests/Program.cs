@@ -22,7 +22,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|guard|project|batch|crop|compare|zoom|batchcancel|errors]
+///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,12 +39,13 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch|crop|compare|zoom|batchcancel|errors]");
+                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
-        if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"
-                        or "crop" or "compare" or "zoom" or "batchcancel" or "errors"))
+        if (mode is not ("golden" or "recovery" or "recoveryno" or "guard" or "project"
+                        or "batch" or "crop" or "compare" or "zoom" or "batchcancel"
+                        or "errors"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -67,7 +68,7 @@ internal static class Program
             File.Delete(output);
         }
         var recovery = Directory.CreateTempSubdirectory("retouchstudio-ui-recovery-");
-        if (mode == "recovery")
+        if (mode is "recovery" or "recoveryno")
         {
             SeedRecovery(recovery.FullName, photo);
         }
@@ -89,6 +90,10 @@ internal static class Program
             if (mode == "recovery")
             {
                 RunRecovery(process, photo);
+            }
+            else if (mode == "recoveryno")
+            {
+                RunRecoveryDecline(process, app, photo, recovery.FullName);
             }
             else if (mode == "guard")
             {
@@ -239,6 +244,77 @@ internal static class Program
             throw new InvalidOperationException($"the app exited with {process.ExitCode}");
         }
         Ok("the app closed cleanly after a recovery");
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// "No" is the other half of the launch prompt: it must drop that one copy
+    /// and keep the next launch quiet, instead of offering the discarded work
+    /// again. The store's own suite proves the file goes; only this drives the
+    /// button a person sees.
+    /// </summary>
+    private static void RunRecoveryDecline(Process process, string app, string photo,
+                                           string recoveryDirectory)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var prompt = WaitWindow(process.Id, "Recover unsaved changes", StartUpPatience)
+            ?? throw new InvalidOperationException("the recovery prompt never appeared");
+        Ok("the seeded unsaved copy raised the recovery prompt");
+        var promptHandle = (IntPtr)prompt.Current.NativeWindowHandle;
+        var no = FindButton(prompt, "No")
+            ?? throw new InvalidOperationException("the recovery prompt has no No button");
+        Invoke(no);
+        if (!WaitFor(() => !IsWindowVisible(promptHandle), TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException("the declined prompt stayed on screen");
+        }
+        Ok("No closed the prompt");
+
+        // An empty editor keeps the plain title; anything else means the
+        // decline restored the copy it was told to drop.
+        if (!WaitFor(() => window.Current.Name == "Retouch Studio", TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"declining did not leave an empty editor; the title is '{window.Current.Name}'");
+        }
+        Ok($"declining left the editor empty: '{window.Current.Name}'");
+
+        CloseCleanly(window, process);
+
+        var start = new ProcessStartInfo(app)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(app)!,
+        };
+        start.Environment["RETOUCHSTUDIO_NO_DIALOG"] = "1";
+        start.Environment["RETOUCHSTUDIO_RECOVERY"] = recoveryDirectory;
+        using var quiet = Process.Start(start)
+            ?? throw new InvalidOperationException("the app did not restart");
+        var second = WaitWindow(quiet.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the second window never appeared");
+
+        // The prompt is raised while the window loads, so a quiet stretch after
+        // the window appears is the evidence that nothing was offered again.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (FindVisibleWindow(quiet.Id, "Recover unsaved changes") != IntPtr.Zero)
+            {
+                throw new InvalidOperationException(
+                    "the discarded copy was offered again on the next launch");
+            }
+            Thread.Sleep(250);
+        }
+        Ok("the next launch offered nothing to recover");
+
+        if (!WaitFor(() => second.Current.Name == "Retouch Studio", TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"the quiet launch is not an empty editor; the title is '{second.Current.Name}'");
+        }
+        Ok($"the quiet launch is an empty editor: '{second.Current.Name}'");
+        CloseCleanly(second, quiet);
         Console.WriteLine("UI HOST TESTS: PASS");
     }
 
@@ -1444,7 +1520,8 @@ internal static class Program
                 ?? throw new InvalidOperationException(
                     "the Batch Export picker never appeared");
             var photosHandle = (IntPtr)photosDialog.Current.NativeWindowHandle;
-            SelectAllInPicker(photosDialog, sources.FullName, extension, count);
+            SelectAllInPicker(photosDialog, sources.FullName, "frame-",
+                              $"frame-*{extension}", count);
             if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
             {
                 throw new InvalidOperationException(
@@ -1549,20 +1626,34 @@ internal static class Program
     }
 
     /// <summary>
-    /// Selects every file of a folder in a file picker. This dialog does not
-    /// parse several quoted paths, so it is navigated into the folder and the
-    /// files are selected the way a person does: click one, press Ctrl+A.
+    /// Hands the picker every file of a folder. This dialog does not parse
+    /// several quoted paths, so it is navigated into the folder and offered a
+    /// wildcard, which the shell expands into every match; a dialog that reads
+    /// the stars literally falls back to ticking the list like a person.
     /// </summary>
     private static void SelectAllInPicker(AutomationElement dialog, string folder,
-                                          string extension, int expected)
+                                          string namePrefix, string pattern, int expected)
     {
+        var handle = (IntPtr)dialog.Current.NativeWindowHandle;
         var edit = SetFileName(dialog, folder + Path.DirectorySeparatorChar);
         CommitFileName(edit);
+        Thread.Sleep(500);
+        SetFileName(dialog, pattern);
+        PressDefaultButton(dialog, "Open");
+        if (WaitFor(() => !IsWindowVisible(handle), TimeSpan.FromSeconds(10)))
+        {
+            Ok($"the picker took the wildcard '{pattern}'");
+            return;
+        }
+
+        // The wildcard stays in the box and would win over a ticked list, so
+        // it is cleared before the list becomes the selection.
+        SetFileName(dialog, "");
         var items = new List<AutomationElement>();
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         while (DateTime.UtcNow < deadline)
         {
-            items = PickerItems(dialog, extension);
+            items = PickerItems(dialog, namePrefix);
             if (items.Count >= expected)
             {
                 break;
@@ -1573,23 +1664,23 @@ internal static class Program
         {
             throw new InvalidOperationException(
                 $"the picker shows {items.Count} files instead of {expected} after entering " +
-                $"{folder}; the texts are " + DescribeWindow(dialog));
+                $"{folder}; the items are {DescribePickerItems(dialog)}; the texts are " +
+                DescribeWindow(dialog));
         }
         var first = items[0].Current.BoundingRectangle;
         if (first.IsEmpty)
         {
             throw new InvalidOperationException("the picker's first file has no screen bounds");
         }
-        var handle = (IntPtr)dialog.Current.NativeWindowHandle;
         ClickControl(items[0], handle);
         keybd_event(VkControl, 0, 0, IntPtr.Zero);
         keybd_event(VkA, 0, 0, IntPtr.Zero);
         keybd_event(VkA, 0, KeyUp, IntPtr.Zero);
         keybd_event(VkControl, 0, KeyUp, IntPtr.Zero);
         Thread.Sleep(300);
-        var selected = PickerItems(dialog, extension).Count(item =>
-            item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var pattern)
-            && pattern is SelectionItemPattern selection
+        var selected = PickerItems(dialog, namePrefix).Count(item =>
+            item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var tick)
+            && tick is SelectionItemPattern selection
             && selection.Current.IsSelected);
         if (selected != expected)
         {
@@ -1602,8 +1693,12 @@ internal static class Program
         Invoke(open);
     }
 
+    /// <summary>
+    /// The files in the picker's list. Explorer hides extensions in this view,
+    /// so the test's own names are the match, not the file extension.
+    /// </summary>
     private static List<AutomationElement> PickerItems(AutomationElement dialog,
-                                                       string extension)
+                                                       string namePrefix)
     {
         var items = new List<AutomationElement>();
         foreach (AutomationElement candidate in dialog.FindAll(
@@ -1616,12 +1711,32 @@ internal static class Program
         {
             var name = candidate.Current.Name;
             if (!string.IsNullOrEmpty(name)
-                && name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                && name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 items.Add(candidate);
             }
         }
         return items;
+    }
+
+    private static string DescribePickerItems(AutomationElement dialog)
+    {
+        var names = new List<string>();
+        foreach (AutomationElement candidate in dialog.FindAll(
+                     TreeScope.Descendants,
+                     new OrCondition(
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.ListItem),
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.DataItem))))
+        {
+            names.Add($"'{candidate.Current.Name}'");
+            if (names.Count == 20)
+            {
+                break;
+            }
+        }
+        return names.Count == 0 ? "(none)" : string.Join(", ", names);
     }
 
     /// <summary>The status line while a batch runs or after it stops.</summary>
