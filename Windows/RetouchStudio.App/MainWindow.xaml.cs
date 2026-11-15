@@ -23,6 +23,11 @@ public partial class MainWindow : Window
 
     private readonly EditorViewModel _vm = new();
 
+    // Set when a close was deferred so the in-flight export or batch could be
+    // cancelled and unwind. The second closing pass closes without asking
+    // again: the owner already answered, and a discard must not be flushed.
+    private bool _closingAfterWork;
+
     // The crop overlay remembers the frame being dragged until Apply. The
     // preview underneath is rendered without a crop while the overlay is open.
     private CropValue _pendingCrop = new(0, 0, 1, 1);
@@ -134,13 +139,64 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Called by the app when Windows ends the session. The debounced autosave
+    /// is committed synchronously; a running export is cancelled so a temp is
+    /// not left staged, though the session may end before it unwinds.
+    /// </summary>
+    public void FlushForSessionEnd()
+    {
+        _vm.CancelExport();
+        _vm.CancelBatch();
+        _vm.FlushCommit();
+    }
+
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
     {
+        // The second pass comes from CancelWorkAndCloseAsync, after the owner
+        // agreed to close and the work was cancelled and awaited: the temp is
+        // removed and the destination is either whole or absent. It closes
+        // without asking again, and without flushing edits that were discarded.
+        if (_closingAfterWork)
+        {
+            return;
+        }
+        if (_vm.IsExportRunning || _vm.IsBatchRunning)
+        {
+            // The unsaved-work question is asked before the export is touched,
+            // so a No leaves both the window and the running export as they
+            // were; a Yes cancels the work and lets it unwind before closing.
+            if (!_vm.CanClose())
+            {
+                e.Cancel = true;
+                return;
+            }
+            e.Cancel = true;
+            _closingAfterWork = true;
+            _ = CancelWorkAndCloseAsync();
+            return;
+        }
         _vm.FlushCommit();
         if (!_vm.CanClose())
         {
             e.Cancel = true;
         }
+    }
+
+    private async Task CancelWorkAndCloseAsync()
+    {
+        _vm.CancelExport();
+        _vm.CancelBatch();
+        // The flags are set before the first await and cleared after the
+        // runner has removed its temp, so waiting on them is what proves the
+        // unwind finished. An encode that cannot be interrupted may outlast
+        // the wait; the second pass then closes anyway.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while ((_vm.IsExportRunning || _vm.IsBatchRunning) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+        await Dispatcher.InvokeAsync(Close);
     }
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -619,9 +675,10 @@ public partial class MainWindow : Window
         {
             return;
         }
+        var work = _vm.ExportAsync(dialog.FileName);
         try
         {
-            await _vm.ExportAsync(dialog.FileName);
+            await work;
         }
         catch (OperationCanceledException)
         {
@@ -630,7 +687,10 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            Report("The photo could not be exported", error);
+            if (!_closingAfterWork)
+            {
+                Report("The photo could not be exported", error);
+            }
         }
     }
 
@@ -660,11 +720,14 @@ public partial class MainWindow : Window
         {
             return;
         }
+        var work = _vm.BatchExportAsync(photos.FileNames, folder.FolderName);
         try
         {
-            var results = await _vm.BatchExportAsync(photos.FileNames, folder.FolderName);
+            var results = await work;
             var failed = results.Where(item => item.Error is not null).ToList();
-            if (failed.Count > 0)
+            // A close cancelled the batch on purpose; a modal report here
+            // would block the close it already agreed to.
+            if (failed.Count > 0 && !_closingAfterWork)
             {
                 var lines = string.Join("\n", failed.Select(
                     item => $"{Path.GetFileName(item.Source)}: {item.Error}"));
@@ -675,7 +738,10 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            Report("The photos could not be exported", error);
+            if (!_closingAfterWork)
+            {
+                Report("The photos could not be exported", error);
+            }
         }
     }
 

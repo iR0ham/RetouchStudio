@@ -50,11 +50,13 @@ internal static class Program
             Corpus(root);
             BitDepth(root);
             SixteenBitPreview(root);
+            SixteenBitGeometry(root);
             BatchExport(root);
             AtomicExport(root);
             ExportCancellation(root);
             ExportDestination(root);
             ExportRefusals(root);
+            ExportDeniedByAcl(root);
             StaleSweep(root);
             AdjustmentEvidence();
             GeometryEvidence();
@@ -1160,6 +1162,66 @@ internal static class Program
     }
 
     /// <summary>
+    /// The 16-bit resamplers, which no other check drove. The preview resizes
+    /// every 16-bit source to fit the panel, and a straighten rotates the
+    /// 16-bit export buffer, so an indexing mistake here stops a 16-bit photo
+    /// from opening at all rather than denting a corner case.
+    /// </summary>
+    private static void SixteenBitGeometry(string root)
+    {
+        var flat = new PixelBuffer16(8, 4);
+        for (var offset = 0; offset < flat.Pixels.Length; offset += 4)
+        {
+            flat.Pixels[offset] = 1000;
+            flat.Pixels[offset + 1] = 2000;
+            flat.Pixels[offset + 2] = 3000;
+            flat.Pixels[offset + 3] = 65535;
+        }
+
+        var small = flat.ResizeLongEdge(4);
+        Check("a 16-bit resize sets the long edge",
+              small.Width == 4 && small.Height == 2);
+        Check("a 16-bit resize keeps a flat colour", Uniform(small, 1000, 2000, 3000));
+
+        var large = flat.ResizeLongEdge(16);
+        Check("a 16-bit upscale sets the long edge",
+              large.Width == 16 && large.Height == 8);
+        Check("a 16-bit upscale keeps a flat colour", Uniform(large, 1000, 2000, 3000));
+
+        var turned = flat.RotateDegrees(5);
+        Check("a 16-bit straighten keeps the frame",
+              turned.Width == 8 && turned.Height == 4);
+        Check("a 16-bit straighten keeps a flat colour", Uniform(turned, 1000, 2000, 3000));
+
+        var fixtures = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures");
+        var sourcePath = Path.Combine(fixtures, "F11_p3_16bit.png");
+        var codec = new WindowsImageCodec();
+        using var session = ProjectSession.Create(sourcePath);
+        session.Document.Orientation = session.Document.Orientation.WithAngle(5);
+        var png = Path.Combine(root, "sixteen-bit-straighten.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                    .GetAwaiter().GetResult();
+        var back = codec.Decode16Async(png).GetAwaiter().GetResult();
+        var source = codec.ReadSizeAsync(sourcePath).GetAwaiter().GetResult();
+        Check("a 16-bit straighten export writes the whole frame",
+              back.Width == source.Width && back.Height == source.Height);
+        File.Delete(png);
+    }
+
+    private static bool Uniform(PixelBuffer16 buffer, ushort red, ushort green, ushort blue)
+    {
+        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        {
+            if (buffer.Pixels[offset] != red || buffer.Pixels[offset + 1] != green
+                || buffer.Pixels[offset + 2] != blue || buffer.Pixels[offset + 3] != 65535)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
     /// A batch must produce exactly what the single-file export produces, for
     /// every source, without touching the sources and without overwriting a
     /// file it did not create. One unreadable file must not stop the others.
@@ -1577,6 +1639,96 @@ internal static class Program
               && Directory.GetFileSystemEntries(occupied).Length == 0);
         Check("an export onto a folder leaves no temp sibling",
               Siblings(folder, "occupied.jpg").Count == 0);
+    }
+
+    /// <summary>
+    /// The OS itself refusing the write, not a held handle: the current account
+    /// is denied write on the destination folder through an ACL, so creating the
+    /// temp file fails with UnauthorizedAccessException before any byte is
+    /// staged. A probe write proves the deny is in force, so a skipped or
+    /// ineffective ACE can never be mistaken for a passing refusal. The deny
+    /// also blocks enumeration, so the folder is inspected after it is lifted.
+    /// </summary>
+    private static void ExportDeniedByAcl(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "export-acl-denied");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+        var account = string.IsNullOrEmpty(Environment.UserDomainName)
+            ? Environment.UserName
+            : $"{Environment.UserDomainName}\\{Environment.UserName}";
+        var destination = Path.Combine(folder, "refused.jpg");
+        var sentinel = new byte[] { 0x77, 0x66, 0x55, 0x44 };
+        File.WriteAllBytes(destination, sentinel);
+
+        var denied = RunIcacls($"{Quote(folder)} /deny \"{account}:(OI)(CI)W\"");
+        Check("the deny ACE is installed on the destination folder", denied);
+        if (!denied)
+        {
+            Directory.Delete(folder, recursive: true);
+            return;
+        }
+        try
+        {
+            var probe = Path.Combine(folder, "probe.txt");
+            var probeRefused = false;
+            try
+            {
+                File.WriteAllText(probe, "x");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                probeRefused = true;
+            }
+            Check("the deny ACE blocks this process from writing into the folder",
+                  probeRefused);
+            var error = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+                session.Document, codec, source, destination, "jpeg", 0.9, 0));
+            Check("an export into a write-denied folder fails",
+                  error is UnauthorizedAccessException or IOException);
+        }
+        finally
+        {
+            RunIcacls($"{Quote(folder)} /remove:d \"{account}\"");
+        }
+        Check("a write-denied export keeps the earlier destination byte-for-byte",
+              File.ReadAllBytes(destination).SequenceEqual(sentinel));
+        Check("a write-denied folder holds only the earlier destination and no temp",
+              Directory.GetFileSystemEntries(folder).Length == 1);
+        Directory.Delete(folder, recursive: true);
+    }
+
+    private static string Quote(string path) => $"\"{path}\"";
+
+    private static bool RunIcacls(string arguments)
+    {
+        try
+        {
+            var info = new ProcessStartInfo("icacls", arguments)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            using var process = Process.Start(info);
+            if (process is null)
+            {
+                return false;
+            }
+            if (!process.WaitForExit(30000))
+            {
+                process.Kill(entireProcessTree: true);
+                return false;
+            }
+            return process.ExitCode == 0;
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or IOException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

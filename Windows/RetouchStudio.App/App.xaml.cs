@@ -34,8 +34,22 @@ public partial class App : Application
         base.OnStartup(e);
     }
 
-    private static void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    /// <summary>
+    /// Windows is logging off or restarting. This is the last point before the
+    /// process is terminated, so the pending debounced autosave is committed
+    /// now; an export still in flight is cancelled rather than left to be cut
+    /// off mid-write.
+    /// </summary>
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
+        if (MainWindow is RetouchStudio.App.MainWindow window)
+        {
+            window.FlushForSessionEnd();
+        }
+        base.OnSessionEnding(e);
+    }
+
+    private static void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)    {
         if (Environment.GetEnvironmentVariable("RETOUCHSTUDIO_NO_DIALOG") == "1")
         {
             Console.Error.WriteLine(e.Exception.ToString());
