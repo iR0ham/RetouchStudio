@@ -138,6 +138,18 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Called by the app when Windows ends the session. The debounced autosave
+    /// is committed synchronously; a running export is cancelled so a temp is
+    /// not left staged, though the session may end before it unwinds.
+    /// </summary>
+    public void FlushForSessionEnd()
+    {
+        _vm.CancelExport();
+        _vm.CancelBatch();
+        _vm.FlushCommit();
+    }
+
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
     {
         // A close during an export is deferred once: the work is cancelled and

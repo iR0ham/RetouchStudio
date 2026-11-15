@@ -1585,7 +1585,8 @@ internal static class Program
     /// is denied write on the destination folder through an ACL, so creating the
     /// temp file fails with UnauthorizedAccessException before any byte is
     /// staged. A probe write proves the deny is in force, so a skipped or
-    /// ineffective ACE can never be mistaken for a passing refusal.
+    /// ineffective ACE can never be mistaken for a passing refusal. The deny
+    /// also blocks enumeration, so the folder is inspected after it is lifted.
     /// </summary>
     private static void ExportDeniedByAcl(string root)
     {
@@ -1597,6 +1598,9 @@ internal static class Program
         var account = string.IsNullOrEmpty(Environment.UserDomainName)
             ? Environment.UserName
             : $"{Environment.UserDomainName}\\{Environment.UserName}";
+        var destination = Path.Combine(folder, "refused.jpg");
+        var sentinel = new byte[] { 0x77, 0x66, 0x55, 0x44 };
+        File.WriteAllBytes(destination, sentinel);
 
         var denied = RunIcacls($"{Quote(folder)} /deny \"{account}:(OI)(CI)W\"");
         Check("the deny ACE is installed on the destination folder", denied);
@@ -1619,18 +1623,19 @@ internal static class Program
             }
             Check("the deny ACE blocks this process from writing into the folder",
                   probeRefused);
-            var destination = Path.Combine(folder, "refused.jpg");
             var error = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
                 session.Document, codec, source, destination, "jpeg", 0.9, 0));
             Check("an export into a write-denied folder fails",
                   error is UnauthorizedAccessException or IOException);
-            Check("a write-denied folder holds no destination and no temp",
-                  Directory.GetFileSystemEntries(folder).Length == 0);
         }
         finally
         {
             RunIcacls($"{Quote(folder)} /remove:d \"{account}\"");
         }
+        Check("a write-denied export keeps the earlier destination byte-for-byte",
+              File.ReadAllBytes(destination).SequenceEqual(sentinel));
+        Check("a write-denied folder holds only the earlier destination and no temp",
+              Directory.GetFileSystemEntries(folder).Length == 1);
         Directory.Delete(folder, recursive: true);
     }
 
