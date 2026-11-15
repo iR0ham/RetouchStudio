@@ -81,12 +81,29 @@ public static class TemporaryFiles
     }
 
     /// <summary>
+    /// Marks a written temp hidden. Windows ignores the leading dot, so the
+    /// attribute is what actually keeps a leftover out of the folder's normal
+    /// view.
+    /// </summary>
+    public static void Hide(string path)
+        => File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden);
+
+    /// <summary>
+    /// Clears the hidden flag before a temp is published. Renames carry the
+    /// source's attributes, so the final file must go in unhidden.
+    /// </summary>
+    public static void Unhide(string path)
+        => File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.Hidden);
+
+    /// <summary>
     /// Deletes the leftover siblings of <paramref name="destination"/> whose
     /// write ended before <paramref name="utcNow"/> minus
     /// <paramref name="minAge"/>. Only regular files in the destination's own
-    /// folder that pass <see cref="IsSiblingTemp"/> are considered; nothing
-    /// recurses and no other name is touched. Returns how many files were
-    /// removed.
+    /// folder that pass <see cref="IsSiblingTemp"/> are considered: nothing
+    /// recurses, no wildcard is used, and the recovery working slot, its
+    /// candidates and quarantine are never eligible. A temp can hold at most
+    /// the bytes of one interrupted write, so removing one loses at most one
+    /// autosave interval. Returns how many files were removed.
     /// </summary>
     public static int SweepStaleSiblings(string destination, DateTime utcNow, TimeSpan minAge)
     {

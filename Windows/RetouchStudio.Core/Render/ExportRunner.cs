@@ -149,6 +149,7 @@ public static class ExportRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 await codec.Encode16Async(rendered, temporary, plan.Format,
                                           metadata, stripPrivacyMetadata);
+                TemporaryFiles.Hide(temporary);
             }
             else
             {
@@ -164,11 +165,13 @@ public static class ExportRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 await codec.EncodeAsync(output, temporary, plan.Format, quality,
                                         metadata, stripPrivacyMetadata);
+                TemporaryFiles.Hide(temporary);
             }
 
             // A cancel that arrives after the encode must not publish the file:
             // the check sits between the finished encode and the rename.
             cancellationToken.ThrowIfCancellationRequested();
+            TemporaryFiles.Unhide(temporary);
             // Publish the temp by rename, so a codec failure, a full disk or a
             // crash cannot leave a partial destination. Replace renames over an
             // existing file without unlinking it first, so a failed publish

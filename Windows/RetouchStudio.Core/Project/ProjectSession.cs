@@ -122,6 +122,10 @@ public sealed class ProjectSession : IDisposable
         try
         {
             File.WriteAllBytes(temporary, bytes);
+            // Hidden for the moment the sibling exists on disk; the commit
+            // below carries the source's attributes, so it is cleared first.
+            TemporaryFiles.Hide(temporary);
+            TemporaryFiles.Unhide(temporary);
             if (File.Exists(projectPath))
             {
                 File.Replace(temporary, projectPath, null);

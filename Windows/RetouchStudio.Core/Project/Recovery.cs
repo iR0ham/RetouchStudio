@@ -244,6 +244,10 @@ public sealed class RecoveryStore
         {
             System.IO.Directory.CreateDirectory(Directory);
             File.WriteAllBytes(temporary, bytes);
+            // Hidden for the moment the sibling exists on disk; the move
+            // below carries the source's attributes, so it is cleared first.
+            TemporaryFiles.Hide(temporary);
+            TemporaryFiles.Unhide(temporary);
             File.Move(temporary, WorkingPath, overwrite: true);
         }
         catch (Exception)
