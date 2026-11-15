@@ -22,7 +22,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|guard|project|batch|crop|compare]
+///       [golden|recovery|guard|project|batch|crop|compare|errors]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,12 +39,12 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch|crop|compare]");
+                "[golden|recovery|guard|project|batch|crop|compare|errors]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"
-                        or "crop" or "compare"))
+                        or "crop" or "compare" or "errors"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -109,6 +109,10 @@ internal static class Program
             else if (mode == "compare")
             {
                 RunCompare(process, photo);
+            }
+            else if (mode == "errors")
+            {
+                RunErrors(process, photo, output);
             }
             else
             {
@@ -331,6 +335,163 @@ internal static class Program
         }
         Ok("the app closed cleanly after the guard prompt");
         Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Both failure paths end in a message box a person can read: a corrupt
+    /// photo must be named as unopenable, and a destination another program
+    /// holds open must fail the export without touching that file. The app
+    /// must stay open and usable after each one.
+    /// </summary>
+    private static void RunErrors(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+
+        var broken = Path.ChangeExtension(output, ".broken" + Path.GetExtension(photo));
+        File.WriteAllText(broken, "this is not a photo");
+        var open = FindButton(window, "Open Photo")
+            ?? throw new InvalidOperationException("the Open Photo button is missing");
+        Invoke(open);
+        var openDialogHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        var openDialog = AutomationElement.FromHandle(openDialogHandle);
+        SetFileName(openDialog, broken);
+        PressDefaultButton(openDialog, "Open");
+
+        var openError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (openError is null || !openError.Contains("could not be opened", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"opening a corrupt photo said {openError ?? "nothing"}; the app's windows are " +
+                DescribeAppWindows(process.Id));
+        }
+        Ok($"a corrupt photo is reported: {openError}");
+        if (process.HasExited || !window.Current.Name.StartsWith("Retouch Studio", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"the app did not survive the failed open; the title is " +
+                $"'{window.Current.Name}'");
+        }
+
+        OpenPhoto(window, process, photo);
+
+        // A file another program holds with no sharing cannot be written. The
+        // Save dialog still offers to replace it, which is the moment the write
+        // is attempted and fails.
+        var locked = Path.ChangeExtension(output, ".locked.jpg");
+        var placeholder = new byte[1024];
+        File.WriteAllBytes(locked, placeholder);
+        using var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite,
+                                        FileShare.None);
+        var export = FindButton(window, "Export")
+            ?? throw new InvalidOperationException("the Export button is missing");
+        Invoke(export);
+        var saveHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Export click opened no window");
+        var saveDialog = AutomationElement.FromHandle(saveHandle);
+        var saveEdit = SetFileName(saveDialog, locked);
+        CommitFileName(saveEdit);
+        if (!WaitFor(() => !IsWindowVisible(saveHandle), TimeSpan.FromSeconds(20)))
+        {
+            var replace = WaitForButton(process.Id, "Yes", TimeSpan.FromSeconds(20));
+            if (replace is null)
+            {
+                throw new InvalidOperationException(
+                    "the Export dialog never offered to replace the locked file; " +
+                    DescribeWindow(saveDialog));
+            }
+            Invoke(replace);
+            if (!WaitFor(() => !IsWindowVisible(saveHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the Export dialog stayed open after replacing; " +
+                    DescribeWindow(saveDialog));
+            }
+        }
+
+        var exportError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (exportError is null
+            || !exportError.Contains("could not be exported", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"exporting onto a locked file said {exportError ?? "nothing"}; " +
+                "the app's windows are " + DescribeAppWindows(process.Id));
+        }
+        Ok($"a locked destination is reported: {exportError}");
+        if (new FileInfo(locked).Length != placeholder.Length)
+        {
+            throw new InvalidOperationException(
+                "the failed export changed the locked file");
+        }
+        Ok("the failed export left the locked file untouched");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Waits for the next message box, reads the text it shows, and answers OK.
+    /// Returns null when no box appears inside the patience.
+    /// </summary>
+    private static string? DismissMessageBox(int processId, IntPtr mainHandle,
+                                             TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var handle in VisibleWindows(processId))
+            {
+                if (handle == mainHandle)
+                {
+                    continue;
+                }
+                try
+                {
+                    var box = AutomationElement.FromHandle(handle);
+                    var ok = FindButton(box, "OK");
+                    if (ok is null)
+                    {
+                        continue;
+                    }
+                    var text = DescribeWindow(box);
+                    Invoke(ok);
+                    return text;
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+            Thread.Sleep(250);
+        }
+        return null;
+    }
+
+    /// <summary>A button by name in any of the process's visible windows.</summary>
+    private static AutomationElement? WaitForButton(int processId, string name, TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var handle in VisibleWindows(processId))
+            {
+                try
+                {
+                    var button = FindButton(AutomationElement.FromHandle(handle), name);
+                    if (button is not null)
+                    {
+                        return button;
+                    }
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+            Thread.Sleep(250);
+        }
+        return null;
     }
 
     /// <summary>
