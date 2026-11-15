@@ -24,7 +24,8 @@ public partial class MainWindow : Window
     private readonly EditorViewModel _vm = new();
 
     // Set when a close was deferred so the in-flight export or batch could be
-    // cancelled and unwind; the second closing pass then closes.
+    // cancelled and unwind. The second closing pass closes without asking
+    // again: the owner already answered, and a discard must not be flushed.
     private bool _closingAfterWork;
 
     // The crop overlay remembers the frame being dragged until Apply. The
@@ -152,12 +153,24 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
     {
-        // A close during an export is deferred once: the work is cancelled and
-        // awaited, so its temp is removed and its destination is either whole
-        // or absent. The second pass closes even if the encode outlasts the
-        // wait; that residue is the documented limit.
-        if (!_closingAfterWork && (_vm.IsExportRunning || _vm.IsBatchRunning))
+        // The second pass comes from CancelWorkAndCloseAsync, after the owner
+        // agreed to close and the work was cancelled and awaited: the temp is
+        // removed and the destination is either whole or absent. It closes
+        // without asking again, and without flushing edits that were discarded.
+        if (_closingAfterWork)
         {
+            return;
+        }
+        if (_vm.IsExportRunning || _vm.IsBatchRunning)
+        {
+            // The unsaved-work question is asked before the export is touched,
+            // so a No leaves both the window and the running export as they
+            // were; a Yes cancels the work and lets it unwind before closing.
+            if (!_vm.CanClose())
+            {
+                e.Cancel = true;
+                return;
+            }
             e.Cancel = true;
             _closingAfterWork = true;
             _ = CancelWorkAndCloseAsync();
@@ -167,7 +180,6 @@ public partial class MainWindow : Window
         if (!_vm.CanClose())
         {
             e.Cancel = true;
-            _closingAfterWork = false;
         }
     }
 

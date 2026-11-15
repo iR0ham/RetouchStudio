@@ -2263,6 +2263,9 @@ internal static class Program
                     DescribeTexts(window));
             }
             ((WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern)).Close();
+            // Choosing PNG changed an export setting, so the document is dirty
+            // and the close asks "Close anyway?" before the export is touched.
+            DismissClosePrompt(process.Id);
             if (!WaitFor(() => process.HasExited, TimeSpan.FromSeconds(120)))
             {
                 throw new InvalidOperationException(
