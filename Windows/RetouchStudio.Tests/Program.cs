@@ -1474,9 +1474,11 @@ internal static class Program
                 session.Document, codec, source, held, "jpeg", 0.9, 0));
             Check("an export onto a held destination fails",
                   heldError is IOException or UnauthorizedAccessException);
-            Check("a refused export keeps the held file byte-for-byte",
-                  File.ReadAllBytes(held).SequenceEqual(sentinel));
         }
+        // Read after the handle is released: the held stream shares reads but
+        // not the write access a second open asks for.
+        Check("a refused export keeps the held file byte-for-byte",
+              File.ReadAllBytes(held).SequenceEqual(sentinel));
         Check("a refused export leaves no temp sibling",
               Siblings(folder, "held.jpg").Count == 0);
 
@@ -1602,11 +1604,13 @@ internal static class Program
             var lockedError = ErrorOf(() => session.Save(locked));
             Check("saving over a held project fails",
                   lockedError is IOException or UnauthorizedAccessException);
-            Check("a failed save leaves the held file byte-for-byte",
-                  File.ReadAllBytes(locked).SequenceEqual(sentinel));
             Check("a failed save leaves no temp sibling",
                   Siblings(folder, "locked.retouch").Count == 0);
         }
+        // Read after the handle is released: the held stream shares reads but
+        // not the write access a second open asks for.
+        Check("a failed save leaves the held file byte-for-byte",
+              File.ReadAllBytes(locked).SequenceEqual(sentinel));
         Check("a failed save leaves the earlier project untouched",
               File.ReadAllBytes(current).SequenceEqual(previous));
         Check("a failed save leaves the project path unchanged",
