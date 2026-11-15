@@ -50,6 +50,7 @@ internal static class Program
             Corpus(root);
             BitDepth(root);
             SixteenBitPreview(root);
+            SixteenBitGeometry(root);
             BatchExport(root);
             AtomicExport(root);
             ExportCancellation(root);
@@ -1158,6 +1159,66 @@ internal static class Program
         Console.WriteLine($"  adjusted 8-bit vs 16-bit preview: {delta} levels max");
         Check("the adjusted 16-bit preview keeps source levels the 8-bit path lost",
               delta > 0 && delta <= 10);
+    }
+
+    /// <summary>
+    /// The 16-bit resamplers, which no other check drove. The preview resizes
+    /// every 16-bit source to fit the panel, and a straighten rotates the
+    /// 16-bit export buffer, so an indexing mistake here stops a 16-bit photo
+    /// from opening at all rather than denting a corner case.
+    /// </summary>
+    private static void SixteenBitGeometry(string root)
+    {
+        var flat = new PixelBuffer16(8, 4);
+        for (var offset = 0; offset < flat.Pixels.Length; offset += 4)
+        {
+            flat.Pixels[offset] = 1000;
+            flat.Pixels[offset + 1] = 2000;
+            flat.Pixels[offset + 2] = 3000;
+            flat.Pixels[offset + 3] = 65535;
+        }
+
+        var small = flat.ResizeLongEdge(4);
+        Check("a 16-bit resize sets the long edge",
+              small.Width == 4 && small.Height == 2);
+        Check("a 16-bit resize keeps a flat colour", Uniform(small, 1000, 2000, 3000));
+
+        var large = flat.ResizeLongEdge(16);
+        Check("a 16-bit upscale sets the long edge",
+              large.Width == 16 && large.Height == 8);
+        Check("a 16-bit upscale keeps a flat colour", Uniform(large, 1000, 2000, 3000));
+
+        var turned = flat.RotateDegrees(5);
+        Check("a 16-bit straighten keeps the frame",
+              turned.Width == 8 && turned.Height == 4);
+        Check("a 16-bit straighten keeps a flat colour", Uniform(turned, 1000, 2000, 3000));
+
+        var fixtures = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures");
+        var sourcePath = Path.Combine(fixtures, "F11_p3_16bit.png");
+        var codec = new WindowsImageCodec();
+        using var session = ProjectSession.Create(sourcePath);
+        session.Document.Orientation = session.Document.Orientation.WithAngle(5);
+        var png = Path.Combine(root, "sixteen-bit-straighten.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                    .GetAwaiter().GetResult();
+        var back = codec.Decode16Async(png).GetAwaiter().GetResult();
+        var source = codec.ReadSizeAsync(sourcePath).GetAwaiter().GetResult();
+        Check("a 16-bit straighten export writes the whole frame",
+              back.Width == source.Width && back.Height == source.Height);
+        File.Delete(png);
+    }
+
+    private static bool Uniform(PixelBuffer16 buffer, ushort red, ushort green, ushort blue)
+    {
+        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        {
+            if (buffer.Pixels[offset] != red || buffer.Pixels[offset + 1] != green
+                || buffer.Pixels[offset + 2] != blue || buffer.Pixels[offset + 3] != 65535)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>

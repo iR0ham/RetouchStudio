@@ -143,7 +143,7 @@ public sealed class PixelBuffer16
                 var dx = x - centreX;
                 var sourceX = centreX + (dx * cos + dy * sin) / cover;
                 var sourceY = centreY + (-dx * sin + dy * cos) / cover;
-                Sample(sourceX, sourceY, output.Pixels, (y * Width + x) * 8);
+                Sample(sourceX, sourceY, output.Pixels, (y * Width + x) * 4);
             }
         }
         return output;
@@ -166,7 +166,7 @@ public sealed class PixelBuffer16
             for (var x = 0; x < width; x++)
             {
                 var sourceX = (x + 0.5) / scale - 0.5;
-                Sample(sourceX, sourceY, output.Pixels, (y * width + x) * 8);
+                Sample(sourceX, sourceY, output.Pixels, (y * width + x) * 4);
             }
         }
         return output;
@@ -209,6 +209,11 @@ public sealed class PixelBuffer16
         return output;
     }
 
+    /// <summary>
+    /// Bilinear sample of one destination pixel. <paramref name="offset"/> is a
+    /// sample index into the destination (four ushorts per pixel), not the byte
+    /// offset the BlockCopy calls above use.
+    /// </summary>
     private void Sample(double x, double y, ushort[] destination, int offset)
     {
         var clampedX = Math.Clamp(x, 0, Width - 1);
