@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Windows;
 using System.Windows.Automation;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Imaging;
@@ -774,24 +775,76 @@ internal static class Program
         var before = CropBadgeSize(window)
             ?? throw new InvalidOperationException(
                 $"the crop badge shows no size; the texts are {DescribeTexts(window)}");
-        var corner = handles.OrderByDescending(item =>
+
+        // The runner's virtual desktop can be smaller than the window's default
+        // 1280x840. A handle past the screen edge cannot be clicked — the
+        // injected pointer clamps to the last pixel — so the window is shrunk
+        // to the screen and only a corner the screen fully shows is used.
+        var screenWidth = GetSystemMetrics(SmCxScreen);
+        var screenHeight = GetSystemMetrics(SmCyScreen);
+        Console.WriteLine($"  virtual screen: {screenWidth}x{screenHeight}");
+        var windowRect = window.Current.BoundingRectangle;
+        Console.WriteLine($"  window rect: {windowRect}");
+        if (windowRect.Right > screenWidth || windowRect.Bottom > screenHeight
+            || windowRect.Width > screenWidth)
+        {
+            if (window.TryGetCurrentPattern(TransformPattern.Pattern, out var pattern)
+                && pattern is TransformPattern transform && transform.Current.CanResize)
+            {
+                transform.Resize(Math.Min(1100, screenWidth - 40),
+                                 Math.Min(780, screenHeight - 80));
+                Thread.Sleep(800);
+                handles = WaitForHandles(window, "Crop corner handle", 4,
+                                         TimeSpan.FromSeconds(15)) ?? handles;
+                windowRect = window.Current.BoundingRectangle;
+                Console.WriteLine($"  window rect after resize: {windowRect}");
+            }
+            else
+            {
+                Console.WriteLine("  the window does not accept a resize");
+            }
+        }
+
+        var screen = new Rect(0, 0, screenWidth, screenHeight);
+        var visible = handles.Where(item =>
+            screen.Contains(item.Current.BoundingRectangle)).ToList();
+        var pool = visible.Count > 0 ? visible : handles;
+        var corner = pool.OrderByDescending(item =>
             item.Current.BoundingRectangle.Right + item.Current.BoundingRectangle.Bottom).First();
         var rect = corner.Current.BoundingRectangle;
         if (rect.IsEmpty || rect.Width < 1 || rect.Height < 1)
         {
-            throw new InvalidOperationException(
-                "the bottom-right crop handle has no screen bounds");
+            throw new InvalidOperationException("the crop handle has no screen bounds");
         }
-        SetForegroundWindow(mainHandle);
+        // Pull the corner towards the photo's centre: right/bottom corners move
+        // left and up, left/top corners move right and down.
+        var dx = rect.X + rect.Width / 2 < windowRect.X + windowRect.Width / 2 ? 70 : -70;
+        var dy = rect.Y + rect.Height / 2 < windowRect.Y + windowRect.Height / 2 ? 45 : -45;
+        Console.WriteLine($"  dragging handle at {rect} by {dx},{dy}");
+
+        var foreground = SetForegroundWindow(mainHandle);
         Thread.Sleep(300);
-        Drag(rect.X + rect.Width / 2, rect.Y + rect.Height / 2, dx: -70, dy: -45);
-        var resized = WaitFor(() => CropBadgeSize(window) is { } size && size != before,
-                              TimeSpan.FromSeconds(10));
+        Console.WriteLine($"  set foreground: {foreground}; " +
+                          $"active window is the app: {GetForegroundWindow() == mainHandle}");
+        var resized = DragHandle(window, rect, dx, dy, before);
+        if (!resized)
+        {
+            // A first click can be what gives the window real input focus on an
+            // unattended desktop; the drag is then repeated once.
+            Console.WriteLine("  the first drag changed nothing; retrying after a focus click");
+            SetForegroundWindow(mainHandle);
+            Thread.Sleep(500);
+            resized = DragHandle(window, rect, dx, dy, before);
+        }
         var after = CropBadgeSize(window);
         if (!resized || after is not { } cropped)
         {
+            GetCursorPos(out var cursor);
+            var under = WindowFromPoint(cursor);
             throw new InvalidOperationException(
-                $"the drag left the badge at {before.Width}×{before.Height}");
+                $"the drag left the badge at {before.Width}×{before.Height}; " +
+                $"cursor {cursor.X},{cursor.Y}, window under it {under}, app {mainHandle}, " +
+                $"active {GetForegroundWindow()}");
         }
         if (cropped.Width >= before.Width || cropped.Height >= before.Height)
         {
@@ -1477,6 +1530,14 @@ internal static class Program
         return null;
     }
 
+    private static bool DragHandle(AutomationElement window, Rect rect, double dx, double dy,
+                                   (int Width, int Height) before)
+    {
+        Drag(rect.X + rect.Width / 2, rect.Y + rect.Height / 2, dx, dy, steps: 20);
+        return WaitFor(() => CropBadgeSize(window) is { } size && size != before,
+                       TimeSpan.FromSeconds(10));
+    }
+
     /// <summary>
     /// A real left-button drag in screen pixels. WPF's Thumb reports DragDelta
     /// only for pointer input, so an automation client must move the pointer.
@@ -1505,6 +1566,28 @@ internal static class Program
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(NativePoint point);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    private const int SmCxScreen = 0;
+    private const int SmCyScreen = 1;
 
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
