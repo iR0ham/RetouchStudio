@@ -26,9 +26,6 @@
         <Button Content="Cancel Batch" Style="{StaticResource ToolButton}" Click="CancelBatch_Click"
                 IsEnabled="{Binding IsBatchRunning}"
                 ToolTip="Stop the batch before its next photo" />
-        <Button Content="Cancel Export" Style="{StaticResource ToolButton}" Click="CancelExport_Click"
-                IsEnabled="{Binding IsExportRunning}"
-                ToolTip="Stop the export before it publishes the photo" />
         <Border Width="1" Background="{StaticResource LineBrush}" Margin="6,2,12,2" />
         <Button Content="Undo" Style="{StaticResource ToolButton}" Click="Undo_Click"
                 IsEnabled="{Binding CanUndo}" />
@@ -51,6 +48,10 @@
             BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0"
             Padding="12,5">
       <DockPanel>
+        <Button DockPanel.Dock="Left" Content="Cancel Export" Style="{StaticResource ToolButton}"
+                Click="CancelExport_Click" IsEnabled="{Binding IsExportRunning}"
+                Margin="0,0,10,0"
+                ToolTip="Stop the export before it publishes the photo" />
         <TextBlock DockPanel.Dock="Right" Text="{Binding DimensionText}"
                    Foreground="{StaticResource MutedBrush}" FontSize="11" />
         <TextBlock DockPanel.Dock="Right" Text="·  drag to pan · Ctrl+wheel to zoom · hold Space to compare  ·"
