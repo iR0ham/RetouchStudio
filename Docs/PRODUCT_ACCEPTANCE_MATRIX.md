@@ -15,7 +15,7 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 | Project create/open/save | VERIFIED | VERIFIED | VERIFIED | macOS ModelTests and codec fixtures; Windows host checks open/save through the C ABI; interchange fixtures round-trip structurally. |
 | V3/V4 compatibility | VERIFIED | VERIFIED | VERIFIED | v3 fixture re-encodes byte-identically and stays v3; v4 keeps `futureFlag`, `requiredFeatures` and keyed crop; Windows run 43534410772. |
 | Unknown fields | VERIFIED | VERIFIED | VERIFIED | Top-level across save and reopen; modelled records preserved; unmodelled nested records dropped by documented design. |
-| Undo/redo | VERIFIED | VERIFIED | N/A | `DocumentHistory`, 55 Windows host checks; the Undo button reverts a slider through UIA (run 43654765580). |
+| Undo/redo | VERIFIED | VERIFIED | N/A | `DocumentHistory`, 55 Windows host checks; the Undo and Redo buttons move a slider through UIA (runs 43654765580, 43658018867). |
 | Image import and adjustments | VERIFIED | TESTED | PARTIAL | Nine adjustments render on Windows (preview median 721 ms, run 43618132157); the Exposure slider and the Open Photo dialog are driven end to end through UIA (run 43647604771), while the other eight sliders are not; cross-host MAE: exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47, each gated at one level. |
 | Crop/rotation/mirror/straighten | VERIFIED | TESTED | PARTIAL | Windows crop arithmetic, orientation order and turn/straighten/mirror composition are tested pixel for pixel; the overlay drag is not driven by CI; no cross-host straighten pixel reference (corpus protected). |
 | Face detection/landmarks/regions | VERIFIED | ABSENT | N/A | macOS Vision, ≥0.35 confidence, largest-first, ~76 points plus derived regions. In-box Windows detector returns boxes only, which cannot drive masks. |
@@ -35,8 +35,8 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 
 - Interactive Windows behaviour the harness does not yet drive: crop overlay
   drag, compare divider drag, pointer zoom/pan, drop-to-open, the other eight
-  adjustment sliders, reopening a saved project, multi-select in the batch
-  picker, batch progress and cancellation.
+  adjustment sliders, multi-select in the batch picker, batch progress and
+  cancellation, and the failure paths of project open/save.
 - macOS window launch and clean-machine installation.
 - Rendering parity for straighten and freeform crop across hosts.
 - Real AI inference, notarization, or an update feed.
