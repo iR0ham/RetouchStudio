@@ -4,7 +4,8 @@
 opens no branch beyond the AI-01 documentation branch and authorizes no
 implementation.
 **Milestone:** AI-01 under the RetouchStudio Master Execution Plan V4.
-**Base:** `main` at `46e2b14` (2026-11-16).
+**Base:** `main` at `a559a0e` (2026-11-16), after the Windows runtime
+payload-size fix (PR #63); the AI-01 dependency order is unchanged by it.
 **Companions:** [AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md),
 [AI_11_MODEL_EVALUATION.md](AI_11_MODEL_EVALUATION.md),
 [ORIGINAL_MASTER_PLAN.md](ORIGINAL_MASTER_PLAN.md),
@@ -342,4 +343,5 @@ the engineering choices belong to the implementing agent.
 No implementation, no UI change, no schema change, no dependency upgrade, no
 model download, no runtime packaging change, no `AIRuntime.package`
 enablement, no worker rewrite, no new language, no release or tag, no change to
-PR #63 or the Windows payload-size workstream, and no modification of `main`.
+the Windows payload-size workstream that PR #63 merged, and no modification of
+`main`.

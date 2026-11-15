@@ -3,7 +3,8 @@
 **Status:** Research record for review. No weight was downloaded, converted,
 quantized or run for this document; no model is adopted by it.
 **Milestone:** AI-01 under the RetouchStudio Master Execution Plan V4.
-**Base:** `main` at `46e2b14` (2026-11-16).
+**Base:** `main` at `a559a0e` (2026-11-16), after the Windows runtime
+payload-size fix (PR #63); no model-evaluation finding changed.
 **Companions:** [AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md),
 [AI_11_ROADMAP.md](AI_11_ROADMAP.md), [AI_RUNTIME.md](AI_RUNTIME.md).
 
@@ -397,7 +398,8 @@ quality figure on either platform; every class in the tables is an ESTIMATE.
 |---|---|---|
 | Face detection/landmarks | None | `Windows.Media.FaceAnalysis` returns boxes without landmarks |
 | Masks | Preserved in v5, not rendered | No pixel/mask path in the C ABI or host renderer |
-| Upscale/enhance/heal/generative | Refused on export | 19 guard categories name unsupported edits |
+| Upscale | No AI upscale option | No inference runtime or Swin2SR model on Windows |
+| Enhance/heal/generative | Not rendered; export warns and omits them | 19 guard categories name unsupported edits, with a confirm dialog before writing |
 | Model inference | None | No ORT integration; no ONNX assets; CPU-only CI |
 
 No Windows AI path is recommended before a Windows landmark decision exists

@@ -3,7 +3,9 @@
 **Status:** Research and decision record for review. It changes no product
 behavior, enables no download and authorizes no implementation.
 **Milestone:** AI-01 under the RetouchStudio Master Execution Plan V4.
-**Base:** `main` at `46e2b14` (2026-11-16).
+**Base:** `main` at `a559a0e` (2026-11-16), including the merged Windows
+runtime payload-size fix from PR #63; the AI-01 branch merged that commit
+without changing this document's findings.
 **Companions:** [AI_11_MODEL_EVALUATION.md](AI_11_MODEL_EVALUATION.md),
 [AI_11_ROADMAP.md](AI_11_ROADMAP.md),
 [ORIGINAL_MASTER_PLAN.md](ORIGINAL_MASTER_PLAN.md),
@@ -47,11 +49,11 @@ release architecture or replace the existing worker.
 | Classical retouch | Frequency-separation skin smoothing, donor-texture healing, separate sclera/iris/lash and enamel masks, makeup, reshape, film looks. | `Sources/RetouchStudio/Core/SkinEngine.swift`, `MakeupEngine.swift`, `FeatureReshaper.swift`, `LookEngine.swift` |
 | Heal stamps | Stored points in the document; rendered by the classical engine. | `Sources/RetouchStudio/Models/Heal.swift` |
 | AI helper | External Python 3.13 process over a local Unix socket, JSON-RPC 2.0, one request per line; the worker source is a separate checkout and is **NOT VERIFIED** here. | `Sources/RetouchStudio/Core/WorkerClient.swift`, [AI_RUNTIME.md](AI_RUNTIME.md) |
-| AI jobs exposed by the host | `upscale`, `patch_edit`, `mask`, plus `models.list/plan/verify/download`, `health`, `ping`, `shutdown`. | `Sources/RetouchStudio/Core/WorkerClient.swift`, `Sources/RetouchStudio/Models/QuickEdit.swift`, `Sources/RetouchStudio/Core/ExportService.swift` |
-| Quick Edit | Three presets: remove object and reimagine route to the generative `patch` engine; heal area routes to the small-hole `inpaint` engine. A masked generative patch is 512 px with 4 steps; a whole-frame reimagine is a separate explicit request. Measured on the owner's M3: about 24 s for the fastest masked patch and about 47 s under load; the guard timeout is 300 s. | `QuickEdit.swift:60`, `:77`, `:137`, `:142` |
+| AI jobs exposed by the host | `upscale`, `patch_edit`, `mask`, plus `models.list/plan/verify/download`, `health`, `ping`, `shutdown`. | `Sources/RetouchStudio/Core/WorkerClient.swift`, `Sources/RetouchStudio/Models/QuickEdit.swift`, `Sources/RetouchStudio/Core/ExportService.swift`, `Sources/RetouchStudio/Models/ModelManager.swift:76-159` |
+| Quick Edit | Three presets: remove object and reimagine route to the generative `patch` engine; heal area routes to the small-hole `inpaint` engine. A masked generative patch is 512 px with 4 steps; a whole-frame reimagine is a separate explicit request. Measured on the owner's M3: about 24 s for the fastest masked patch and about 47 s under load; the guard timeout is 300 s. | `QuickEdit.swift:36-45`, `:65`, `:93-95`, `:107-122`, `:137` |
 | Non-destructive AI edits | A result is a patch plus an alpha file stored beside the edit id; the compositor uses `CIBlendWithMask` and crops the blend to the edit's rectangle, so pixels outside the authorized box stay the input pixels; preview and export rebuild the same layers at their own sizes. | `Sources/RetouchStudio/Core/AICompositor.swift:63-83` |
 | 4× upscaling | Export-time only: render at source size, send the pixels to the `upscale` job (Swin2SR x4), show tile progress, then apply analysis callouts at the enlarged size. The job timeout is 1500 s. A real 4× upscale from the bundled runtime was recorded. | `ExportService.swift:137-165`, `:204-242`, [AI_RUNTIME.md](AI_RUNTIME.md) §3 |
-| Model manager | The catalog, plan, verify and download operations live in the worker CLI; the host shows the list, a consent plan with a manifest hash, progress, verify and remove. A missing size makes progress indeterminate rather than fake. | `Sources/RetouchStudio/Models/ModelManager.swift:30-61` |
+| Model manager | The catalog, plan, verify and download operations live in the worker CLI; the host shows the list, a consent plan with a manifest hash, progress, verify and remove. A missing size makes progress indeterminate rather than fake. | `Sources/RetouchStudio/Models/ModelManager.swift:34-207` |
 | Consent and integrity | Each model sheet shows file count, total size and licence; the download runs only after approval with the manifest hash; catalog SHA256 files are verified. SAM 2.1 tiny has neither a size nor a SHA256 in the inspected catalog, so it cannot be checksum-verified. | [AI_RUNTIME.md](AI_RUNTIME.md) §3, §6.3 |
 | Runtime v2 host lifecycle | Transactional install with staging, backup, functional validation, rollback and recovery; registry, generation, nonce and CAS; process identity checks; a shared usage lease inherited by the child through fd 197. | `AIRuntime.swift`, `AIRuntimeTransaction.swift`, `AIRuntimeValidation.swift`, `HelperRegistry.swift`, `RuntimeUsageLease.swift` |
 | Network behavior | Measured zero TCP/UDP endpoints while idle and during a real upscale; exactly two HTTPS connections during an approved download. | [PRIVACY_AUDIT.md](PRIVACY_AUDIT.md) §3 |
@@ -65,7 +67,7 @@ release architecture or replace the existing worker.
 | Worker-side protocol v2 behavior | The host side is implemented; the worker side handshake, readiness and shutdown against a real protocol-v2 helper are **NOT VERIFIED**. |
 | Worker source | Outside this repository, not under version control here; its catalog, preprocessing and inference details are **NOT VERIFIED**. |
 | SAM 2.1 tiny integrity | No size or SHA256 in the inspected catalog; verify cannot compare it. |
-| Model removal guard | `ModelManager.remove` checks that the target stays under `AI/models` but takes no runtime lease and does not consult `ModelActivity`, so a removal racing a running job is not excluded (`ModelManager.swift:196-206`). |
+| Model removal guard | `ModelManager.remove` checks that the target stays under `AI/models` but takes no runtime lease and does not check `ModelActivity.isRunning(id)` before deleting; it only calls `forget` afterwards, so a removal racing a running job is not excluded (`ModelManager.swift:196-207`). |
 | Working-copy cleanup | Only a >24 h sweep of export temp siblings runs. `clearWorkingCopies()` has no call site and the helper's job cleanup is **NOT VERIFIED**. |
 | Windows AI | No face path, no masks, no AI edits and no runtime. The Windows host preserves AI/mask records and names them as edits it cannot render. |
 | Windows face landmarks | `Windows.Media.FaceAnalysis` returns boxes without landmarks, so it cannot drive masks. A distributable landmark model is an owner decision. |
@@ -268,9 +270,9 @@ maintenance owner and the integration cost before it is added.
 layer for 1.1, behind a capability contract, and treat native Core ML/MLX and a
 Windows ONNX adapter as separately gated alternatives.** Evidence: the worker
 is the only path with measured inference (4× upscale, generative patch), a
-complete licence inventory, a packaged runtime and a privacy-audited network
-surface. Rewriting it now would spend the milestone on an unmeasured
-alternative and would not add a single capability.
+recorded runtime and model licence inventory, a packaged runtime and a
+privacy-audited network surface. Rewriting it now would spend the milestone on
+an unmeasured alternative and would not add a single capability.
 
 The gate for changing any single component is a measured comparison on the
 target M3: identical inputs, equal or better quality, lower peak memory or
