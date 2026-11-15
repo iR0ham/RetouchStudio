@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Automation;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Imaging;
+using ComTypes = System.Runtime.InteropServices.ComTypes;
 
 namespace RetouchStudio.UiTests;
 
@@ -22,7 +23,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]
+///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,13 +40,13 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]");
+                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "recoveryno" or "guard" or "project"
                         or "batch" or "crop" or "compare" or "zoom" or "batchcancel"
-                        or "errors"))
+                        or "errors" or "drop"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -126,6 +127,10 @@ internal static class Program
             else if (mode == "errors")
             {
                 RunErrors(process, photo, output);
+            }
+            else if (mode == "drop")
+            {
+                RunDrop(process, photo, output);
             }
             else
             {
@@ -1365,6 +1370,198 @@ internal static class Program
     }
 
     /// <summary>
+    /// Drop-to-open is an OLE operation no UIA pattern can express. A helper
+    /// STA thread is the drag source: a WPF DataObject hands the photo over as
+    /// CF_HDROP and an IOleDropSource ends the drag on the button release, both
+    /// passed to ole32's DoDragDrop. The test thread performs the gesture the
+    /// drag loop watches for — press inside PreviewHost, move, release — and
+    /// the opened title plus the exported file prove the drop reached the same
+    /// open path the dialogs use.
+    /// </summary>
+    private static void RunDrop(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException(
+                "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        // The launcher passed no photo, so a title with the photo's name after
+        // the drop can only come from the drop.
+        if (window.Current.Name != "Retouch Studio")
+        {
+            throw new InvalidOperationException(
+                $"the app did not start as an empty editor; the title is " +
+                $"'{window.Current.Name}'");
+        }
+
+        var windowRect = FitWindowToScreen(window);
+        // PreviewHost is the canvas column left of the 336-pixel accordion and
+        // below the top bar. It is a bare Grid with no automation peer, so its
+        // centre is found from the window rectangle, not from the tree.
+        var target = new Point(
+            windowRect.X + Math.Max(40, (windowRect.Width - 336) / 2),
+            windowRect.Y + windowRect.Height / 2);
+        var start = new Point(target.X - 80, target.Y);
+        var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
+                              GetSystemMetrics(SmCyScreen));
+        if (!screen.Contains(start) || !screen.Contains(target))
+        {
+            throw new InvalidOperationException(
+                $"the canvas at {target} is off the screen {screen}");
+        }
+
+        // Not disposed: a failing check can leave the source thread waiting on
+        // one of them, and ManualResetEventSlim only allocates a handle when a
+        // wait handle is explicitly requested.
+        var ready = new ManualResetEventSlim(false);
+        var begin = new ManualResetEventSlim(false);
+        var finished = new ManualResetEventSlim(false);
+        string? dragFailure = null;
+        var dragResult = -1;
+        uint dropEffect = 0;
+        var dragSource = new Thread(() =>
+        {
+            var oleReady = false;
+            try
+            {
+                var initialize = OleInitialize(IntPtr.Zero);
+                if (initialize < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"OleInitialize failed with 0x{initialize:X8}");
+                }
+                oleReady = true;
+                var data = new DataObject(DataFormats.FileDrop, new[] { photo });
+                ready.Set();
+                if (!begin.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    throw new InvalidOperationException(
+                        "the test thread never began the drag");
+                }
+                // DoDragDrop pumps the pointer loop and calls back into the
+                // source; it returns once the button is released.
+                dragResult = DoDragDrop(
+                    (ComTypes.IDataObject)data, new FileDropSource(),
+                    DropEffectCopy, out dropEffect);
+            }
+            catch (Exception error)
+            {
+                dragFailure = error.Message;
+            }
+            finally
+            {
+                if (oleReady)
+                {
+                    OleUninitialize();
+                }
+                finished.Set();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "OLE drop source",
+        };
+        dragSource.SetApartmentState(ApartmentState.STA);
+        dragSource.Start();
+
+        if (!ready.Wait(TimeSpan.FromSeconds(15)))
+        {
+            // finished is only read after the source thread set it, which is
+            // the synchronization point for the failure text.
+            throw new InvalidOperationException(finished.IsSet
+                ? $"the OLE drag source never armed: {dragFailure}"
+                : "the OLE drag source never armed");
+        }
+        SetForegroundWindow(mainHandle);
+        Thread.Sleep(300);
+        var down = new NativePoint
+        {
+            X = (int)Math.Round(start.X),
+            Y = (int)Math.Round(start.Y),
+        };
+        SetCursorPos(down.X, down.Y);
+        Thread.Sleep(150);
+        if (!PointBelongsToProcess(down, process.Id))
+        {
+            throw new InvalidOperationException(
+                $"the press point ({down.X},{down.Y}) is not over the app; " +
+                $"the window is {windowRect}");
+        }
+
+        // A real drag has the button down before the source starts, which is
+        // what this holds while the source thread enters its loop.
+        Console.WriteLine($"  pressing at {down.X},{down.Y} and dragging to " +
+                          $"{target.X:0},{target.Y:0}");
+        mouse_event(MouseLeftDown, 0, 0, 0, IntPtr.Zero);
+        Thread.Sleep(150);
+        begin.Set();
+
+        // The loop takes the capture first; the moves then have it call the
+        // app's DragOver, and the release must land inside PreviewHost so the
+        // drop goes to the app's target.
+        Thread.Sleep(800);
+        const int steps = 12;
+        for (var step = 1; step <= steps; step++)
+        {
+            SetCursorPos(
+                (int)Math.Round(start.X + (target.X - start.X) * step / steps),
+                (int)Math.Round(start.Y + (target.Y - start.Y) * step / steps));
+            Thread.Sleep(50);
+        }
+        Thread.Sleep(300);
+        mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+
+        if (!finished.Wait(TimeSpan.FromSeconds(30)))
+        {
+            throw new InvalidOperationException(
+                "DoDragDrop did not return after the button was released; " +
+                "the OLE drag loop never saw the release");
+        }
+        if (dragFailure is not null)
+        {
+            throw new InvalidOperationException(
+                $"the OLE drag source failed: {dragFailure}");
+        }
+        if (dragResult < 0)
+        {
+            throw new InvalidOperationException(
+                $"DoDragDrop failed with 0x{dragResult:X8}");
+        }
+        if (dropEffect != DropEffectCopy)
+        {
+            throw new InvalidOperationException(
+                $"the drop ended with effect 0x{dropEffect:X8}, not DROPEFFECT_COPY; " +
+                "PreviewHost never accepted the file drop");
+        }
+        Ok("PreviewHost accepted the drag and dropped with DROPEFFECT_COPY");
+
+        var photoName = Path.GetFileName(photo);
+        var opened = WaitFor(
+            () => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+            TimeSpan.FromSeconds(90));
+        if (!opened)
+        {
+            throw new InvalidOperationException(
+                $"the drop did not open the photo; the title is '{window.Current.Name}'; " +
+                $"the status says {DescribeTexts(window)}");
+        }
+        Ok($"the drop opened the photo: '{window.Current.Name}'");
+
+        var written = ExportTo(window, process, mainHandle, output);
+        var source = PhotoSize(photo);
+        if (written.Width != source.Width || written.Height != source.Height)
+        {
+            throw new InvalidOperationException(
+                $"the export is {written.Width}x{written.Height}, the photo is " +
+                $"{source.Width}x{source.Height}");
+        }
+        Ok($"the dropped photo exported at its own {written.Width}x{written.Height}");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
     /// The zoom dock's label: "Fit", or the percentage it shows. A button
     /// exposes its caption as a Text element too, and the export panel shows a
     /// quality percentage, so the label is picked by where it sits: between the
@@ -2092,6 +2289,22 @@ internal static class Program
     }
 
     /// <summary>
+    /// Whether the top-level window under a screen point belongs to the app.
+    /// A drop lands on whatever window is under the pointer, so the gesture is
+    /// checked against a hit test instead of trusting the UIA rectangle.
+    /// </summary>
+    private static bool PointBelongsToProcess(NativePoint point, int processId)
+    {
+        var window = WindowFromPoint(point);
+        if (window == IntPtr.Zero)
+        {
+            return false;
+        }
+        GetWindowThreadProcessId(window, out var owner);
+        return owner == (uint)processId;
+    }
+
+    /// <summary>
     /// The first visible top-level window of the app other than the one named.
     /// A click that opens a dialog has to produce such a window; the caption is
     /// the dialog's own choice and is reported, not asserted.
@@ -2701,6 +2914,20 @@ internal static class Program
     private const int SmCxScreen = 0;
     private const int SmCyScreen = 1;
 
+    [DllImport("ole32.dll")]
+    private static extern int OleInitialize(IntPtr reserved);
+
+    [DllImport("ole32.dll")]
+    private static extern void OleUninitialize();
+
+    [DllImport("ole32.dll", ExactSpelling = true)]
+    private static extern int DoDragDrop(
+        [MarshalAs(UnmanagedType.Interface)] ComTypes.IDataObject dataObject,
+        [MarshalAs(UnmanagedType.Interface)] IOleDropSource dropSource,
+        uint allowedEffects, out uint effect);
+
+    private const uint DropEffectCopy = 1;
+
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
     private const uint KeyUp = 0x0002;
@@ -2793,4 +3020,45 @@ internal static class Program
     }
 
     private static void Ok(string message) => Console.WriteLine($"  ok {message}");
+}
+
+/// <summary>
+/// The source half of an OLE drag. OLE asks this object after every input
+/// event: S_OK keeps dragging, DRAGDROP_S_DROP drops where the pointer is, and
+/// Escape cancels. Returning DROP on the button release is what ends the drag
+/// loop with the pointer still over the app's window.
+/// </summary>
+[ComVisible(true)]
+[ComImport]
+[Guid("00000121-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IOleDropSource
+{
+    [PreserveSig]
+    int QueryContinueDrag(int escapePressed, int keyState);
+
+    [PreserveSig]
+    int GiveFeedback(int effect);
+}
+
+/// <summary>An OLE drop source that drops as soon as the button is released.</summary>
+[ComVisible(true)]
+public sealed class FileDropSource : IOleDropSource
+{
+    private const int SOk = 0;
+    private const int DragDropDrop = 0x00040100;
+    private const int DragDropCancel = 0x00040101;
+    private const int DragDropUseDefaultCursors = 0x00040102;
+    private const int MkLeftButton = 0x0001;
+
+    public int QueryContinueDrag(int escapePressed, int keyState)
+    {
+        if (escapePressed != 0)
+        {
+            return DragDropCancel;
+        }
+        return (keyState & MkLeftButton) != 0 ? SOk : DragDropDrop;
+    }
+
+    public int GiveFeedback(int effect) => DragDropUseDefaultCursors;
 }
