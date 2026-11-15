@@ -169,9 +169,18 @@ public static class ExportRunner
             // A cancel that arrives after the encode must not publish the file:
             // the check sits between the finished encode and the rename.
             cancellationToken.ThrowIfCancellationRequested();
-            // Encode to the temp file, then rename it into place, so a codec
-            // failure, a full disk or a crash cannot leave a partial destination.
-            File.Move(temporary, fullDestination, overwrite: true);
+            // Publish the temp by rename, so a codec failure, a full disk or a
+            // crash cannot leave a partial destination. Replace renames over an
+            // existing file without unlinking it first, so a failed publish
+            // leaves the old bytes intact; a plain move covers the absent case.
+            if (File.Exists(fullDestination))
+            {
+                File.Replace(temporary, fullDestination, null);
+            }
+            else
+            {
+                File.Move(temporary, fullDestination);
+            }
         }
         catch
         {

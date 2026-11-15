@@ -122,7 +122,14 @@ public sealed class ProjectSession : IDisposable
         try
         {
             File.WriteAllBytes(temporary, bytes);
-            File.Move(temporary, projectPath, overwrite: true);
+            if (File.Exists(projectPath))
+            {
+                File.Replace(temporary, projectPath, null);
+            }
+            else
+            {
+                File.Move(temporary, projectPath);
+            }
         }
         catch
         {
