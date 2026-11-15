@@ -70,7 +70,7 @@ Exists and is verified:
   before publishing; its Windows application job is gated behind the repository
   variable `WINDOWS_APP_READY` and is skipped until an application exists
   (2026-11-15: `WINDOWS_APP_READY` has been `true` since 2026-11-14, so the job
-  runs as a required check and uploads the zip and MSI);
+  is active in the release workflow and uploads the zip and MSI);
 - a prepared packaging script that writes the Windows zip and SHA-256
   (`Tools/package-windows.ps1`); it has not been executed on Windows
   (2026-11-15: it runs inside the Windows App job, which passes `-RequireMsi`
