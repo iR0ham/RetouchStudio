@@ -2244,6 +2244,70 @@ func testOperationCoordination() async {
           leftovers.joined(separator: ", "))
 }
 
+// MARK: - R6
+
+@MainActor
+func testCancelBetweenRenderAndWrite() async {
+    print("\n[R6] a cancel after rendering and before the write leaves nothing behind")
+
+    let prefix = "cancel-render-write-\(UUID().uuidString.prefix(8))"
+    let sourceURL = workDir.appendingPathComponent("\(prefix)-source.png")
+    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: sourceURL) else {
+        check(false, "render-write fixture")
+        return
+    }
+    let model = EditorModel()
+    model.load(url: sourceURL)
+    model.exportFormat = .png
+    check(await waitUntil { model.hasImage && !model.isBusy }, "render-write fixture loads")
+
+    // The same request the app hands the renderer, and the same load the batch
+    // uses to build a source.
+    guard let snapshot = model.makeExportSnapshot(),
+          let loaded = ImageProcessor.shared.load(from: sourceURL,
+                                                  previewMaxDimension: 1024) else {
+        check(false, "the render request and its source exist")
+        return
+    }
+    let source = ExportSource(image: loaded.sourceFull,
+                              masks: nil,
+                              faces: loaded.faces,
+                              photoAspect: loaded.pixelSize.width / loaded.pixelSize.height,
+                              colorSpace: loaded.colorSpace,
+                              metadata: loaded.metadata,
+                              xmp: loaded.xmp)
+    let destination = workDir.appendingPathComponent("\(prefix)-out.png")
+
+    // Cancel the task that writes, not the test task: an unstructured task
+    // starts uncancelled, so this is the exact task state the boundary sees.
+    let outcome: String = await Task {
+        let renderer = MacDocumentRenderer()
+        do {
+            let rendered = try renderer.render(snapshot, source: source, progress: nil)
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                _ = try renderer.write(rendered, request: snapshot, source: source,
+                                       to: destination, protecting: sourceURL)
+                return "written"
+            } catch RenderError.cancelled {
+                return "cancelled"
+            } catch {
+                return "write failed: \(error)"
+            }
+        } catch {
+            return "render failed: \(error)"
+        }
+    }.value
+
+    check(outcome == "cancelled", "a post-render cancel reports cancelled", outcome)
+    check(!FileManager.default.fileExists(atPath: destination.path),
+          "a post-render cancel writes no destination")
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: workDir.path))?
+        .filter { $0.hasPrefix(".\(destination.lastPathComponent).") && $0.hasSuffix(".tmp") } ?? []
+    check(leftovers.isEmpty, "a post-render cancel leaves no temp sibling",
+          leftovers.joined(separator: ", "))
+}
+
 // MARK: - P1-8
 
 @MainActor
@@ -6514,6 +6578,7 @@ func runAll() async {
     testBatchPlannerFilePolicy()
     testBatchPlannerUpscaleAndNaming()
     await testOperationCoordination()
+    await testCancelBetweenRenderAndWrite()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()
     await testPreviewStaysAtPreviewResolution()
