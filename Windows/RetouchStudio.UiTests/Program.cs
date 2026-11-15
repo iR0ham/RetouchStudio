@@ -91,7 +91,7 @@ internal static class Program
             }
             else if (mode == "project")
             {
-                RunProject(process, photo, output);
+                RunProject(process, app, photo, output, recovery.FullName);
             }
             else if (mode == "batch")
             {
@@ -324,7 +324,8 @@ internal static class Program
     /// Saves the edited photo as a project through its dialog, then proves the
     /// Undo button reaches the same history the headless checks measure.
     /// </summary>
-    private static void RunProject(Process process, string photo, string output)
+    private static void RunProject(Process process, string app, string photo,
+                                   string output, string recoveryDirectory)
     {
         var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
             ?? throw new InvalidOperationException("the main window never appeared");
@@ -402,6 +403,25 @@ internal static class Program
         }
         Ok("Undo returned Exposure to 0 through the UI");
 
+        var redo = FindButton(window, "Redo")
+            ?? throw new InvalidOperationException("the Redo button is missing");
+        Invoke(redo);
+        if (!WaitFor(() => Math.Abs(SliderValue(slider) - 40) < 0.5, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"Redo left Exposure at {SliderValue(slider)}");
+        }
+        Ok("Redo reapplied Exposure 40 through the UI");
+
+        // The project path is known now, so this save writes without a dialog.
+        Invoke(save);
+        if (!WaitFor(() => !window.Current.Name.Contains('•'), TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the second save left unsaved changes: '{window.Current.Name}'");
+        }
+        Ok("the second Save Project wrote through the existing path");
+
         var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
         close.Close();
         if (!process.WaitForExit(30_000))
@@ -417,6 +437,78 @@ internal static class Program
             throw new InvalidOperationException($"the app exited with {process.ExitCode}");
         }
         Ok("the app closed cleanly after the project checks");
+
+        // A fresh process must reopen the saved file with its edit intact.
+        var start = new ProcessStartInfo(app)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(app)!,
+        };
+        start.Environment["RETOUCHSTUDIO_NO_DIALOG"] = "1";
+        start.Environment["RETOUCHSTUDIO_RECOVERY"] = recoveryDirectory;
+        using var reopened = Process.Start(start)
+            ?? throw new InvalidOperationException("the app did not restart");
+        var second = WaitWindow(reopened.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the second window never appeared");
+        var secondHandle = (IntPtr)second.Current.NativeWindowHandle;
+
+        var openProject = FindButton(second, "Open Project")
+            ?? throw new InvalidOperationException("the Open Project button is missing");
+        Invoke(openProject);
+        var reopenHandle = WaitNewWindow(reopened.Id, secondHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Open Project click opened no window");
+        var reopenDialog = AutomationElement.FromHandle(reopenHandle);
+        var reopenEdit = SetFileName(reopenDialog, project);
+        if (!WaitFor(() => ReadValue(reopenEdit) == project, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the file-name box holds '{ReadValue(reopenEdit)}' instead of '{project}'");
+        }
+        CommitFileName(reopenEdit);
+        if (!WaitFor(() => !IsWindowVisible(reopenHandle), TimeSpan.FromSeconds(30)))
+        {
+            PressDefaultButton(reopenDialog, "Open");
+            if (!WaitFor(() => !IsWindowVisible(reopenHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the Open Project dialog stayed open; " + DescribeWindow(reopenDialog));
+            }
+        }
+        if (!WaitFor(() => second.Current.Name.Contains(photoName, StringComparison.Ordinal),
+                     TimeSpan.FromSeconds(90)))
+        {
+            throw new InvalidOperationException(
+                $"the saved project did not reopen; the title is '{second.Current.Name}'; " +
+                $"the windows are {DescribeAppWindows(reopened.Id)}");
+        }
+        Ok($"the saved project reopened: '{second.Current.Name}'");
+
+        var reopenedSlider = FindSlider(second, "Exposure")
+            ?? throw new InvalidOperationException("the Exposure slider is missing after reopening");
+        if (!WaitFor(() => Math.Abs(SliderValue(reopenedSlider) - 40) < 0.5,
+                     TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                $"the reopened Exposure is {SliderValue(reopenedSlider)}, not 40");
+        }
+        Ok("the reopened project kept Exposure at 40");
+
+        var closeAgain = (WindowPattern)second.GetCurrentPattern(WindowPattern.Pattern);
+        closeAgain.Close();
+        if (!reopened.WaitForExit(30_000))
+        {
+            DismissClosePrompt(reopened.Id);
+            if (!reopened.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the restarted app did not close");
+            }
+        }
+        if (reopened.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"the restarted app exited with {reopened.ExitCode}");
+        }
+        Ok("the restarted app closed cleanly");
         Console.WriteLine("UI HOST TESTS: PASS");
     }
 
