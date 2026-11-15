@@ -83,8 +83,10 @@ void sc_core_bytes_release(ScCoreBytes *bytes);
 /*
  * Reads a project file of any version this build supports.
  *
- * out_document receives the current canonical v4 record as JSON: what the host
- * edits. It is version 4 even when the file was version 3.
+ * out_document receives the current canonical record as JSON: what the host
+ * edits. A v1-v3 file arrives as a v4 document; a v5 file arrives as a v5
+ * document, because its masks and face identities live in keys only that
+ * version has.
  * out_context receives the JSON write context: the original file version and
  * every top-level key and nested record field this build does not model. It
  * must be passed back unchanged to sc_project_write, or the save silently drops
@@ -128,7 +130,7 @@ ScCoreStatus sc_render_plan(const uint8_t *request, size_t request_length,
  *
  * States are compared byte-for-byte, so a host must pass the same canonical
  * encoding every time — for a project document, the document bytes from
- * sc_project_read, which are canonical v4. Equal JSON with different key
+ * sc_project_read. Equal JSON with different key
  * order, spacing or number spelling is a different state. (A v3 file written
  * back by sc_project_write is not a safe history state: v3 encodes analysis
  * regions as an unordered set.)

@@ -206,6 +206,90 @@ static void test_project_round_trip(void) {
   }
 }
 
+/* MARK: - v5 masks across the boundary */
+
+static void test_project_v5_round_trip(void) {
+  size_t length = 0;
+  uint8_t *file = load("project-v5.json", &length);
+  ScCoreBytes document = {0};
+  ScCoreBytes context = {0};
+  ScCoreBytes error = {0};
+
+  ScCoreStatus status = sc_project_read(file, length, &document, &context, &error);
+  ok(status == SC_CORE_OK, "a v5 read returns OK");
+  ok(document.ptr != NULL && contains(document.ptr, document.len, "\"version\" : 5"),
+     "a v5 file reaches the host as a canonical v5 document");
+  ok(document.ptr != NULL &&
+         contains(document.ptr, document.len, "\"masks\""),
+     "the editable document carries the masks");
+  ok(document.ptr != NULL &&
+         contains(document.ptr, document.len, "22222222-2222-4222-8222-222222222222"),
+     "the editable document carries the stable mask id");
+  ok(document.ptr != NULL && contains(document.ptr, document.len, "\"faceId\""),
+     "the editable document carries the mask's face association");
+  ok(document.ptr != NULL &&
+         contains(document.ptr, document.len, "\"faceIdentities\""),
+     "the editable document carries the stored people");
+  ok(document.ptr != NULL &&
+         !contains(document.ptr, document.len, "futureMaskField"),
+     "a field this build does not model is not in the editable document");
+  ok(context.ptr != NULL && contains(context.ptr, context.len, "\"version\" : 5"),
+     "the context keeps the v5 version");
+  ok(context.ptr != NULL && contains(context.ptr, context.len, "futureMaskField"),
+     "the context keeps unknown data inside a mask");
+  ok(context.ptr != NULL &&
+         contains(context.ptr, context.len, "futureDocumentField"),
+     "the context keeps an unknown top-level key");
+
+  ScCoreBytes project = {0};
+  ScCoreBytes writeError = {0};
+  status = sc_project_write(document.ptr, document.len,
+                            context.ptr, context.len, &project, &writeError);
+  ok(status == SC_CORE_OK, "a v5 write returns OK");
+  ok(bytes_equal(&project, file, length),
+     "a v5 save reproduces the file byte for byte");
+
+  /* An edit to a slider keeps the masks, the association and the unknowns. */
+  size_t editLength = document.len;
+  uint8_t *edited = malloc(editLength);
+  ok(edited != NULL, "the v5 edited buffer is allocated");
+  if (edited != NULL) {
+    memcpy(edited, document.ptr, editLength);
+    const char *before = "\"exposure\" : 12";
+    const char *after = "\"exposure\" : 14";
+    int found = 0;
+    for (size_t i = 0; i + strlen(before) <= editLength; i++) {
+      if (memcmp(edited + i, before, strlen(before)) == 0) {
+        memcpy(edited + i, after, strlen(after));
+        found = 1;
+        break;
+      }
+    }
+    ok(found, "the v5 fixture models exposure");
+    ScCoreBytes saved = {0};
+    ScCoreBytes saveError = {0};
+    status = sc_project_write(edited, editLength,
+                              context.ptr, context.len, &saved, &saveError);
+    ok(status == SC_CORE_OK, "writing the edited v5 document returns OK");
+    ok(saved.ptr != NULL &&
+           contains(saved.ptr, saved.len, "22222222-2222-4222-8222-222222222222"),
+       "the edited save keeps the mask");
+    ok(saved.ptr != NULL && contains(saved.ptr, saved.len, "futureMaskField"),
+       "the edited save keeps unknown mask data");
+    ok(saved.ptr != NULL && contains(saved.ptr, saved.len, "futureDocumentField"),
+       "the edited save keeps the unknown top-level key");
+    sc_core_bytes_release(&saved);
+    sc_core_bytes_release(&saveError);
+    free(edited);
+  }
+
+  sc_core_bytes_release(&document);
+  sc_core_bytes_release(&context);
+  sc_core_bytes_release(&project);
+  sc_core_bytes_release(&error);
+  free(file);
+}
+
 /* MARK: - Refusals */
 
 static void test_refusals(void) {
@@ -480,6 +564,7 @@ int main(void) {
   ok(sc_core_abi_version() == SC_CORE_ABI, "sc_core_abi_version matches the header");
 
   test_project_round_trip();
+  test_project_v5_round_trip();
   test_refusals();
   test_render_plan();
   test_history();

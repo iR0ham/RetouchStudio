@@ -45,16 +45,50 @@ struct RecoverySnapshot: Codable {
     /// snapshot, so an unchanged v3 snapshot keeps its exact bytes and a bare
     /// project still decodes.
     var fileContext: ProjectWriteContext? = nil
+    /// Masks and the people they name, kept beside the project body because the
+    /// v3 writer that body uses is frozen and cannot express them. Nil for a
+    /// document that has none and for every snapshot taken before v5, so an
+    /// unchanged v3 snapshot keeps its exact bytes.
+    var masks: [MaskRecord]? = nil
+    var faceIdentities: [FaceIdentityRecord]? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case version, savedAt, project, source, fileContext, masks, faceIdentities
+    }
 
     init(project: RetouchProject, savedAt: Date = Date(),
          source: RecoverySourceIdentity? = nil,
          fileContext: ProjectWriteContext? = nil,
+         masks: [MaskRecord]? = nil, faceIdentities: [FaceIdentityRecord]? = nil,
          version: Int = RecoverySnapshot.currentVersion) {
         self.version = version
         self.savedAt = savedAt
         self.project = project
         self.source = source
         self.fileContext = fileContext
+        self.masks = masks
+        self.faceIdentities = faceIdentities
+    }
+
+    /// The wrapper's own keys decode tolerantly, and the two v5 keys are put
+    /// back on the project body so every reader of a snapshot sees one complete
+    /// document. An older build decodes the body it knows and ignores the keys
+    /// it does not, which is why the wrapper version stays 1.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 0
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+        project = try c.decode(RetouchProject.self, forKey: .project)
+        source = try c.decodeIfPresent(RecoverySourceIdentity.self, forKey: .source)
+        fileContext = try c.decodeIfPresent(ProjectWriteContext.self, forKey: .fileContext)
+        masks = try c.decodeIfPresent([MaskRecord].self, forKey: .masks)
+        faceIdentities = try c.decodeIfPresent([FaceIdentityRecord].self, forKey: .faceIdentities)
+        if let masks {
+            project.masks = masks
+        }
+        if let faceIdentities {
+            project.faceIdentities = faceIdentities
+        }
     }
 
     /// Records the identity of the photo the project points at, resolving the
@@ -64,8 +98,12 @@ struct RecoverySnapshot: Codable {
     static func capture(_ project: RetouchProject, savedAt: Date = Date(),
                         context: ProjectWriteContext = .v3) -> RecoverySnapshot {
         let identity = RecoveryStore.sourceURL(for: project).flatMap(RecoverySourceIdentity.of)
-        return RecoverySnapshot(project: project, savedAt: savedAt, source: identity,
-                                fileContext: context.carriesFileMetadata ? context : nil)
+        return RecoverySnapshot(
+            project: project, savedAt: savedAt, source: identity,
+            fileContext: context.carriesFileMetadata ? context : nil,
+            masks: project.masks?.isEmpty == false ? project.masks : nil,
+            faceIdentities: project.faceIdentities?.isEmpty == false
+                ? project.faceIdentities : nil)
     }
 }
 

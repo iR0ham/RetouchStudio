@@ -52,12 +52,18 @@ public struct RetouchProject: Codable {
     /// The face the owner was working on, as an index into the accepted faces
     /// (largest first). `nil` keeps the automatic choice.
     public var selectedFace: Int? = nil
+    /// Masks the owner drew, each with a stable id. Introduced in v5; a v3 or
+    /// v4 save never writes them, and a document that carries them saves as v5.
+    public var masks: [MaskRecord]? = nil
+    /// The people masks are attached to, by id. Detection still runs on every
+    /// open; these records only keep an association resolvable.
+    public var faceIdentities: [FaceIdentityRecord]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case version, imagePath, imageBookmark, adjustments, exportFormat,
              exportQuality, exportLongEdge, autoRetouchStrength,
              autoColorStrength, crop, healSpots, stickers, aiEdits, analysis,
-             selectedFace, orientation
+             selectedFace, orientation, masks, faceIdentities
     }
 
     /// Every top-level key this schema owns. Anything else in a file is an
@@ -77,7 +83,9 @@ public struct RetouchProject: Codable {
                 stickers: [Sticker]? = nil, aiEdits: [AIEdit]? = nil,
                 analysis: AnalysisSettings? = nil,
                 selectedFace: Int? = nil,
-                orientation: DocumentOrientation? = nil) {
+                orientation: DocumentOrientation? = nil,
+                masks: [MaskRecord]? = nil,
+                faceIdentities: [FaceIdentityRecord]? = nil) {
         self.imagePath = imagePath
         self.imageBookmark = imageBookmark
         self.adjustments = adjustments
@@ -93,6 +101,8 @@ public struct RetouchProject: Codable {
         self.analysis = analysis
         self.selectedFace = selectedFace
         self.orientation = orientation
+        self.masks = masks
+        self.faceIdentities = faceIdentities
     }
 
     /// Decoded by hand so a project written before the version key existed
@@ -119,6 +129,11 @@ public struct RetouchProject: Codable {
         analysis = try c.decodeIfPresent(AnalysisSettingsWire.self, forKey: .analysis)?
             .settings
         selectedFace = try c.decodeIfPresent(Int.self, forKey: .selectedFace)
+        // A v3 save never writes these, but a document that carries masks and
+        // happens to be written with a v3 context still needs them in memory.
+        masks = try c.decodeIfPresent([MaskRecord].self, forKey: .masks)
+        faceIdentities = try c.decodeIfPresent([FaceIdentityRecord].self,
+                                               forKey: .faceIdentities)
     }
 
     /// Writes the same bytes v3 always wrote: the portable values are turned
@@ -141,6 +156,8 @@ public struct RetouchProject: Codable {
         try c.encodeIfPresent(aiEdits?.map(AIEditWire.init), forKey: .aiEdits)
         try c.encodeIfPresent(analysis.map(AnalysisSettingsWire.init), forKey: .analysis)
         try c.encodeIfPresent(selectedFace, forKey: .selectedFace)
+        // v3 is frozen: masks and face identities are v5 data and a v3 write
+        // never adds keys an older reader would have to understand.
     }
 }
 

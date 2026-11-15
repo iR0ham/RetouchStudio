@@ -338,6 +338,11 @@ public struct DocumentState: Codable, Equatable {
     public var crop: StudioRect?
     public var orientation: DocumentOrientation
     public var selectedFaceIndex: Int?
+    /// Masks the owner drew. They are edits, so they undo and save with the
+    /// document; an older state that predates them decodes with none.
+    public var masks: [MaskRecord]
+    /// The people those masks attach to, by id.
+    public var faceIdentities: [FaceIdentityRecord]
 
     public init(adjustments: Adjustments = Adjustments(),
                 healSpots: [HealSpot] = [],
@@ -346,7 +351,9 @@ public struct DocumentState: Codable, Equatable {
                 analysis: AnalysisSettings = AnalysisSettings(),
                 crop: StudioRect? = nil,
                 orientation: DocumentOrientation = .identity,
-                selectedFaceIndex: Int? = nil) {
+                selectedFaceIndex: Int? = nil,
+                masks: [MaskRecord] = [],
+                faceIdentities: [FaceIdentityRecord] = []) {
         self.adjustments = adjustments
         self.healSpots = healSpots
         self.stickers = stickers
@@ -355,6 +362,30 @@ public struct DocumentState: Codable, Equatable {
         self.crop = crop
         self.orientation = orientation
         self.selectedFaceIndex = selectedFaceIndex
+        self.masks = masks
+        self.faceIdentities = faceIdentities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case adjustments, healSpots, stickers, aiEdits, analysis, crop,
+             orientation, selectedFaceIndex, masks, faceIdentities
+    }
+
+    /// Tolerant by construction: a history step written before masks existed
+    /// has no key for them and must still decode.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        adjustments = try c.decode(Adjustments.self, forKey: .adjustments)
+        healSpots = try c.decode([HealSpot].self, forKey: .healSpots)
+        stickers = try c.decode([Sticker].self, forKey: .stickers)
+        aiEdits = try c.decode([AIEdit].self, forKey: .aiEdits)
+        analysis = try c.decode(AnalysisSettings.self, forKey: .analysis)
+        crop = try c.decodeIfPresent(StudioRect.self, forKey: .crop)
+        orientation = try c.decode(DocumentOrientation.self, forKey: .orientation)
+        selectedFaceIndex = try c.decodeIfPresent(Int.self, forKey: .selectedFaceIndex)
+        masks = try c.decodeIfPresent([MaskRecord].self, forKey: .masks) ?? []
+        faceIdentities = try c.decodeIfPresent([FaceIdentityRecord].self,
+                                               forKey: .faceIdentities) ?? []
     }
 }
 
