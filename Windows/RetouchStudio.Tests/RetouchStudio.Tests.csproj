@@ -11,9 +11,13 @@
     <RootNamespace>RetouchStudio.Tests</RootNamespace>
     <AssemblyName>RetouchStudio.Tests</AssemblyName>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <!-- The single-export/batch exclusion is enforced by the window's view
+         model, so the tests reference the app project and use its WPF types. -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\RetouchStudio.App\RetouchStudio.App.csproj" />
     <ProjectReference Include="..\RetouchStudio.Core\RetouchStudio.Core.csproj" />
     <ProjectReference Include="..\RetouchStudio.Imaging\RetouchStudio.Imaging.csproj" />
   </ItemGroup>
