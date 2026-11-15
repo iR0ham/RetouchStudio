@@ -380,7 +380,8 @@ public sealed class RecoveryStore
         {
             return false;
         }
-        if (string.Equals(candidate.Path, WorkingPath, StringComparison.OrdinalIgnoreCase))
+        var stuckSlot = string.Equals(candidate.Path, WorkingPath, StringComparison.OrdinalIgnoreCase);
+        if (stuckSlot)
         {
             // Restoring the stuck slot is the owner's decision about it, so
             // the slot may be written again.
@@ -388,6 +389,12 @@ public sealed class RecoveryStore
         }
         if (!WriteWorking(candidate.Snapshot, out _))
         {
+            // The write did not land, so the unresolved copy is still the only
+            // one there is and must stay protected from the next autosave.
+            if (stuckSlot)
+            {
+                _workingLocked = true;
+            }
             return false;
         }
         if (ReadWorking() is not { } written ||

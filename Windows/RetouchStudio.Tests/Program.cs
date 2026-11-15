@@ -1700,6 +1700,13 @@ internal static class Program
               File.ReadAllBytes(stuckStore.WorkingPath).SequenceEqual(stuckBytes));
         Check("the refused autosave leaves no temp sibling",
               Siblings(stuckStore.Directory, RecoveryStore.WorkingFileName).Count == 0);
+        stuckStore.InjectedFailures.Add(RecoveryStore.Failure.WorkingWrite);
+        var restored = stuckStore.Restore(offered[0]);
+        stuckStore.InjectedFailures.Clear();
+        Check("a restore that cannot write reports failure", !restored);
+        Check("a failed restore leaves the slot locked",
+              !stuckStore.WriteWorking(second, out _)
+              && File.ReadAllBytes(stuckStore.WorkingPath).SequenceEqual(stuckBytes));
         Check("discarding the copy frees the slot",
               stuckStore.Discard(offered[0]) && !File.Exists(stuckStore.WorkingPath));
         stuckStore.InjectedFailures.Clear();
