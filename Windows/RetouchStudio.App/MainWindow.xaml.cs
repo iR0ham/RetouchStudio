@@ -590,7 +590,7 @@ public partial class MainWindow : Window
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (!_vm.HasDocument || _vm.IsExportRunning ||
+        if (!_vm.HasDocument || _vm.IsExportRunning || _vm.IsBatchRunning ||
             !ConfirmUnsupportedEdits("the exported photo"))
         {
             return;
@@ -636,7 +636,8 @@ public partial class MainWindow : Window
 
     private async void BatchExport_Click(object sender, RoutedEventArgs e)
     {
-        if (!_vm.HasDocument || !ConfirmUnsupportedEdits("the batch export"))
+        if (!_vm.HasDocument || _vm.IsExportRunning ||
+            !ConfirmUnsupportedEdits("the batch export"))
         {
             return;
         }

@@ -19,14 +19,16 @@
         <Button Content="Open Photo" Style="{StaticResource PrimaryButton}" Click="OpenPhoto_Click" />
         <Button Content="Open Project" Style="{StaticResource ToolButton}" Click="OpenProject_Click" />
         <Button Content="Save Project" Style="{StaticResource ToolButton}" Click="Save_Click" />
-        <Button Content="Export" Style="{StaticResource ToolButton}" Click="Export_Click" />
-        <Button Content="Batch Export…" Style="{StaticResource ToolButton}" Click="BatchExport_Click" />
+        <Button Content="Export" Style="{StaticResource ToolButton}" Click="Export_Click"
+                IsEnabled="{Binding CanStartExport}" />
+        <Button Content="Batch Export…" Style="{StaticResource ToolButton}" Click="BatchExport_Click"
+                IsEnabled="{Binding CanStartBatch}" />
         <Button Content="Cancel Batch" Style="{StaticResource ToolButton}" Click="CancelBatch_Click"
                 IsEnabled="{Binding IsBatchRunning}"
                 ToolTip="Stop the batch before its next photo" />
         <Button Content="Cancel Export" Style="{StaticResource ToolButton}" Click="CancelExport_Click"
                 IsEnabled="{Binding IsExportRunning}"
-                ToolTip="Stop the export before it writes the photo" />
+                ToolTip="Stop the export before it publishes the photo" />
         <Border Width="1" Background="{StaticResource LineBrush}" Margin="6,2,12,2" />
         <Button Content="Undo" Style="{StaticResource ToolButton}" Click="Undo_Click"
                 IsEnabled="{Binding CanUndo}" />

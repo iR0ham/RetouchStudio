@@ -226,15 +226,41 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     public bool IsBatchRunning
     {
         get => _isBatchRunning;
-        private set => Set(ref _isBatchRunning, value);
+        private set
+        {
+            if (value == _isBatchRunning)
+            {
+                return;
+            }
+            Set(ref _isBatchRunning, value);
+            Raise(nameof(CanStartExport));
+            Raise(nameof(CanStartBatch));
+        }
     }
 
     /// <summary>True while a single export is running; enables its Cancel button.</summary>
     public bool IsExportRunning
     {
         get => _isExportRunning;
-        private set => Set(ref _isExportRunning, value);
+        private set
+        {
+            if (value == _isExportRunning)
+            {
+                return;
+            }
+            Set(ref _isExportRunning, value);
+            Raise(nameof(CanStartExport));
+            Raise(nameof(CanStartBatch));
+        }
     }
+
+    /// <summary>
+    /// An export and a batch never overlap, so each start button is enabled
+    /// only while neither is running.
+    /// </summary>
+    public bool CanStartExport => !_isExportRunning && !_isBatchRunning;
+
+    public bool CanStartBatch => !_isExportRunning && !_isBatchRunning;
 
     public string DimensionText
     {
@@ -553,6 +579,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         {
             throw new InvalidOperationException("there is no open document");
         }
+        if (IsBatchRunning)
+        {
+            throw new InvalidOperationException("a batch export is already running");
+        }
         FlushCommit();
         using var cancellation = new CancellationTokenSource();
         _exportCancellation = cancellation;
@@ -592,6 +622,10 @@ public sealed class EditorViewModel : INotifyPropertyChanged
         if (_session is null)
         {
             throw new InvalidOperationException("there is no open document");
+        }
+        if (IsExportRunning)
+        {
+            throw new InvalidOperationException("an export is already running");
         }
         if (sources.Count == 0)
         {
@@ -634,7 +668,11 @@ public sealed class EditorViewModel : INotifyPropertyChanged
     /// <summary>Stops a running batch before its next file.</summary>
     public void CancelBatch() => _batchCancellation?.Cancel();
 
-    /// <summary>Stops a running single export before it writes its file.</summary>
+    /// <summary>
+    /// Stops a running single export. The codec has no mid-write cancel point,
+    /// so the current encode finishes; the export then stops before it
+    /// publishes its file.
+    /// </summary>
     public void CancelExport() => _exportCancellation?.Cancel();
 
     public void Undo()
