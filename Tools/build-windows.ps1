@@ -297,6 +297,13 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiZoomOutput zoom
     Assert-ExitCode 'UI zoom tests'
+
+    # A running batch is stopped by its own button; the status line names how
+    # many photos landed, and the folder must hold exactly that many.
+    $uiCancelOutput = Join-Path $uiTemp 'retouchstudio-ui-batch-cancel.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiCancelOutput batchcancel
+    Assert-ExitCode 'UI batch cancel tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted

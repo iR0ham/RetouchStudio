@@ -39,12 +39,12 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch|crop|compare|zoom]");
+                "[golden|recovery|guard|project|batch|crop|compare|zoom|batchcancel]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"
-                        or "crop" or "compare" or "zoom"))
+                        or "crop" or "compare" or "zoom" or "batchcancel"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -113,6 +113,10 @@ internal static class Program
             else if (mode == "zoom")
             {
                 RunZoomPan(process, photo);
+            }
+            else if (mode == "batchcancel")
+            {
+                RunBatchCancel(process, photo, output);
             }
             else
             {
@@ -978,7 +982,7 @@ internal static class Program
         var fit = FindButton(window, "Fit to window")
             ?? throw new InvalidOperationException("the Fit to window button is missing");
 
-        var label = ZoomLabel(window);
+        var label = ZoomLabel(window, zoomOut, zoomIn);
         if (label != "Fit")
         {
             throw new InvalidOperationException(
@@ -994,16 +998,16 @@ internal static class Program
         // The pointer rests in the canvas margin between captures so a hover
         // highlight cannot be mistaken for the gesture's own effect.
         var neutral = new Point(windowRect.X + 20, windowRect.Y + windowRect.Height / 2);
-        var fittedShot = StableDigest(windowRect, neutral);
+        var fittedShot = StableSamples(windowRect, neutral);
 
         ClickControl(zoomIn, mainHandle);
-        var zoomed = WaitFor(() => ZoomLabel(window) != "Fit", TimeSpan.FromSeconds(8));
+        var zoomed = WaitFor(() => ZoomLabel(window, zoomOut, zoomIn) != "Fit", TimeSpan.FromSeconds(8));
         if (!zoomed)
         {
             throw new InvalidOperationException(
-                $"Zoom in left the dock at '{ZoomLabel(window)}'");
+                $"Zoom in left the dock at '{ZoomLabel(window, zoomOut, zoomIn)}'");
         }
-        label = ZoomLabel(window);
+        label = ZoomLabel(window, zoomOut, zoomIn);
         if (label != "150%")
         {
             throw new InvalidOperationException(
@@ -1016,8 +1020,8 @@ internal static class Program
         }
         Ok($"Zoom in took the dock to {label} and enabled Zoom out and Fit");
 
-        var zoomedShot = StableDigest(windowRect, neutral);
-        if (zoomedShot == fittedShot)
+        var zoomedShot = StableSamples(windowRect, neutral);
+        if (Difference(zoomedShot, fittedShot) < 0.05)
         {
             throw new InvalidOperationException(
                 "the photo looks identical after zooming in; the canvas did not change");
@@ -1030,36 +1034,38 @@ internal static class Program
         var startY = windowRect.Y + (windowRect.Height - 40) / 2;
         Console.WriteLine($"  dragging the zoomed photo at {startX:0},{startY:0}");
         Drag(startX, startY, dx: 0, dy: 70, steps: 20);
-        var pannedShot = StableDigest(windowRect, neutral);
-        if (pannedShot == zoomedShot)
+        var pannedShot = StableSamples(windowRect, neutral);
+        if (Difference(pannedShot, zoomedShot) < 0.01)
         {
             throw new InvalidOperationException(
                 "dragging the zoomed photo changed no pixel; the pan never reached the canvas");
         }
-        if (ZoomLabel(window) != label)
+        if (ZoomLabel(window, zoomOut, zoomIn) != label)
         {
             throw new InvalidOperationException(
-                $"the pan changed the zoom from {label} to {ZoomLabel(window)}");
+                $"the pan changed the zoom from {label} to {ZoomLabel(window, zoomOut, zoomIn)}");
         }
         Ok("dragging the zoomed photo panned it without changing the zoom");
 
         ClickControl(fit, mainHandle);
-        var refitted = WaitFor(() => ZoomLabel(window) == "Fit", TimeSpan.FromSeconds(8));
+        var refitted = WaitFor(() => ZoomLabel(window, zoomOut, zoomIn) == "Fit", TimeSpan.FromSeconds(8));
         if (!refitted)
         {
             throw new InvalidOperationException(
-                $"Fit left the dock at '{ZoomLabel(window)}'");
+                $"Fit left the dock at '{ZoomLabel(window, zoomOut, zoomIn)}'");
         }
         if (zoomOut.Current.IsEnabled || fit.Current.IsEnabled)
         {
             throw new InvalidOperationException(
                 "Zoom out and Fit stay enabled after Fit");
         }
-        var refitShot = StableDigest(windowRect, neutral);
-        if (refitShot != fittedShot)
+        var refitShot = StableSamples(windowRect, neutral);
+        // A focus mark or antialiased edge may move a few pixels; the photo
+        // and the dock must be back to what they were, which is all of it.
+        if (Difference(refitShot, fittedShot) > 0.002)
         {
             throw new InvalidOperationException(
-                "Fit did not restore the canvas the photo opened with");
+                $"Fit left {Difference(refitShot, fittedShot):P1} of the canvas changed");
         }
         Ok("Fit restored the exact view the photo opened with");
 
@@ -1067,14 +1073,29 @@ internal static class Program
         Console.WriteLine("UI HOST TESTS: PASS");
     }
 
-    /// <summary>The zoom dock's label: "Fit", or the percentage it shows.</summary>
-    private static string ZoomLabel(AutomationElement window)
+    /// <summary>
+    /// The zoom dock's label: "Fit", or the percentage it shows. A button
+    /// exposes its caption as a Text element too, and the export panel shows a
+    /// quality percentage, so the label is picked by where it sits: between the
+    /// Zoom out and Zoom in buttons, on their row.
+    /// </summary>
+    private static string ZoomLabel(AutomationElement window, AutomationElement zoomOut,
+                                    AutomationElement zoomIn)
     {
+        var left = zoomOut.Current.BoundingRectangle;
+        var right = zoomIn.Current.BoundingRectangle;
         foreach (AutomationElement candidate in window.FindAll(
                      TreeScope.Descendants,
                      new PropertyCondition(AutomationElement.ControlTypeProperty,
                                            ControlType.Text)))
         {
+            var rect = candidate.Current.BoundingRectangle;
+            if (rect.IsEmpty
+                || rect.Left < left.Right - 2 || rect.Right > right.Left + 2
+                || rect.Top < left.Top - 6 || rect.Bottom > left.Bottom + 6)
+            {
+                continue;
+            }
             var text = candidate.Current.Name;
             if (text == "Fit" || Regex.IsMatch(text, @"^\d{1,3}%$"))
             {
@@ -1085,22 +1106,22 @@ internal static class Program
     }
 
     /// <summary>
-    /// A sampled hash of the screen inside a region, once two captures a
-    /// moment apart agree. Zoom and pan leave no UIA evidence, so the pixels
-    /// are the witness; waiting for agreement keeps a repainting canvas from
-    /// passing as a gesture.
+    /// Sampled screen pixels inside a region, once two captures a moment apart
+    /// agree. Zoom and pan leave no UIA evidence, so the pixels are the
+    /// witness; waiting for agreement keeps a repainting canvas from passing
+    /// as a gesture.
     /// </summary>
-    private static ulong StableDigest(Rect rect, Point pointer)
+    private static uint[] StableSamples(Rect rect, Point pointer)
     {
         SetCursorPos((int)Math.Round(pointer.X), (int)Math.Round(pointer.Y));
         Thread.Sleep(300);
-        var previous = ScreenDigest(rect);
+        var previous = ScreenSamples(rect);
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
         while (DateTime.UtcNow < deadline)
         {
             Thread.Sleep(400);
-            var current = ScreenDigest(rect);
-            if (current == previous)
+            var current = ScreenSamples(rect);
+            if (current.AsSpan().SequenceEqual(previous))
             {
                 return current;
             }
@@ -1110,7 +1131,7 @@ internal static class Program
             "the window kept repainting; there is no stable frame to compare");
     }
 
-    private static ulong ScreenDigest(Rect rect)
+    private static uint[] ScreenSamples(Rect rect)
     {
         var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
                               GetSystemMetrics(SmCyScreen));
@@ -1129,15 +1150,209 @@ internal static class Program
                                     new System.Drawing.Size(width, height),
                                     System.Drawing.CopyPixelOperation.SourceCopy);
         }
-        ulong hash = 14695981039346656037;
+        var samples = new uint[(width / 8 + 1) * (height / 8 + 1)];
+        var index = 0;
         for (var y = 0; y < height; y += 8)
         {
             for (var x = 0; x < width; x += 8)
             {
-                hash = (hash ^ (uint)bitmap.GetPixel(x, y).ToArgb()) * 1099511628211;
+                samples[index++] = (uint)bitmap.GetPixel(x, y).ToArgb();
             }
         }
-        return hash;
+        return samples;
+    }
+
+    /// <summary>The share of sampled pixels that differ between two captures.</summary>
+    private static double Difference(uint[] a, uint[] b)
+    {
+        if (a.Length != b.Length)
+        {
+            throw new InvalidOperationException(
+                "the two captures cover different areas");
+        }
+        var changed = 0;
+        for (var index = 0; index < a.Length; index++)
+        {
+            if (a[index] != b[index])
+            {
+                changed++;
+            }
+        }
+        return (double)changed / a.Length;
+    }
+
+    /// <summary>
+    /// A batch is cancelled by its own button mid-run, not by a dialog. The
+    /// status line is the shop window: it counts finished files while the
+    /// batch runs and reports how many landed after a cancel, so the button's
+    /// enabled state and that line are the whole test.
+    /// </summary>
+    private static void RunBatchCancel(Process process, string photo, string output)
+    {
+        const int count = 16;
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        OpenPhoto(window, process, photo);
+
+        // Every source needs its own name, or the batch would export one file
+        // and call the rest duplicates of it.
+        var sources = Directory.CreateTempSubdirectory("retouchstudio-ui-cancel-");
+        var extension = Path.GetExtension(photo);
+        var selection = new List<string>(count);
+        for (var index = 1; index <= count; index++)
+        {
+            var copy = Path.Combine(sources.FullName, $"frame-{index:00}{extension}");
+            File.Copy(photo, copy);
+            selection.Add(copy);
+        }
+        var folder = Path.Combine(
+            Path.GetDirectoryName(output)!, "retouchstudio-ui-batch-cancel");
+        if (Directory.Exists(folder))
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var cancel = FindButton(window, "Cancel Batch")
+                ?? throw new InvalidOperationException("the Cancel Batch button is missing");
+            if (cancel.Current.IsEnabled)
+            {
+                throw new InvalidOperationException(
+                    "Cancel Batch is enabled before a batch starts");
+            }
+
+            var batch = FindButton(window, "Batch Export…")
+                ?? throw new InvalidOperationException("the Batch Export button is missing");
+            Invoke(batch);
+            var photosHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+                ?? throw new InvalidOperationException(
+                    "the Batch Export click opened no window");
+            var photosDialog = AutomationElement.FromHandle(photosHandle);
+            // The common dialog takes several quoted paths in its File name box.
+            var photosEdit = SetFileName(photosDialog,
+                string.Join(" ", selection.Select(path => $"\"{path}\"")));
+            if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
+            {
+                CommitFileName(photosEdit);
+                if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
+                {
+                    throw new InvalidOperationException(
+                        "the photo picker did not take the selection; " +
+                        DescribeWindow(photosDialog));
+                }
+            }
+            Ok($"the batch photo picker took {count} photos");
+
+            var folderHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+                ?? throw new InvalidOperationException("the folder picker never appeared");
+            var folderDialog = AutomationElement.FromHandle(folderHandle);
+            var folderEdit = FindFolderEdit(folderDialog);
+            if (folderEdit is null || !TypeInto(folderEdit, folder))
+            {
+                throw new InvalidOperationException(
+                    "the folder picker has no Folder box: " + DescribeEditors(folderDialog));
+            }
+            CommitFileName(folderEdit);
+            if (!WaitFor(() => !IsWindowVisible(folderHandle), TimeSpan.FromSeconds(30)))
+            {
+                var select = FindButton(folderDialog, "Select Folder")
+                    ?? throw new InvalidOperationException(
+                        "the folder picker has no Select Folder button: " +
+                        DescribeWindow(folderDialog));
+                Invoke(select);
+                if (!WaitFor(() => !IsWindowVisible(folderHandle), TimeSpan.FromSeconds(30)))
+                {
+                    throw new InvalidOperationException(
+                        "the folder picker stayed open; " + DescribeWindow(folderDialog));
+                }
+            }
+            Ok($"the folder picker took '{folder}'");
+
+            var running = WaitFor(() => cancel.Current.IsEnabled, TimeSpan.FromSeconds(15));
+            if (!running)
+            {
+                throw new InvalidOperationException(
+                    "the batch never showed itself as running; the status says " +
+                    DescribeTexts(window) + "; the folder holds " + RecentFiles(folder));
+            }
+            var progress = BatchStatus(window);
+            if (progress is null || !Regex.IsMatch(progress, @"^Exported \d+ of 16…$"))
+            {
+                throw new InvalidOperationException(
+                    $"a running batch does not count its files; the status says '{progress}'");
+            }
+            Ok($"the batch counted progress: '{progress}'");
+
+            Invoke(cancel);
+            var stopped = WaitFor(
+                () => BatchStatus(window)?.StartsWith("Export cancelled after ",
+                                                      StringComparison.Ordinal) == true,
+                TimeSpan.FromSeconds(30));
+            if (!stopped)
+            {
+                throw new InvalidOperationException(
+                    "the cancel left no verdict; the status says " + DescribeTexts(window) +
+                    "; the folder holds " + RecentFiles(folder));
+            }
+            var verdict = BatchStatus(window)!;
+            var numbers = Regex.Match(verdict, @"^Export cancelled after (\d+) of (\d+) photos\.$");
+            if (!numbers.Success
+                || !int.TryParse(numbers.Groups[1].Value, out var done)
+                || !int.TryParse(numbers.Groups[2].Value, out var total)
+                || total != count || done >= total)
+            {
+                throw new InvalidOperationException(
+                    $"the cancel verdict reads '{verdict}', not a partial of {count}");
+            }
+            if (!WaitFor(() => !cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "Cancel Batch stayed enabled after the batch stopped");
+            }
+            var written = Directory.GetFiles(folder).Length;
+            if (written != done)
+            {
+                throw new InvalidOperationException(
+                    $"the folder holds {written} files, the status reports {done}");
+            }
+            Ok($"cancelling stopped after {done} of {total} photos and left " +
+               $"{written} written files");
+        }
+        finally
+        {
+            try
+            {
+                sources.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>The status line while a batch runs or after it stops.</summary>
+    private static string? BatchStatus(AutomationElement window)
+    {
+        foreach (AutomationElement candidate in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var text = candidate.Current.Name;
+            if (text.StartsWith("Exported ", StringComparison.Ordinal)
+                || text.StartsWith("Export cancelled ", StringComparison.Ordinal))
+            {
+                return text;
+            }
+        }
+        return null;
     }
 
     private static void CloseCleanly(AutomationElement window, Process process)
