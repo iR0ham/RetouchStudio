@@ -66,7 +66,7 @@ Every fixture is generated procedurally from code in `Tests/CorpusSupport.swift`
 | `F08_HIGHRES_PORTRAIT` | `F08_highres_portrait.png` | 1600×1067, 8-bit sRGB | Full-resolution behaviour | Radius scaling and preview/export parity require an image well above 1400 px | load dimensions, 256 px export; hash-only no-op |
 | `F09_ALPHA_CUTOUT` | `F09_alpha_cutout.png` | 512×512, 8-bit sRGB + alpha | Transparency and alpha export | Alpha handling and JPEG flattening cannot be verified on opaque photos | load alpha, PNG alpha export, JPEG flatten |
 | `F10_EXIF_ORIENT6` | `F10_exif_orient6.jpg` | stored 720×480, 8-bit JPEG, orientation 6 | EXIF orientation handling | Camera files are commonly stored rotated; the corpus must prove the mapping | decode, upright baking (480×720), quadrant mapping, oriented export |
-| `F11_P3_16BIT` | `F11_p3_16bit.png` | 512×512, 16-bit Display P3 | Wide gamut and deep storage | Colour management and bit-depth behaviour need a non-sRGB, non-8-bit source | 16-bit decode, P3 preservation, 16-bit PNG export |
+| `F11_P3_16BIT` | `F11_p3_16bit.png` | 512×512, 16-bit Display P3 | Wide gamut and deep storage | Colour management and bit-depth behaviour need a non-sRGB, non-8-bit source | 16-bit decode, P3 source profile, 16-bit PNG export (converted to sRGB since 2026-11-15, W4-4) |
 | `F12_GRAY_8` | `F12_gray_8.png` | 640×480, 8-bit Gray Gamma 2.2 | Grayscale source | A grayscale source exercises a colour model the RGB fixtures cannot | decode only; the current loader refuses it (see §6) |
 
 The manifest records for each fixture: `id`, `file`, `width`, `height`, `bitsPerComponent`, `bitsPerPixel`, `colorSpace`, `sha256`, `decodedKey`, `purpose`, `characteristics`, `operations`, `necessity`.
@@ -233,3 +233,4 @@ Behaviour:
 3. **Regenerate, do not patch.** If a fixture must change, change its generator, recapture, and review the new manifest and references as a whole.
 4. **Never mix hosts.** A baseline captured on arm64 must not be compared against a run on another architecture as if it were expected to match exactly. Use the methodology document.
 5. **Keep private photos out.** The corpus has no mechanism to ingest user images and must not gain one for this purpose.
+6. **One authorised export renewal.** On 2026-11-15 the Product Owner approved the sRGB output policy (W4-4 Option A) and authorised renewing exactly one tracked artifact, `Exports/F11_export_256.png`, because its source is Display P3. No fixture, reference PNG or baseline digest changed, and every other export kept its hash; see `Docs/OUTPUT_COLOR_POLICY.md`.

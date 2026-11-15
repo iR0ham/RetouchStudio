@@ -124,7 +124,10 @@ public enum RenderPolicy {
                           appliesWatermark: request.watermark.isActive && !linesOnly,
                           flattensAlpha: format.flattensAlpha,
                           bitsPerChannel: format.bitsPerChannel,
-                          colorSpace: upscales ? .sRGB : .source,
+                          // 1.0 writes every export in sRGB whether or not
+                          // the source is wide-gamut; the decoded source
+                          // profile stays the working space, not the output.
+                          colorSpace: .sRGB,
                           carriesSourceMetadata: !linesOnly)
     }
 

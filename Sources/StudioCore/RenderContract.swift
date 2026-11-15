@@ -106,9 +106,11 @@ public struct WatermarkSettings: Codable, Equatable, Sendable {
 /// Where the written pixels take their colour profile from. The host owns the
 /// actual profile objects; this only states the decision.
 public enum RenderColorSpace: String, Codable, Equatable, Sendable {
-    /// The profile the source photo was decoded with.
+    /// The profile the source photo was decoded with. The 1.0 plan never
+    /// chooses it; it stays so a writer can be driven with an explicit
+    /// profile when wide-gamut output is added later.
     case source
-    /// The upscaler's fixed working profile, because it returns untagged pixels.
+    /// sRGB, the 1.0 output profile for every export.
     case sRGB
 }
 

@@ -1154,8 +1154,14 @@ check(basePlan.format == .jpeg && basePlan.pixelSize == StudioSize(width: 800, h
         && !basePlan.upscales && !basePlan.appliesAnalysis && !basePlan.appliesWatermark,
       "a plain export keeps the photo size and draws nothing extra")
 check(basePlan.flattensAlpha && basePlan.bitsPerChannel == 8
-        && basePlan.colorSpace == .source && basePlan.carriesSourceMetadata,
-      "a plain JPEG keeps the source profile and 8-bit opaque output")
+        && basePlan.colorSpace == .sRGB && basePlan.carriesSourceMetadata,
+      "a plain JPEG is written in sRGB with 8-bit opaque output")
+
+let wideSource = RenderSourceDescription(pixelSize: StudioSize(width: 800, height: 600),
+                                         photoAspect: 4.0 / 3.0, faceCount: 2,
+                                         colorProfileName: "Display P3")
+check(RenderPolicy.plan(baseRequest, source: wideSource).colorSpace == .sRGB,
+      "a wide-gamut source is still planned in sRGB")
 
 var linesRequest = baseRequest
 linesRequest.analysis = overlay

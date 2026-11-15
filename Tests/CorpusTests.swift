@@ -1153,18 +1153,18 @@ func exportChecks() -> [[String: Any]] {
         print("    HEIC: skipped — no writable HEIC encoder on this host")
     }
 
-    // 16-bit Display P3 round-trip.
+    // A 16-bit Display P3 source is written in sRGB, the 1.0 output profile.
     let (p3URL, p3Props, p3Image) = pngProperties(
-        "F11_export_256.png", p3Fixture, .png, p3, 256)
+        "F11_export_256.png", p3Fixture, .png, sRGB, 256)
     if let p3Image {
-        check(p3Image.width == 256, "P3 PNG long edge is 256")
-        check(p3Image.bitsPerComponent == 16, "P3 PNG export is 16-bit")
-        check(colorSpaceName(p3Image.colorSpace).contains("P3"),
-              "P3 PNG export keeps Display P3",
+        check(p3Image.width == 256, "P3 source PNG long edge is 256")
+        check(p3Image.bitsPerComponent == 16, "P3 source PNG export is 16-bit")
+        check(colorSpaceName(p3Image.colorSpace).lowercased().contains("srgb"),
+              "P3 source PNG export is sRGB",
               colorSpaceName(p3Image.colorSpace))
     }
     let profile = p3Props[kCGImagePropertyProfileName] as? String ?? ""
-    check(profile.contains("P3"), "P3 PNG embeds a Display P3 profile", profile)
+    check(profile.contains("sRGB"), "P3 source PNG embeds an sRGB profile", profile)
 
     // Alpha: PNG keeps it, JPEG flattens onto white.
     let alphaPNG = exportsDir.appendingPathComponent("F09_alpha_export.png")
