@@ -290,6 +290,13 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiCompareOutput compare
     Assert-ExitCode 'UI compare tests'
+
+    # Zoom and pan are pointer gestures too: the dock's label reports the zoom,
+    # and a screen hash proves the drag moved the photo and Fit restored it.
+    $uiZoomOutput = Join-Path $uiTemp 'retouchstudio-ui-zoom.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiZoomOutput zoom
+    Assert-ExitCode 'UI zoom tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted

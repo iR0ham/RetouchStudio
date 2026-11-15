@@ -39,12 +39,12 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch|crop|compare]");
+                "[golden|recovery|guard|project|batch|crop|compare|zoom]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"
-                        or "crop" or "compare"))
+                        or "crop" or "compare" or "zoom"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -109,6 +109,10 @@ internal static class Program
             else if (mode == "compare")
             {
                 RunCompare(process, photo);
+            }
+            else if (mode == "zoom")
+            {
+                RunZoomPan(process, photo);
             }
             else
             {
@@ -949,6 +953,191 @@ internal static class Program
 
         CloseCleanly(window, process);
         Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Zoom and pan are canvas gestures with no automation pattern behind them:
+    /// the dock's label is the only text, and a pan moves pixels nobody exposes
+    /// to UIA. The label is read for zoom state, and a sampled screen hash
+    /// proves the photo moved and that Fit restored the opening view.
+    /// </summary>
+    private static void RunZoomPan(Process process, string photo)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException(
+                "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        OpenPhoto(window, process, photo);
+        var windowRect = FitWindowToScreen(window);
+
+        var zoomIn = FindButton(window, "Zoom in")
+            ?? throw new InvalidOperationException("the Zoom in button is missing");
+        var zoomOut = FindButton(window, "Zoom out")
+            ?? throw new InvalidOperationException("the Zoom out button is missing");
+        var fit = FindButton(window, "Fit to window")
+            ?? throw new InvalidOperationException("the Fit to window button is missing");
+
+        var label = ZoomLabel(window);
+        if (label != "Fit")
+        {
+            throw new InvalidOperationException(
+                $"a freshly opened photo is labelled '{label}', not Fit");
+        }
+        if (zoomOut.Current.IsEnabled || fit.Current.IsEnabled)
+        {
+            throw new InvalidOperationException(
+                "Zoom out and Fit are enabled while the photo is fitted");
+        }
+        Ok("the photo opens fitted, with Zoom out and Fit disabled");
+
+        // The pointer rests in the canvas margin between captures so a hover
+        // highlight cannot be mistaken for the gesture's own effect.
+        var neutral = new Point(windowRect.X + 20, windowRect.Y + windowRect.Height / 2);
+        var fittedShot = StableDigest(windowRect, neutral);
+
+        ClickControl(zoomIn, mainHandle);
+        var zoomed = WaitFor(() => ZoomLabel(window) != "Fit", TimeSpan.FromSeconds(8));
+        if (!zoomed)
+        {
+            throw new InvalidOperationException(
+                $"Zoom in left the dock at '{ZoomLabel(window)}'");
+        }
+        label = ZoomLabel(window);
+        if (label != "150%")
+        {
+            throw new InvalidOperationException(
+                $"one Zoom in step reads '{label}', expected 150%");
+        }
+        if (!zoomOut.Current.IsEnabled || !fit.Current.IsEnabled)
+        {
+            throw new InvalidOperationException(
+                "Zoom out and Fit are still disabled on a zoomed photo");
+        }
+        Ok($"Zoom in took the dock to {label} and enabled Zoom out and Fit");
+
+        var zoomedShot = StableDigest(windowRect, neutral);
+        if (zoomedShot == fittedShot)
+        {
+            throw new InvalidOperationException(
+                "the photo looks identical after zooming in; the canvas did not change");
+        }
+
+        // Portrait photos have a wider canvas than the fitted photo, so the
+        // vertical axis is the one with room to pan when zoomed.
+        var canvasWidth = windowRect.Width - 336;
+        var startX = windowRect.X + canvasWidth / 2;
+        var startY = windowRect.Y + (windowRect.Height - 40) / 2;
+        Console.WriteLine($"  dragging the zoomed photo at {startX:0},{startY:0}");
+        Drag(startX, startY, dx: 0, dy: 70, steps: 20);
+        var pannedShot = StableDigest(windowRect, neutral);
+        if (pannedShot == zoomedShot)
+        {
+            throw new InvalidOperationException(
+                "dragging the zoomed photo changed no pixel; the pan never reached the canvas");
+        }
+        if (ZoomLabel(window) != label)
+        {
+            throw new InvalidOperationException(
+                $"the pan changed the zoom from {label} to {ZoomLabel(window)}");
+        }
+        Ok("dragging the zoomed photo panned it without changing the zoom");
+
+        ClickControl(fit, mainHandle);
+        var refitted = WaitFor(() => ZoomLabel(window) == "Fit", TimeSpan.FromSeconds(8));
+        if (!refitted)
+        {
+            throw new InvalidOperationException(
+                $"Fit left the dock at '{ZoomLabel(window)}'");
+        }
+        if (zoomOut.Current.IsEnabled || fit.Current.IsEnabled)
+        {
+            throw new InvalidOperationException(
+                "Zoom out and Fit stay enabled after Fit");
+        }
+        var refitShot = StableDigest(windowRect, neutral);
+        if (refitShot != fittedShot)
+        {
+            throw new InvalidOperationException(
+                "Fit did not restore the canvas the photo opened with");
+        }
+        Ok("Fit restored the exact view the photo opened with");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>The zoom dock's label: "Fit", or the percentage it shows.</summary>
+    private static string ZoomLabel(AutomationElement window)
+    {
+        foreach (AutomationElement candidate in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var text = candidate.Current.Name;
+            if (text == "Fit" || Regex.IsMatch(text, @"^\d{1,3}%$"))
+            {
+                return text;
+            }
+        }
+        throw new InvalidOperationException("the zoom label is not in the UIA tree");
+    }
+
+    /// <summary>
+    /// A sampled hash of the screen inside a region, once two captures a
+    /// moment apart agree. Zoom and pan leave no UIA evidence, so the pixels
+    /// are the witness; waiting for agreement keeps a repainting canvas from
+    /// passing as a gesture.
+    /// </summary>
+    private static ulong StableDigest(Rect rect, Point pointer)
+    {
+        SetCursorPos((int)Math.Round(pointer.X), (int)Math.Round(pointer.Y));
+        Thread.Sleep(300);
+        var previous = ScreenDigest(rect);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(400);
+            var current = ScreenDigest(rect);
+            if (current == previous)
+            {
+                return current;
+            }
+            previous = current;
+        }
+        throw new InvalidOperationException(
+            "the window kept repainting; there is no stable frame to compare");
+    }
+
+    private static ulong ScreenDigest(Rect rect)
+    {
+        var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
+                              GetSystemMetrics(SmCyScreen));
+        rect.Intersect(screen);
+        var width = (int)Math.Round(rect.Width);
+        var height = (int)Math.Round(rect.Height);
+        if (width < 8 || height < 8)
+        {
+            throw new InvalidOperationException(
+                $"the window {rect} has nothing on screen to capture");
+        }
+        using var bitmap = new System.Drawing.Bitmap(width, height);
+        using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+        {
+            graphics.CopyFromScreen((int)rect.X, (int)rect.Y, 0, 0,
+                                    new System.Drawing.Size(width, height),
+                                    System.Drawing.CopyPixelOperation.SourceCopy);
+        }
+        ulong hash = 14695981039346656037;
+        for (var y = 0; y < height; y += 8)
+        {
+            for (var x = 0; x < width; x += 8)
+            {
+                hash = (hash ^ (uint)bitmap.GetPixel(x, y).ToArgb()) * 1099511628211;
+            }
+        }
+        return hash;
     }
 
     private static void CloseCleanly(AutomationElement window, Process process)
