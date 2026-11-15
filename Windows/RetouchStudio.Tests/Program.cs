@@ -2095,19 +2095,16 @@ internal static class Program
             && Math.Abs(parts[0] - 35) < 0.001
             && Math.Abs(parts[1] - 41) < 0.001
             && Math.Abs(parts[2] - 12) < 0.001;
-        Check("the decoder reads the composed GPS latitude", latitude);
         if (capture is null)
         {
             Describe(decoded, "System.Photo.DateTaken");
         }
-        if (!latitude)
-        {
-            Describe(decoded, "System.GPS.Latitude");
-        }
 
-        // Diagnostics that separate "WIC cannot expose GPS" from "this block is
-        // malformed": the same decoder reads a JPEG macOS ImageIO wrote with a
-        // GPS IFD, and the composed block is printed for an independent reader.
+        // WIC's WinRT surface exposes no GPS for JPEG at all: this file, and a
+        // JPEG macOS ImageIO wrote with a GPS IFD, both report the property
+        // absent. So the block is gated through the parser above and an
+        // independent reader (see WINDOWS_FORMAT_AUDIT.md), and the WIC answer
+        // is printed as a diagnostic instead of asserted.
         var foreign = Path.Combine(RepoRoot(),
                                    "Windows/RetouchStudio.Tests/Fixtures/camera-gps.jpg");
         var foreignProperties = DecodeProperties(foreign, new[]
@@ -2115,13 +2112,10 @@ internal static class Program
             "System.GPS.Latitude",
             "System.Photo.DateTaken",
         }).GetAwaiter().GetResult();
+        Console.WriteLine($"  composed GPS through WIC: {(latitude ? "kept" : "absent")}");
         Console.WriteLine("  third-party GPS file:");
         Describe(foreignProperties, "System.GPS.Latitude");
         Describe(foreignProperties, "System.Photo.DateTaken");
-        if (composed is not null)
-        {
-            Console.WriteLine($"  composed EXIF: {Convert.ToBase64String(composed)}");
-        }
 
         // A TIFF source has no APP1 or eXIf block to copy, so the export path
         // must compose one from the properties the decoder reports for it.
