@@ -2685,7 +2685,6 @@ internal static class Program
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
     private const uint KeyUp = 0x0002;
-    private const byte VkReturn = 0x0D;
     private const byte VkControl = 0x11;
     private const byte VkA = 0x41;
 
