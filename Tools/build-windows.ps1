@@ -258,6 +258,12 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
         $uiApp $uiPhoto $uiRecoveryOutput recovery
     Assert-ExitCode 'UI recovery tests'
 
+    # The other answer: "No" must drop that copy and leave the next launch quiet.
+    $uiDeclineOutput = Join-Path $uiTemp 'retouchstudio-ui-recovery-no.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiDeclineOutput recoveryno
+    Assert-ExitCode 'UI recovery decline tests'
+
     # Export must name the edits this host cannot render; "No" writes nothing.
     $uiGuardOutput = Join-Path $uiTemp 'retouchstudio-ui-guard.jpg'
     & dotnet run --project $uiProject -c $Configuration -- `
