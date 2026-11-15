@@ -46,6 +46,7 @@ public static class ExifComposer
     public const ushort TagPixelYDimension = 0xA003;
     public const ushort TagWhiteBalance = 0xA403;
     public const ushort TagLensModel = 0xA434;
+    public const ushort TagGpsVersionId = 0x0000;
     public const ushort TagGpsLatitudeRef = 0x0001;
     public const ushort TagGpsLatitude = 0x0002;
     public const ushort TagGpsLongitudeRef = 0x0003;
@@ -141,6 +142,12 @@ public static class ExifComposer
                               new[] { (byte)(below ? 1 : 0) }));
             gps.Add(Rational(TagGpsAltitude, Math.Abs(altitude)));
             contributed = true;
+        }
+        if (gps.Count > 0)
+        {
+            // The GPS IFD starts with its version; readers use its presence to
+            // decide that the IFD follows the EXIF 2.3 layout at all.
+            gps.Add(new Entry(TagGpsVersionId, TypeByte, 4, new byte[] { 2, 3, 0, 0 }));
         }
 
         return contributed ? Serialize(ifd0, exif, gps) : null;

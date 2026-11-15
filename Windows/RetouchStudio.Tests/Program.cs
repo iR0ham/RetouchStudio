@@ -1513,6 +1513,24 @@ internal static class Program
         return await decoder.BitmapProperties.GetPropertiesAsync(keys);
     }
 
+    /// <summary>Prints what the platform decoder actually returned for a key.</summary>
+    private static void Describe(BitmapPropertySet set, string key)
+    {
+        if (!set.TryGetValue(key, out var typed))
+        {
+            Console.WriteLine($"  decoded {key}: absent");
+            return;
+        }
+        var value = typed.Value;
+        var text = value switch
+        {
+            double[] parts => string.Join(", ", parts),
+            null => "null",
+            _ => value.ToString(),
+        };
+        Console.WriteLine($"  decoded {key}: {value?.GetType().FullName} = {text}");
+    }
+
     /// <summary>
     /// Every pixel on this host is converted to sRGB at decode, so an export
     /// that declares nothing is read back as sRGB by convention rather than by
@@ -2019,9 +2037,25 @@ internal static class Program
         Check("a source with nothing to describe composes no block",
               ExifComposer.Build(new Dictionary<string, object>(), 72, 72) is null);
 
+        Check("the composed block records the capture time",
+              TiffText(composed, ExifComposer.TagDateTimeOriginal) == "2024:05:17 10:30:00");
+        Check("the composed block records the GPS position",
+              composed is not null
+              && FindTiffEntry(composed, ExifComposer.TagGpsLatitude, out var gpsType,
+                               out var gpsCount, out _, out _)
+              && gpsType == 5 && gpsCount == 3);
+
         var spliced = Path.Combine(root, "compose-spliced.jpg");
         codec.EncodeAsync(image, spliced, "jpeg", 0.95).GetAwaiter().GetResult();
         MetadataCarry.WriteJpeg(spliced, composed, null);
+        var splicedBlock = MetadataCarry.ReadExif(spliced);
+        Check("the spliced block keeps the capture time",
+              TiffText(splicedBlock, ExifComposer.TagDateTimeOriginal) == "2024:05:17 10:30:00");
+        Check("the spliced block keeps the GPS position",
+              splicedBlock is not null
+              && FindTiffEntry(splicedBlock, ExifComposer.TagGpsLatitude, out var keptType,
+                               out var keptCount, out _, out _)
+              && keptType == 5 && keptCount == 3);
         var read = codec.ReadMetadataAsync(spliced).GetAwaiter().GetResult();
         Check("the decoder reads the composed model",
               Text(read, "System.Photo.CameraModel") == "RS-Compose");
@@ -2037,11 +2071,16 @@ internal static class Program
             "System.GPS.Latitude",
             "System.GPS.Longitude",
         }).GetAwaiter().GetResult();
+        var capture = decoded.TryGetValue("System.Photo.DateTaken", out var taken)
+            ? taken.Value switch
+            {
+                DateTime date => (DateTime?)date,
+                DateTimeOffset offset => offset.DateTime,
+                _ => null,
+            }
+            : null;
         Check("the decoder reads the composed capture date",
-              decoded.TryGetValue("System.Photo.DateTaken", out var taken)
-              && taken.Value is DateTime date
-              && date.Year == 2024 && date.Month == 5 && date.Day == 17
-              && date.Hour == 10 && date.Minute == 30);
+              capture is { Year: 2024, Month: 5, Day: 17, Hour: 10, Minute: 30 });
         Check("the decoder reads the composed exposure",
               decoded.TryGetValue("System.Photo.ExposureTime", out var exposure)
               && exposure.Value is double seconds && Math.Abs(seconds - 0.008) < 0.0001);
@@ -2051,12 +2090,20 @@ internal static class Program
         Check("the decoder reads the composed lens",
               decoded.TryGetValue("System.Photo.LensModel", out var lens)
               && lens.Value is string name && name == "RF 50mm F1.8");
-        Check("the decoder reads the composed GPS latitude",
-              decoded.TryGetValue("System.GPS.Latitude", out var latitude)
-              && latitude.Value is double[] { Length: 3 } parts
-              && Math.Abs(parts[0] - 35) < 0.001
-              && Math.Abs(parts[1] - 41) < 0.001
-              && Math.Abs(parts[2] - 12) < 0.001);
+        var latitude = decoded.TryGetValue("System.GPS.Latitude", out var rawLatitude)
+            && rawLatitude.Value is double[] { Length: 3 } parts
+            && Math.Abs(parts[0] - 35) < 0.001
+            && Math.Abs(parts[1] - 41) < 0.001
+            && Math.Abs(parts[2] - 12) < 0.001;
+        Check("the decoder reads the composed GPS latitude", latitude);
+        if (capture is null)
+        {
+            Describe(decoded, "System.Photo.DateTaken");
+        }
+        if (!latitude)
+        {
+            Describe(decoded, "System.GPS.Latitude");
+        }
 
         // A TIFF source has no APP1 or eXIf block to copy, so the export path
         // must compose one from the properties the decoder reports for it.
@@ -2249,20 +2296,24 @@ internal static class Program
         {
             return false;
         }
-        var ifd = ReadTiffU32(tiff, 4, little);
-        for (var pass = 0; pass < 2; pass++)
+        // IFD0, then the Exif and GPS sub-IFDs it points at; no directory is
+        // visited twice, so a self-referential pointer cannot loop.
+        var pending = new Queue<uint>();
+        pending.Enqueue(ReadTiffU32(tiff, 4, little));
+        var visited = new HashSet<uint>();
+        while (pending.Count > 0 && visited.Count < 4)
         {
-            if (ifd > int.MaxValue || (long)ifd + 2 > tiff.Length)
+            var ifd = pending.Dequeue();
+            if (!visited.Add(ifd) || ifd > int.MaxValue || (long)ifd + 2 > tiff.Length)
             {
-                return false;
+                continue;
             }
             var at = (int)ifd;
             var total = ReadTiffU16(tiff, at, little);
             if (total > 4096 || (long)at + 2 + 12L * total > tiff.Length)
             {
-                return false;
+                continue;
             }
-            uint? sub = null;
             for (var index = 0; index < total; index++)
             {
                 var candidate = at + 2 + 12 * index;
@@ -2274,18 +2325,13 @@ internal static class Program
                     entry = candidate;
                     return true;
                 }
-                if (tag == 0x8769
+                if ((tag == 0x8769 || tag == 0x8825)
                     && ReadTiffU16(tiff, candidate + 2, little) == 4
                     && ReadTiffU32(tiff, candidate + 4, little) >= 1)
                 {
-                    sub = ReadTiffU32(tiff, candidate + 8, little);
+                    pending.Enqueue(ReadTiffU32(tiff, candidate + 8, little));
                 }
             }
-            if (sub is not { } next)
-            {
-                return false;
-            }
-            ifd = next;
         }
         return false;
     }
