@@ -8,6 +8,9 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Threading;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Imaging;
 
@@ -22,7 +25,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]
+///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,13 +42,13 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]");
+                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "recoveryno" or "guard" or "project"
                         or "batch" or "crop" or "compare" or "zoom" or "batchcancel"
-                        or "errors"))
+                        or "errors" or "drop"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -126,6 +129,10 @@ internal static class Program
             else if (mode == "errors")
             {
                 RunErrors(process, photo, output);
+            }
+            else if (mode == "drop")
+            {
+                RunDrop(process, photo, output);
             }
             else
             {
@@ -1365,6 +1372,318 @@ internal static class Program
     }
 
     /// <summary>
+    /// Drop-to-open is an OLE operation no UIA pattern can express. The drag
+    /// source is a real WPF drag: a helper STA thread shows a small window at
+    /// the press point, the test presses inside it, and the window's own
+    /// pressed-button move starts DragDrop.DoDragDrop, so OLE's source owns a
+    /// capture that began on a genuine click. The moves then carry the pointer
+    /// into PreviewHost and the release drops the photo there; the opened title
+    /// plus the exported file prove the drop reached the same open path the
+    /// dialogs use.
+    /// </summary>
+    private static void RunDrop(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException(
+                "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        // The launcher passed no photo, so a title with the photo's name after
+        // the drop can only come from the drop.
+        if (window.Current.Name != "Retouch Studio")
+        {
+            throw new InvalidOperationException(
+                $"the app did not start as an empty editor; the title is " +
+                $"'{window.Current.Name}'");
+        }
+
+        var windowRect = FitWindowToScreen(window);
+        // PreviewHost is the canvas column left of the 336-pixel accordion and
+        // below the top bar. It is a bare Grid with no automation peer, so its
+        // centre is found from the window rectangle, not from the tree.
+        var target = new Point(
+            windowRect.X + Math.Max(40, (windowRect.Width - 336) / 2),
+            windowRect.Y + windowRect.Height / 2);
+        var start = new Point(target.X - 80, target.Y);
+        var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
+                              GetSystemMetrics(SmCyScreen));
+        if (!screen.Contains(start) || !screen.Contains(target))
+        {
+            throw new InvalidOperationException(
+                $"the canvas at {target} is off the screen {screen}");
+        }
+
+        // Not disposed: a failing check can leave the helper waiting on one of
+        // them, and ManualResetEventSlim only allocates a handle when a wait
+        // handle is explicitly requested.
+        var helperReady = new ManualResetEventSlim(false);
+        var dragReturned = new ManualResetEventSlim(false);
+        Application? helperApp = null;
+        var helperHandle = IntPtr.Zero;
+        string? helperFailure = null;
+        string? dragFailure = null;
+        var dragStarted = new int[1];
+        var pressedMoves = new int[1];
+        var dragEffect = DragDropEffects.None;
+
+        void ShutHelperDown()
+        {
+            // BeginInvokeShutdown is the only shutdown member that is safe
+            // from another thread. It throws once the dispatcher has begun
+            // shutting down, which the check and the catch both cover.
+            var dispatcher = helperApp?.Dispatcher;
+            if (dispatcher is null || dispatcher.HasShutdownStarted
+                || dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+            try
+            {
+                dispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        var helper = new Thread(() =>
+        {
+            Application? app = null;
+            try
+            {
+                app = new Application
+                {
+                    ShutdownMode = ShutdownMode.OnExplicitShutdown,
+                };
+                helperApp = app;
+                var source = new Window
+                {
+                    Width = 24,
+                    Height = 24,
+                    SizeToContent = SizeToContent.Manual,
+                    WindowStyle = WindowStyle.None,
+                    ResizeMode = ResizeMode.NoResize,
+                    Topmost = true,
+                    ShowInTaskbar = false,
+                    Background = System.Windows.Media.Brushes.White,
+                };
+                source.PreviewMouseLeftButtonDown += (_, down) =>
+                {
+                    // The drag only exists if the press reached this window;
+                    // capturing keeps the button state flowing to it while the
+                    // pointer leaves.
+                    var captured = source.CaptureMouse();
+                    Console.WriteLine(
+                        $"  drop helper: button down at {down.GetPosition(source)}; " +
+                        $"mouse captured: {captured}");
+                };
+                source.PreviewMouseMove += (_, move) =>
+                {
+                    if (move.LeftButton != MouseButtonState.Pressed)
+                    {
+                        return;
+                    }
+                    Interlocked.Increment(ref pressedMoves[0]);
+                    if (Interlocked.Exchange(ref dragStarted[0], 1) != 0)
+                    {
+                        return;
+                    }
+                    // The canonical WPF drag: the window is the source, the
+                    // photo travels as CF_HDROP, and WPF's own drag loop ends
+                    // the drag on the button release.
+                    Console.WriteLine("  drop helper: a pressed-button move arrived; " +
+                                      "DoDragDrop starts");
+                    try
+                    {
+                        var data = new DataObject(
+                            DataFormats.FileDrop, new[] { photo });
+                        dragEffect = DragDrop.DoDragDrop(
+                            source, data, DragDropEffects.Copy);
+                        Console.WriteLine(
+                            $"  drop helper: DoDragDrop returned {dragEffect}; " +
+                            "the drag ended on the button-up");
+                    }
+                    catch (Exception error)
+                    {
+                        dragFailure = $"{error.GetType().Name}: {error.Message}";
+                    }
+                    finally
+                    {
+                        source.ReleaseMouseCapture();
+                        dragReturned.Set();
+                    }
+                };
+                source.Show();
+                // Window.Left/Top are DIPs and the press point is a device
+                // coordinate; the window's own DPI converts between them, so
+                // the helper really sits under the press.
+                var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(source);
+                source.Left = start.X / dpi.DpiScaleX;
+                source.Top = start.Y / dpi.DpiScaleY;
+                source.UpdateLayout();
+                helperHandle = new WindowInteropHelper(source).Handle;
+                Console.WriteLine(
+                    $"  drop helper: a {source.ActualWidth}x{source.ActualHeight} " +
+                    $"window covers {source.Left:0},{source.Top:0} at " +
+                    $"{dpi.PixelsPerInchX:0} dpi");
+                helperReady.Set();
+                app.Run();
+            }
+            catch (Exception error)
+            {
+                helperFailure = $"{error.GetType().Name}: {error.Message}";
+                Console.WriteLine($"  drop helper: {helperFailure}");
+                helperReady.Set();
+            }
+            finally
+            {
+                // A helper that failed before Run left nothing to wait for.
+                dragReturned.Set();
+                if (app is not null && !app.Dispatcher.HasShutdownStarted)
+                {
+                    try
+                    {
+                        app.Dispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WPF drop helper",
+        };
+        helper.SetApartmentState(ApartmentState.STA);
+        helper.Start();
+
+        try
+        {
+            if (!helperReady.Wait(TimeSpan.FromSeconds(15)))
+            {
+                throw new InvalidOperationException(
+                    "the drop helper never showed its window");
+            }
+            if (helperFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper failed: {helperFailure}");
+            }
+            SetForegroundWindow(helperHandle);
+            Thread.Sleep(300);
+            var down = new NativePoint
+            {
+                X = (int)Math.Round(start.X),
+                Y = (int)Math.Round(start.Y),
+            };
+            // The press must land on the helper, or no drag starts at all.
+            var under = WindowFromPoint(down);
+            if (under != helperHandle)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper's window 0x{helperHandle.ToInt64():X} is not " +
+                    $"under the press point ({down.X},{down.Y}); the window there " +
+                    $"is 0x{under.ToInt64():X}");
+            }
+            SetCursorPos(down.X, down.Y);
+            Thread.Sleep(150);
+            Console.WriteLine($"  pressing at {down.X},{down.Y} inside the drop " +
+                              $"helper and dragging to {target.X:0},{target.Y:0}");
+            mouse_event(MouseLeftDown, 0, 0, 0, IntPtr.Zero);
+            // WPF must see the down before a move can start the drag.
+            Thread.Sleep(400);
+
+            const int steps = 12;
+            for (var step = 1; step <= steps; step++)
+            {
+                MovePointer(start.X + (target.X - start.X) * step / steps,
+                            start.Y + (target.Y - start.Y) * step / steps);
+                Thread.Sleep(50);
+            }
+            var arrival = new NativePoint
+            {
+                X = (int)Math.Round(target.X),
+                Y = (int)Math.Round(target.Y),
+            };
+            if (!PointBelongsToProcess(arrival, process.Id))
+            {
+                mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+                throw new InvalidOperationException(
+                    $"the drag left the preview: ({arrival.X},{arrival.Y}) is not over " +
+                    $"the app; the window is {windowRect}");
+            }
+            // The release must land inside PreviewHost so the drop goes to the
+            // app's target; WPF's drag source ends the drag on that button-up.
+            mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+
+            if (!dragReturned.Wait(TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    Volatile.Read(ref dragStarted[0]) == 0
+                        ? "the drop helper never started the drag: its window saw " +
+                          $"{Volatile.Read(ref pressedMoves[0])} pressed-button " +
+                          "moves, so DoDragDrop was never called"
+                        : "DoDragDrop in the drop helper never returned after the " +
+                          $"button was released; the helper saw " +
+                          $"{Volatile.Read(ref pressedMoves[0])} pressed-button moves");
+            }
+            if (dragFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper's DoDragDrop failed: {dragFailure}");
+            }
+            if (Volatile.Read(ref dragStarted[0]) == 0)
+            {
+                throw new InvalidOperationException(
+                    "the drop helper never started the drag: its window saw " +
+                    $"{Volatile.Read(ref pressedMoves[0])} pressed-button moves, " +
+                    "so DoDragDrop was never called");
+            }
+            if (dragEffect != DragDropEffects.Copy)
+            {
+                throw new InvalidOperationException(
+                    $"the drop ended with effect {dragEffect}, not Copy (ended by: " +
+                    "WPF's drag source on the button-up); PreviewHost never " +
+                    "accepted the file drop");
+            }
+            Ok("the helper's own DragDrop.DoDragDrop dropped with Copy");
+            Ok("the drag ended by: WPF's drag source on the injected button-up");
+        }
+        finally
+        {
+            // However this ended, the helper must not keep the process alive
+            // or its window on screen during the evidence checks.
+            ShutHelperDown();
+        }
+
+        var photoName = Path.GetFileName(photo);
+        var opened = WaitFor(
+            () => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+            TimeSpan.FromSeconds(90));
+        if (!opened)
+        {
+            throw new InvalidOperationException(
+                $"the drop did not open the photo; the title is '{window.Current.Name}'; " +
+                $"the status says {DescribeTexts(window)}");
+        }
+        Ok($"the drop opened the photo: '{window.Current.Name}'");
+
+        var written = ExportTo(window, process, mainHandle, output);
+        var source = PhotoSize(photo);
+        if (written.Width != source.Width || written.Height != source.Height)
+        {
+            throw new InvalidOperationException(
+                $"the export is {written.Width}x{written.Height}, the photo is " +
+                $"{source.Width}x{source.Height}");
+        }
+        Ok($"the dropped photo exported at its own {written.Width}x{written.Height}");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
     /// The zoom dock's label: "Fit", or the percentage it shows. A button
     /// exposes its caption as a Text element too, and the export panel shows a
     /// quality percentage, so the label is picked by where it sits: between the
@@ -2092,6 +2411,22 @@ internal static class Program
     }
 
     /// <summary>
+    /// Whether the top-level window under a screen point belongs to the app.
+    /// A drop lands on whatever window is under the pointer, so the gesture is
+    /// checked against a hit test instead of trusting the UIA rectangle.
+    /// </summary>
+    private static bool PointBelongsToProcess(NativePoint point, int processId)
+    {
+        var window = WindowFromPoint(point);
+        if (window == IntPtr.Zero)
+        {
+            return false;
+        }
+        GetWindowThreadProcessId(window, out var owner);
+        return owner == (uint)processId;
+    }
+
+    /// <summary>
     /// The first visible top-level window of the app other than the one named.
     /// A click that opens a dialog has to produce such a window; the caption is
     /// the dialog's own choice and is reported, not asserted.
@@ -2666,6 +3001,27 @@ internal static class Program
         Thread.Sleep(250);
     }
 
+    /// <summary>
+    /// Moves the pointer with SetCursorPos and then with an absolute
+    /// mouse_event move. The cursor move alone may not be delivered as input
+    /// while OLE's drag loop owns the mouse; the injected move is the input
+    /// message a drag loop sees, carrying the button state with it.
+    /// </summary>
+    private static void MovePointer(double x, double y)
+    {
+        var screenWidth = Math.Max(2, GetSystemMetrics(SmCxScreen));
+        var screenHeight = Math.Max(2, GetSystemMetrics(SmCyScreen));
+        SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
+        // MOUSEEVENTF_ABSOLUTE takes 0..65535 across the primary screen.
+        mouse_event(
+            MouseMoveAbsolute,
+            (uint)Math.Round(Math.Clamp(x, 0, screenWidth - 1) * 65535.0
+                             / (screenWidth - 1)),
+            (uint)Math.Round(Math.Clamp(y, 0, screenHeight - 1) * 65535.0
+                             / (screenHeight - 1)),
+            0, IntPtr.Zero);
+    }
+
     [DllImport("user32.dll")]
     private static extern bool SetCursorPos(int x, int y);
 
@@ -2703,6 +3059,7 @@ internal static class Program
 
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
+    private const uint MouseMoveAbsolute = 0x0001 | 0x8000;
     private const uint KeyUp = 0x0002;
     private const byte VkControl = 0x11;
     private const byte VkA = 0x41;

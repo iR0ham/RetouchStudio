@@ -164,8 +164,14 @@ before upload, so a release carries one installer version, not two.
   cancellation is checked headlessly, but no automated check presses the
   button. Cancellation is cooperative between files, so a very large photo in
   flight finishes before the batch stops.
-- No drag-out of the app, no recent-files list and no settings window; the
-  drop-in open is the only drag gesture, and no automated check performs it.
+- No drag-out of the app, no recent-files list and no settings window. The
+  drop-in open is the only drag gesture, and the UI harness now performs it: a
+  helper WPF window starts a real `DragDrop.DoDragDrop` from a press on its own
+  24×24 window, OLE ends the drag on the injected button-up over the canvas
+  with `DROPEFFECT_COPY`, the dropped photo opens, and the export decodes at
+  the source size (Windows App job, run 43712286626, commit `89c9683`; the mode
+  runs from `Tools/build-windows.ps1` on `windows-2025`). The pointer input is
+  injected, not a physical mouse, and no drag-out is covered.
 - No 16-bit JPEG path. A 16-bit PNG or TIFF source previews through the
   16-bit pipeline and exports keep 16-bit samples for PNG and TIFF; the JPEG
   encoder is 8-bit.

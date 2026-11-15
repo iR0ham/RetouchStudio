@@ -317,6 +317,14 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiErrorOutput errors
     Assert-ExitCode 'UI error tests'
+
+    # Drop-to-open is an OLE drop no UIA pattern can express: a helper drag
+    # source drops the photo on the preview. The opened title and the exported
+    # file prove the drop reached the same open path the dialogs use.
+    $uiDropOutput = Join-Path $uiTemp 'retouchstudio-ui-drop.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiDropOutput drop
+    Assert-ExitCode 'UI drop tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted

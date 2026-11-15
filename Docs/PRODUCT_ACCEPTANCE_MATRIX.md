@@ -34,12 +34,20 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 ## What a green CI run does not prove
 
 - Interactive Windows behaviour the harness does not yet drive: crop overlay
-  drag, compare divider drag, pointer zoom/pan, drop-to-open, multi-select in
-  the batch picker, batch progress and cancellation, and the failure paths of
-  project open/save.
+  drag, compare divider drag, pointer zoom/pan, multi-select in the batch
+  picker, batch progress and cancellation, and the failure paths of project
+  open/save.
 - macOS window launch and clean-machine installation.
 - Rendering parity for straighten and freeform crop across hosts.
 - Real AI inference, notarization, or an update feed.
 
 These limits are requirements of the plan, not temporary caveats: the matrix
 must carry them until evidence exists.
+
+One of them is now met: the drop-in open is driven by the UiTests harness. A
+helper WPF window starts `DragDrop.DoDragDrop` from a real press on its own
+window, OLE ends the drag on the injected button-up over the canvas with
+`DROPEFFECT_COPY`, the dropped photo opens, and its export decodes at the source
+size (Windows App job, run 43712286626, commit `89c9683`; the mode runs from
+`Tools/build-windows.ps1` on `windows-2025`). The input is injected, not a
+physical mouse or touchscreen, and no drag-out is covered.
