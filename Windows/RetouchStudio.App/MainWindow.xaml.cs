@@ -590,7 +590,8 @@ public partial class MainWindow : Window
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (!_vm.HasDocument || !ConfirmUnsupportedEdits("the exported photo"))
+        if (!_vm.HasDocument || _vm.IsExportRunning || _vm.IsBatchRunning ||
+            !ConfirmUnsupportedEdits("the exported photo"))
         {
             return;
         }
@@ -622,6 +623,11 @@ public partial class MainWindow : Window
         {
             await _vm.ExportAsync(dialog.FileName);
         }
+        catch (OperationCanceledException)
+        {
+            // A deliberate cancel is not a failure; the status line already
+            // says the export was cancelled.
+        }
         catch (Exception error)
         {
             Report("The photo could not be exported", error);
@@ -630,7 +636,8 @@ public partial class MainWindow : Window
 
     private async void BatchExport_Click(object sender, RoutedEventArgs e)
     {
-        if (!_vm.HasDocument || !ConfirmUnsupportedEdits("the batch export"))
+        if (!_vm.HasDocument || _vm.IsExportRunning ||
+            !ConfirmUnsupportedEdits("the batch export"))
         {
             return;
         }
@@ -673,6 +680,8 @@ public partial class MainWindow : Window
     }
 
     private void CancelBatch_Click(object sender, RoutedEventArgs e) => _vm.CancelBatch();
+
+    private void CancelExport_Click(object sender, RoutedEventArgs e) => _vm.CancelExport();
 
     private void Undo_Click(object sender, RoutedEventArgs e) => _vm.Undo();
 

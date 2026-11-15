@@ -56,6 +56,9 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
         }
     }
 
+    /// Both single exports (`renderAndWrite`) and batch files reach here. A
+    /// task cancelled while the bytes are being written must not commit them:
+    /// the write is abandoned, so the cancelled file leaves nothing behind.
     func write(_ output: RenderedExport, request: RenderRequest,
                source: ExportSource, to destination: URL,
                protecting protectedURL: URL?) throws -> RenderResult {
@@ -68,7 +71,8 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
                                          colorSpace: colorSpace,
                                          metadata: source.metadata,
                                          xmp: source.xmp,
-                                         protecting: protectedURL) {
+                                         protecting: protectedURL,
+                                         isCancelled: { Task.isCancelled }) {
         case .written:
             return RenderResult(destination: destination,
                                 pixelSize: plan.pixelSize,
@@ -80,6 +84,8 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
                                 carriedSourceMetadata: output.carriesSourceMetadata)
         case .refusedOriginal:
             throw RenderError.sourceIsDestination
+        case .cancelled:
+            throw RenderError.cancelled
         case .failed:
             throw RenderError.writeFailed
         }

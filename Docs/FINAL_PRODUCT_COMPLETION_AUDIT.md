@@ -42,7 +42,22 @@ resource byte for byte, while PNG and TIFF carry none (run 43663201459). Gate F'
 compare divider, zoom/pan, batch progress and Cancel Batch, multi-select in the
 picker and the photo open/export failure reports are driven (runs 43681175327,
 43696215085), as is drop-to-open through a helper drag source (run 43712286626);
-the failure paths of project open/save are still not driven.
+the open/save failure paths were still not driven at that point.
+
+**2026-11-15 addendum (reliability completion, run 43736047883 on `089a413`).**
+Gate E's "interrupted saves … and mid-render cancellation not verified" is
+stale for the paths now tested: a cancel inside an 8-bit or 16-bit export write
+stops it after the encoder, deletes the temp and leaves an existing destination
+intact; a refused save (held project, directory target) keeps the earlier file
+and the dirty flag and a retry succeeds; a working slot that cannot be lifted is
+never overwritten by an autosave, and a restore whose write fails re-locks the
+slot; the stale sweep removes only the exact sibling temp names. Disk-full, shutdown ordering and a real OS-produced write failure
+remain unexercised, and the encode is not interrupted mid-encode. The Windows
+host now prints `WINDOWS HOST TESTS: PASS (370 checks)`, so the "184 checks"
+line in §1 is also point-in-time. The open/save failure paths are now driven
+through their dialogs: a corrupt project, a save onto a held file and an export
+onto a held file each report, keep the open photo in place and leave the held
+bytes untouched.
 
 ## 3. Requirement audit against the plan
 
