@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Automation;
 using RetouchStudio.Core.Project;
@@ -18,7 +20,8 @@ namespace RetouchStudio.UiTests;
 /// slider, export through the Save dialog, and read the written file back with
 /// the real codec.
 ///
-///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt; [golden|recovery]
+///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
+///       [golden|recovery|guard|project|batch|crop]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -35,11 +38,11 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch]");
+                "[golden|recovery|guard|project|batch|crop]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
-        if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"))
+        if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch" or "crop"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -96,6 +99,10 @@ internal static class Program
             else if (mode == "batch")
             {
                 RunBatch(process, photo, output);
+            }
+            else if (mode == "crop")
+            {
+                RunCrop(process, photo, output);
             }
             else
             {
@@ -647,25 +654,7 @@ internal static class Program
         var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
         Ok("the app opened a window UIA can see");
 
-        var open = FindButton(window, "Open Photo")
-            ?? throw new InvalidOperationException("the Open Photo button is missing");
-        Invoke(open);
-        var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(90))
-            ?? throw new InvalidOperationException("the Open dialog never appeared");
-        Ok("Open Photo opened its dialog");
-
-        SetFileName(openDialog, photo);
-        PressDefaultButton(openDialog, "Open");
-        var photoName = Path.GetFileName(photo);
-        var opened = WaitFor(
-            () => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
-            TimeSpan.FromSeconds(90));
-        if (!opened)
-        {
-            throw new InvalidOperationException(
-                $"the photo did not open; the title is '{window.Current.Name}'");
-        }
-        Ok($"the photo opened: '{window.Current.Name}'");
+        OpenPhoto(window, process, photo);
 
         var slider = FindSlider(window, "Exposure")
             ?? throw new InvalidOperationException("the Exposure slider is missing");
@@ -718,6 +707,187 @@ internal static class Program
             ?? throw new InvalidOperationException("the Fit button is missing");
         Invoke(fit);
 
+        var photoSize = PhotoSize(photo);
+        var written = ExportTo(window, process, mainHandle, output);
+        if (written.Width != photoSize.Width || written.Height != photoSize.Height)
+        {
+            throw new InvalidOperationException(
+                $"the export is {written.Width}x{written.Height}, the photo is " +
+                $"{photoSize.Width}x{photoSize.Height}");
+        }
+        Ok($"the exported file decodes at the photo's {written.Width}x{written.Height}");
+
+        // The slider edit is still unsaved; undo it so Closing has nothing to
+        // ask about, then close like a person would.
+        var undo = FindButton(window, "Undo");
+        if (undo is not null)
+        {
+            Invoke(undo);
+        }
+        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
+        close.Close();
+        if (!process.WaitForExit(30_000))
+        {
+            DismissClosePrompt(process.Id);
+            if (!process.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the app did not close");
+            }
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"the app exited with {process.ExitCode}");
+        }
+        Ok("the app closed cleanly");
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// The crop path proves a pointer gesture, which no UIA pattern can
+    /// express: the bottom-right handle is dragged with injected mouse input,
+    /// the size badge is read before and after, and the applied crop is
+    /// exported. The written frame must equal the badge, so the drag reached
+    /// the same crop maths the headless checks cover.
+    /// </summary>
+    private static void RunCrop(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException(
+                "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        OpenPhoto(window, process, photo);
+
+        var custom = FindButton(window, "Custom…")
+            ?? throw new InvalidOperationException("the Custom crop button is missing");
+        Invoke(custom);
+        var handles = WaitForHandles(window, "Crop corner handle", 4, TimeSpan.FromSeconds(15));
+        if (handles is null)
+        {
+            throw new InvalidOperationException(
+                "the crop overlay showed fewer than four handles; the texts are " +
+                DescribeTexts(window));
+        }
+        Ok("the crop overlay opened with four corner handles");
+
+        var before = CropBadgeSize(window)
+            ?? throw new InvalidOperationException(
+                $"the crop badge shows no size; the texts are {DescribeTexts(window)}");
+        var corner = handles.OrderByDescending(item =>
+            item.Current.BoundingRectangle.Right + item.Current.BoundingRectangle.Bottom).First();
+        var rect = corner.Current.BoundingRectangle;
+        if (rect.IsEmpty || rect.Width < 1 || rect.Height < 1)
+        {
+            throw new InvalidOperationException(
+                "the bottom-right crop handle has no screen bounds");
+        }
+        SetForegroundWindow(mainHandle);
+        Thread.Sleep(300);
+        Drag(rect.X + rect.Width / 2, rect.Y + rect.Height / 2, dx: -70, dy: -45);
+        var resized = WaitFor(() => CropBadgeSize(window) is { } size && size != before,
+                              TimeSpan.FromSeconds(10));
+        var after = CropBadgeSize(window);
+        if (!resized || after is not { } cropped)
+        {
+            throw new InvalidOperationException(
+                $"the drag left the badge at {before.Width}×{before.Height}");
+        }
+        if (cropped.Width >= before.Width || cropped.Height >= before.Height)
+        {
+            throw new InvalidOperationException(
+                $"the drag grew the crop from {before.Width}×{before.Height} to " +
+                $"{cropped.Width}×{cropped.Height}");
+        }
+        Ok($"dragging the corner shrank the crop from {before.Width}×{before.Height} " +
+           $"to {cropped.Width}×{cropped.Height}");
+
+        var apply = FindButton(window, "Apply crop")
+            ?? throw new InvalidOperationException("the Apply crop button is missing");
+        Invoke(apply);
+        if (!WaitFor(() => FindText(window, "Custom") is not null, TimeSpan.FromSeconds(10)))
+        {
+            throw new InvalidOperationException(
+                "the crop label never named the drawn frame; the texts are " +
+                DescribeTexts(window));
+        }
+        Ok("Apply crop committed the drawn frame");
+
+        var written = ExportTo(window, process, mainHandle, output);
+        if (written.Width != cropped.Width || written.Height != cropped.Height)
+        {
+            throw new InvalidOperationException(
+                $"the export is {written.Width}x{written.Height}, the badge said " +
+                $"{cropped.Width}×{cropped.Height}");
+        }
+        Ok($"the exported crop is the badge's {written.Width}x{written.Height}");
+
+        var undo = FindButton(window, "Undo");
+        if (undo is not null)
+        {
+            Invoke(undo);
+        }
+        var close = (WindowPattern)window.Current.GetCurrentPattern(WindowPattern.Pattern);
+        close.Close();
+        if (!process.WaitForExit(30_000))
+        {
+            DismissClosePrompt(process.Id);
+            if (!process.WaitForExit(15_000))
+            {
+                throw new InvalidOperationException("the app did not close");
+            }
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"the app exited with {process.ExitCode}");
+        }
+        Ok("the app closed cleanly");
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Opens a photo through the Open Photo dialog and waits for the window
+    /// title to name it. The golden path and the crop path share it, so both
+    /// prove the same entry point.
+    /// </summary>
+    private static void OpenPhoto(AutomationElement window, Process process, string photo)
+    {
+        var open = FindButton(window, "Open Photo")
+            ?? throw new InvalidOperationException("the Open Photo button is missing");
+        Invoke(open);
+        var openDialog = WaitWindow(process.Id, "Open Photo", TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        Ok("Open Photo opened its dialog");
+
+        SetFileName(openDialog, photo);
+        PressDefaultButton(openDialog, "Open");
+        var photoName = Path.GetFileName(photo);
+        var opened = WaitFor(
+            () => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+            TimeSpan.FromSeconds(90));
+        if (!opened)
+        {
+            throw new InvalidOperationException(
+                $"the photo did not open; the title is '{window.Current.Name}'");
+        }
+        Ok($"the photo opened: '{window.Current.Name}'");
+    }
+
+    private static (int Width, int Height) PhotoSize(string path)
+    {
+        var size = new WindowsImageCodec().ReadSizeAsync(path).GetAwaiter().GetResult();
+        return (size.Width, size.Height);
+    }
+
+    /// <summary>
+    /// Exports through the Export button and its Save dialog, waits for the
+    /// file, and decodes what was written. The caller decides what the size
+    /// must mean: the whole photo, or the crop the overlay shows.
+    /// </summary>
+    private static (int Width, int Height) ExportTo(AutomationElement window, Process process,
+                                                    IntPtr mainHandle, string output)
+    {
         var export = FindButton(window, "Export")
             ?? throw new InvalidOperationException("the Export button is missing");
         Invoke(export);
@@ -778,40 +948,9 @@ internal static class Program
         Ok($"the export wrote {new FileInfo(output).Length} bytes");
 
         var codec = new WindowsImageCodec();
-        var source = codec.ReadSizeAsync(photo).GetAwaiter().GetResult();
         var written = codec.ReadSizeAsync(output).GetAwaiter().GetResult();
-        if (written.Width != source.Width || written.Height != source.Height)
-        {
-            throw new InvalidOperationException(
-                $"the export is {written.Width}x{written.Height}, the photo is " +
-                $"{source.Width}x{source.Height}");
-        }
-        Ok($"the exported file decodes at the photo's {written.Width}x{written.Height}");
-
-        // The slider edit is still unsaved; undo it so Closing has nothing to
-        // ask about, then close like a person would.
-        var undo = FindButton(window, "Undo");
-        if (undo is not null)
-        {
-            Invoke(undo);
-        }
-        var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
-        close.Close();
-        if (!process.WaitForExit(30_000))
-        {
-            DismissClosePrompt(process.Id);
-            if (!process.WaitForExit(15_000))
-            {
-                throw new InvalidOperationException("the app did not close");
-            }
-        }
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException(
-                $"the app exited with {process.ExitCode}");
-        }
-        Ok("the app closed cleanly");
-        Console.WriteLine("UI HOST TESTS: PASS");
+        Ok($"the exported file decodes at {written.Width}x{written.Height}");
+        return (written.Width, written.Height);
     }
 
     /// <summary>
@@ -1292,6 +1431,83 @@ internal static class Program
         }
         Invoke(button);
     }
+
+    /// <summary>The Thumb controls, once the crop overlay has laid them out.</summary>
+    private static List<AutomationElement>? WaitForHandles(AutomationElement window, string name,
+                                                          int wanted, TimeSpan patience)
+    {
+        List<AutomationElement>? found = null;
+        WaitFor(() =>
+        {
+            var current = window.FindAll(
+                    TreeScope.Descendants,
+                    new AndCondition(
+                        new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                              ControlType.Thumb),
+                        new PropertyCondition(AutomationElement.NameProperty, name)))
+                .Cast<AutomationElement>()
+                .ToList();
+            found = current;
+            return current.Count >= wanted;
+        }, patience);
+        return found is not null && found.Count >= wanted ? found : null;
+    }
+
+    /// <summary>
+    /// The crop overlay's "width × height" badge, in source pixels, or null
+    /// when no badge is on screen.
+    /// </summary>
+    private static (int Width, int Height)? CropBadgeSize(AutomationElement window)
+    {
+        foreach (AutomationElement item in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var match = Regex.Match(item.Current.Name, @"^(\d[\d,]*)\s*×\s*(\d[\d,]*)$");
+            if (match.Success
+                && int.TryParse(match.Groups[1].Value, NumberStyles.AllowThousands,
+                                CultureInfo.InvariantCulture, out var width)
+                && int.TryParse(match.Groups[2].Value, NumberStyles.AllowThousands,
+                                CultureInfo.InvariantCulture, out var height))
+            {
+                return (width, height);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// A real left-button drag in screen pixels. WPF's Thumb reports DragDelta
+    /// only for pointer input, so an automation client must move the pointer.
+    /// </summary>
+    private static void Drag(double x, double y, double dx, double dy, int steps = 12)
+    {
+        SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
+        Thread.Sleep(150);
+        mouse_event(MouseLeftDown, 0, 0, 0, IntPtr.Zero);
+        for (var step = 1; step <= steps; step++)
+        {
+            SetCursorPos((int)Math.Round(x + dx * step / steps),
+                         (int)Math.Round(y + dy * step / steps));
+            Thread.Sleep(30);
+        }
+        mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+        Thread.Sleep(250);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint flags, uint dx, uint dy,
+                                           uint data, IntPtr extra);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    private const uint MouseLeftDown = 0x0002;
+    private const uint MouseLeftUp = 0x0004;
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr extra);
