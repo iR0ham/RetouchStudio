@@ -1513,6 +1513,33 @@ func testProjectV4Capabilities() {
     }
 }
 
+@MainActor
+func testProjectV5Capabilities() {
+    print("\n[R4.8] v5 refuses a required capability this build does not have")
+
+    let project = fullV4Project()
+    let supported = (try? ProjectCodec.encodeV5(
+        project, requiredFeatures: ["portable_geometry"]))
+        .flatMap { try? ProjectCodec.read($0) }
+    check(supported?.context.version == 5,
+          "the portable geometry requirement is supported by v5")
+
+    guard let unsupported = try? ProjectCodec.encodeV5(
+            project, requiredFeatures: ["future_geometry"]) else {
+        check(false, "the unsupported v5 fixture encodes")
+        return
+    }
+    do {
+        _ = try ProjectCodec.read(unsupported)
+        check(false, "a v5 file with an unsupported requirement is refused")
+    } catch ProjectCodecError.unsupportedFeatures(let features) {
+        check(features == ["future_geometry"], "the v5 refusal names the capability",
+              "\(features)")
+    } catch {
+        check(false, "the v5 refusal is a capability error", "\(error)")
+    }
+}
+
 /// A v4 file keeps unknown data at every depth: inside known objects, inside
 /// the objects of a known array, and inside the arrays and objects nested in
 /// those. The capture is a diff, so a later save keeps the data without letting
@@ -6566,6 +6593,7 @@ func runAll() async {
     testProjectV4FixtureCrossArchitecture()
     testProjectUnknownFieldsSurvive()
     testProjectV4Capabilities()
+    testProjectV5Capabilities()
     testProjectV4NestedUnknownFieldsArePreserved()
     testProjectV4UnknownFieldsFollowArrayRecords()
     testProjectV3NestedCaptureIsAbsent()
