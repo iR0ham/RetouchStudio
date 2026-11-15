@@ -2335,6 +2335,102 @@ func testCancelBetweenRenderAndWrite() async {
           leftovers.joined(separator: ", "))
 }
 
+// MARK: - Completion
+
+@MainActor
+func testExportCancelsBeforeCommit() async {
+    print("\n[R6-X] a cancel at the commit point leaves nothing behind")
+
+    let prefix = "commit-cancel-\(UUID().uuidString.prefix(8))"
+    let sourceURL = workDir.appendingPathComponent("\(prefix)-source.png")
+    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: sourceURL) else {
+        check(false, "commit-cancel fixture")
+        return
+    }
+    let model = EditorModel()
+    model.load(url: sourceURL)
+    model.exportFormat = .png
+    check(await waitUntil { model.hasImage && !model.isBusy }, "commit-cancel fixture loads")
+
+    // Same request and source the batch path builds, so the pixels written
+    // here are the pixels the app would write.
+    guard let snapshot = model.makeExportSnapshot(),
+          let loaded = ImageProcessor.shared.load(from: sourceURL,
+                                                  previewMaxDimension: 1024) else {
+        check(false, "the render request and its source exist")
+        return
+    }
+    let source = ExportSource(image: loaded.sourceFull,
+                              masks: nil,
+                              faces: loaded.faces,
+                              photoAspect: loaded.pixelSize.width / loaded.pixelSize.height,
+                              colorSpace: loaded.colorSpace,
+                              metadata: loaded.metadata,
+                              xmp: loaded.xmp)
+
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("rs-commit-cancel-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    let destination = scratch.appendingPathComponent("photo.png")
+
+    guard let rendered = try? MacDocumentRenderer().render(snapshot, source: source,
+                                                           progress: nil) else {
+        check(false, "the export renders before its commit")
+        return
+    }
+    let result = ExportService.writeResult(rendered, snapshot: snapshot, to: destination,
+                                           colorSpace: source.colorSpace,
+                                           metadata: source.metadata, xmp: source.xmp,
+                                           protecting: sourceURL,
+                                           isCancelled: { true })
+    check(result == .cancelled, "a commit-point cancel reports cancelled", "\(result)")
+    check(!FileManager.default.fileExists(atPath: destination.path),
+          "a commit-point cancel writes no destination")
+    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: scratch.path))?
+        .filter { $0.hasPrefix(".\(destination.lastPathComponent).") && $0.hasSuffix(".tmp") } ?? []
+    check(leftovers.isEmpty, "a commit-point cancel leaves no temp sibling",
+          leftovers.joined(separator: ", "))
+}
+
+@MainActor
+func testStaleExportTempsAreSweptSafely() async {
+    print("\n[R6-X] stale export temps are swept without touching other files")
+
+    let fm = FileManager.default
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("rs-stale-temps-\(UUID().uuidString)", isDirectory: true)
+    try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: scratch) }
+
+    let destination = scratch.appendingPathComponent("photo.jpg")
+    let oldTemp = scratch.appendingPathComponent(".photo.jpg.\(UUID().uuidString).tmp")
+    let freshTemp = scratch.appendingPathComponent(".photo.jpg.\(UUID().uuidString).tmp")
+    let unrelatedTemp = scratch.appendingPathComponent(".notes.tmp")
+    let userFile = scratch.appendingPathComponent("photo.jpg")
+    for fixture in [oldTemp, freshTemp, unrelatedTemp, userFile] {
+        check(fm.createFile(atPath: fixture.path, contents: Data("x".utf8)),
+              "fixture written: \(fixture.lastPathComponent)")
+    }
+
+    let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+    do {
+        try fm.setAttributes([.modificationDate: fixedNow.addingTimeInterval(-25 * 60 * 60)],
+                             ofItemAtPath: oldTemp.path)
+        try fm.setAttributes([.modificationDate: fixedNow.addingTimeInterval(-60)],
+                             ofItemAtPath: freshTemp.path)
+    } catch {
+        check(false, "the fixture ages can be set", "\(error)")
+    }
+
+    let removed = ExportService.sweepStaleSiblingTemps(for: destination, now: fixedNow)
+    check(removed == 1, "exactly the stale matching temp is swept", "\(removed)")
+    check(!fm.fileExists(atPath: oldTemp.path), "the 25-hour-old matching temp is gone")
+    check(fm.fileExists(atPath: freshTemp.path), "a fresh matching temp survives")
+    check(fm.fileExists(atPath: unrelatedTemp.path), "an unrelated .tmp survives")
+    check(fm.fileExists(atPath: userFile.path), "the user's own file survives")
+}
+
 // MARK: - P1-8
 
 @MainActor
@@ -6607,6 +6703,8 @@ func runAll() async {
     testBatchPlannerUpscaleAndNaming()
     await testOperationCoordination()
     await testCancelBetweenRenderAndWrite()
+    await testExportCancelsBeforeCommit()
+    await testStaleExportTempsAreSweptSafely()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()
     await testPreviewStaysAtPreviewResolution()

@@ -80,6 +80,8 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
                                 carriedSourceMetadata: output.carriesSourceMetadata)
         case .refusedOriginal:
             throw RenderError.sourceIsDestination
+        case .cancelled:
+            throw RenderError.cancelled
         case .failed:
             throw RenderError.writeFailed
         }
