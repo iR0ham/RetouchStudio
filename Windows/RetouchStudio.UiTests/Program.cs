@@ -429,10 +429,12 @@ internal static class Program
     }
 
     /// <summary>
-    /// Both failure paths end in a message box a person can read: a corrupt
-    /// photo must be named as unopenable, and a destination another program
-    /// holds open must fail the export without touching that file. The app
-    /// must stay open and usable after each one.
+    /// Every failure path ends in a message box a person can read, and none of
+    /// them may cost the document that was open: a corrupt photo, a corrupt
+    /// project and a save onto a file another program holds all fail without
+    /// replacing what the window shows. A destination another program holds
+    /// open must also fail the export without touching that file. The app must
+    /// stay open and usable after each one.
     /// </summary>
     private static void RunErrors(Process process, string photo, string output)
     {
@@ -440,6 +442,10 @@ internal static class Program
             ?? throw new InvalidOperationException("the main window never appeared");
         var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
         Ok("the app opened a window UIA can see");
+
+        // A good photo first: every failure below is judged against it.
+        OpenPhoto(window, process, photo);
+        var openTitle = window.Current.Name;
 
         var broken = Path.ChangeExtension(output, ".broken" + Path.GetExtension(photo));
         File.WriteAllText(broken, "this is not a photo");
@@ -460,14 +466,124 @@ internal static class Program
                 DescribeAppWindows(process.Id));
         }
         Ok($"a corrupt photo is reported: {openError}");
-        if (process.HasExited || !window.Current.Name.StartsWith("Retouch Studio", StringComparison.Ordinal))
+        if (process.HasExited)
+        {
+            throw new InvalidOperationException("the app exited on a corrupt photo");
+        }
+        if (!WaitFor(() => window.Current.Name == openTitle, TimeSpan.FromSeconds(15)))
         {
             throw new InvalidOperationException(
-                $"the app did not survive the failed open; the title is " +
-                $"'{window.Current.Name}'");
+                $"a corrupt photo replaced the open document; the title is " +
+                $"'{window.Current.Name}' instead of '{openTitle}'");
         }
+        var export = FindButton(window, "Export")
+            ?? throw new InvalidOperationException("the Export button is missing");
+        if (!WaitFor(() => export.Current.IsEnabled, TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                "Export is disabled after a corrupt photo, so the document is gone");
+        }
+        Ok("a corrupt photo left the previous photo open and Export enabled");
 
-        OpenPhoto(window, process, photo);
+        // A project file the codec cannot read is the same promise: a message,
+        // and the photo that was open stays the document.
+        var brokenProject = Path.ChangeExtension(output, ".broken.retouch");
+        File.WriteAllText(brokenProject, "{ this is not a project");
+        var openProject = FindButton(window, "Open Project")
+            ?? throw new InvalidOperationException("the Open Project button is missing");
+        Invoke(openProject);
+        var projectDialogHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(60))
+            ?? throw new InvalidOperationException("the Open Project dialog never appeared");
+        var projectDialog = AutomationElement.FromHandle(projectDialogHandle);
+        SetFileName(projectDialog, brokenProject);
+        PressDefaultButton(projectDialog, "Open");
+
+        var projectError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (projectError is null
+            || !projectError.Contains("project could not be opened", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"opening a corrupt project said {projectError ?? "nothing"}; " +
+                "the app's windows are " + DescribeAppWindows(process.Id));
+        }
+        Ok($"a corrupt project is reported: {projectError}");
+        if (process.HasExited)
+        {
+            throw new InvalidOperationException("the app exited on a corrupt project");
+        }
+        if (!WaitFor(() => window.Current.Name == openTitle, TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"a corrupt project replaced the open document; the title is " +
+                $"'{window.Current.Name}' instead of '{openTitle}'");
+        }
+        Ok("a corrupt project left the previous photo open");
+
+        // Saving onto a file another program holds with no sharing cannot
+        // publish its bytes. The previous project must survive untouched.
+        var lockedProject = Path.ChangeExtension(output, ".locked.retouch");
+        var projectSentinel = Encoding.UTF8.GetBytes("the project that was here before");
+        File.WriteAllBytes(lockedProject, projectSentinel);
+        using (new FileStream(lockedProject, FileMode.Open, FileAccess.ReadWrite,
+                              FileShare.None))
+        {
+            var saveProject = FindButton(window, "Save Project")
+                ?? throw new InvalidOperationException("the Save Project button is missing");
+            Invoke(saveProject);
+            var projectSaveHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(60))
+                ?? throw new InvalidOperationException("the Save Project click opened no dialog");
+            var projectSaveDialog = AutomationElement.FromHandle(projectSaveHandle);
+            var projectSaveEdit = SetFileName(projectSaveDialog, lockedProject);
+            CommitFileName(projectSaveEdit);
+            var projectReplace = WaitForReplacePrompt(process.Id, projectSaveHandle,
+                                                      TimeSpan.FromSeconds(10));
+            if (projectReplace is null && IsWindowVisible(projectSaveHandle))
+            {
+                PressDefaultButton(projectSaveDialog, "Save");
+                projectReplace = WaitForReplacePrompt(process.Id, projectSaveHandle,
+                                                      TimeSpan.FromSeconds(20));
+                if (projectReplace is null && IsWindowVisible(projectSaveHandle))
+                {
+                    throw new InvalidOperationException(
+                        "the Save Project dialog never offered to replace the locked file; " +
+                        DescribeWindow(projectSaveDialog));
+                }
+            }
+            if (projectReplace is not null)
+            {
+                Invoke(projectReplace);
+            }
+            if (!WaitFor(() => !IsWindowVisible(projectSaveHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the Save Project dialog stayed open; " +
+                    DescribeWindow(projectSaveDialog));
+            }
+
+            var saveError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+            if (saveError is null
+                || !saveError.Contains("could not be saved", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"saving onto a locked file said {saveError ?? "nothing"}; " +
+                    "the app's windows are " + DescribeAppWindows(process.Id));
+            }
+            Ok($"a locked project destination is reported: {saveError}");
+        }
+        // The lock is released first: a handle opened with no sharing blocks
+        // this process's own read as well, and the point is the bytes on disk.
+        if (!File.ReadAllBytes(lockedProject).SequenceEqual(projectSentinel))
+        {
+            throw new InvalidOperationException(
+                "the failed save changed the locked project file");
+        }
+        Ok("the failed save left the locked project untouched");
+        if (!WaitFor(() => window.Current.Name == openTitle, TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"a failed save replaced the open document; the title is " +
+                $"'{window.Current.Name}' instead of '{openTitle}'");
+        }
 
         // A file another program holds with no sharing cannot be written. The
         // Save dialog still offers to replace it, which is the moment the write
@@ -477,8 +593,6 @@ internal static class Program
         File.WriteAllBytes(locked, placeholder);
         using var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite,
                                         FileShare.None);
-        var export = FindButton(window, "Export")
-            ?? throw new InvalidOperationException("the Export button is missing");
         Invoke(export);
         var saveHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
             ?? throw new InvalidOperationException("the Export click opened no dialog");
