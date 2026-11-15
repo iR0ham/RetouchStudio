@@ -35,9 +35,11 @@ wrong 16-bit claim corrupts nothing visible but everything numeric.
   converted and stays within 3 levels of the measured sRGB points at 8 bits and
   4 at 16 ("a Display P3 photo is colour-managed to sRGB on decode", "the
   16-bit export path is colour-managed the same way").
-- Wide-gamut values outside sRGB are clipped by that conversion. This is the
-  same trade-off macOS documents, and it is the known W4-4 gap: the source
-  profile is not carried to the output.
+- Wide-gamut values outside sRGB are clipped by that conversion. Since
+  2026-11-15 this is the approved 1.0 policy (W4-4 Option A, see
+  `Docs/OUTPUT_COLOR_POLICY.md`), not a gap: macOS now converts wide-gamut
+  sources to sRGB as well, so neither host carries the source profile to the
+  output.
 - Exports embed a generated ICC v2 sRGB profile instead of relying on
   convention: JPEG as an APP2 `ICC_PROFILE` block, PNG as an `iCCP` chunk
   ("an exported JPEG declares an RGB display profile", "an exported PNG

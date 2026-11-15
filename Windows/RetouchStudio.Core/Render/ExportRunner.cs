@@ -1,3 +1,4 @@
+using RetouchStudio.Core.IO;
 using RetouchStudio.Core.Project;
 
 namespace RetouchStudio.Core.Render;
@@ -59,8 +60,10 @@ public static class ExportRunner
                                                      string format,
                                                      double quality,
                                                      int longEdge,
-                                                     bool stripPrivacyMetadata = true)
+                                                     bool stripPrivacyMetadata = true,
+                                                     CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var document = session.Document;
         var sourcePath = document.ImagePath;
         if (string.IsNullOrEmpty(sourcePath))
@@ -68,7 +71,8 @@ public static class ExportRunner
             throw new InvalidOperationException("the document has no photo");
         }
         return await ExportSourceAsync(document, codec, sourcePath, destination,
-                                       format, quality, longEdge, stripPrivacyMetadata);
+                                       format, quality, longEdge, stripPrivacyMetadata,
+                                       cancellationToken);
     }
 
     /// <summary>
@@ -83,8 +87,10 @@ public static class ExportRunner
                                                            string format,
                                                            double quality,
                                                            int longEdge,
-                                                           bool stripPrivacyMetadata = true)
+                                                           bool stripPrivacyMetadata = true,
+                                                           CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (SameFile(sourcePath, destination))
         {
             throw new InvalidOperationException(
@@ -113,38 +119,73 @@ public static class ExportRunner
         var metadata = plan.CarriesSourceMetadata
             ? await codec.ReadMetadataAsync(sourcePath)
             : Imaging.ImageMetadata.Empty;
+        cancellationToken.ThrowIfCancellationRequested();
 
-        // The plan decides the depth. PNG and TIFF are 16-bit containers in the
-        // shared contract, so an export to either keeps 16-bit pixels instead
-        // of reducing them to the preview's 8-bit buffer.
-        if (plan.BitsPerChannel >= 16)
+        var fullDestination = Path.GetFullPath(destination);
+        // A dot-prefixed sibling with a unique name: two exports into the same
+        // folder cannot collide. A temp left behind by a crash is swept first,
+        // so the folder does not grow one stale file per interrupted export.
+        var temporary = TemporaryFiles.SiblingTempPath(fullDestination);
+        TemporaryFiles.SweepStaleSiblings(fullDestination);
+        try
         {
-            var decoded = await codec.Decode16Async(sourcePath);
-            var rendered = RenderDocument16(decoded, document);
-            var edge = FitLongEdge(document, plan, longEdge);
-            if (edge > 0)
+            // The plan decides the depth. PNG and TIFF are 16-bit containers in
+            // the shared contract, so an export to either keeps 16-bit pixels
+            // instead of reducing them to the preview's 8-bit buffer.
+            if (plan.BitsPerChannel >= 16)
             {
-                rendered = rendered.ResizeLongEdge(edge);
+                var decoded = await codec.Decode16Async(sourcePath);
+                cancellationToken.ThrowIfCancellationRequested();
+                var rendered = RenderDocument16(decoded, document);
+                var edge = FitLongEdge(document, plan, longEdge);
+                if (edge > 0)
+                {
+                    rendered = rendered.ResizeLongEdge(edge);
+                }
+                if (plan.FlattensAlpha)
+                {
+                    rendered = rendered.FlattenOntoWhite();
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                await codec.Encode16Async(rendered, temporary, plan.Format,
+                                          metadata, stripPrivacyMetadata);
             }
-            if (plan.FlattensAlpha)
+            else
             {
-                rendered = rendered.FlattenOntoWhite();
+                var decoded = await codec.DecodeAsync(sourcePath);
+                cancellationToken.ThrowIfCancellationRequested();
+                var rendered = RenderDocument(decoded, document);
+                var edge = FitLongEdge(document, plan, longEdge);
+                if (edge > 0)
+                {
+                    rendered = rendered.ResizeLongEdge(edge);
+                }
+                var output = plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered;
+                cancellationToken.ThrowIfCancellationRequested();
+                await codec.EncodeAsync(output, temporary, plan.Format, quality,
+                                        metadata, stripPrivacyMetadata);
             }
-            await codec.Encode16Async(rendered, destination, plan.Format,
-                                      metadata, stripPrivacyMetadata);
+
+            // A cancel that arrives after the encode must not publish the file:
+            // the check sits between the finished encode and the rename.
+            cancellationToken.ThrowIfCancellationRequested();
+            // Publish the temp by rename, so a codec failure, a full disk or a
+            // crash cannot leave a partial destination.
+            TemporaryFiles.Publish(temporary, fullDestination);
         }
-        else
+        catch
         {
-            var decoded = await codec.DecodeAsync(sourcePath);
-            var rendered = RenderDocument(decoded, document);
-            var edge = FitLongEdge(document, plan, longEdge);
-            if (edge > 0)
+            try
             {
-                rendered = rendered.ResizeLongEdge(edge);
+                File.Delete(temporary);
             }
-            await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,
-                                    destination, plan.Format, quality,
-                                    metadata, stripPrivacyMetadata);
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+            throw;
         }
         return plan;
     }

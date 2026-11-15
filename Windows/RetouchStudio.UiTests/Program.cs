@@ -8,6 +8,11 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Threading;
+using RetouchStudio.Core.Imaging;
+using RetouchStudio.Core.IO;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Imaging;
 
@@ -22,7 +27,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]
+///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop|exportcancel|exportclose]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,13 +44,13 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]");
+                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors|drop|exportcancel|exportclose]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
         if (mode is not ("golden" or "recovery" or "recoveryno" or "guard" or "project"
                         or "batch" or "crop" or "compare" or "zoom" or "batchcancel"
-                        or "errors"))
+                        or "errors" or "drop" or "exportcancel" or "exportclose"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -126,6 +131,18 @@ internal static class Program
             else if (mode == "errors")
             {
                 RunErrors(process, photo, output);
+            }
+            else if (mode == "drop")
+            {
+                RunDrop(process, photo, output);
+            }
+            else if (mode == "exportcancel")
+            {
+                RunExportCancel(process, output);
+            }
+            else if (mode == "exportclose")
+            {
+                RunExportClose(process, output);
             }
             else
             {
@@ -422,10 +439,12 @@ internal static class Program
     }
 
     /// <summary>
-    /// Both failure paths end in a message box a person can read: a corrupt
-    /// photo must be named as unopenable, and a destination another program
-    /// holds open must fail the export without touching that file. The app
-    /// must stay open and usable after each one.
+    /// Every failure path ends in a message box a person can read, and none of
+    /// them may cost the document that was open: a corrupt photo, a corrupt
+    /// project and a save onto a file another program holds all fail without
+    /// replacing what the window shows. A destination another program holds
+    /// open must also fail the export without touching that file. The app must
+    /// stay open and usable after each one.
     /// </summary>
     private static void RunErrors(Process process, string photo, string output)
     {
@@ -433,6 +452,10 @@ internal static class Program
             ?? throw new InvalidOperationException("the main window never appeared");
         var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
         Ok("the app opened a window UIA can see");
+
+        // A good photo first: every failure below is judged against it.
+        OpenPhoto(window, process, photo);
+        var openTitle = window.Current.Name;
 
         var broken = Path.ChangeExtension(output, ".broken" + Path.GetExtension(photo));
         File.WriteAllText(broken, "this is not a photo");
@@ -453,14 +476,124 @@ internal static class Program
                 DescribeAppWindows(process.Id));
         }
         Ok($"a corrupt photo is reported: {openError}");
-        if (process.HasExited || !window.Current.Name.StartsWith("Retouch Studio", StringComparison.Ordinal))
+        if (process.HasExited)
+        {
+            throw new InvalidOperationException("the app exited on a corrupt photo");
+        }
+        if (!WaitFor(() => window.Current.Name == openTitle, TimeSpan.FromSeconds(15)))
         {
             throw new InvalidOperationException(
-                $"the app did not survive the failed open; the title is " +
-                $"'{window.Current.Name}'");
+                $"a corrupt photo replaced the open document; the title is " +
+                $"'{window.Current.Name}' instead of '{openTitle}'");
         }
+        var export = FindButton(window, "Export")
+            ?? throw new InvalidOperationException("the Export button is missing");
+        if (!WaitFor(() => export.Current.IsEnabled, TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                "Export is disabled after a corrupt photo, so the document is gone");
+        }
+        Ok("a corrupt photo left the previous photo open and Export enabled");
 
-        OpenPhoto(window, process, photo);
+        // A project file the codec cannot read is the same promise: a message,
+        // and the photo that was open stays the document.
+        var brokenProject = Path.ChangeExtension(output, ".broken.retouch");
+        File.WriteAllText(brokenProject, "{ this is not a project");
+        var openProject = FindButton(window, "Open Project")
+            ?? throw new InvalidOperationException("the Open Project button is missing");
+        Invoke(openProject);
+        var projectDialogHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(60))
+            ?? throw new InvalidOperationException("the Open Project dialog never appeared");
+        var projectDialog = AutomationElement.FromHandle(projectDialogHandle);
+        SetFileName(projectDialog, brokenProject);
+        PressDefaultButton(projectDialog, "Open");
+
+        var projectError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (projectError is null
+            || !projectError.Contains("project could not be opened", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"opening a corrupt project said {projectError ?? "nothing"}; " +
+                "the app's windows are " + DescribeAppWindows(process.Id));
+        }
+        Ok($"a corrupt project is reported: {projectError}");
+        if (process.HasExited)
+        {
+            throw new InvalidOperationException("the app exited on a corrupt project");
+        }
+        if (!WaitFor(() => window.Current.Name == openTitle, TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"a corrupt project replaced the open document; the title is " +
+                $"'{window.Current.Name}' instead of '{openTitle}'");
+        }
+        Ok("a corrupt project left the previous photo open");
+
+        // Saving onto a file another program holds with no sharing cannot
+        // publish its bytes. The previous project must survive untouched.
+        var lockedProject = Path.ChangeExtension(output, ".locked.retouch");
+        var projectSentinel = Encoding.UTF8.GetBytes("the project that was here before");
+        File.WriteAllBytes(lockedProject, projectSentinel);
+        using (new FileStream(lockedProject, FileMode.Open, FileAccess.ReadWrite,
+                              FileShare.None))
+        {
+            var saveProject = FindButton(window, "Save Project")
+                ?? throw new InvalidOperationException("the Save Project button is missing");
+            Invoke(saveProject);
+            var projectSaveHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(60))
+                ?? throw new InvalidOperationException("the Save Project click opened no dialog");
+            var projectSaveDialog = AutomationElement.FromHandle(projectSaveHandle);
+            var projectSaveEdit = SetFileName(projectSaveDialog, lockedProject);
+            CommitFileName(projectSaveEdit);
+            var projectReplace = WaitForReplacePrompt(process.Id, projectSaveHandle,
+                                                      TimeSpan.FromSeconds(10));
+            if (projectReplace is null && IsWindowVisible(projectSaveHandle))
+            {
+                PressDefaultButton(projectSaveDialog, "Save");
+                projectReplace = WaitForReplacePrompt(process.Id, projectSaveHandle,
+                                                      TimeSpan.FromSeconds(20));
+                if (projectReplace is null && IsWindowVisible(projectSaveHandle))
+                {
+                    throw new InvalidOperationException(
+                        "the Save Project dialog never offered to replace the locked file; " +
+                        DescribeWindow(projectSaveDialog));
+                }
+            }
+            if (projectReplace is not null)
+            {
+                Invoke(projectReplace);
+            }
+            if (!WaitFor(() => !IsWindowVisible(projectSaveHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the Save Project dialog stayed open; " +
+                    DescribeWindow(projectSaveDialog));
+            }
+
+            var saveError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+            if (saveError is null
+                || !saveError.Contains("could not be saved", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"saving onto a locked file said {saveError ?? "nothing"}; " +
+                    "the app's windows are " + DescribeAppWindows(process.Id));
+            }
+            Ok($"a locked project destination is reported: {saveError}");
+        }
+        // The lock is released first: a handle opened with no sharing blocks
+        // this process's own read as well, and the point is the bytes on disk.
+        if (!File.ReadAllBytes(lockedProject).SequenceEqual(projectSentinel))
+        {
+            throw new InvalidOperationException(
+                "the failed save changed the locked project file");
+        }
+        Ok("the failed save left the locked project untouched");
+        if (!WaitFor(() => window.Current.Name == openTitle, TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"a failed save replaced the open document; the title is " +
+                $"'{window.Current.Name}' instead of '{openTitle}'");
+        }
 
         // A file another program holds with no sharing cannot be written. The
         // Save dialog still offers to replace it, which is the moment the write
@@ -470,8 +603,6 @@ internal static class Program
         File.WriteAllBytes(locked, placeholder);
         using var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite,
                                         FileShare.None);
-        var export = FindButton(window, "Export")
-            ?? throw new InvalidOperationException("the Export button is missing");
         Invoke(export);
         var saveHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
             ?? throw new InvalidOperationException("the Export click opened no dialog");
@@ -1365,6 +1496,318 @@ internal static class Program
     }
 
     /// <summary>
+    /// Drop-to-open is an OLE operation no UIA pattern can express. The drag
+    /// source is a real WPF drag: a helper STA thread shows a small window at
+    /// the press point, the test presses inside it, and the window's own
+    /// pressed-button move starts DragDrop.DoDragDrop, so OLE's source owns a
+    /// capture that began on a genuine click. The moves then carry the pointer
+    /// into PreviewHost and the release drops the photo there; the opened title
+    /// plus the exported file prove the drop reached the same open path the
+    /// dialogs use.
+    /// </summary>
+    private static void RunDrop(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException(
+                "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        // The launcher passed no photo, so a title with the photo's name after
+        // the drop can only come from the drop.
+        if (window.Current.Name != "Retouch Studio")
+        {
+            throw new InvalidOperationException(
+                $"the app did not start as an empty editor; the title is " +
+                $"'{window.Current.Name}'");
+        }
+
+        var windowRect = FitWindowToScreen(window);
+        // PreviewHost is the canvas column left of the 336-pixel accordion and
+        // below the top bar. It is a bare Grid with no automation peer, so its
+        // centre is found from the window rectangle, not from the tree.
+        var target = new Point(
+            windowRect.X + Math.Max(40, (windowRect.Width - 336) / 2),
+            windowRect.Y + windowRect.Height / 2);
+        var start = new Point(target.X - 80, target.Y);
+        var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
+                              GetSystemMetrics(SmCyScreen));
+        if (!screen.Contains(start) || !screen.Contains(target))
+        {
+            throw new InvalidOperationException(
+                $"the canvas at {target} is off the screen {screen}");
+        }
+
+        // Not disposed: a failing check can leave the helper waiting on one of
+        // them, and ManualResetEventSlim only allocates a handle when a wait
+        // handle is explicitly requested.
+        var helperReady = new ManualResetEventSlim(false);
+        var dragReturned = new ManualResetEventSlim(false);
+        Application? helperApp = null;
+        var helperHandle = IntPtr.Zero;
+        string? helperFailure = null;
+        string? dragFailure = null;
+        var dragStarted = new int[1];
+        var pressedMoves = new int[1];
+        var dragEffect = DragDropEffects.None;
+
+        void ShutHelperDown()
+        {
+            // BeginInvokeShutdown is the only shutdown member that is safe
+            // from another thread. It throws once the dispatcher has begun
+            // shutting down, which the check and the catch both cover.
+            var dispatcher = helperApp?.Dispatcher;
+            if (dispatcher is null || dispatcher.HasShutdownStarted
+                || dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+            try
+            {
+                dispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        var helper = new Thread(() =>
+        {
+            Application? app = null;
+            try
+            {
+                app = new Application
+                {
+                    ShutdownMode = ShutdownMode.OnExplicitShutdown,
+                };
+                helperApp = app;
+                var source = new Window
+                {
+                    Width = 24,
+                    Height = 24,
+                    SizeToContent = SizeToContent.Manual,
+                    WindowStyle = WindowStyle.None,
+                    ResizeMode = ResizeMode.NoResize,
+                    Topmost = true,
+                    ShowInTaskbar = false,
+                    Background = System.Windows.Media.Brushes.White,
+                };
+                source.PreviewMouseLeftButtonDown += (_, down) =>
+                {
+                    // The drag only exists if the press reached this window;
+                    // capturing keeps the button state flowing to it while the
+                    // pointer leaves.
+                    var captured = source.CaptureMouse();
+                    Console.WriteLine(
+                        $"  drop helper: button down at {down.GetPosition(source)}; " +
+                        $"mouse captured: {captured}");
+                };
+                source.PreviewMouseMove += (_, move) =>
+                {
+                    if (move.LeftButton != MouseButtonState.Pressed)
+                    {
+                        return;
+                    }
+                    Interlocked.Increment(ref pressedMoves[0]);
+                    if (Interlocked.Exchange(ref dragStarted[0], 1) != 0)
+                    {
+                        return;
+                    }
+                    // The canonical WPF drag: the window is the source, the
+                    // photo travels as CF_HDROP, and WPF's own drag loop ends
+                    // the drag on the button release.
+                    Console.WriteLine("  drop helper: a pressed-button move arrived; " +
+                                      "DoDragDrop starts");
+                    try
+                    {
+                        var data = new DataObject(
+                            DataFormats.FileDrop, new[] { photo });
+                        dragEffect = DragDrop.DoDragDrop(
+                            source, data, DragDropEffects.Copy);
+                        Console.WriteLine(
+                            $"  drop helper: DoDragDrop returned {dragEffect}; " +
+                            "the drag ended on the button-up");
+                    }
+                    catch (Exception error)
+                    {
+                        dragFailure = $"{error.GetType().Name}: {error.Message}";
+                    }
+                    finally
+                    {
+                        source.ReleaseMouseCapture();
+                        dragReturned.Set();
+                    }
+                };
+                source.Show();
+                // Window.Left/Top are DIPs and the press point is a device
+                // coordinate; the window's own DPI converts between them, so
+                // the helper really sits under the press.
+                var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(source);
+                source.Left = start.X / dpi.DpiScaleX;
+                source.Top = start.Y / dpi.DpiScaleY;
+                source.UpdateLayout();
+                helperHandle = new WindowInteropHelper(source).Handle;
+                Console.WriteLine(
+                    $"  drop helper: a {source.ActualWidth}x{source.ActualHeight} " +
+                    $"window covers {source.Left:0},{source.Top:0} at " +
+                    $"{dpi.PixelsPerInchX:0} dpi");
+                helperReady.Set();
+                app.Run();
+            }
+            catch (Exception error)
+            {
+                helperFailure = $"{error.GetType().Name}: {error.Message}";
+                Console.WriteLine($"  drop helper: {helperFailure}");
+                helperReady.Set();
+            }
+            finally
+            {
+                // A helper that failed before Run left nothing to wait for.
+                dragReturned.Set();
+                if (app is not null && !app.Dispatcher.HasShutdownStarted)
+                {
+                    try
+                    {
+                        app.Dispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WPF drop helper",
+        };
+        helper.SetApartmentState(ApartmentState.STA);
+        helper.Start();
+
+        try
+        {
+            if (!helperReady.Wait(TimeSpan.FromSeconds(15)))
+            {
+                throw new InvalidOperationException(
+                    "the drop helper never showed its window");
+            }
+            if (helperFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper failed: {helperFailure}");
+            }
+            SetForegroundWindow(helperHandle);
+            Thread.Sleep(300);
+            var down = new NativePoint
+            {
+                X = (int)Math.Round(start.X),
+                Y = (int)Math.Round(start.Y),
+            };
+            // The press must land on the helper, or no drag starts at all.
+            var under = WindowFromPoint(down);
+            if (under != helperHandle)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper's window 0x{helperHandle.ToInt64():X} is not " +
+                    $"under the press point ({down.X},{down.Y}); the window there " +
+                    $"is 0x{under.ToInt64():X}");
+            }
+            SetCursorPos(down.X, down.Y);
+            Thread.Sleep(150);
+            Console.WriteLine($"  pressing at {down.X},{down.Y} inside the drop " +
+                              $"helper and dragging to {target.X:0},{target.Y:0}");
+            mouse_event(MouseLeftDown, 0, 0, 0, IntPtr.Zero);
+            // WPF must see the down before a move can start the drag.
+            Thread.Sleep(400);
+
+            const int steps = 12;
+            for (var step = 1; step <= steps; step++)
+            {
+                MovePointer(start.X + (target.X - start.X) * step / steps,
+                            start.Y + (target.Y - start.Y) * step / steps);
+                Thread.Sleep(50);
+            }
+            var arrival = new NativePoint
+            {
+                X = (int)Math.Round(target.X),
+                Y = (int)Math.Round(target.Y),
+            };
+            if (!PointBelongsToProcess(arrival, process.Id))
+            {
+                mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+                throw new InvalidOperationException(
+                    $"the drag left the preview: ({arrival.X},{arrival.Y}) is not over " +
+                    $"the app; the window is {windowRect}");
+            }
+            // The release must land inside PreviewHost so the drop goes to the
+            // app's target; WPF's drag source ends the drag on that button-up.
+            mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+
+            if (!dragReturned.Wait(TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    Volatile.Read(ref dragStarted[0]) == 0
+                        ? "the drop helper never started the drag: its window saw " +
+                          $"{Volatile.Read(ref pressedMoves[0])} pressed-button " +
+                          "moves, so DoDragDrop was never called"
+                        : "DoDragDrop in the drop helper never returned after the " +
+                          $"button was released; the helper saw " +
+                          $"{Volatile.Read(ref pressedMoves[0])} pressed-button moves");
+            }
+            if (dragFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper's DoDragDrop failed: {dragFailure}");
+            }
+            if (Volatile.Read(ref dragStarted[0]) == 0)
+            {
+                throw new InvalidOperationException(
+                    "the drop helper never started the drag: its window saw " +
+                    $"{Volatile.Read(ref pressedMoves[0])} pressed-button moves, " +
+                    "so DoDragDrop was never called");
+            }
+            if (dragEffect != DragDropEffects.Copy)
+            {
+                throw new InvalidOperationException(
+                    $"the drop ended with effect {dragEffect}, not Copy (ended by: " +
+                    "WPF's drag source on the button-up); PreviewHost never " +
+                    "accepted the file drop");
+            }
+            Ok("the helper's own DragDrop.DoDragDrop dropped with Copy");
+            Ok("the drag ended by: WPF's drag source on the injected button-up");
+        }
+        finally
+        {
+            // However this ended, the helper must not keep the process alive
+            // or its window on screen during the evidence checks.
+            ShutHelperDown();
+        }
+
+        var photoName = Path.GetFileName(photo);
+        var opened = WaitFor(
+            () => window.Current.Name.Contains(photoName, StringComparison.Ordinal),
+            TimeSpan.FromSeconds(90));
+        if (!opened)
+        {
+            throw new InvalidOperationException(
+                $"the drop did not open the photo; the title is '{window.Current.Name}'; " +
+                $"the status says {DescribeTexts(window)}");
+        }
+        Ok($"the drop opened the photo: '{window.Current.Name}'");
+
+        var written = ExportTo(window, process, mainHandle, output);
+        var source = PhotoSize(photo);
+        if (written.Width != source.Width || written.Height != source.Height)
+        {
+            throw new InvalidOperationException(
+                $"the export is {written.Width}x{written.Height}, the photo is " +
+                $"{source.Width}x{source.Height}");
+        }
+        Ok($"the dropped photo exported at its own {written.Width}x{written.Height}");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
     /// The zoom dock's label: "Fit", or the percentage it shows. A button
     /// exposes its caption as a Text element too, and the export panel shows a
     /// quality percentage, so the label is picked by where it sits: between the
@@ -1640,6 +2083,284 @@ internal static class Program
     }
 
     /// <summary>
+    /// A photo large enough that its export is still running when the harness
+    /// acts. Sixteen-bit samples with per-pixel noise: the PNG is both slow to
+    /// decode and slow to encode, so the cancel and the close land inside the
+    /// work instead of after it.
+    /// </summary>
+    private static string MakeBusyPhoto(string folder)
+    {
+        const int width = 4000;
+        const int height = 3000;
+        var buffer = new PixelBuffer16(width, height);
+        var pixels = buffer.Pixels;
+        var state = 0x2F6E2B1u;
+        for (var index = 0; index < width * height; index++)
+        {
+            state = state * 1664525u + 1013904223u;
+            var red = (ushort)(state >> 16);
+            state = state * 1664525u + 1013904223u;
+            var green = (ushort)(state >> 16);
+            state = state * 1664525u + 1013904223u;
+            var blue = (ushort)(state >> 16);
+            var offset = index * 4;
+            pixels[offset] = red;
+            pixels[offset + 1] = green;
+            pixels[offset + 2] = blue;
+            pixels[offset + 3] = ushort.MaxValue;
+        }
+        var path = Path.Combine(folder, "busy-4000x3000.png");
+        new WindowsImageCodec().Encode16Async(buffer, path, "png")
+            .GetAwaiter().GetResult();
+        return path;
+    }
+
+    /// <summary>
+    /// The format is a bound ComboBox with no automation name; its AutomationId
+    /// is the x:Name the XAML declares. Arrow keys change the selection of a
+    /// closed WPF ComboBox and raise the same change the mouse would, and the
+    /// selection pattern reads back what the app now holds.
+    /// </summary>
+    private static void SelectFormat(AutomationElement window, string name, IntPtr mainHandle)
+    {
+        var box = window.FindFirst(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.AutomationIdProperty, "FormatBox"))
+            ?? throw new InvalidOperationException("the Format box is missing");
+        SetForegroundWindow(mainHandle);
+        box.SetFocus();
+        for (var attempt = 0; attempt < 4 && SelectedFormat(box) != name; attempt++)
+        {
+            keybd_event(VkDown, 0, 0, IntPtr.Zero);
+            keybd_event(VkDown, 0, KeyUp, IntPtr.Zero);
+            Thread.Sleep(300);
+        }
+        var selected = SelectedFormat(box);
+        if (selected != name)
+        {
+            throw new InvalidOperationException(
+                $"the Format box shows '{selected}', not '{name}'");
+        }
+    }
+
+    private static string? SelectedFormat(AutomationElement box)
+    {
+        if (!box.TryGetCurrentPattern(SelectionPattern.Pattern, out var pattern)
+            || pattern is not SelectionPattern selection)
+        {
+            return null;
+        }
+        return selection.Current.GetSelection().FirstOrDefault()?.Current.Name;
+    }
+
+    /// <summary>
+    /// The single-export cancel, clicked while a 24-megapixel 16-bit PNG is
+    /// still being encoded. The token the button sets is read between the
+    /// finished encode and the publish, so nothing may appear at the
+    /// destination and the temp sibling must be gone.
+    /// </summary>
+    private static void RunExportCancel(Process process, string output)
+    {
+        var busy = Directory.CreateTempSubdirectory("retouchstudio-ui-export-cancel-");
+        try
+        {
+            var (window, mainHandle, _, destination) =
+                PrepareBusyExport(process, busy, output);
+            var cancel = FindButton(window, "Cancel Export")
+                ?? throw new InvalidOperationException("the Cancel Export button is missing");
+            if (cancel.Current.IsEnabled)
+            {
+                throw new InvalidOperationException(
+                    "Cancel Export is enabled before an export starts");
+            }
+            SelectFormat(window, "PNG", mainHandle);
+            Ok("the export format is PNG, so the export takes the 16-bit path");
+            DriveExportDialog(window, process, mainHandle, destination);
+            if (!WaitFor(() => cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the export never showed itself as running; the status says " +
+                    DescribeTexts(window) + "; the folder holds " +
+                    RecentFiles(Path.GetDirectoryName(destination)!));
+            }
+            try
+            {
+                Invoke(cancel);
+            }
+            catch (ElementNotEnabledException)
+            {
+                throw new InvalidOperationException(
+                    "the export ended before the cancel was clicked; the status says " +
+                    DescribeTexts(window) + "; the folder holds " +
+                    RecentFiles(Path.GetDirectoryName(destination)!));
+            }
+            var stopped = WaitFor(
+                () => ExportStatus(window) == "Export cancelled.",
+                TimeSpan.FromSeconds(120));
+            if (!stopped)
+            {
+                throw new InvalidOperationException(
+                    "the button left no cancelled verdict; the status says " +
+                    DescribeTexts(window) + "; the folder holds " +
+                    RecentFiles(Path.GetDirectoryName(destination)!));
+            }
+            Ok("Cancel Export stopped the export");
+            if (!WaitFor(() => !cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "Cancel Export stayed enabled after the export stopped");
+            }
+            if (File.Exists(destination))
+            {
+                throw new InvalidOperationException(
+                    $"a cancelled export left {new FileInfo(destination).Length} bytes " +
+                    "at the destination");
+            }
+            var leftovers = TempSiblings(destination);
+            if (leftovers.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    "a cancelled export left a temp sibling: " +
+                    string.Join(", ", leftovers.Select(Path.GetFileName)));
+            }
+            Ok("a cancelled export left no destination and no temp sibling");
+            CloseCleanly(window, process);
+        }
+        finally
+        {
+            try
+            {
+                busy.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// The window closed while the same export is running. The closing handler
+    /// must cancel the work and let it unwind before the process exits, so the
+    /// destination is untouched and the temp sibling is removed.
+    /// </summary>
+    private static void RunExportClose(Process process, string output)
+    {
+        var busy = Directory.CreateTempSubdirectory("retouchstudio-ui-export-close-");
+        try
+        {
+            var (window, mainHandle, _, destination) =
+                PrepareBusyExport(process, busy, output);
+            var cancel = FindButton(window, "Cancel Export")
+                ?? throw new InvalidOperationException("the Cancel Export button is missing");
+            SelectFormat(window, "PNG", mainHandle);
+            DriveExportDialog(window, process, mainHandle, destination);
+            if (!WaitFor(() => cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the export never showed itself as running; the status says " +
+                    DescribeTexts(window));
+            }
+            ((WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern)).Close();
+            // Choosing PNG changed an export setting, so the document is dirty
+            // and the close asks "Close anyway?" before the export is touched.
+            DismissClosePrompt(process.Id);
+            if (!WaitFor(() => process.HasExited, TimeSpan.FromSeconds(120)))
+            {
+                throw new InvalidOperationException(
+                    "the app did not close while an export was running; the status says " +
+                    DescribeTexts(window));
+            }
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"the app exited with {process.ExitCode} after closing during an export");
+            }
+            Ok("the app closed during an export and exited cleanly");
+            if (File.Exists(destination))
+            {
+                throw new InvalidOperationException(
+                    $"a close during an export left {new FileInfo(destination).Length} " +
+                    "bytes at the destination");
+            }
+            var leftovers = TempSiblings(destination);
+            if (leftovers.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    "a close during an export left a temp sibling: " +
+                    string.Join(", ", leftovers.Select(Path.GetFileName)));
+            }
+            Ok("the close cancelled the export: no destination and no temp sibling");
+        }
+        finally
+        {
+            try
+            {
+                busy.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Opens the big source and answers with the window and the paths the two
+    /// close/cancel scenarios share.
+    /// </summary>
+    private static (AutomationElement Window, IntPtr MainHandle, string Photo, string Destination)
+        PrepareBusyExport(Process process, DirectoryInfo folder, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        var photo = MakeBusyPhoto(folder.FullName);
+        var size = PhotoSize(photo);
+        Ok($"a {size.Width}x{size.Height} 16-bit source is ready");
+        OpenPhoto(window, process, photo);
+        var destination = Path.ChangeExtension(output, ".png");
+        if (File.Exists(destination))
+        {
+            File.Delete(destination);
+        }
+        return (window, mainHandle, photo, destination);
+    }
+
+    private static List<string> TempSiblings(string destination)
+    {
+        var folder = Path.GetDirectoryName(destination);
+        if (folder is null || !Directory.Exists(folder))
+        {
+            return new List<string>();
+        }
+        return Directory.GetFiles(folder)
+            .Where(file => TemporaryFiles.IsSiblingTemp(
+                Path.GetFileName(file), Path.GetFileName(destination)))
+            .ToList();
+    }
+
+    private static string? ExportStatus(AutomationElement window)
+    {
+        foreach (AutomationElement candidate in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var text = candidate.Current.Name;
+            if (text == "Export cancelled."
+                || text.StartsWith("Exported ", StringComparison.Ordinal))
+            {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Hands the picker every file of a folder. The shell remembers the folder
     /// the single-photo dialog last opened, so the files are sometimes in view
     /// already. A picker that starts elsewhere is navigated by typing the
@@ -1904,8 +2625,11 @@ internal static class Program
             TimeSpan.FromSeconds(90));
         if (!opened)
         {
+            var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
             throw new InvalidOperationException(
-                $"the photo did not open; the title is '{window.Current.Name}'");
+                $"the photo did not open; the title is '{window.Current.Name}'; " +
+                $"the status says {DescribeTexts(window)}; " +
+                AppErrorText(process.Id, mainHandle));
         }
         Ok($"the photo opened: '{window.Current.Name}'");
     }
@@ -1917,12 +2641,12 @@ internal static class Program
     }
 
     /// <summary>
-    /// Exports through the Export button and its Save dialog, waits for the
-    /// file, and decodes what was written. The caller decides what the size
-    /// must mean: the whole photo, or the crop the overlay shows.
+    /// Drives the Export button and its Save dialog and returns once the dialog
+    /// has closed, which is when the export starts. A caller that intends to
+    /// stop the export drives this and then acts on the running window.
     /// </summary>
-    private static (int Width, int Height) ExportTo(AutomationElement window, Process process,
-                                                    IntPtr mainHandle, string output)
+    private static void DriveExportDialog(AutomationElement window, Process process,
+                                          IntPtr mainHandle, string output)
     {
         var export = FindButton(window, "Export")
             ?? throw new InvalidOperationException("the Export button is missing");
@@ -1969,6 +2693,17 @@ internal static class Program
             throw new InvalidOperationException(
                 "the Export dialog stayed open after Save; " + DescribeWindow(saveDialog));
         }
+    }
+
+    /// <summary>
+    /// Exports through the Export button and its Save dialog, waits for the
+    /// file, and decodes what was written. The caller decides what the size
+    /// must mean: the whole photo, or the crop the overlay shows.
+    /// </summary>
+    private static (int Width, int Height) ExportTo(AutomationElement window, Process process,
+                                                    IntPtr mainHandle, string output)
+    {
+        DriveExportDialog(window, process, mainHandle, output);
         var wrote = WaitFor(
             () => File.Exists(output) && new FileInfo(output).Length > 1024,
             TimeSpan.FromMinutes(2));
@@ -2092,6 +2827,22 @@ internal static class Program
     }
 
     /// <summary>
+    /// Whether the top-level window under a screen point belongs to the app.
+    /// A drop lands on whatever window is under the pointer, so the gesture is
+    /// checked against a hit test instead of trusting the UIA rectangle.
+    /// </summary>
+    private static bool PointBelongsToProcess(NativePoint point, int processId)
+    {
+        var window = WindowFromPoint(point);
+        if (window == IntPtr.Zero)
+        {
+            return false;
+        }
+        GetWindowThreadProcessId(window, out var owner);
+        return owner == (uint)processId;
+    }
+
+    /// <summary>
     /// The first visible top-level window of the app other than the one named.
     /// A click that opens a dialog has to produce such a window; the caption is
     /// the dialog's own choice and is reported, not asserted.
@@ -2124,6 +2875,37 @@ internal static class Program
             text.Append('\'').Append(item.Current.Name).Append("' ");
         }
         return $"texts are {text}".TrimEnd();
+    }
+
+    /// <summary>
+    /// A failing action reports in a message box captioned with the app title.
+    /// Reading its text turns 'the photo did not open' into the reason the app
+    /// gave, instead of a guess about the wait.
+    /// </summary>
+    private static string AppErrorText(int processId, IntPtr mainHandle)
+    {
+        var found = new List<string>();
+        foreach (var handle in VisibleWindows(processId))
+        {
+            if (handle == mainHandle)
+            {
+                continue;
+            }
+            try
+            {
+                var text = AllTexts(AutomationElement.FromHandle(handle));
+                if (text.Length > 0)
+                {
+                    found.Add(text);
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        }
+        return found.Count == 0
+            ? "the app shows no message box"
+            : "the app says " + string.Join(" / ", found);
     }
 
     private static string DescribeAppWindows(int processId)
@@ -2666,6 +3448,27 @@ internal static class Program
         Thread.Sleep(250);
     }
 
+    /// <summary>
+    /// Moves the pointer with SetCursorPos and then with an absolute
+    /// mouse_event move. The cursor move alone may not be delivered as input
+    /// while OLE's drag loop owns the mouse; the injected move is the input
+    /// message a drag loop sees, carrying the button state with it.
+    /// </summary>
+    private static void MovePointer(double x, double y)
+    {
+        var screenWidth = Math.Max(2, GetSystemMetrics(SmCxScreen));
+        var screenHeight = Math.Max(2, GetSystemMetrics(SmCyScreen));
+        SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
+        // MOUSEEVENTF_ABSOLUTE takes 0..65535 across the primary screen.
+        mouse_event(
+            MouseMoveAbsolute,
+            (uint)Math.Round(Math.Clamp(x, 0, screenWidth - 1) * 65535.0
+                             / (screenWidth - 1)),
+            (uint)Math.Round(Math.Clamp(y, 0, screenHeight - 1) * 65535.0
+                             / (screenHeight - 1)),
+            0, IntPtr.Zero);
+    }
+
     [DllImport("user32.dll")]
     private static extern bool SetCursorPos(int x, int y);
 
@@ -2703,6 +3506,7 @@ internal static class Program
 
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
+    private const uint MouseMoveAbsolute = 0x0001 | 0x8000;
     private const uint KeyUp = 0x0002;
     private const byte VkControl = 0x11;
     private const byte VkA = 0x41;
@@ -2729,6 +3533,7 @@ internal static class Program
     private const uint WmKeyDown = 0x0100;
     private const uint WmKeyUp = 0x0101;
     private const int VkReturn = 0x0D;
+    private const int VkDown = 0x28;
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);

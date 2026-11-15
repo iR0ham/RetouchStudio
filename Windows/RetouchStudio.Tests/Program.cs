@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Nodes;
+using RetouchStudio.App;
 using RetouchStudio.Core.Imaging;
 using RetouchStudio.Core.Interop;
+using RetouchStudio.Core.IO;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Core.Render;
 using RetouchStudio.Core.View;
@@ -11,6 +14,10 @@ using RetouchStudio.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using IRandomAccessStream = Windows.Storage.Streams.IRandomAccessStream;
+// UseWPF replaces the SDK's implicit usings and drops System.IO, and
+// Windows.Storage brings its own FileAttributes (no Hidden), so the two are
+// named explicitly here.
+using FileAttributes = System.IO.FileAttributes;
 
 namespace RetouchStudio.Tests;
 
@@ -43,8 +50,16 @@ internal static class Program
             Corpus(root);
             BitDepth(root);
             SixteenBitPreview(root);
+            SixteenBitGeometry(root);
             BatchExport(root);
+            AtomicExport(root);
+            ExportCancellation(root);
+            ExportDestination(root);
+            ExportRefusals(root);
+            ExportDeniedByAcl(root);
+            StaleSweep(root);
             AdjustmentEvidence();
+            GeometryEvidence();
             FormatProbes(root);
             Metadata(root);
             Carry(root);
@@ -53,6 +68,9 @@ internal static class Program
             Colour(root);
             Interchange(root);
             Recovery(root);
+            RecoveryWriteFailures(root);
+            ProjectSaveFailures(root);
+            ExportExclusion(root);
             PerformanceAndStress(root);
             UnsupportedEditGuard(root);
             CropPresets();
@@ -490,6 +508,89 @@ internal static class Program
                 // rounding on the detail chart's hard edges.
                 Check("G09 stays within one level of the macOS clarity", mae <= 1.0);
             }
+        }
+    }
+
+    /// <summary>
+    /// The additive Crop/Straighten set (W4-8 Option A, approved 2026-11-15)
+    /// rendered through the same orientation → crop → adjustments order the
+    /// export uses, compared against the macOS references.
+    ///
+    /// Crop and mirror resample nothing, and the macOS harness proved its
+    /// references are the exact cropped and mirrored fixture pixels, so those
+    /// cases are parity gates: one differing level fails the run.
+    ///
+    /// A straighten resamples each host with a different filter (Core Image's
+    /// affine versus this host's bilinear), and no numeric tolerance has been
+    /// approved, so those cases measure and print MAE/PSNR without inventing a
+    /// bound. They still gate the dimensions and the direction: a render with
+    /// the angle negated must be measurably further from the reference than the
+    /// one with the documented sign.
+    /// </summary>
+    private static void GeometryEvidence()
+    {
+        var repo = RepoRoot();
+        var fixtures = Path.Combine(repo, "Tests/Corpus/Fixtures");
+        var references = Path.Combine(repo, "Tests/Corpus/References");
+        var codec = new WindowsImageCodec();
+        var source = codec.DecodeAsync(Path.Combine(fixtures, "F13_geometry_grid.png"))
+                          .GetAwaiter().GetResult();
+
+        var cases = new (string Id, CropValue? Crop, OrientationValue Orientation,
+                         int Width, int Height, bool Exact)[]
+        {
+            ("Q01_CROP_CENTER", new CropValue(0.25, 0.25, 0.5, 0.5),
+             OrientationValue.Identity, 256, 192, true),
+            ("Q02_CROP_EDGE", new CropValue(0, 0, 0.375, 0.5),
+             OrientationValue.Identity, 192, 192, true),
+            ("Q03_STRAIGHTEN_CW", null, OrientationValue.Identity.WithAngle(5),
+             512, 384, false),
+            ("Q04_STRAIGHTEN_CCW", null, OrientationValue.Identity.WithAngle(-7.5),
+             512, 384, false),
+            ("Q05_STRAIGHTEN_CROP", new CropValue(0.125, 0.125, 0.5, 0.5),
+             OrientationValue.Identity.WithAngle(4), 256, 192, false),
+            ("Q06_TURN_STRAIGHTEN_CROP", new CropValue(0.125, 0.25, 0.5, 0.5),
+             OrientationValue.Identity.WithQuarterTurn(1).WithAngle(3), 192, 256, false),
+            ("Q07_MIRROR_CROP", new CropValue(0.25, 0.125, 0.5, 0.75),
+             OrientationValue.Identity.WithFlip(), 256, 288, true),
+        };
+
+        foreach (var (id, crop, orientation, width, height, exact) in cases)
+        {
+            var reference = codec.DecodeAsync(Path.Combine(references, id + ".png"))
+                                 .GetAwaiter().GetResult();
+            var rendered = ExportRunner.RenderDocument(source,
+                new DocumentModel(new JsonObject())
+                {
+                    Crop = crop,
+                    Orientation = orientation,
+                });
+            Check($"{id} renders the approved size",
+                  rendered.Width == width && rendered.Height == height
+                  && rendered.Width == reference.Width && rendered.Height == reference.Height);
+            if (rendered.Width != reference.Width || rendered.Height != reference.Height)
+            {
+                continue;
+            }
+
+            var (mae, _, psnr, changed, _) = Compare(rendered, reference);
+            Console.WriteLine($"  case {id}: mae {mae:0.###} psnr {psnr:0.##} dB " +
+                              $"changed {changed:P1}");
+
+            if (exact)
+            {
+                Check($"{id} matches the macOS reference exactly", mae == 0);
+                continue;
+            }
+
+            var wrong = ExportRunner.RenderDocument(source,
+                new DocumentModel(new JsonObject())
+                {
+                    Crop = crop,
+                    Orientation = orientation with { Angle = -orientation.Angle },
+                });
+            var wrongMae = Compare(wrong, reference).Mae;
+            Check($"{id} rotates in the documented direction", mae < wrongMae);
         }
     }
 
@@ -1061,6 +1162,66 @@ internal static class Program
     }
 
     /// <summary>
+    /// The 16-bit resamplers, which no other check drove. The preview resizes
+    /// every 16-bit source to fit the panel, and a straighten rotates the
+    /// 16-bit export buffer, so an indexing mistake here stops a 16-bit photo
+    /// from opening at all rather than denting a corner case.
+    /// </summary>
+    private static void SixteenBitGeometry(string root)
+    {
+        var flat = new PixelBuffer16(8, 4);
+        for (var offset = 0; offset < flat.Pixels.Length; offset += 4)
+        {
+            flat.Pixels[offset] = 1000;
+            flat.Pixels[offset + 1] = 2000;
+            flat.Pixels[offset + 2] = 3000;
+            flat.Pixels[offset + 3] = 65535;
+        }
+
+        var small = flat.ResizeLongEdge(4);
+        Check("a 16-bit resize sets the long edge",
+              small.Width == 4 && small.Height == 2);
+        Check("a 16-bit resize keeps a flat colour", Uniform(small, 1000, 2000, 3000));
+
+        var large = flat.ResizeLongEdge(16);
+        Check("a 16-bit upscale sets the long edge",
+              large.Width == 16 && large.Height == 8);
+        Check("a 16-bit upscale keeps a flat colour", Uniform(large, 1000, 2000, 3000));
+
+        var turned = flat.RotateDegrees(5);
+        Check("a 16-bit straighten keeps the frame",
+              turned.Width == 8 && turned.Height == 4);
+        Check("a 16-bit straighten keeps a flat colour", Uniform(turned, 1000, 2000, 3000));
+
+        var fixtures = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures");
+        var sourcePath = Path.Combine(fixtures, "F11_p3_16bit.png");
+        var codec = new WindowsImageCodec();
+        using var session = ProjectSession.Create(sourcePath);
+        session.Document.Orientation = session.Document.Orientation.WithAngle(5);
+        var png = Path.Combine(root, "sixteen-bit-straighten.png");
+        ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0)
+                    .GetAwaiter().GetResult();
+        var back = codec.Decode16Async(png).GetAwaiter().GetResult();
+        var source = codec.ReadSizeAsync(sourcePath).GetAwaiter().GetResult();
+        Check("a 16-bit straighten export writes the whole frame",
+              back.Width == source.Width && back.Height == source.Height);
+        File.Delete(png);
+    }
+
+    private static bool Uniform(PixelBuffer16 buffer, ushort red, ushort green, ushort blue)
+    {
+        for (var offset = 0; offset < buffer.Pixels.Length; offset += 4)
+        {
+            if (buffer.Pixels[offset] != red || buffer.Pixels[offset + 1] != green
+                || buffer.Pixels[offset + 2] != blue || buffer.Pixels[offset + 3] != 65535)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
     /// A batch must produce exactly what the single-file export produces, for
     /// every source, without touching the sources and without overwriting a
     /// file it did not create. One unreadable file must not stop the others.
@@ -1186,6 +1347,90 @@ internal static class Program
               !File.Exists(Path.Combine(midDir, "two-retouched.png")));
     }
 
+    /// <summary>
+    /// An encode that fails must not leave a partial photo at the destination:
+    /// the write goes through a sibling temp file that is removed on failure,
+    /// and an existing destination is only replaced by the final move.
+    /// </summary>
+    private static void AtomicExport(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var failing = new FailAfterWriting(codec);
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "atomic-export");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+
+        var missing = Path.Combine(folder, "never-written.png");
+        var threw = false;
+        try
+        {
+            ExportRunner.ExportSourceAsync(session.Document, failing, source, missing,
+                                           "png", 1.0, 0).GetAwaiter().GetResult();
+        }
+        catch (IOException)
+        {
+            threw = true;
+        }
+        Check("a failed 16-bit export throws", threw);
+        Check("a failed 16-bit export leaves no destination", !File.Exists(missing));
+        Check("a failed 16-bit export leaves no temp file",
+              Directory.GetFiles(folder, "*.tmp").Length == 0);
+
+        var existing = Path.Combine(folder, "kept.jpg");
+        var sentinel = new byte[] { 7, 7, 7, 7 };
+        File.WriteAllBytes(existing, sentinel);
+        threw = false;
+        try
+        {
+            ExportRunner.ExportSourceAsync(session.Document, failing, source, existing,
+                                           "jpeg", 0.9, 0).GetAwaiter().GetResult();
+        }
+        catch (IOException)
+        {
+            threw = true;
+        }
+        Check("a failed 8-bit export throws", threw);
+        Check("a failed export keeps an existing destination byte-for-byte",
+              File.ReadAllBytes(existing).SequenceEqual(sentinel));
+        Check("a failed 8-bit export leaves no temp file",
+              Directory.GetFiles(folder, "*.tmp").Length == 0);
+    }
+
+    /// <summary>
+    /// Writes a few bytes to the path it is given — the runner's temp file —
+    /// then fails, like a codec that hits a full disk or a broken container.
+    /// </summary>
+    private sealed class FailAfterWriting(IImageCodec inner) : IImageCodec
+    {
+        public Task<ImageSize> ReadSizeAsync(string path) => inner.ReadSizeAsync(path);
+
+        public Task<int> ReadBitDepthAsync(string path) => inner.ReadBitDepthAsync(path);
+
+        public Task<PixelBuffer> DecodeAsync(string path) => inner.DecodeAsync(path);
+
+        public Task<PixelBuffer16> Decode16Async(string path) => inner.Decode16Async(path);
+
+        public Task<ImageMetadata> ReadMetadataAsync(string path) =>
+            inner.ReadMetadataAsync(path);
+
+        public Task EncodeAsync(PixelBuffer image, string path, string format,
+                                double quality, ImageMetadata? metadata = null,
+                                bool stripPrivacyMetadata = true) =>
+            FailAsync(path);
+
+        public Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                  ImageMetadata? metadata = null,
+                                  bool stripPrivacyMetadata = true) =>
+            FailAsync(path);
+
+        private static async Task FailAsync(string path)
+        {
+            await File.WriteAllBytesAsync(path, new byte[] { 0x42, 0x42, 0x42 });
+            throw new IOException("the encoder failed");
+        }
+    }
+
     /// <summary>Cancels its batch from inside the first file's pipeline.</summary>
     private sealed class CancelDuringFirstDecode(IImageCodec inner,
                                                  CancellationTokenSource source)
@@ -1238,6 +1483,751 @@ internal static class Program
             {
                 source.Cancel();
             }
+        }
+    }
+
+    /// <summary>
+    /// One individual export can be stopped after it starts. The token is
+    /// raised from inside the codec, after bytes have reached the sibling
+    /// temp, so the export has to unwind on its own: no temp, no new file and
+    /// the previous destination byte-for-byte. A cancel that arrives before
+    /// the encoder is entered must skip it, and a token cancelled before the
+    /// call must skip the codec entirely.
+    /// </summary>
+    private static void ExportCancellation(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "export-cancel");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+        var sentinel = new byte[] { 0x11, 0x22, 0x33, 0x44 };
+
+        var kept = Path.Combine(folder, "kept.jpg");
+        File.WriteAllBytes(kept, sentinel);
+        using var midEight = new CancellationTokenSource();
+        var cancellingEight = new CancelDuringEncode(codec, midEight);
+        var eightError = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+            session.Document, cancellingEight, source, kept, "jpeg", 0.9, 0,
+            cancellationToken: midEight.Token));
+        Check("a cancel inside an 8-bit write is an OperationCanceledException",
+              eightError is OperationCanceledException cancelled
+              && cancelled.CancellationToken == midEight.Token);
+        Check("a cancelled 8-bit write still reached the encoder",
+              cancellingEight.EncodeCalls == 1);
+        Check("a cancelled 8-bit write leaves no temp sibling",
+              Siblings(folder, "kept.jpg").Count == 0);
+        Check("a cancelled 8-bit write keeps the existing destination",
+              File.ReadAllBytes(kept).SequenceEqual(sentinel));
+
+        var kept16 = Path.Combine(folder, "kept.png");
+        File.WriteAllBytes(kept16, sentinel);
+        using var midSixteen = new CancellationTokenSource();
+        var cancellingSixteen = new CancelDuringEncode(codec, midSixteen);
+        var sixteenError = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+            session.Document, cancellingSixteen, source, kept16, "png", 1.0, 0,
+            cancellationToken: midSixteen.Token));
+        Check("a cancel inside a 16-bit write is an OperationCanceledException",
+              sixteenError is OperationCanceledException wide
+              && wide.CancellationToken == midSixteen.Token);
+        Check("a cancelled 16-bit write still reached the encoder",
+              cancellingSixteen.Encode16Calls == 1);
+        Check("a cancelled 16-bit write leaves no temp sibling",
+              Siblings(folder, "kept.png").Count == 0);
+        Check("a cancelled 16-bit write keeps the existing destination",
+              File.ReadAllBytes(kept16).SequenceEqual(sentinel));
+
+        using var preCancelled = new CancellationTokenSource();
+        preCancelled.Cancel();
+        var counting = new CountingCodec(codec);
+        var never = Path.Combine(folder, "never.jpg");
+        var preError = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+            session.Document, counting, source, never, "jpeg", 0.9, 0,
+            cancellationToken: preCancelled.Token));
+        Check("a token cancelled before the call is an OperationCanceledException",
+              preError is OperationCanceledException);
+        Check("a token cancelled before the call never reaches the codec",
+              counting.Calls == 0);
+        Check("a token cancelled before the call leaves no temp and no destination",
+              !File.Exists(never) && Siblings(folder, "never.jpg").Count == 0);
+
+        using var afterDecode = new CancellationTokenSource();
+        var decodeCancelling = new CancelAfterDecode(codec, afterDecode);
+        var unwritten = Path.Combine(folder, "after-decode.jpg");
+        var decodeError = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+            session.Document, decodeCancelling, source, unwritten, "jpeg", 0.9, 0,
+            cancellationToken: afterDecode.Token));
+        Check("a cancel after decode is an OperationCanceledException",
+              decodeError is OperationCanceledException);
+        Check("a cancel after decode never invokes the encoder",
+              decodeCancelling.EncodeCalls == 0);
+        Check("a cancel after decode leaves no temp and no destination",
+              !File.Exists(unwritten) && Siblings(folder, "after-decode.jpg").Count == 0);
+    }
+
+    /// <summary>
+    /// An export onto a name that already exists replaces the file in one
+    /// rename, so the new bytes appear whole and the previous file is gone
+    /// without ever being half-written.
+    /// </summary>
+    private static void ExportDestination(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "export-destination");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+        var existing = Path.Combine(folder, "photo.jpg");
+        var sentinel = Encoding.UTF8.GetBytes("the export that was here before");
+        File.WriteAllBytes(existing, sentinel);
+
+        var plan = ExportRunner.ExportSourceAsync(session.Document, codec, source, existing,
+                                                  "jpeg", 0.9, 0).GetAwaiter().GetResult();
+        var written = File.ReadAllBytes(existing);
+        var decoded = codec.DecodeAsync(existing).GetAwaiter().GetResult();
+        Check("a successful export replaces the existing destination",
+              !written.SequenceEqual(sentinel) && written.Length > sentinel.Length);
+        Check("the replacement is the photo the plan describes",
+              decoded.Width == plan.Width && decoded.Height == plan.Height);
+        Check("a successful export leaves no temp sibling",
+              Siblings(folder, "photo.jpg").Count == 0);
+        Check("a successful export leaves only the destination",
+              Directory.GetFiles(folder).Length == 1);
+    }
+
+    /// <summary>
+    /// A destination another program holds, and a destination that is a
+    /// folder, both have to fail as a whole: the old bytes stay and no sibling
+    /// temp is left behind. A read-only folder attribute is not used, because
+    /// it does not stop file creation on Windows; the open handle is the real
+    /// seam.
+    /// </summary>
+    private static void ExportRefusals(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "export-refused");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+        var sentinel = new byte[] { 0x77, 0x66, 0x55, 0x44 };
+
+        var held = Path.Combine(folder, "held.jpg");
+        File.WriteAllBytes(held, sentinel);
+        using (var hold = new FileStream(held, FileMode.Open, FileAccess.ReadWrite,
+                                         FileShare.Read))
+        {
+            var heldError = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+                session.Document, codec, source, held, "jpeg", 0.9, 0));
+            Check("an export onto a held destination fails",
+                  heldError is IOException or UnauthorizedAccessException);
+        }
+        // Read after the handle is released: the held stream shares reads but
+        // not the write access a second open asks for.
+        Check("a refused export keeps the held file byte-for-byte",
+              File.ReadAllBytes(held).SequenceEqual(sentinel));
+        Check("a refused export leaves no temp sibling",
+              Siblings(folder, "held.jpg").Count == 0);
+
+        var occupied = Path.Combine(folder, "occupied.jpg");
+        Directory.CreateDirectory(occupied);
+        var occupiedError = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+            session.Document, codec, source, occupied, "jpeg", 0.9, 0));
+        Check("an export onto a folder fails",
+              occupiedError is IOException or UnauthorizedAccessException);
+        Check("an export onto a folder leaves the folder empty",
+              Directory.Exists(occupied)
+              && Directory.GetFileSystemEntries(occupied).Length == 0);
+        Check("an export onto a folder leaves no temp sibling",
+              Siblings(folder, "occupied.jpg").Count == 0);
+    }
+
+    /// <summary>
+    /// The OS itself refusing the write, not a held handle: the current account
+    /// is denied write on the destination folder through an ACL, so creating the
+    /// temp file fails with UnauthorizedAccessException before any byte is
+    /// staged. A probe write proves the deny is in force, so a skipped or
+    /// ineffective ACE can never be mistaken for a passing refusal. The deny
+    /// also blocks enumeration, so the folder is inspected after it is lifted.
+    /// </summary>
+    private static void ExportDeniedByAcl(string root)
+    {
+        var codec = new WindowsImageCodec();
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "export-acl-denied");
+        Directory.CreateDirectory(folder);
+        using var session = ProjectSession.Create(source);
+        var account = string.IsNullOrEmpty(Environment.UserDomainName)
+            ? Environment.UserName
+            : $"{Environment.UserDomainName}\\{Environment.UserName}";
+        var destination = Path.Combine(folder, "refused.jpg");
+        var sentinel = new byte[] { 0x77, 0x66, 0x55, 0x44 };
+        File.WriteAllBytes(destination, sentinel);
+
+        var denied = RunIcacls($"{Quote(folder)} /deny \"{account}:(OI)(CI)W\"");
+        Check("the deny ACE is installed on the destination folder", denied);
+        if (!denied)
+        {
+            Directory.Delete(folder, recursive: true);
+            return;
+        }
+        try
+        {
+            var probe = Path.Combine(folder, "probe.txt");
+            var probeRefused = false;
+            try
+            {
+                File.WriteAllText(probe, "x");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                probeRefused = true;
+            }
+            Check("the deny ACE blocks this process from writing into the folder",
+                  probeRefused);
+            var error = AsyncErrorOf(() => ExportRunner.ExportSourceAsync(
+                session.Document, codec, source, destination, "jpeg", 0.9, 0));
+            Check("an export into a write-denied folder fails",
+                  error is UnauthorizedAccessException or IOException);
+        }
+        finally
+        {
+            RunIcacls($"{Quote(folder)} /remove:d \"{account}\"");
+        }
+        Check("a write-denied export keeps the earlier destination byte-for-byte",
+              File.ReadAllBytes(destination).SequenceEqual(sentinel));
+        Check("a write-denied folder holds only the earlier destination and no temp",
+              Directory.GetFileSystemEntries(folder).Length == 1);
+        Directory.Delete(folder, recursive: true);
+    }
+
+    private static string Quote(string path) => $"\"{path}\"";
+
+    private static bool RunIcacls(string arguments)
+    {
+        try
+        {
+            var info = new ProcessStartInfo("icacls", arguments)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            using var process = Process.Start(info);
+            if (process is null)
+            {
+                return false;
+            }
+            if (!process.WaitForExit(30000))
+            {
+                process.Kill(entireProcessTree: true);
+                return false;
+            }
+            return process.ExitCode == 0;
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or IOException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The launch sweep removes only the leftovers a crashed write of this
+    /// destination could own: exact <c>.&lt;name&gt;.&lt;guid&gt;.tmp</c>
+    /// siblings, and their one metadata tail, once they are old enough. A
+    /// fresh temp, a similar name and a person's own file all survive, and a
+    /// hidden leftover is still found because the sweep enumerates real files.
+    /// </summary>
+    private static void StaleSweep(string root)
+    {
+        var folder = Path.Combine(root, "stale-sweep");
+        Directory.CreateDirectory(folder);
+        var destinationName = "holiday.2026.final.png";
+        var destination = Path.Combine(folder, destinationName);
+        var now = new DateTime(2026, 11, 15, 12, 0, 0, DateTimeKind.Utc);
+        var old = now.AddHours(-25);
+        var fresh = now.AddHours(-1);
+        var destinationBytes = new byte[] { 0x10, 0x20, 0x30 };
+        File.WriteAllBytes(destination, destinationBytes);
+
+        static string ExactAt(string directory, string name) =>
+            Path.Combine(directory, $".{name}.{Guid.NewGuid():N}.tmp");
+        static string MetadataAt(string directory, string name) =>
+            Path.Combine(directory, $".{name}.{Guid.NewGuid():N}.tmp.metadata-{Guid.NewGuid():N}");
+
+        var oldExact = ExactAt(folder, destinationName);
+        var hiddenExact = ExactAt(folder, destinationName);
+        var oldMetadata = MetadataAt(folder, destinationName);
+        var freshExact = ExactAt(folder, destinationName);
+        var freshMetadata = MetadataAt(folder, destinationName);
+        var dotless = Path.Combine(folder, $"{destinationName}.{Guid.NewGuid():N}.tmp");
+        var otherName = Path.Combine(folder, $".other-name.{Guid.NewGuid():N}.tmp");
+        var missingDot = Path.Combine(folder,
+            $".holiday.2026.final{Guid.NewGuid():N}.tmp");
+        var userFile = Path.Combine(folder, "notes.txt");
+        foreach (var path in new[] { oldExact, hiddenExact, oldMetadata, freshExact,
+                                     freshMetadata, dotless, otherName, missingDot,
+                                     userFile })
+        {
+            File.WriteAllText(path, "leftover");
+        }
+        File.SetAttributes(hiddenExact, FileAttributes.Hidden);
+        foreach (var path in new[] { oldExact, hiddenExact, oldMetadata, userFile })
+        {
+            File.SetLastWriteTimeUtc(path, old);
+        }
+        foreach (var path in new[] { freshExact, freshMetadata, dotless, otherName,
+                                     missingDot })
+        {
+            File.SetLastWriteTimeUtc(path, fresh);
+        }
+        File.SetLastWriteTimeUtc(destination, old);
+        var destinationStamp = File.GetLastWriteTimeUtc(destination);
+
+        Check("the sibling recogniser accepts the multi-dot name",
+              TemporaryFiles.IsSiblingTemp(Path.GetFileName(oldExact), destinationName));
+        Check("the hidden leftover is a real file the sweep can enumerate",
+              (File.GetAttributes(hiddenExact) & FileAttributes.Hidden) != 0);
+
+        var removed = TemporaryFiles.SweepStaleSiblings(destination, now,
+                                                        TemporaryFiles.StaleAge);
+        Check("the sweep removes exactly the stale exact siblings", removed == 3);
+        Check("the sweep removes the old exact leftover", !File.Exists(oldExact));
+        Check("the sweep removes a hidden old leftover", !File.Exists(hiddenExact));
+        Check("the sweep removes the old metadata tail", !File.Exists(oldMetadata));
+        Check("the sweep keeps a fresh exact sibling", File.Exists(freshExact));
+        Check("the sweep keeps a fresh metadata tail", File.Exists(freshMetadata));
+        Check("the sweep keeps a dotless name", File.Exists(dotless));
+        Check("the sweep keeps the same basename under another name",
+              File.Exists(otherName) && File.Exists(missingDot));
+        Check("the sweep keeps a plain user file", File.Exists(userFile));
+        Check("the sweep leaves the destination alone",
+              File.Exists(destination)
+              && File.ReadAllBytes(destination).SequenceEqual(destinationBytes)
+              && File.GetLastWriteTimeUtc(destination) == destinationStamp);
+        Check("a second sweep finds nothing to remove",
+              TemporaryFiles.SweepStaleSiblings(destination, now,
+                                                TemporaryFiles.StaleAge) == 0);
+    }
+
+    /// <summary>
+    /// A project save that cannot publish its bytes must leave the previous
+    /// project exactly as it was and the document exactly as it was: the path
+    /// it was saved to and its dirty flag both stay, and a retry after the
+    /// obstacle is gone writes the file with no temp left over.
+    /// </summary>
+    private static void ProjectSaveFailures(string root)
+    {
+        var folder = Path.Combine(root, "project-save");
+        Directory.CreateDirectory(folder);
+        var photo = Path.Combine(root, "project-save-photo.png");
+        File.WriteAllBytes(photo, new byte[] { 1, 2, 3 });
+        using var session = ProjectSession.Create(photo);
+
+        var current = Path.Combine(folder, "kept.retouch");
+        session.Save(current);
+        var previous = File.ReadAllBytes(current);
+        Check("a saved project is on disk and cleaned up",
+              File.Exists(current) && Siblings(folder, "kept.retouch").Count == 0);
+
+        var locked = Path.Combine(folder, "locked.retouch");
+        var sentinel = new byte[] { 0x5A, 0x5A, 0x5A };
+        File.WriteAllBytes(locked, sentinel);
+        session.Document.SetAdjustment("exposure", 20);
+        using (var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite,
+                                         FileShare.Read))
+        {
+            var lockedError = ErrorOf(() => session.Save(locked));
+            Check("saving over a held project fails",
+                  lockedError is IOException or UnauthorizedAccessException);
+            Check("a failed save leaves no temp sibling",
+                  Siblings(folder, "locked.retouch").Count == 0);
+        }
+        // Read after the handle is released: the held stream shares reads but
+        // not the write access a second open asks for.
+        Check("a failed save leaves the held file byte-for-byte",
+              File.ReadAllBytes(locked).SequenceEqual(sentinel));
+        Check("a failed save leaves the earlier project untouched",
+              File.ReadAllBytes(current).SequenceEqual(previous));
+        Check("a failed save leaves the project path unchanged",
+              session.ProjectPath == current);
+        Check("a failed save leaves the document dirty", session.IsDirty());
+
+        var asFolder = Path.Combine(folder, "looks-like-a-project.retouch");
+        Directory.CreateDirectory(asFolder);
+        var folderError = ErrorOf(() => session.Save(asFolder));
+        Check("saving onto a directory fails",
+              folderError is IOException or UnauthorizedAccessException);
+        Check("saving onto a directory leaves the directory",
+              Directory.Exists(asFolder)
+              && Directory.GetFileSystemEntries(asFolder).Length == 0);
+        Check("saving onto a directory leaves no temp sibling",
+              Siblings(folder, "looks-like-a-project.retouch").Count == 0);
+
+        session.Save(locked);
+        Check("a retried save writes the project",
+              File.Exists(locked) && new FileInfo(locked).Length > sentinel.Length);
+        Check("a retried save leaves no temp sibling",
+              Siblings(folder, "locked.retouch").Count == 0);
+        Check("a retried save marks the document clean", !session.IsDirty());
+        Check("a retried save records the new project path", session.ProjectPath == locked);
+    }
+
+    /// <summary>
+    /// The recovery slot is the only mutable copy, so a write that cannot land
+    /// must leave the previous copy whole and no temp behind. The same holds
+    /// when the slot itself is an unresolved candidate: until the owner
+    /// decides, an autosave must not replace the copy the launch offered.
+    /// </summary>
+    private static void RecoveryWriteFailures(string root)
+    {
+        var photo = Path.Combine(root, "recovery-write-photo.png");
+        File.WriteAllBytes(photo, new byte[] { 4, 5, 6 });
+        var at = new DateTimeOffset(2026, 11, 15, 9, 0, 0, TimeSpan.Zero);
+        var context = Encoding.UTF8.GetBytes("""{"version":4}""");
+
+        static byte[] ProjectFor(string imagePath, Action<JsonObject>? customize = null)
+        {
+            var document = new JsonObject
+            {
+                ["version"] = 4,
+                ["imagePath"] = imagePath,
+                ["adjustments"] = new JsonObject(),
+                ["exportFormat"] = "jpeg",
+                ["exportQuality"] = 0.92,
+            };
+            customize?.Invoke(document);
+            return Encoding.UTF8.GetBytes(document.ToJsonString());
+        }
+
+        var first = RecoverySnapshot.Capture(ProjectFor(photo), context, photo, at);
+        var second = RecoverySnapshot.Capture(
+            ProjectFor(photo, document => document["adjustments"]!["exposure"] = 25),
+            context, photo, at.AddMinutes(1));
+
+        var store = new RecoveryStore(Path.Combine(root, "recovery-write"));
+        Check("the working copy is written before the lock",
+              store.WriteWorking(first, out _) && File.Exists(store.WorkingPath));
+        var previous = File.ReadAllBytes(store.WorkingPath);
+        bool written;
+        using (new FileStream(store.WorkingPath, FileMode.Open, FileAccess.ReadWrite,
+                              FileShare.None))
+        {
+            written = store.WriteWorking(second, out _);
+        }
+        Check("a working slot another program holds is not replaced", !written);
+        Check("a failed working write keeps the previous bytes",
+              File.ReadAllBytes(store.WorkingPath).SequenceEqual(previous));
+        Check("a failed working write leaves no temp sibling",
+              Siblings(store.Directory, RecoveryStore.WorkingFileName).Count == 0);
+
+        var stuckStore = new RecoveryStore(Path.Combine(root, "recovery-stuck"));
+        stuckStore.WriteWorking(first, out _);
+        stuckStore.InjectedFailures.Add(RecoveryStore.Failure.Migrate);
+        var offered = stuckStore.PrepareForLaunch();
+        Check("a slot that cannot be lifted is offered as a candidate",
+              offered.Count == 1
+              && string.Equals(offered[0].Path, stuckStore.WorkingPath,
+                               StringComparison.OrdinalIgnoreCase));
+        var stuckBytes = File.ReadAllBytes(stuckStore.WorkingPath);
+        var overwritten = stuckStore.WriteWorking(second, out _);
+        Check("an unresolved slot is not overwritten by an autosave", !overwritten);
+        Check("an unresolved slot keeps the bytes the launch offered",
+              File.ReadAllBytes(stuckStore.WorkingPath).SequenceEqual(stuckBytes));
+        Check("the refused autosave leaves no temp sibling",
+              Siblings(stuckStore.Directory, RecoveryStore.WorkingFileName).Count == 0);
+        stuckStore.InjectedFailures.Add(RecoveryStore.Failure.WorkingWrite);
+        var restored = stuckStore.Restore(offered[0]);
+        stuckStore.InjectedFailures.Clear();
+        Check("a restore that cannot write reports failure", !restored);
+        Check("a failed restore leaves the slot locked",
+              !stuckStore.WriteWorking(second, out _)
+              && File.ReadAllBytes(stuckStore.WorkingPath).SequenceEqual(stuckBytes));
+        Check("discarding the copy frees the slot",
+              stuckStore.Discard(offered[0]) && !File.Exists(stuckStore.WorkingPath));
+        stuckStore.InjectedFailures.Clear();
+        Check("after the slot is resolved an autosave writes again",
+              stuckStore.WriteWorking(second, out _) && File.Exists(stuckStore.WorkingPath));
+        Check("the copy that landed is the one written after the decision",
+              stuckStore.ReadWorking()?.Document().Adjustment("exposure") == 25);
+    }
+
+    /// <summary>
+    /// A single export and a batch are two writes of the same document, so
+    /// neither may start while the other runs; the refusal has to arrive
+    /// before either destination is touched. The guard lives in the window's
+    /// view model, whose WPF types want an STA thread. That thread also gets a
+    /// dispatcher context, so the checks run as work posted into a pumping
+    /// loop; awaiting them from a bare STA thread would wait for a queue
+    /// nothing drains.
+    /// </summary>
+    private static void ExportExclusion(string root)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            async void Run()
+            {
+                try
+                {
+                    await ExportExclusionOnSta(root);
+                }
+                catch (Exception error)
+                {
+                    failure = error;
+                }
+                finally
+                {
+                    dispatcher.InvokeShutdown();
+                }
+            }
+            dispatcher.InvokeAsync(Run);
+            System.Windows.Threading.Dispatcher.Run();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!thread.Join(TimeSpan.FromMinutes(5)))
+        {
+            throw new TimeoutException(
+                "the export exclusion checks did not finish within five minutes");
+        }
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "the export exclusion checks failed", failure);
+        }
+    }
+
+    private static async Task ExportExclusionOnSta(string root)
+    {
+        var source = Path.Combine(RepoRoot(), "Tests/Corpus/Fixtures/F01_portrait_srgb_8.png");
+        var folder = Path.Combine(root, "export-exclusion");
+        var batchFolder = Path.Combine(folder, "batch-out");
+        var otherBatchFolder = Path.Combine(folder, "other-batch-out");
+        Directory.CreateDirectory(folder);
+        var singleTarget = Path.Combine(folder, "single.jpg");
+        var otherTarget = Path.Combine(folder, "other.jpg");
+
+        // The window's autosave folder must not be this machine's real one.
+        var previousRecovery = Environment.GetEnvironmentVariable("RETOUCHSTUDIO_RECOVERY");
+        Environment.SetEnvironmentVariable("RETOUCHSTUDIO_RECOVERY",
+                                           Path.Combine(root, "export-exclusion-recovery"));
+        try
+        {
+            var viewModel = new EditorViewModel();
+            await viewModel.OpenImageAsync(source);
+            Check("the editor holds the photo before the exclusion checks",
+                  viewModel.HasDocument);
+
+            var batch = viewModel.BatchExportAsync(new[] { source }, batchFolder);
+            Check("a running batch is marked as running", viewModel.IsBatchRunning);
+            var refusedSingle = AsyncErrorOf(() => viewModel.ExportAsync(singleTarget));
+            Check("a single export is refused while a batch runs",
+                  refusedSingle is InvalidOperationException);
+            Check("a refused single export writes nothing", !File.Exists(singleTarget));
+            Check("a refused single export does not claim the single slot",
+                  !viewModel.IsExportRunning);
+            await batch;
+            Check("the batch that held the lock still exported",
+                  Directory.Exists(batchFolder)
+                  && Directory.GetFiles(batchFolder, "*.jpg").Length == 1);
+
+            var single = viewModel.ExportAsync(otherTarget);
+            Check("a running single export is marked as running",
+                  viewModel.IsExportRunning);
+            var refusedBatch = AsyncErrorOf(() => viewModel.BatchExportAsync(
+                new[] { source }, otherBatchFolder));
+            Check("a batch is refused while a single export runs",
+                  refusedBatch is InvalidOperationException);
+            Check("a refused batch creates no destination folder",
+                  !Directory.Exists(otherBatchFolder));
+            Check("a refused batch does not claim the batch slot",
+                  !viewModel.IsBatchRunning);
+            await single;
+            Check("the single export that held the lock still wrote its file",
+                  File.Exists(otherTarget));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RETOUCHSTUDIO_RECOVERY", previousRecovery);
+        }
+    }
+
+    /// <summary>
+    /// Writes a few bytes to the path it is given — the runner's temp file —
+    /// then raises its own token, as a person pressing Cancel mid-encode does.
+    /// It does not throw: the cancellation must come from the runner's check
+    /// between the encode and the rename, or a passing test would prove
+    /// nothing about that check.
+    /// </summary>
+    private sealed class CancelDuringEncode(IImageCodec inner, CancellationTokenSource source)
+        : IImageCodec
+    {
+        public int EncodeCalls { get; private set; }
+        public int Encode16Calls { get; private set; }
+
+        public Task<ImageSize> ReadSizeAsync(string path) => inner.ReadSizeAsync(path);
+
+        public Task<int> ReadBitDepthAsync(string path) => inner.ReadBitDepthAsync(path);
+
+        public Task<PixelBuffer> DecodeAsync(string path) => inner.DecodeAsync(path);
+
+        public Task<PixelBuffer16> Decode16Async(string path) => inner.Decode16Async(path);
+
+        public Task<ImageMetadata> ReadMetadataAsync(string path) =>
+            inner.ReadMetadataAsync(path);
+
+        public async Task EncodeAsync(PixelBuffer image, string path, string format,
+                                      double quality, ImageMetadata? metadata = null,
+                                      bool stripPrivacyMetadata = true)
+        {
+            EncodeCalls++;
+            await File.WriteAllBytesAsync(path, new byte[] { 0x51, 0x52, 0x53 });
+            source.Cancel();
+        }
+
+        public async Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                        ImageMetadata? metadata = null,
+                                        bool stripPrivacyMetadata = true)
+        {
+            Encode16Calls++;
+            await File.WriteAllBytesAsync(path, new byte[] { 0x54, 0x55, 0x56, 0x57 });
+            source.Cancel();
+        }
+    }
+
+    /// <summary>Counts every codec call; a pre-cancelled export must make none.</summary>
+    private sealed class CountingCodec(IImageCodec inner) : IImageCodec
+    {
+        public int Calls { get; private set; }
+
+        public Task<ImageSize> ReadSizeAsync(string path)
+        {
+            Calls++;
+            return inner.ReadSizeAsync(path);
+        }
+
+        public Task<int> ReadBitDepthAsync(string path)
+        {
+            Calls++;
+            return inner.ReadBitDepthAsync(path);
+        }
+
+        public Task<PixelBuffer> DecodeAsync(string path)
+        {
+            Calls++;
+            return inner.DecodeAsync(path);
+        }
+
+        public Task<PixelBuffer16> Decode16Async(string path)
+        {
+            Calls++;
+            return inner.Decode16Async(path);
+        }
+
+        public Task<ImageMetadata> ReadMetadataAsync(string path)
+        {
+            Calls++;
+            return inner.ReadMetadataAsync(path);
+        }
+
+        public Task EncodeAsync(PixelBuffer image, string path, string format,
+                                double quality, ImageMetadata? metadata = null,
+                                bool stripPrivacyMetadata = true)
+        {
+            Calls++;
+            return inner.EncodeAsync(image, path, format, quality, metadata,
+                                     stripPrivacyMetadata);
+        }
+
+        public Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                  ImageMetadata? metadata = null,
+                                  bool stripPrivacyMetadata = true)
+        {
+            Calls++;
+            return inner.Encode16Async(image, path, format, metadata,
+                                       stripPrivacyMetadata);
+        }
+    }
+
+    /// <summary>
+    /// Raises its token as soon as the decode returns, so the cancel arrives
+    /// after the pixels are in hand and before the encoder is entered.
+    /// </summary>
+    private sealed class CancelAfterDecode(IImageCodec inner, CancellationTokenSource source)
+        : IImageCodec
+    {
+        public int EncodeCalls { get; private set; }
+
+        public Task<ImageSize> ReadSizeAsync(string path) => inner.ReadSizeAsync(path);
+
+        public Task<int> ReadBitDepthAsync(string path) => inner.ReadBitDepthAsync(path);
+
+        public async Task<PixelBuffer> DecodeAsync(string path)
+        {
+            var buffer = await inner.DecodeAsync(path);
+            source.Cancel();
+            return buffer;
+        }
+
+        public Task<PixelBuffer16> Decode16Async(string path) => inner.Decode16Async(path);
+
+        public Task<ImageMetadata> ReadMetadataAsync(string path) =>
+            inner.ReadMetadataAsync(path);
+
+        public Task EncodeAsync(PixelBuffer image, string path, string format,
+                                double quality, ImageMetadata? metadata = null,
+                                bool stripPrivacyMetadata = true)
+        {
+            EncodeCalls++;
+            return inner.EncodeAsync(image, path, format, quality, metadata,
+                                     stripPrivacyMetadata);
+        }
+
+        public Task Encode16Async(PixelBuffer16 image, string path, string format,
+                                  ImageMetadata? metadata = null,
+                                  bool stripPrivacyMetadata = true)
+        {
+            EncodeCalls++;
+            return inner.Encode16Async(image, path, format, metadata,
+                                       stripPrivacyMetadata);
+        }
+    }
+
+    /// <summary>
+    /// The leftover siblings of one destination name: the dot-prefixed files a
+    /// finished write renames away, so finding one means a write did not land.
+    /// </summary>
+    private static List<string> Siblings(string folder, string destinationName) =>
+        Directory.EnumerateFiles(folder)
+                 .Where(path => TemporaryFiles.IsSiblingTemp(Path.GetFileName(path),
+                                                             destinationName))
+                 .ToList();
+
+    private static Exception? ErrorOf(Action action)
+    {
+        try
+        {
+            action();
+            return null;
+        }
+        catch (Exception error)
+        {
+            return error;
+        }
+    }
+
+    private static Exception? AsyncErrorOf(Func<Task> action)
+    {
+        try
+        {
+            action().GetAwaiter().GetResult();
+            return null;
+        }
+        catch (Exception error)
+        {
+            return error;
         }
     }
 

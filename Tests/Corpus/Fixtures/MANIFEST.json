@@ -179,6 +179,21 @@
       "purpose" : "Grayscale source.",
       "sha256" : "47c1c64adc8027a289bd4256985ecb808a20efb6dd868dccd0b391b5b06a9b77",
       "width" : 640
+    },
+    {
+      "bitsPerComponent" : 8,
+      "bitsPerPixel" : 32,
+      "characteristics" : "512x384, 8-bit sRGB, four colour quadrants, 64 px grid, central checkerboard, 6 px edge bars, diagonal marker.",
+      "colorSpace" : "kCGColorSpaceSRGB",
+      "decodedKey" : "512x384|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|1b4cf962f7cb74b00c48d3341e77f2d058218debf8ce276b156fcde19de7a7f2",
+      "file" : "F13_geometry_grid.png",
+      "height" : 384,
+      "id" : "F13_GEOMETRY_GRID",
+      "necessity" : "Geometry needs a frame with exact pixel edges, orientation markers and measurable resampling; the portrait fixtures do not provide it.",
+      "operations" : "crop fractions, straighten angles, quarter turn, mirror, coordinate mapping, interpolation and edge behaviour.",
+      "purpose" : "Crop and straighten geometry (added 2026-11-15, W4-8 Option A).",
+      "sha256" : "7a20140616ca4b0349588591688689b28097ba100a8caead556aebdea8ad2f9a",
+      "width" : 512
     }
   ],
   "generatedBy" : "Tests\/CorpusSupport.swift",

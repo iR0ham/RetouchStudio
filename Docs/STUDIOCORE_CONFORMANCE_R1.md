@@ -273,15 +273,22 @@ No fixture copies corpus pixels or depends on the corpus harness at runtime.
 
 `corpus-lock.json` pins:
 
-- `manifestSha256`: `84f4b81cb994627ad501a677526a833cc501116f8aad6eaa10b17180f902d254`
+- `manifestSha256`: `20d120e9cd20e499b0a3901d30ea0505a7fa149b04db62a707a321bb07aed062`
 - `baselinesSha256`: `aea08d46c116b303c2766797f5b31e603d2f6ecf5d3cbc33c9e2cb363c411ed1`
-- counts: 12 fixtures, 78 baseline cases, 21 reference PNGs, 11 export files
+- counts: 13 fixtures, 78 baseline cases, 21 reference PNGs, 11 export files
 - the SHA-256 of every reference PNG
 - the set of 11 export file names
+- `geometry.baselinesSha256`: `b8c26fd794d16a053c721381d02532295d3c4337523e9cf2a17a547353e69449`
+  for the additive `baselines.geometry.v1.json` (schema 1, `additive: true`,
+  approved 2026-11-15), plus its 7 case ids and the SHA-256 of each of its
+  reference PNGs
 
 The runner recomputes all of these. If anyone regenerates a baseline, changes
 an image algorithm, or adds/removes an export, the lock fails until the change
-is reviewed and the lock is updated deliberately.
+is reviewed and the lock is updated deliberately. The additive geometry set
+(W4-8 Option A, `Docs/GOLDEN_IMAGE_CORPUS.md` §7a) is pinned the same way, in
+its own block, so a future addition is a reviewed lock update rather than an
+unnoticed corpus change.
 
 Export bytes are deliberately **not** pinned. During R1 validation the corpus
 harness rewrote four export files with different bytes while all 376 corpus

@@ -56,19 +56,23 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
         }
     }
 
+    /// Both single exports (`renderAndWrite`) and batch files reach here. A
+    /// task cancelled while the bytes are being written must not commit them:
+    /// the write is abandoned, so the cancelled file leaves nothing behind.
     func write(_ output: RenderedExport, request: RenderRequest,
                source: ExportSource, to destination: URL,
                protecting protectedURL: URL?) throws -> RenderResult {
         if Task.isCancelled { throw RenderError.cancelled }
         let plan = RenderPolicy.plan(request, source: source.renderDescription)
         let colorSpace = plan.colorSpace == .sRGB
-            ? RenderColorSpace.sRGB.cgColorSpace
+            ? Self.sRGBOutput(for: source.colorSpace)
             : source.colorSpace
         switch ExportService.writeResult(output, snapshot: request, to: destination,
                                          colorSpace: colorSpace,
                                          metadata: source.metadata,
                                          xmp: source.xmp,
-                                         protecting: protectedURL) {
+                                         protecting: protectedURL,
+                                         isCancelled: { Task.isCancelled }) {
         case .written:
             return RenderResult(destination: destination,
                                 pixelSize: plan.pixelSize,
@@ -80,9 +84,24 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
                                 carriedSourceMetadata: output.carriesSourceMetadata)
         case .refusedOriginal:
             throw RenderError.sourceIsDestination
+        case .cancelled:
+            throw RenderError.cancelled
         case .failed:
             throw RenderError.writeFailed
         }
+    }
+
+    /// A photo that already carries the sRGB profile is written through its own
+    /// space, so its bytes stay exactly as before. Converting into the canonical
+    /// sRGB object instead would nudge a few samples by one 16-bit step.
+    private static func sRGBOutput(for sourceSpace: CGColorSpace?) -> CGColorSpace? {
+        guard let sourceSpace,
+              let sourceICC = sourceSpace.copyICCData() as Data?,
+              let sRGBICC = CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData() as Data?,
+              sourceICC == sRGBICC else {
+            return RenderColorSpace.sRGB.cgColorSpace
+        }
+        return sourceSpace
     }
 
     private static func map(_ error: Error) -> RenderError {

@@ -239,7 +239,7 @@ These are captured in `baselines.json` under `exports`, with artifacts under `Te
 | TIFF export | written |
 | JPEG export | 256 px, 8 bits per component |
 | HEIC export | written on this host (encoder available); still treated as optional |
-| Display P3 PNG export | 16 bits, profile preserved as Display P3 |
+| Display P3 PNG export | 16 bits, converted to the sRGB output profile (2026-11-15, W4-4 Option A; was "profile preserved as Display P3") |
 | Alpha PNG export (F09) | alpha preserved |
 | JPEG alpha flatten (F09) | transparent regions flattened |
 | F08 large-source export | 256 px long edge from 1600×1067 |
@@ -331,6 +331,12 @@ existing effect results (`reshape` and `teethWhiten` regressions in
 `EngineTests`). Source profiles still tag exports, so a Display P3 photo
 keeps its P3 profile. What is *not* proven: the preview surface, the PDF/print
 path, and any wide-gamut display path beyond the encoded file.
+
+**Correction (2026-11-15, W4-4 Option A, owner-approved).** Exports no longer
+carry the source profile. `RenderPolicy.plan` names sRGB for every export, so
+a Display P3 photo is converted to sRGB and colours outside the sRGB gamut are
+clipped. The working-space text above remains accurate — only the output
+decision changed. See `Docs/OUTPUT_COLOR_POLICY.md`.
 
 **XMP survives when the owner keeps metadata.** `load` reads the XMP packet
 with `CGImageSourceCopyMetadataAtIndex` and carries it as `CGImageMetadata`

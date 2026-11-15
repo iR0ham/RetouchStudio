@@ -1324,7 +1324,8 @@ check((secondExif[kCGImagePropertyExifCameraOwnerName] as? String) == "Second Ow
         && (secondTIFF[kCGImagePropertyTIFFMake] as? String) == "Second Make",
       "a batch row uses its own file's metadata")
 
-// A Display P3 source must keep its profile, not be retagged as sRGB.
+// The 1.0 plan always asks for sRGB, but the writer still honours an explicit
+// profile so a later wide-gamut export only needs the plan changed.
 if let p3 = CGColorSpace(name: CGColorSpace.displayP3),
    let context = CGContext(data: nil, width: privacySide, height: privacySide,
                            bitsPerComponent: 8, bytesPerRow: 0, space: p3,
@@ -1340,7 +1341,7 @@ if let p3 = CGColorSpace(name: CGColorSpace.displayP3),
        let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil),
        let name = decoded.colorSpace?.name as String? {
         check(wrote && name == (CGColorSpace.displayP3 as String),
-              "Display P3 profile survives the export", name)
+              "an explicitly supplied P3 profile survives the writer", name)
     } else {
         check(false, "Display P3 export decodes")
     }

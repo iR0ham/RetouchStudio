@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RetouchStudio.Core.IO;
 
 namespace RetouchStudio.Core.Project;
 
@@ -190,6 +191,13 @@ public sealed class RecoveryStore
 
     private DateTimeOffset _lastSavedAt = Epoch;
 
+    /// <summary>
+    /// True while the working slot still holds a copy the launch could not
+    /// lift. It is then the only copy of that document, so an autosave must
+    /// leave the file alone until the owner restores or discards it.
+    /// </summary>
+    private bool _workingLocked;
+
     public RecoveryStore(string directory)
     {
         Directory = directory;
@@ -218,7 +226,7 @@ public sealed class RecoveryStore
     public bool WriteWorking(RecoverySnapshot snapshot, out RecoverySnapshot? written)
     {
         written = null;
-        if (InjectedFailures.Contains(Failure.WorkingWrite))
+        if (_workingLocked || InjectedFailures.Contains(Failure.WorkingWrite))
         {
             return false;
         }
@@ -231,15 +239,24 @@ public sealed class RecoveryStore
             Source = snapshot.Source,
         };
         var bytes = current.ToUtf8();
-        var temporary = WorkingPath + ".tmp";
+        var temporary = TemporaryFiles.SiblingTempPath(WorkingPath);
         try
         {
             System.IO.Directory.CreateDirectory(Directory);
             File.WriteAllBytes(temporary, bytes);
-            File.Move(temporary, WorkingPath, overwrite: true);
+            TemporaryFiles.Publish(temporary, WorkingPath);
         }
         catch (Exception)
         {
+            // The failed bytes only ever lived in the sibling; removing it
+            // leaves the previous working copy whole.
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (Exception)
+            {
+            }
             return false;
         }
         _lastSavedAt = savedAt;
@@ -251,11 +268,16 @@ public sealed class RecoveryStore
 
     /// <summary>
     /// Drops the working copy. A caller that only owns one document passes its
-    /// photo path, so a slot another document already wrote survives.
+    /// photo path, so a slot another document already wrote survives. A slot
+    /// that could not be lifted is never removed: it is the only copy of an
+    /// unresolved document until the owner restores or discards it.
     /// </summary>
     public bool RemoveWorking(string? ifSourcePath = null)
     {
-        if (InjectedFailures.Contains(Failure.WorkingRemove))
+        // The macOS store refuses this outright (Recovery.swift's
+        // removeWorking): an unresolved slot outlives the document that is
+        // open, so closing or replacing that document cannot delete it.
+        if (_workingLocked || InjectedFailures.Contains(Failure.WorkingRemove))
         {
             return false;
         }
@@ -287,6 +309,10 @@ public sealed class RecoveryStore
     public IReadOnlyList<Candidate> PrepareForLaunch()
     {
         System.IO.Directory.CreateDirectory(Directory);
+        // A crash during an autosave can leave its sibling temp behind. Only
+        // those old temps are removed: the working slot, candidates and
+        // quarantine are never swept.
+        TemporaryFiles.SweepStaleSiblings(WorkingPath);
         if (File.Exists(WorkingPath))
         {
             if (TryReadFile(WorkingPath) is { } working)
@@ -314,6 +340,9 @@ public sealed class RecoveryStore
         }
 
         var list = new List<Candidate>();
+        // A slot that survived the lift is an unresolved copy and the only
+        // one there is: autosave must not overwrite it for this session.
+        _workingLocked = File.Exists(WorkingPath);
         if (TryReadFile(WorkingPath) is { } stuck)
         {
             // The lift failed, so the slot is offered as-is. No new document is
@@ -351,8 +380,21 @@ public sealed class RecoveryStore
         {
             return false;
         }
+        var stuckSlot = string.Equals(candidate.Path, WorkingPath, StringComparison.OrdinalIgnoreCase);
+        if (stuckSlot)
+        {
+            // Restoring the stuck slot is the owner's decision about it, so
+            // the slot may be written again.
+            _workingLocked = false;
+        }
         if (!WriteWorking(candidate.Snapshot, out _))
         {
+            // The write did not land, so the unresolved copy is still the only
+            // one there is and must stay protected from the next autosave.
+            if (stuckSlot)
+            {
+                _workingLocked = true;
+            }
             return false;
         }
         if (ReadWorking() is not { } written ||
@@ -395,12 +437,17 @@ public sealed class RecoveryStore
             {
                 File.Delete(candidate.Path);
             }
-            return true;
         }
         catch (Exception)
         {
             return false;
         }
+        if (string.Equals(candidate.Path, WorkingPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // The owner dropped the stuck copy, so the slot is free again.
+            _workingLocked = false;
+        }
+        return true;
     }
 
     /// <summary>Moves an unreadable copy aside; its bytes are kept, never deleted.</summary>

@@ -3,7 +3,7 @@
   "appliesWatermark" : true,
   "bitsPerChannel" : 8,
   "carriesSourceMetadata" : true,
-  "colorSpace" : "source",
+  "colorSpace" : "sRGB",
   "flattensAlpha" : true,
   "format" : "jpeg",
   "pixelSize" : {

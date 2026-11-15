@@ -1,22 +1,26 @@
 # Project Schema v5 — persistent masks
 
-**Status:** codec, ABI and macOS app wiring IMPLEMENTED and locally tested
-(2026-11-15, branch `schema/v5-masks`; codec committed as `a675078`, app wiring
-as `b0a8676` plus the recovery snapshot fix on top). A Quick Edit now stores
-the mask it was drawn from beside the edit as one undo step, a reopened project
-shows its mask again when the pixels still match, the refined raster lives in a
-cache keyed by the mask id, and an autosave keeps masks and face identities so a
-crash restore does not lose them. Nothing here is CI verified yet and nothing
-is merged.
+**Status:** codec, ABI and macOS app wiring IMPLEMENTED, locally tested and CI
+verified; merged to `main` as `49a0a15` (PR #58) on 2026-11-15 and carried into
+`develop` by `0b55606` (codec committed as `a675078`, app wiring as `b0a8676`
+plus the recovery snapshot fix on top). A Quick Edit now stores the mask it was
+drawn from beside the edit as one undo step, a reopened project shows its mask
+again when the pixels still match, the refined raster lives in a cache keyed by
+the mask id, and an autosave keeps masks and face identities so a crash restore
+does not lose them. A `requiredFeatures` entry this build cannot honor is
+refused on v5 exactly as on v4 (`testProjectV5Capabilities`).
 
-Evidence so far, all local on this Mac:
+Evidence:
 
 | Check | Result |
 |---|---|
 | `Tests/run-studiocore.sh` (arm64 and x86_64) | 287 checks passed |
 | `Tests/run-abi.sh` (arm64 and x86_64) | ABI TESTS: PASS (104 checks) |
-| `Tests/run.sh` (arm64: engine, model, runtime process, runtime v2) | all four suites PASS, exit 0; the model suite carries the new `[v5]` checks, including the recovery snapshot |
-| Windows suite | NOT RUN — runs only on a Windows runner; the new cases compile in CI |
+| `Tests/run.sh` (arm64: engine, model, runtime process, runtime v2) | all four suites PASS, exit 0; the model suite carries the `[v5]` checks, including the recovery snapshot and the capability refusal |
+| Windows suite (CI only; no Windows machine here) | run 43719176158 on `3996049`: `Windows StudioCore` 287 core checks, ABI 104 checks, `R1 conformance: PASS`; `Windows App` 295 host checks and the twelve UI modes |
+
+Windows reads and writes v5 through this same Swift codec behind the C ABI
+(`StudioCoreABI`); there is no second parser to keep in step.
 
 ## 1. Three concepts, kept apart
 

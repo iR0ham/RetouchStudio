@@ -1,5 +1,6 @@
 using System.Text;
 using RetouchStudio.Core.Interop;
+using RetouchStudio.Core.IO;
 
 namespace RetouchStudio.Core.Project;
 
@@ -116,9 +117,29 @@ public sealed class ProjectSession : IDisposable
     public void Save(string projectPath)
     {
         var bytes = StudioCoreApi.WriteProject(CurrentState(), _context);
-        var temporary = projectPath + ".tmp";
-        File.WriteAllBytes(temporary, bytes);
-        File.Move(temporary, projectPath, overwrite: true);
+        TemporaryFiles.SweepStaleSiblings(projectPath);
+        var temporary = TemporaryFiles.SiblingTempPath(projectPath);
+        try
+        {
+            File.WriteAllBytes(temporary, bytes);
+            TemporaryFiles.Publish(temporary, projectPath);
+        }
+        catch
+        {
+            // The new bytes only ever lived in the sibling, so a failed write
+            // or rename leaves the previous project file exactly as it was.
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+            throw;
+        }
         ProjectPath = projectPath;
         MarkClean();
     }

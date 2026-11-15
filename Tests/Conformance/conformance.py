@@ -1151,13 +1151,15 @@ CORPUS_IDS: set[str] = set()
 def verify_corpus() -> tuple[dict[str, str], dict]:
     manifest_path = CORPUS / "Fixtures" / "MANIFEST.json"
     baselines_path = CORPUS / "baselines.json"
+    geometry_path = CORPUS / "baselines.geometry.v1.json"
     lock_path = FIXTURES / "corpus-lock.json"
-    for path in (manifest_path, baselines_path, lock_path):
+    for path in (manifest_path, baselines_path, geometry_path, lock_path):
         if not path.is_file():
             fail(f"missing corpus file: {path.relative_to(ROOT)}")
 
     _, _, manifest = load_json(manifest_path)
     _, _, baselines = load_json(baselines_path)
+    geometry_raw, _, geometry = load_json(geometry_path)
     lock_raw, _, lock = load_json(lock_path)
     check_canonical(lock_path, lock_raw, lock)
     if lock.get("schema") != 1:
@@ -1165,10 +1167,18 @@ def verify_corpus() -> tuple[dict[str, str], dict]:
 
     manifest_sha = sha256_hex(manifest_path.read_bytes())
     baselines_sha = sha256_hex(baselines_path.read_bytes())
+    geometry_sha = sha256_hex(geometry_path.read_bytes())
     if manifest_sha != lock.get("manifestSha256"):
         fail("corpus manifest hash differs from corpus-lock.json")
     if baselines_sha != lock.get("baselinesSha256"):
         fail("corpus baselines hash differs from corpus-lock.json")
+    geometry_lock = lock.get("geometry")
+    if not isinstance(geometry_lock, dict):
+        fail("corpus lock: geometry must be an object")
+    if geometry_sha != geometry_lock.get("baselinesSha256"):
+        fail("corpus geometry baseline hash differs from corpus-lock.json")
+    if geometry.get("schemaVersion") != 1 or geometry.get("additive") is not True:
+        fail("corpus geometry baseline: schemaVersion must be 1 and additive must be true")
 
     fixtures = manifest.get("fixtures")
     if not isinstance(fixtures, list):
@@ -1209,6 +1219,43 @@ def verify_corpus() -> tuple[dict[str, str], dict]:
     for case in cases:
         if not isinstance(case, dict) or case.get("fixture") not in fixture_ids:
             fail("corpus baselines: case references an unknown fixture")
+
+    geometry_cases = geometry.get("cases")
+    if not isinstance(geometry_cases, list):
+        fail("corpus geometry baseline: cases must be an array")
+    geometry_ids = [case.get("id") for case in geometry_cases if isinstance(case, dict)]
+    if len(geometry_ids) != len(set(geometry_ids)):
+        fail("corpus geometry baseline: duplicate case ids")
+    if set(geometry_ids) & set(case_ids):
+        fail("corpus geometry baseline: a case id repeats baselines.json")
+    if geometry_lock.get("cases") != len(geometry_cases):
+        fail("corpus geometry case count differs from lock")
+    for case in geometry_cases:
+        if not isinstance(case, dict) or case.get("fixture") not in fixture_ids:
+            fail("corpus geometry baseline: case references an unknown fixture")
+
+    geometry_reference_cases = sorted(
+        case.get("id") for case in geometry_cases
+        if isinstance(case, dict) and case.get("reference")
+    )
+    lock_geometry_references = geometry_lock.get("referenceFiles")
+    if not isinstance(lock_geometry_references, list):
+        fail("corpus lock: geometry referenceFiles must be an array")
+    lock_geometry_ids = [
+        item.get("caseId") for item in lock_geometry_references if isinstance(item, dict)
+    ]
+    if geometry_reference_cases != sorted(lock_geometry_ids):
+        fail("corpus lock: geometry reference case set differs from the geometry baseline")
+    for item in lock_geometry_references:
+        if not isinstance(item, dict):
+            fail("corpus lock: geometry reference entry is not an object")
+        case_id = item.get("caseId")
+        file_name = item.get("file")
+        path = CORPUS / "References" / file_name
+        if not path.is_file():
+            fail(f"corpus geometry reference missing: {file_name}")
+        if sha256_hex(path.read_bytes()) != item.get("sha256"):
+            fail(f"corpus geometry reference hash mismatch: {case_id}")
 
     reference_cases = sorted(
         case.get("id") for case in cases if isinstance(case, dict) and case.get("reference")
@@ -1260,6 +1307,8 @@ def verify_corpus() -> tuple[dict[str, str], dict]:
         "cases": len(cases),
         "references": len(reference_cases),
         "exports": len(export_files),
+        "geometryCases": len(geometry_cases),
+        "geometryReferences": len(geometry_reference_cases),
     }
 
 
@@ -1386,6 +1435,11 @@ def main() -> int:
         f"{corpus_counts['exports']} exports"
     )
     print("  canonical JSON: UTF-8, sorted keys, 2-space pretty form, SHA-256 verified")
+    print(
+        f"  corpus geometry (additive, approved): "
+        f"{corpus_counts['geometryCases']} cases, "
+        f"{corpus_counts['geometryReferences']} references"
+    )
     print("  render plans: 17 stages in canonical order")
     return 0
 

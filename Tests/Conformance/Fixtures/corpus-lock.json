@@ -3,7 +3,7 @@
   "comparisonMethodology": "Docs/IMAGE_COMPARISON_METHODOLOGY.md",
   "counts": {
     "baselineCases": 78,
-    "corpusFixtures": 12,
+    "corpusFixtures": 13,
     "exportFiles": 11,
     "referenceFiles": 21
   },
@@ -42,7 +42,49 @@
       "file": "F11_export_256.png"
     }
   ],
-  "manifestSha256": "84f4b81cb994627ad501a677526a833cc501116f8aad6eaa10b17180f902d254",
+  "geometry": {
+    "approved": "2026-11-15",
+    "baselinesSha256": "b8c26fd794d16a053c721381d02532295d3c4337523e9cf2a17a547353e69449",
+    "cases": 7,
+    "referenceFiles": [
+      {
+        "caseId": "Q01_CROP_CENTER",
+        "file": "Q01_CROP_CENTER.png",
+        "sha256": "c628e54b4606d7364678d7e4e03323e3f7992dc0eba8ae56fbfd23340934d0b5"
+      },
+      {
+        "caseId": "Q02_CROP_EDGE",
+        "file": "Q02_CROP_EDGE.png",
+        "sha256": "eaa7be72d586d2e61af5a21c0d14565db00b21a217b38dbd6e2db5aef25f587c"
+      },
+      {
+        "caseId": "Q03_STRAIGHTEN_CW",
+        "file": "Q03_STRAIGHTEN_CW.png",
+        "sha256": "da80860b3c8296c4cd9730534006bafa6a278bfaf4c304c0c04b938309606ba6"
+      },
+      {
+        "caseId": "Q04_STRAIGHTEN_CCW",
+        "file": "Q04_STRAIGHTEN_CCW.png",
+        "sha256": "c17d791f0a6cb2b06cd6dc1a451de350bec49605a4dcb1f7900c133b2035d6a2"
+      },
+      {
+        "caseId": "Q05_STRAIGHTEN_CROP",
+        "file": "Q05_STRAIGHTEN_CROP.png",
+        "sha256": "188fdcc2a3ea5930eb1b9311b3d180cd6e934a8da66c1fa5fbea79b618194b41"
+      },
+      {
+        "caseId": "Q06_TURN_STRAIGHTEN_CROP",
+        "file": "Q06_TURN_STRAIGHTEN_CROP.png",
+        "sha256": "2a5ad056b5105ef495f0c812026ffc8da171a3fb754ddba82c028def2eb7a41c"
+      },
+      {
+        "caseId": "Q07_MIRROR_CROP",
+        "file": "Q07_MIRROR_CROP.png",
+        "sha256": "e14c16bae7dc1c1641203e519b5ed1a57d520a160f3cad5a6be71b75e1f37c2e"
+      }
+    ]
+  },
+  "manifestSha256": "20d120e9cd20e499b0a3901d30ea0505a7fa149b04db62a707a321bb07aed062",
   "referenceFiles": [
     {
       "caseId": "BG01_BLUR",
