@@ -57,6 +57,16 @@ The next milestone PR carries that work plus these documents.
 | W4-7 | RenderPlan consumed end to end (dimensions, depth, alpha, profile, compression, quality, metadata, orientation) | PARTIAL | dimensions, depth, alpha, orientation, quality and the strip policy are honoured; the profile is fixed sRGB rather than passed through | W4-4 decision |
 | W4-8 | Deterministic cross-host corpus comparisons (MAE, max error, SSIM, colour difference) | PARTIAL | adjustments compared to macOS references (exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47 MAE); straighten/crop lacks a cross-host pixel reference | golden-corpus fixture needs owner approval |
 
+**Backlog correction (2026-11-15, read-only audit).** The Windows request builder's
+hardcoded `includeStamps`/`includeAnalysis`/`aiUpscale` = false and `faceCount` = 0
+are correct-by-design, not gaps: the host has no heal/sticker renderer
+(`ExportRunner.cs:20`), no analysis or face model, and no upscaler toggle; projects
+carrying those edits are named and confirmed before export (`DocumentModel.cs:221,233`,
+`MainWindow.xaml.cs:874`), and the 4096 long edge behaves identically because macOS
+also refuses to enlarge with upscale off (`RenderPolicy.swift:69`). Latent, not
+fixed: a batch request copies `aiEdits` where macOS clears them per file
+(`BatchRenderPolicy.swift:45`), invisible while the plan never reads `aiEdits`.
+
 ## WS-2 — W3 face analysis and masks
 
 | ID | Item | Current status | Remaining work | Dependency |
@@ -71,8 +81,8 @@ The next milestone PR carries that work plus these documents.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, all nine global sliders, zoom buttons, Export dialog writing a decoded JPEG) in runs 43647604771 and 43659238621 | CI does not drive the crop overlay drag or pointer gestures | extend the harness per interaction |
-| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771) | divider drag, pointer zoom/pan and the peek modifier are not driven by CI | as WP-1 |
+| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, all nine global sliders, zoom buttons, Export dialog writing a decoded JPEG) in runs 43647604771 and 43659238621, and the crop overlay's corner drag with injected pointer input (512×512 to 449×472), Apply crop and the exported frame in run 43681175327 | pointer zoom/pan, drop-to-open and the failure paths are not driven | extend the harness per interaction |
+| WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771); the compare divider is turned on by a pointer click, dragged 80 px right and back within 6 px, and removed on the second click (run 43681175327) | pointer zoom/pan and the peek modifier are not driven by CI | as WP-1 |
 | WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI | as WP-1 |
 | WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure); a one-photo batch runs from the UI through the photo and folder pickers and writes a decoded file (run 43655814761) | progress/cancel UI NOT VERIFIED; multi-select and cancellation during a running batch are not exercised | extend the harness |
 | WP-5 | Project lifecycle, undo/redo, save/reopen, recovery | TESTED headless and driven through UIA: Open Project with a codec-saved project (run 43653664500), Save Project through its dialog, Undo and Redo on the slider (run 43654765580), a fresh-process reopen keeping Exposure 40 (run 43658018867), and the launch recovery prompt (run 43647604771) | none for the golden paths; failure paths (unreadable project, failed save) are not driven | none |
@@ -106,7 +116,7 @@ The next milestone PR carries that work plus these documents.
 | DS-2 | Windows updater and update feed | NOT IMPLEMENTED | design signed metadata, download verification, rollback, test channels | signing; no public feed without authorization |
 | DS-3 | macOS DMG build | VERIFIED locally and on a release dry run | clean-machine install NOT VERIFIED | none |
 | DS-4 | Developer ID signing, notarization, stapling, Gatekeeper | BLOCKED | pipeline prepared; credentials unavailable | owner Apple Developer membership |
-| DS-5 | Tag release publishing | NOT VERIFIED | a `workflow_dispatch` dry run built and uploaded artifacts without publishing | owner authorization for a release |
+| DS-5 | Tag release publishing | REPAIRED, NOT VERIFIED | a tag used to skip its Release because `release` inherited the `windows-app` skip; the job now uses `always()` with explicit results, `-PackageVersion` stamps the published assembly, and `Tools/check-versions.sh` fails a tag that disagrees with Info.plist and Directory.Build.props. Only a real tag can prove the paths, so they stay unverified; a `workflow_dispatch` dry run built and uploaded artifacts without publishing | owner authorization for a release or a throwaway tag |
 
 ## WS-7 — Cross-platform acceptance
 
