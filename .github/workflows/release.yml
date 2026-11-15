@@ -163,7 +163,7 @@ jobs:
       && needs['windows-core'].result == 'success'
       && (needs['windows-app'].result == 'success'
       || needs['windows-app'].result == 'skipped') }}
-    # Windows is a product platform, so a release waits for its package too.
+    # Listed so a release waits for the Windows package whenever it runs.
     needs: [macos-arm64, macos-x86_64, windows-core, windows-app]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
