@@ -63,7 +63,7 @@ prompt. The next milestone PR carries that work plus these documents.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, Exposure slider, zoom buttons, Export dialog writing a decoded JPEG) in run 43647604771 | CI does not drive the crop overlay drag, pointer slider drags, or the other eight sliders; the Save/Open Project dialogs are not driven | extend the harness per interaction |
+| WP-1 | Import, preview, adjustments, crop, rotation, mirror, straighten | TESTED headless; the golden path is driven through UIA (Open Photo dialog, all nine global sliders, zoom buttons, Export dialog writing a decoded JPEG) in runs 43647604771 and 43659238621 | CI does not drive the crop overlay drag or pointer gestures | extend the harness per interaction |
 | WP-2 | Zoom, pan, compare split, peek | TESTED (arithmetic); the Fit/Zoom in buttons reach Fit and 150% through UIA (run 43647604771) | divider drag, pointer zoom/pan and the peek modifier are not driven by CI | as WP-1 |
 | WP-3 | Drop-to-open photo or project | IMPLEMENTED; UI wiring NOT VERIFIED | the drop handler is compiled and reviewed, not exercised by CI | as WP-1 |
 | WP-4 | Batch export (planning, collisions, progress, cancellation, failure isolation) | TESTED headless (sample-exact, collision-safe, per-file failure); a one-photo batch runs from the UI through the photo and folder pickers and writes a decoded file (run 43655814761) | progress/cancel UI NOT VERIFIED; multi-select and cancellation during a running batch are not exercised | extend the harness |
