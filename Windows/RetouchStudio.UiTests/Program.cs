@@ -22,7 +22,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|guard|project|batch|crop|compare]
+///       [golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,12 +39,13 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch|crop|compare]");
+                "[golden|recovery|recoveryno|guard|project|batch|crop|compare|zoom|batchcancel|errors]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
-        if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"
-                        or "crop" or "compare"))
+        if (mode is not ("golden" or "recovery" or "recoveryno" or "guard" or "project"
+                        or "batch" or "crop" or "compare" or "zoom" or "batchcancel"
+                        or "errors"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -67,7 +68,7 @@ internal static class Program
             File.Delete(output);
         }
         var recovery = Directory.CreateTempSubdirectory("retouchstudio-ui-recovery-");
-        if (mode == "recovery")
+        if (mode is "recovery" or "recoveryno")
         {
             SeedRecovery(recovery.FullName, photo);
         }
@@ -90,6 +91,10 @@ internal static class Program
             {
                 RunRecovery(process, photo);
             }
+            else if (mode == "recoveryno")
+            {
+                RunRecoveryDecline(process, app, photo, recovery.FullName);
+            }
             else if (mode == "guard")
             {
                 RunGuard(process, photo, output);
@@ -109,6 +114,18 @@ internal static class Program
             else if (mode == "compare")
             {
                 RunCompare(process, photo);
+            }
+            else if (mode == "zoom")
+            {
+                RunZoomPan(process, photo);
+            }
+            else if (mode == "batchcancel")
+            {
+                RunBatchCancel(process, photo, output);
+            }
+            else if (mode == "errors")
+            {
+                RunErrors(process, photo, output);
             }
             else
             {
@@ -231,6 +248,77 @@ internal static class Program
     }
 
     /// <summary>
+    /// "No" is the other half of the launch prompt: it must drop that one copy
+    /// and keep the next launch quiet, instead of offering the discarded work
+    /// again. The store's own suite proves the file goes; only this drives the
+    /// button a person sees.
+    /// </summary>
+    private static void RunRecoveryDecline(Process process, string app, string photo,
+                                           string recoveryDirectory)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var prompt = WaitWindow(process.Id, "Recover unsaved changes", StartUpPatience)
+            ?? throw new InvalidOperationException("the recovery prompt never appeared");
+        Ok("the seeded unsaved copy raised the recovery prompt");
+        var promptHandle = (IntPtr)prompt.Current.NativeWindowHandle;
+        var no = FindButton(prompt, "No")
+            ?? throw new InvalidOperationException("the recovery prompt has no No button");
+        Invoke(no);
+        if (!WaitFor(() => !IsWindowVisible(promptHandle), TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException("the declined prompt stayed on screen");
+        }
+        Ok("No closed the prompt");
+
+        // An empty editor keeps the plain title; anything else means the
+        // decline restored the copy it was told to drop.
+        if (!WaitFor(() => window.Current.Name == "Retouch Studio", TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"declining did not leave an empty editor; the title is '{window.Current.Name}'");
+        }
+        Ok($"declining left the editor empty: '{window.Current.Name}'");
+
+        CloseCleanly(window, process);
+
+        var start = new ProcessStartInfo(app)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(app)!,
+        };
+        start.Environment["RETOUCHSTUDIO_NO_DIALOG"] = "1";
+        start.Environment["RETOUCHSTUDIO_RECOVERY"] = recoveryDirectory;
+        using var quiet = Process.Start(start)
+            ?? throw new InvalidOperationException("the app did not restart");
+        var second = WaitWindow(quiet.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the second window never appeared");
+
+        // The prompt is raised while the window loads, so a quiet stretch after
+        // the window appears is the evidence that nothing was offered again.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (FindVisibleWindow(quiet.Id, "Recover unsaved changes") != IntPtr.Zero)
+            {
+                throw new InvalidOperationException(
+                    "the discarded copy was offered again on the next launch");
+            }
+            Thread.Sleep(250);
+        }
+        Ok("the next launch offered nothing to recover");
+
+        if (!WaitFor(() => second.Current.Name == "Retouch Studio", TimeSpan.FromSeconds(15)))
+        {
+            throw new InvalidOperationException(
+                $"the quiet launch is not an empty editor; the title is '{second.Current.Name}'");
+        }
+        Ok($"the quiet launch is an empty editor: '{second.Current.Name}'");
+        CloseCleanly(second, quiet);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
     /// Opens a project whose edits this host cannot render and proves Export
     /// names them before writing anything. "No" must leave the photo unwritten
     /// and the document open, which is the whole point of the guard.
@@ -331,6 +419,217 @@ internal static class Program
         }
         Ok("the app closed cleanly after the guard prompt");
         Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Both failure paths end in a message box a person can read: a corrupt
+    /// photo must be named as unopenable, and a destination another program
+    /// holds open must fail the export without touching that file. The app
+    /// must stay open and usable after each one.
+    /// </summary>
+    private static void RunErrors(Process process, string photo, string output)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+
+        var broken = Path.ChangeExtension(output, ".broken" + Path.GetExtension(photo));
+        File.WriteAllText(broken, "this is not a photo");
+        var open = FindButton(window, "Open Photo")
+            ?? throw new InvalidOperationException("the Open Photo button is missing");
+        Invoke(open);
+        var openDialogHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(90))
+            ?? throw new InvalidOperationException("the Open dialog never appeared");
+        var openDialog = AutomationElement.FromHandle(openDialogHandle);
+        SetFileName(openDialog, broken);
+        PressDefaultButton(openDialog, "Open");
+
+        var openError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (openError is null || !openError.Contains("could not be opened", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"opening a corrupt photo said {openError ?? "nothing"}; the app's windows are " +
+                DescribeAppWindows(process.Id));
+        }
+        Ok($"a corrupt photo is reported: {openError}");
+        if (process.HasExited || !window.Current.Name.StartsWith("Retouch Studio", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"the app did not survive the failed open; the title is " +
+                $"'{window.Current.Name}'");
+        }
+
+        OpenPhoto(window, process, photo);
+
+        // A file another program holds with no sharing cannot be written. The
+        // Save dialog still offers to replace it, which is the moment the write
+        // is attempted and fails.
+        var locked = Path.ChangeExtension(output, ".locked.jpg");
+        var placeholder = new byte[1024];
+        File.WriteAllBytes(locked, placeholder);
+        using var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite,
+                                        FileShare.None);
+        var export = FindButton(window, "Export")
+            ?? throw new InvalidOperationException("the Export button is missing");
+        Invoke(export);
+        var saveHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Export click opened no dialog");
+        var saveDialog = AutomationElement.FromHandle(saveHandle);
+        var saveEdit = SetFileName(saveDialog, locked);
+        CommitFileName(saveEdit);
+        // An existing name first raises the dialog's own replace question. The
+        // Enter can be swallowed by an auto-complete suggestion, so Save is
+        // pressed when nothing has happened yet.
+        var replace = WaitForReplacePrompt(process.Id, saveHandle, TimeSpan.FromSeconds(10));
+        if (replace is null && IsWindowVisible(saveHandle))
+        {
+            PressDefaultButton(saveDialog, "Save");
+            replace = WaitForReplacePrompt(process.Id, saveHandle, TimeSpan.FromSeconds(20));
+            if (replace is null && IsWindowVisible(saveHandle))
+            {
+                throw new InvalidOperationException(
+                    "the Export dialog never offered to replace the locked file; " +
+                    DescribeWindow(saveDialog));
+            }
+        }
+        if (replace is not null)
+        {
+            Invoke(replace);
+        }
+        if (!WaitFor(() => !IsWindowVisible(saveHandle), TimeSpan.FromSeconds(30)))
+        {
+            throw new InvalidOperationException(
+                "the Export dialog stayed open; " + DescribeWindow(saveDialog));
+        }
+
+        var exportError = DismissMessageBox(process.Id, mainHandle, TimeSpan.FromSeconds(60));
+        if (exportError is null
+            || !exportError.Contains("could not be exported", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"exporting onto a locked file said {exportError ?? "nothing"}; " +
+                "the app's windows are " + DescribeAppWindows(process.Id));
+        }
+        Ok($"a locked destination is reported: {exportError}");
+        if (new FileInfo(locked).Length != placeholder.Length)
+        {
+            throw new InvalidOperationException(
+                "the failed export changed the locked file");
+        }
+        Ok("the failed export left the locked file untouched");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Waits for the next message box, reads the text it shows, and answers OK.
+    /// Returns null when no box appears inside the patience.
+    /// </summary>
+    private static string? DismissMessageBox(int processId, IntPtr mainHandle,
+                                             TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var handle in VisibleWindows(processId))
+            {
+                if (handle == mainHandle)
+                {
+                    continue;
+                }
+                try
+                {
+                    var box = AutomationElement.FromHandle(handle);
+                    var ok = FindButton(box, "OK");
+                    if (ok is null)
+                    {
+                        continue;
+                    }
+                    var text = DescribeWindow(box);
+                    Invoke(ok);
+                    return text;
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+            Thread.Sleep(250);
+        }
+        return null;
+    }
+
+    /// <summary>A button by name in any of the process's visible windows.</summary>
+    private static AutomationElement? TryFindButton(int processId, string name)
+    {
+        foreach (var handle in VisibleWindows(processId))
+        {
+            try
+            {
+                var button = FindButton(AutomationElement.FromHandle(handle), name);
+                if (button is not null)
+                {
+                    return button;
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The Save dialog's replace question, unless the dialog has already
+    /// closed, which means it committed without asking.
+    /// </summary>
+    private static AutomationElement? WaitForReplacePrompt(int processId, IntPtr dialog,
+                                                           TimeSpan patience)
+    {
+        AutomationElement? found = null;
+        WaitFor(() =>
+        {
+            if (!IsWindowVisible(dialog))
+            {
+                return true;
+            }
+            found = TryFindButton(processId, "Yes");
+            return found is not null;
+        }, patience);
+        return found;
+    }
+
+    /// <summary>
+    /// The next visible window that is a file dialog. A plain "new window" can
+    /// be a transient shell popup with no controls, so the dialog is the one
+    /// whose tree holds a File name box.
+    /// </summary>
+    private static IntPtr? WaitFileDialog(int processId, IntPtr except, TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var handle in VisibleWindows(processId))
+            {
+                if (handle == except)
+                {
+                    continue;
+                }
+                try
+                {
+                    if (FindFileNameControl(AutomationElement.FromHandle(handle)) is not null)
+                    {
+                        return handle;
+                    }
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+            Thread.Sleep(200);
+        }
+        return null;
     }
 
     /// <summary>
@@ -562,8 +861,8 @@ internal static class Program
         var batch = FindButton(window, "Batch Export…")
             ?? throw new InvalidOperationException("the Batch Export button is missing");
         Invoke(batch);
-        var photosHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
-            ?? throw new InvalidOperationException("the Batch Export click opened no window");
+        var photosHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Batch Export click opened no dialog");
         var photosDialog = AutomationElement.FromHandle(photosHandle);
         var photosEdit = SetFileName(photosDialog, photo);
         if (!WaitFor(() => ReadValue(photosEdit) == photo, TimeSpan.FromSeconds(10)))
@@ -951,6 +1250,561 @@ internal static class Program
         Console.WriteLine("UI HOST TESTS: PASS");
     }
 
+    /// <summary>
+    /// Zoom and pan are canvas gestures with no automation pattern behind them:
+    /// the dock's label is the only text, and a pan moves pixels nobody exposes
+    /// to UIA. The label is read for zoom state, and a sampled screen hash
+    /// proves the photo moved and that Fit restored the opening view.
+    /// </summary>
+    private static void RunZoomPan(Process process, string photo)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException(
+                "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        OpenPhoto(window, process, photo);
+        var windowRect = FitWindowToScreen(window);
+
+        var zoomIn = FindButton(window, "Zoom in")
+            ?? throw new InvalidOperationException("the Zoom in button is missing");
+        var zoomOut = FindButton(window, "Zoom out")
+            ?? throw new InvalidOperationException("the Zoom out button is missing");
+        var fit = FindButton(window, "Fit to window")
+            ?? throw new InvalidOperationException("the Fit to window button is missing");
+
+        var label = ZoomLabel(window, zoomOut, zoomIn);
+        if (label != "Fit")
+        {
+            throw new InvalidOperationException(
+                $"a freshly opened photo is labelled '{label}', not Fit");
+        }
+        if (zoomOut.Current.IsEnabled || fit.Current.IsEnabled)
+        {
+            throw new InvalidOperationException(
+                "Zoom out and Fit are enabled while the photo is fitted");
+        }
+        Ok("the photo opens fitted, with Zoom out and Fit disabled");
+
+        // The pointer rests in the canvas margin between captures so a hover
+        // highlight cannot be mistaken for the gesture's own effect.
+        var neutral = new Point(windowRect.X + 20, windowRect.Y + windowRect.Height / 2);
+        var fittedShot = StableSamples(windowRect, neutral);
+
+        ClickControl(zoomIn, mainHandle);
+        var zoomed = WaitFor(() => ZoomLabel(window, zoomOut, zoomIn) != "Fit", TimeSpan.FromSeconds(8));
+        if (!zoomed)
+        {
+            throw new InvalidOperationException(
+                $"Zoom in left the dock at '{ZoomLabel(window, zoomOut, zoomIn)}'");
+        }
+        label = ZoomLabel(window, zoomOut, zoomIn);
+        if (label != "150%")
+        {
+            throw new InvalidOperationException(
+                $"one Zoom in step reads '{label}', expected 150%");
+        }
+        if (!zoomOut.Current.IsEnabled || !fit.Current.IsEnabled)
+        {
+            throw new InvalidOperationException(
+                "Zoom out and Fit are still disabled on a zoomed photo");
+        }
+        Ok($"Zoom in took the dock to {label} and enabled Zoom out and Fit");
+
+        var zoomedShot = StableSamples(windowRect, neutral);
+        if (Difference(zoomedShot, fittedShot) < 0.05)
+        {
+            throw new InvalidOperationException(
+                "the photo looks identical after zooming in; the canvas did not change");
+        }
+
+        // Portrait photos have a wider canvas than the fitted photo, so the
+        // vertical axis is the one with room to pan when zoomed.
+        var canvasWidth = windowRect.Width - 336;
+        var startX = windowRect.X + canvasWidth / 2;
+        var startY = windowRect.Y + (windowRect.Height - 40) / 2;
+        Console.WriteLine($"  dragging the zoomed photo at {startX:0},{startY:0}");
+        Drag(startX, startY, dx: 0, dy: 70, steps: 20);
+        var pannedShot = StableSamples(windowRect, neutral);
+        if (Difference(pannedShot, zoomedShot) < 0.01)
+        {
+            throw new InvalidOperationException(
+                "dragging the zoomed photo changed no pixel; the pan never reached the canvas");
+        }
+        if (ZoomLabel(window, zoomOut, zoomIn) != label)
+        {
+            throw new InvalidOperationException(
+                $"the pan changed the zoom from {label} to {ZoomLabel(window, zoomOut, zoomIn)}");
+        }
+        Ok("dragging the zoomed photo panned it without changing the zoom");
+
+        ClickControl(fit, mainHandle);
+        var refitted = WaitFor(() => ZoomLabel(window, zoomOut, zoomIn) == "Fit", TimeSpan.FromSeconds(8));
+        if (!refitted)
+        {
+            throw new InvalidOperationException(
+                $"Fit left the dock at '{ZoomLabel(window, zoomOut, zoomIn)}'");
+        }
+        if (zoomOut.Current.IsEnabled || fit.Current.IsEnabled)
+        {
+            throw new InvalidOperationException(
+                "Zoom out and Fit stay enabled after Fit");
+        }
+        var refitShot = StableSamples(windowRect, neutral);
+        // A focus mark or antialiased edge may move a few pixels; the photo
+        // and the dock must be back to what they were, which is all of it.
+        if (Difference(refitShot, fittedShot) > 0.002)
+        {
+            throw new InvalidOperationException(
+                $"Fit left {Difference(refitShot, fittedShot):P1} of the canvas changed");
+        }
+        Ok("Fit restored the exact view the photo opened with");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// The zoom dock's label: "Fit", or the percentage it shows. A button
+    /// exposes its caption as a Text element too, and the export panel shows a
+    /// quality percentage, so the label is picked by where it sits: between the
+    /// Zoom out and Zoom in buttons, on their row.
+    /// </summary>
+    private static string ZoomLabel(AutomationElement window, AutomationElement zoomOut,
+                                    AutomationElement zoomIn)
+    {
+        var left = zoomOut.Current.BoundingRectangle;
+        var right = zoomIn.Current.BoundingRectangle;
+        foreach (AutomationElement candidate in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var rect = candidate.Current.BoundingRectangle;
+            if (rect.IsEmpty
+                || rect.Left < left.Right - 2 || rect.Right > right.Left + 2
+                || rect.Top < left.Top - 6 || rect.Bottom > left.Bottom + 6)
+            {
+                continue;
+            }
+            var text = candidate.Current.Name;
+            if (text == "Fit" || Regex.IsMatch(text, @"^\d{1,3}%$"))
+            {
+                return text;
+            }
+        }
+        throw new InvalidOperationException("the zoom label is not in the UIA tree");
+    }
+
+    /// <summary>
+    /// Sampled screen pixels inside a region, once two captures a moment apart
+    /// agree. Zoom and pan leave no UIA evidence, so the pixels are the
+    /// witness; waiting for agreement keeps a repainting canvas from passing
+    /// as a gesture.
+    /// </summary>
+    private static uint[] StableSamples(Rect rect, Point pointer)
+    {
+        SetCursorPos((int)Math.Round(pointer.X), (int)Math.Round(pointer.Y));
+        Thread.Sleep(300);
+        var previous = ScreenSamples(rect);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(400);
+            var current = ScreenSamples(rect);
+            if (current.AsSpan().SequenceEqual(previous))
+            {
+                return current;
+            }
+            previous = current;
+        }
+        throw new InvalidOperationException(
+            "the window kept repainting; there is no stable frame to compare");
+    }
+
+    private static uint[] ScreenSamples(Rect rect)
+    {
+        var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
+                              GetSystemMetrics(SmCyScreen));
+        rect.Intersect(screen);
+        var width = (int)Math.Round(rect.Width);
+        var height = (int)Math.Round(rect.Height);
+        if (width < 8 || height < 8)
+        {
+            throw new InvalidOperationException(
+                $"the window {rect} has nothing on screen to capture");
+        }
+        using var bitmap = new System.Drawing.Bitmap(width, height);
+        using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+        {
+            graphics.CopyFromScreen((int)rect.X, (int)rect.Y, 0, 0,
+                                    new System.Drawing.Size(width, height),
+                                    System.Drawing.CopyPixelOperation.SourceCopy);
+        }
+        var samples = new uint[(width / 8 + 1) * (height / 8 + 1)];
+        var index = 0;
+        for (var y = 0; y < height; y += 8)
+        {
+            for (var x = 0; x < width; x += 8)
+            {
+                samples[index++] = (uint)bitmap.GetPixel(x, y).ToArgb();
+            }
+        }
+        return samples;
+    }
+
+    /// <summary>The share of sampled pixels that differ between two captures.</summary>
+    private static double Difference(uint[] a, uint[] b)
+    {
+        if (a.Length != b.Length)
+        {
+            throw new InvalidOperationException(
+                "the two captures cover different areas");
+        }
+        var changed = 0;
+        for (var index = 0; index < a.Length; index++)
+        {
+            if (a[index] != b[index])
+            {
+                changed++;
+            }
+        }
+        return (double)changed / a.Length;
+    }
+
+    /// <summary>
+    /// A batch is cancelled by its own button mid-run, not by a dialog. The
+    /// status line is the shop window: it counts finished files while the
+    /// batch runs and reports how many landed after a cancel, so the button's
+    /// enabled state and that line are the whole test.
+    /// </summary>
+    private static void RunBatchCancel(Process process, string photo, string output)
+    {
+        // Small frames finish in well under a second each; sixty-four of them
+        // keep the batch running long enough for a cancel to land mid-way.
+        const int count = 64;
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException("the main window never appeared");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+
+        // Every source needs its own name, or the batch would export one file
+        // and call the rest duplicates of it. The sources are made before the
+        // document opens so the picker, which remembers the folder the photo
+        // came from, starts in the folder that holds them.
+        var sources = Directory.CreateTempSubdirectory("retouchstudio-ui-cancel-");
+        var extension = Path.GetExtension(photo);
+        for (var index = 1; index <= count; index++)
+        {
+            File.Copy(photo, Path.Combine(sources.FullName, $"frame-{index:00}{extension}"));
+        }
+        OpenPhoto(window, process, Path.Combine(sources.FullName, $"frame-01{extension}"));
+        var folder = Path.Combine(
+            Path.GetDirectoryName(output)!, "retouchstudio-ui-batch-cancel");
+        if (Directory.Exists(folder))
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var cancel = FindButton(window, "Cancel Batch")
+                ?? throw new InvalidOperationException("the Cancel Batch button is missing");
+            if (cancel.Current.IsEnabled)
+            {
+                throw new InvalidOperationException(
+                    "Cancel Batch is enabled before a batch starts");
+            }
+
+            var batch = FindButton(window, "Batch Export…")
+                ?? throw new InvalidOperationException("the Batch Export button is missing");
+            Invoke(batch);
+            var photosDialog = WaitWindow(process.Id, "Batch Export", TimeSpan.FromSeconds(30))
+                ?? throw new InvalidOperationException(
+                    "the Batch Export picker never appeared");
+            var photosHandle = (IntPtr)photosDialog.Current.NativeWindowHandle;
+            SelectAllInPicker(photosDialog, sources.FullName, "frame-",
+                              $"frame-*{extension}", count);
+            if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "the photo picker did not take the selection; " +
+                    DescribeWindow(photosDialog));
+            }
+            Ok($"the batch photo picker took {count} photos");
+
+            var folderDialog = WaitWindow(process.Id, "Export the selection to",
+                                          TimeSpan.FromSeconds(30))
+                ?? throw new InvalidOperationException("the folder picker never appeared");
+            var folderHandle = (IntPtr)folderDialog.Current.NativeWindowHandle;
+            var folderEdit = FindFolderEdit(folderDialog);
+            if (folderEdit is null || !TypeInto(folderEdit, folder))
+            {
+                throw new InvalidOperationException(
+                    "the folder picker has no Folder box: " + DescribeEditors(folderDialog));
+            }
+            CommitFileName(folderEdit);
+            if (!WaitFor(() => !IsWindowVisible(folderHandle), TimeSpan.FromSeconds(30)))
+            {
+                var select = FindButton(folderDialog, "Select Folder")
+                    ?? throw new InvalidOperationException(
+                        "the folder picker has no Select Folder button: " +
+                        DescribeWindow(folderDialog));
+                Invoke(select);
+                if (!WaitFor(() => !IsWindowVisible(folderHandle), TimeSpan.FromSeconds(30)))
+                {
+                    throw new InvalidOperationException(
+                        "the folder picker stayed open; " + DescribeWindow(folderDialog));
+                }
+            }
+            Ok($"the folder picker took '{folder}'");
+
+            var running = WaitFor(() => cancel.Current.IsEnabled, TimeSpan.FromSeconds(15));
+            if (!running)
+            {
+                throw new InvalidOperationException(
+                    "the batch never showed itself as running; the status says " +
+                    DescribeTexts(window) + "; the folder holds " + RecentFiles(folder));
+            }
+            string? progress = null;
+            var counting = WaitFor(
+                () => (progress = BatchStatus(window)) is not null
+                      && Regex.IsMatch(progress, $@"^Exported \d+ of {count}…$"),
+                TimeSpan.FromSeconds(10));
+            if (!counting)
+            {
+                throw new InvalidOperationException(
+                    "a running batch does not count its files; the status says " +
+                    DescribeTexts(window));
+            }
+            Ok($"the batch counted progress: '{progress}'");
+
+            try
+            {
+                Invoke(cancel);
+            }
+            catch (ElementNotEnabledException)
+            {
+                throw new InvalidOperationException(
+                    "the batch ended before the cancel was clicked; the status says " +
+                    DescribeTexts(window) + "; the folder holds " + RecentFiles(folder));
+            }
+            var stopped = WaitFor(
+                () => BatchStatus(window)?.StartsWith("Export cancelled after ",
+                                                      StringComparison.Ordinal) == true,
+                TimeSpan.FromSeconds(30));
+            if (!stopped)
+            {
+                throw new InvalidOperationException(
+                    "the cancel left no verdict; the status says " + DescribeTexts(window) +
+                    "; the folder holds " + RecentFiles(folder));
+            }
+            var verdict = BatchStatus(window)!;
+            var numbers = Regex.Match(verdict, @"^Export cancelled after (\d+) of (\d+) photos\.$");
+            if (!numbers.Success
+                || !int.TryParse(numbers.Groups[1].Value, out var done)
+                || !int.TryParse(numbers.Groups[2].Value, out var total)
+                || total != count || done >= total)
+            {
+                throw new InvalidOperationException(
+                    $"the cancel verdict reads '{verdict}', not a partial of {count}");
+            }
+            if (!WaitFor(() => !cancel.Current.IsEnabled, TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    "Cancel Batch stayed enabled after the batch stopped");
+            }
+            var written = Directory.GetFiles(folder).Length;
+            if (written != done)
+            {
+                throw new InvalidOperationException(
+                    $"the folder holds {written} files, the status reports {done}");
+            }
+            Ok($"cancelling stopped after {done} of {total} photos and left " +
+               $"{written} written files");
+        }
+        finally
+        {
+            try
+            {
+                sources.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Hands the picker every file of a folder. The shell remembers the folder
+    /// the single-photo dialog last opened, so the files are sometimes in view
+    /// already. A picker that starts elsewhere is navigated by typing the
+    /// folder and pressing Enter for real: a posted key message leaves the
+    /// shell's own file-name state unchanged, which is why a posted Enter
+    /// never moves the view. The view itself is virtualised and exposes only
+    /// the rows on screen, so one file is clicked and Ctrl+A takes the rest.
+    /// </summary>
+    private static void SelectAllInPicker(AutomationElement dialog, string folder,
+                                          string namePrefix, string pattern, int expected)
+    {
+        var handle = (IntPtr)dialog.Current.NativeWindowHandle;
+        // A file view that shows any of the sources is in the right folder;
+        // the rest may be scrolled out of UIA's reach, so their presence is
+        // proved by the batch that later reports 'of 16'.
+        var items = PollPickerItems(dialog, namePrefix, 1, TimeSpan.FromSeconds(3));
+        if (items.Count == 0)
+        {
+            var edit = SetFileName(dialog, folder + Path.DirectorySeparatorChar);
+            SetForegroundWindow(handle);
+            try
+            {
+                edit.SetFocus();
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+            Thread.Sleep(200);
+            keybd_event(VkReturn, 0, 0, IntPtr.Zero);
+            keybd_event(VkReturn, 0, KeyUp, IntPtr.Zero);
+            items = PollPickerItems(dialog, namePrefix, 1, TimeSpan.FromSeconds(20));
+        }
+        if (items.Count == 0)
+        {
+            // Last resort: the shell expands a wildcard path into every match.
+            SetFileName(dialog, Path.Combine(folder, pattern));
+            PressDefaultButton(dialog, "Open");
+            if (WaitFor(() => !IsWindowVisible(handle), TimeSpan.FromSeconds(10)))
+            {
+                Ok($"the picker took the wildcard '{pattern}'");
+                return;
+            }
+            // The wildcard stays in the box and would win over a ticked list,
+            // so it is cleared before the list becomes the selection.
+            SetFileName(dialog, "");
+            items = PollPickerItems(dialog, namePrefix, 1, TimeSpan.FromSeconds(5));
+        }
+        if (items.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"the picker shows none of the {expected} files in {folder}; the items are " +
+                $"{DescribePickerItems(dialog)}; the editors are {DescribeEditors(dialog)}; " +
+                "the texts are " + DescribeWindow(dialog));
+        }
+        var first = items[0].Current.BoundingRectangle;
+        if (first.IsEmpty)
+        {
+            throw new InvalidOperationException("the picker's first file has no screen bounds");
+        }
+        ClickControl(items[0], handle);
+        keybd_event(VkControl, 0, 0, IntPtr.Zero);
+        keybd_event(VkA, 0, 0, IntPtr.Zero);
+        keybd_event(VkA, 0, KeyUp, IntPtr.Zero);
+        keybd_event(VkControl, 0, KeyUp, IntPtr.Zero);
+        Thread.Sleep(300);
+        // Ctrl+A selects every file, not only the rows the view exposes.
+        var exposed = PickerItems(dialog, namePrefix);
+        var selected = exposed.Count(item =>
+            item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var tick)
+            && tick is SelectionItemPattern selection
+            && selection.Current.IsSelected);
+        if (selected != exposed.Count)
+        {
+            throw new InvalidOperationException(
+                $"Ctrl+A left {selected} of the {exposed.Count} visible files selected");
+        }
+        Ok($"Ctrl+A selected all {exposed.Count} visible files of {expected}");
+        var open = FindButton(dialog, "Open")
+            ?? throw new InvalidOperationException(
+                "the photo picker has no Open button: " + DescribeWindow(dialog));
+        Invoke(open);
+    }
+
+    private static List<AutomationElement> PollPickerItems(AutomationElement dialog,
+                                                           string namePrefix, int expected,
+                                                           TimeSpan patience)
+    {
+        var items = new List<AutomationElement>();
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            items = PickerItems(dialog, namePrefix);
+            if (items.Count >= expected)
+            {
+                break;
+            }
+            Thread.Sleep(300);
+        }
+        return items;
+    }
+
+    /// <summary>
+    /// The files in the picker's list. Explorer hides extensions in this view,
+    /// so the test's own names are the match, not the file extension.
+    /// </summary>
+    private static List<AutomationElement> PickerItems(AutomationElement dialog,
+                                                       string namePrefix)
+    {
+        var items = new List<AutomationElement>();
+        foreach (AutomationElement candidate in dialog.FindAll(
+                     TreeScope.Descendants,
+                     new OrCondition(
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.ListItem),
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.DataItem))))
+        {
+            var name = candidate.Current.Name;
+            if (!string.IsNullOrEmpty(name)
+                && name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                items.Add(candidate);
+            }
+        }
+        return items;
+    }
+
+    private static string DescribePickerItems(AutomationElement dialog)
+    {
+        var names = new List<string>();
+        foreach (AutomationElement candidate in dialog.FindAll(
+                     TreeScope.Descendants,
+                     new OrCondition(
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.ListItem),
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.DataItem))))
+        {
+            names.Add($"'{candidate.Current.Name}'");
+            if (names.Count == 20)
+            {
+                break;
+            }
+        }
+        return names.Count == 0 ? "(none)" : string.Join(", ", names);
+    }
+
+    /// <summary>The status line while a batch runs or after it stops.</summary>
+    private static string? BatchStatus(AutomationElement window)
+    {
+        foreach (AutomationElement candidate in window.FindAll(
+                     TreeScope.Descendants,
+                     new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                           ControlType.Text)))
+        {
+            var text = candidate.Current.Name;
+            if (text.StartsWith("Exported ", StringComparison.Ordinal)
+                || text.StartsWith("Export cancelled ", StringComparison.Ordinal))
+            {
+                return text;
+            }
+        }
+        return null;
+    }
+
     private static void CloseCleanly(AutomationElement window, Process process)
     {
         var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
@@ -1076,8 +1930,8 @@ internal static class Program
         // The dialog is the new window the click opened. Its caption is not
         // asserted: on this host the common dialog carries the app title, so
         // the evidence is the window itself plus the export it writes.
-        var dialogHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
-            ?? throw new InvalidOperationException("the Export click opened no window");
+        var dialogHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            ?? throw new InvalidOperationException("the Export click opened no dialog");
         var saveDialog = AutomationElement.FromHandle(dialogHandle);
         var caption = saveDialog.Current.Name;
         if (FindFileNameControl(saveDialog) is null)
@@ -1816,6 +2670,9 @@ internal static class Program
     private static extern bool SetCursorPos(int x, int y);
 
     [DllImport("user32.dll")]
+    private static extern void keybd_event(byte key, byte scan, uint flags, IntPtr extra);
+
+    [DllImport("user32.dll")]
     private static extern void mouse_event(uint flags, uint dx, uint dy,
                                            uint data, IntPtr extra);
 
@@ -1846,6 +2703,9 @@ internal static class Program
 
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
+    private const uint KeyUp = 0x0002;
+    private const byte VkControl = 0x11;
+    private const byte VkA = 0x41;
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr extra);

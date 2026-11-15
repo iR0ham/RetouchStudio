@@ -258,6 +258,12 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
         $uiApp $uiPhoto $uiRecoveryOutput recovery
     Assert-ExitCode 'UI recovery tests'
 
+    # The other answer: "No" must drop that copy and leave the next launch quiet.
+    $uiDeclineOutput = Join-Path $uiTemp 'retouchstudio-ui-recovery-no.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiDeclineOutput recoveryno
+    Assert-ExitCode 'UI recovery decline tests'
+
     # Export must name the edits this host cannot render; "No" writes nothing.
     $uiGuardOutput = Join-Path $uiTemp 'retouchstudio-ui-guard.jpg'
     & dotnet run --project $uiProject -c $Configuration -- `
@@ -290,6 +296,27 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiCompareOutput compare
     Assert-ExitCode 'UI compare tests'
+
+    # Zoom and pan are pointer gestures too: the dock's label reports the zoom,
+    # and a screen hash proves the drag moved the photo and Fit restored it.
+    $uiZoomOutput = Join-Path $uiTemp 'retouchstudio-ui-zoom.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiZoomOutput zoom
+    Assert-ExitCode 'UI zoom tests'
+
+    # A running batch is stopped by its own button; the status line names how
+    # many photos landed, and the folder must hold exactly that many.
+    $uiCancelOutput = Join-Path $uiTemp 'retouchstudio-ui-batch-cancel.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiCancelOutput batchcancel
+    Assert-ExitCode 'UI batch cancel tests'
+
+    # A corrupt photo and a locked destination must each end in a message the
+    # person reads, and the failed export must leave the locked file alone.
+    $uiErrorOutput = Join-Path $uiTemp 'retouchstudio-ui-errors.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiErrorOutput errors
+    Assert-ExitCode 'UI error tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted
