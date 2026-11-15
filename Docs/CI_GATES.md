@@ -21,7 +21,7 @@ status check under its own name. All five are required merge checks:
 | `Platform-neutral Conformance` | `ubuntu-24.04` (x64) | `./Tests/Conformance/run-conformance.sh` |
 | `macOS Integration` | `macos-15` (Apple silicon, arm64) | `./Tests/run-studiocore.sh` and `RETOUCH_ARCH=arm64 ./Tests/run.sh` |
 | `Windows StudioCore` (required since 2026-11-14) | `windows-2025` (x64) | `./Tests/run-studiocore-windows.ps1` and the conformance gate |
-| `Windows App` (required since 2026-11-14) | `windows-2025` (x64) | `pwsh ./Tools/build-windows.ps1` |
+| `Windows App` (required since 2026-11-14) | `windows-2025` (x64) | `pwsh ./Tools/build-windows.ps1 -RequireMsi` |
 
 ## What each check proves
 
@@ -179,7 +179,13 @@ first: the job requires exactly one Programs-and-Features entry, the new
 version, the shortcut, and an upgraded copy that still loads a window.
 `-RequireMsi` makes a missing WiX toolset fail the job instead of silently
 skipping the installer. The job uploads `build/windows/dist/**` so the zip and
-the MSIs can be inspected. On failure it uploads the published folder
+the MSIs can be inspected. On 2026-11-15 the script gained one version input:
+`-PackageVersion` stamps the published assembly (`Tools/build-windows.ps1:160-162`)
+and names the zip and the MSI, and it defaults to the `Version` in
+`Windows/Directory.Build.props` (`Tools/build-windows.ps1:37-38`). Until then
+`dotnet publish` received no version, so a tag reached the artifact names but the
+executable kept the props value. The release workflow passes the tag version
+(`release.yml:129-132`). On failure it uploads the published folder
 (`windows-app-publish`), so a broken build can be inspected. The job is a
 required check since 2026-11-14, by owner direction: Windows is a first-class
 product, so a Windows regression must be able to block `main`. The job had
@@ -383,21 +389,39 @@ failed the first run of this job before it was corrected in `d0673d8`.
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds an
 arm64 DMG, an x86_64 DMG, runs the Windows StudioCore portability job, verifies
 every SHA-256 manifest, and publishes a GitHub Release. It triggers on `v*` tag
-pushes and on manual dispatch; a manual dispatch runs only the
-platform-independent Windows job, because every other job carries
-`if: startsWith(github.ref, 'refs/tags/v')`. A manual dispatch therefore cannot
-create a release or a non-versioned artifact.
+pushes and on manual dispatch. Only the `release` job carries
+`if: startsWith(github.ref, 'refs/tags/v')` (`release.yml:160`), so a manual
+dispatch builds and uploads the per-run artifacts to the run but never creates
+a Release.
+
+The release job's conditions were corrected on 2026-11-15
+(`release.yml:151-167`). It used to inherit the skip of a gated job through
+`needs`, so while `WINDOWS_APP_READY` was unset a tag skipped `windows-app`,
+skipped the dependent `release`, and produced no Release at all. The job now
+uses `always()` with explicit result checks: it runs when every macOS and core
+job is `success` and `windows-app` is `success` or `skipped`, and it is skipped
+when any of them is `failure` or `cancelled`; `!cancelled()` keeps an
+explicitly cancelled run from publishing. A skipped Windows application
+therefore publishes the macOS artifacts, and a failed job still blocks the
+release.
+
+The release job also runs `Tools/check-versions.sh` with the tag version
+(`release.yml:174-175`) before downloading artifacts, so a tag that disagrees
+with `Resources/Info.plist` and `Windows/Directory.Build.props` fails the
+release instead of publishing mislabelled files. CI runs the same script
+without a tag (`ci.yml:73-74`), so the two version sources cannot drift between
+releases.
 
 The Windows application job is gated behind the repository variable
-`WINDOWS_APP_READY=true` and is still skipped: the host builds and opens a
-window, but packaging, signing and a release decision are unverified, so the
-variable stays unset. The job now installs the .NET SDK and packages
-`build/windows/app`, but it has never executed, and the release job's `needs`
-list does not yet include it. Treat the job and `Tools/package-windows.ps1` as
-**NOT VERIFIED**; both must be reworked and run before the variable is set. A
-green release therefore never implies a Windows product. A job-level
-`hashFiles()` condition would be read before `actions/checkout`, so it was
-replaced with the repository variable.
+`WINDOWS_APP_READY=true` (`release.yml:111`). With the variable unset a tag run
+skips it, and since 2026-11-15 the release still publishes the macOS artifacts
+without a Windows package. A green release therefore never implies a Windows
+product. The gate is a product decision, not a statement that the job is
+untested: the dispatch recorded on 2026-11-14 (run 43598113385) built and
+uploaded both DMGs and the Windows zip and MSI, and the required `Windows App`
+check runs the same script on every PR. A job-level `hashFiles()` condition
+would be read before `actions/checkout`, so it was replaced with the repository
+variable.
 
 No paid signing certificate or notarization is used; macOS builds are ad-hoc
 signed and Windows output is unsigned.

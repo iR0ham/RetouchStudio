@@ -13,6 +13,10 @@
 #   pwsh -File Tools/build-windows.ps1 -PackageVersion 1.2.3
 #   pwsh -File Tools/build-windows.ps1 -RequireMsi        # CI: no silent skip
 #
+# -PackageVersion stamps the published assembly and names the zip and the MSI.
+# It defaults to the Version in Windows/Directory.Build.props, and a release
+# passes the tag version.
+#
 # Requires a Swift toolchain for Windows (swiftc.exe plus its clang.exe and lld)
 # and the .NET 10 SDK, both on PATH. The MSI needs WiX Toolset v3, which the CI
 # image has; without it the installer step is skipped and everything else runs.
@@ -27,7 +31,11 @@ param(
     [switch]$SkipPublish,
     [switch]$SkipPackage,
     [switch]$RequireMsi,
-    [string]$PackageVersion = '0.0.0-ci'
+    # One version for the whole build: the published assembly, the zip name and
+    # the MSI. A release passes the tag version; otherwise it is the shared
+    # Windows version, so the binary and the artifacts cannot disagree.
+    [string]$PackageVersion = ([xml](Get-Content `
+        (Join-Path $PSScriptRoot '../Windows/Directory.Build.props'))).Project.PropertyGroup.Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -146,8 +154,12 @@ Write-Host "   copied $($copied.Count) runtime DLLs"
 #    .NET runtime.
 if (-not $SkipPublish) {
     Step 'publishing the WPF host (win-x64, self-contained)'
+    # The assembly takes the same version as the zip and the MSI. Without this
+    # the binary keeps Directory.Build.props' Version while the artifacts are
+    # named from the tag, so a release would ship a mislabelled executable.
     & dotnet publish (Join-Path $root 'Windows/RetouchStudio.App/RetouchStudio.App.csproj') `
-        -c $Configuration -r win-x64 --self-contained true -o $appDir
+        -c $Configuration -r win-x64 --self-contained true -o $appDir `
+        -p:Version=$PackageVersion
     Assert-ExitCode 'dotnet publish'
 
     Get-ChildItem $nativeDir -Filter *.dll -File | ForEach-Object {

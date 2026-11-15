@@ -70,6 +70,9 @@ jobs:
           python3 -c 'import sys; print(sys.version); assert sys.version_info >= (3, 10), sys.version'
           cc --version
 
+      - name: Assert the macOS and Windows version sources agree
+        run: ./Tools/check-versions.sh
+
       - name: Run conformance gate
         run: |
           set -euo pipefail
