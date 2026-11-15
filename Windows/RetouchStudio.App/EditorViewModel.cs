@@ -488,7 +488,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     public async Task OpenImageAsync(string imagePath)
     {
-        CloseSession();
         var session = ProjectSession.Create(imagePath);
         await AdoptAsync(session);
         Status = $"{Path.GetFileName(imagePath)} opened.";
@@ -504,7 +503,6 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             throw new FileNotFoundException(
                 "the project's photo is not at the recorded path", imagePath);
         }
-        CloseSession();
         await AdoptAsync(session);
         var unrendered = session.Document.UnsupportedEdits;
         Status = unrendered.Count == 0
@@ -799,8 +797,13 @@ public sealed class EditorViewModel : INotifyPropertyChanged
 
     private async Task AdoptAsync(ProjectSession session)
     {
-        PixelBuffer? decoded = null;
-        PixelBuffer16? decoded16 = null;
+        // Decode and resize before the old document is touched: a photo that
+        // cannot be loaded must leave the open document, its recovery copy,
+        // the sliders and the preview exactly as they were.
+        PixelBuffer? previewSource = null;
+        PixelBuffer16? previewSource16 = null;
+        int width;
+        int height;
         try
         {
             // A file that stores 16-bit samples previews through the 16-bit
@@ -808,35 +811,34 @@ public sealed class EditorViewModel : INotifyPropertyChanged
             // an adjustment can amplify it. Everything else stays 8-bit.
             if (await _codec.ReadBitDepthAsync(session.ImagePath) >= 16)
             {
-                decoded16 = await _codec.Decode16Async(session.ImagePath);
+                var wide = await _codec.Decode16Async(session.ImagePath);
+                width = wide.Width;
+                height = wide.Height;
+                previewSource16 = await Task.Run(() => wide.ResizeLongEdge(PreviewLongEdge));
             }
             else
             {
-                decoded = await _codec.DecodeAsync(session.ImagePath);
+                var narrow = await _codec.DecodeAsync(session.ImagePath);
+                width = narrow.Width;
+                height = narrow.Height;
+                previewSource = await Task.Run(() => narrow.ResizeLongEdge(PreviewLongEdge));
             }
         }
         catch
         {
-            // The window never adopted this session, so the failed decode must
+            // The window never adopted this session, so the failed load must
             // not leave its history handle open.
             session.Dispose();
             throw;
         }
 
-        _sourceWidth = decoded?.Width ?? decoded16!.Width;
-        _sourceHeight = decoded?.Height ?? decoded16!.Height;
-        if (decoded16 is not null)
-        {
-            var wide = decoded16;
-            _previewSource16 = await Task.Run(() => wide.ResizeLongEdge(PreviewLongEdge));
-            _previewSource = null;
-        }
-        else
-        {
-            var narrow = decoded!;
-            _previewSource = await Task.Run(() => narrow.ResizeLongEdge(PreviewLongEdge));
-            _previewSource16 = null;
-        }
+        // The new document is ready to show, so the old one can go and the
+        // slot can accept its successor.
+        CloseSession();
+        _sourceWidth = width;
+        _sourceHeight = height;
+        _previewSource = previewSource;
+        _previewSource16 = previewSource16;
 
         _loading = true;
         try
