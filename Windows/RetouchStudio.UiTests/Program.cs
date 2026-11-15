@@ -876,7 +876,7 @@ internal static class Program
 
         var compare = FindButton(window, "Compare before and after")
             ?? throw new InvalidOperationException("the Compare toggle is missing");
-        Toggle(compare);
+        ClickToggle(compare);
         var turnedOn = WaitFor(
             () => compare.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
                   && pattern is TogglePattern toggle
@@ -892,8 +892,8 @@ internal static class Program
         if (handles is null || handles[0].Current.BoundingRectangle.IsEmpty)
         {
             throw new InvalidOperationException(
-                "the compare divider did not appear; the texts are " +
-                DescribeTexts(window));
+                $"the compare divider did not appear; the toggle reads {ToggleState(compare)}; " +
+                "the texts are " + DescribeTexts(window));
         }
         var thumb = handles[0];
         var start = thumb.Current.BoundingRectangle;
@@ -929,7 +929,7 @@ internal static class Program
         }
         Ok("dragging it back returned the divider to its start");
 
-        Toggle(compare);
+        ClickToggle(compare);
         var disappeared = WaitFor(() => HandleCount(window, "Compare split") == 0,
                                   TimeSpan.FromSeconds(10));
         if (!disappeared)
@@ -963,16 +963,34 @@ internal static class Program
         Ok("the app closed cleanly");
     }
 
-    private static void Toggle(AutomationElement element)
+    /// <summary>
+    /// Clicks a toggle the way a pointer does. Compare is applied from the
+    /// control's Click handler, so TogglePattern alone flips IsChecked and
+    /// leaves the overlay hidden.
+    /// </summary>
+    private static void ClickToggle(AutomationElement element)
     {
+        if (element.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke)
+            && invoke is InvokePattern click)
+        {
+            click.Invoke();
+            return;
+        }
         if (element.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
             && pattern is TogglePattern toggle)
         {
             toggle.Toggle();
             return;
         }
-        Invoke(element);
+        throw new InvalidOperationException(
+            $"'{element.Current.Name}' exposes neither Invoke nor Toggle");
     }
+
+    private static string ToggleState(AutomationElement element) =>
+        element.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
+        && pattern is TogglePattern toggle
+            ? toggle.Current.ToggleState.ToString()
+            : "not a toggle";
 
     private static int HandleCount(AutomationElement window, string name) =>
         window.FindAll(
