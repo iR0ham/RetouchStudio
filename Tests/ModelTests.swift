@@ -2408,89 +2408,91 @@ func testExportCancelsBeforeCommit() async {
 }
 
 @MainActor
-func testBatchWriteKeepsFileInFlight() async {
-    print("\n[R6-X] a batch cancel at the commit point keeps the file in flight")
+func testCommitCancelKeepsExistingDestination() async {
+    print("\n[R6-X] a commit-point cancel keeps a pre-existing destination intact")
 
-    let prefix = "batch-commit-\(UUID().uuidString.prefix(8))"
-    let sourceURL = workDir.appendingPathComponent("\(prefix)-source.png")
-    guard let image = makeImage(width: 480, height: 600), writePNG(image, to: sourceURL) else {
-        check(false, "batch-commit fixture")
-        return
-    }
-    let model = EditorModel()
-    model.load(url: sourceURL)
-    model.exportFormat = .png
-    check(await waitUntil { model.hasImage && !model.isBusy }, "batch-commit fixture loads")
-
-    guard let snapshot = model.makeExportSnapshot(),
-          let loaded = ImageProcessor.shared.load(from: sourceURL,
-                                                  previewMaxDimension: 1024) else {
-        check(false, "the render request and its source exist")
-        return
-    }
-    let source = ExportSource(image: loaded.sourceFull,
-                              masks: nil,
-                              faces: loaded.faces,
-                              photoAspect: loaded.pixelSize.width / loaded.pixelSize.height,
-                              colorSpace: loaded.colorSpace,
-                              metadata: loaded.metadata,
-                              xmp: loaded.xmp)
-
+    let fm = FileManager.default
     let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("rs-batch-commit-\(UUID().uuidString)", isDirectory: true)
-    try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: scratch) }
-    let destination = scratch.appendingPathComponent("in-flight.png")
+        .appendingPathComponent("rs-commit-existing-\(UUID().uuidString)", isDirectory: true)
+    try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: scratch) }
 
-    guard let rendered = try? MacDocumentRenderer().render(snapshot, source: source,
-                                                           progress: nil) else {
-        check(false, "the batch file renders before its commit")
+    let destination = scratch.appendingPathComponent("photo.png")
+    let sentinel = Data("sentinel-bytes".utf8)
+    check(fm.createFile(atPath: destination.path, contents: sentinel),
+          "the destination sentinel is written")
+
+    guard let image = makeImage(width: 32, height: 32) else {
+        check(false, "commit-existing fixture")
+        return
+    }
+    let rendered = RenderedExport(image: CIImage(cgImage: image),
+                                  carriesSourceMetadata: false)
+    var snapshot = ExportSnapshot()
+    snapshot.format = .png
+
+    let result = ExportService.writeResult(rendered, snapshot: snapshot, to: destination,
+                                           colorSpace: sRGB, metadata: [:],
+                                           protecting: nil, isCancelled: { true })
+    check(result == .cancelled, "the commit-point cancel reports cancelled", "\(result)")
+    check(fileBytes(destination) == sentinel,
+          "the pre-existing destination is byte-identical")
+    let leftovers = (try? fm.contentsOfDirectory(atPath: scratch.path))?
+        .filter { $0.hasPrefix(".\(destination.lastPathComponent).") && $0.hasSuffix(".tmp") } ?? []
+    check(leftovers.isEmpty, "no temp sibling remains next to the sentinel",
+          leftovers.joined(separator: ", "))
+}
+
+@MainActor
+func testUnwritableFolderReportsFailure() async {
+    print("\n[R6-X] an unwritable folder reports failure and leaves nothing")
+
+    if geteuid() == 0 {
+        print("  · running as root; NOT RUN")
         return
     }
 
-    // The batch's writer never consults the task: its own closure reports "not
-    // cancelled" even when the task is cancelled exactly at the commit point,
-    // so the in-flight file lands and the loop stops before the next one.
-    var batch = MacDocumentRenderer()
-    batch.commitCancellation = {
-        withUnsafeCurrentTask { $0?.cancel() }
-        return false
+    let fm = FileManager.default
+    let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("rs-unwritable-\(UUID().uuidString)", isDirectory: true)
+    try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+    let sentinelURL = scratch.appendingPathComponent("photo.jpg")
+    let sentinel = Data("keep-me".utf8)
+    check(fm.createFile(atPath: sentinelURL.path, contents: sentinel),
+          "the sentinel is written before the folder is closed")
+    do {
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: scratch.path)
+    } catch {
+        check(false, "the folder can be made unwritable", "\(error)")
+        try? fm.removeItem(at: scratch)
+        return
     }
-    let committed = await Task { () -> Bool in
-        do {
-            _ = try batch.write(rendered, request: snapshot, source: source,
-                                to: destination, protecting: sourceURL)
-            return true
-        } catch {
-            return false
-        }
-    }.value
-    check(committed, "a cancelled batch still commits the file in flight")
-    check(FileManager.default.fileExists(atPath: destination.path),
-          "the in-flight output is complete on disk")
+    defer {
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scratch.path)
+        try? fm.removeItem(at: scratch)
+    }
 
-    // The same entry point does stop at the commit point when the batch's
-    // answer is yes; nothing is left behind.
-    var stopping = MacDocumentRenderer()
-    stopping.commitCancellation = { true }
-    let stopped = scratch.appendingPathComponent("stopped.png")
-    let cancelledOutcome = await Task { () -> Bool in
-        do {
-            _ = try stopping.write(rendered, request: snapshot, source: source,
-                                   to: stopped, protecting: sourceURL)
-            return false
-        } catch RenderError.cancelled {
-            return true
-        } catch {
-            return false
-        }
-    }.value
-    check(cancelledOutcome, "a commit-point cancel stops the batch write")
-    check(!FileManager.default.fileExists(atPath: stopped.path),
-          "the stopped batch write leaves no destination")
-    let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: scratch.path))?
+    guard let image = makeImage(width: 32, height: 32) else {
+        check(false, "unwritable fixture")
+        return
+    }
+    let rendered = RenderedExport(image: CIImage(cgImage: image),
+                                  carriesSourceMetadata: false)
+    var snapshot = ExportSnapshot()
+    snapshot.format = .png
+    let destination = scratch.appendingPathComponent("new.png")
+
+    let result = ExportService.writeResult(rendered, snapshot: snapshot, to: destination,
+                                           colorSpace: sRGB, metadata: [:],
+                                           protecting: nil, isCancelled: { false })
+    check(result == .failed, "an unwritable folder reports failure", "\(result)")
+    check(!fm.fileExists(atPath: destination.path), "no destination was written")
+    check(fileBytes(sentinelURL) == sentinel, "the existing file is byte-identical")
+
+    try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scratch.path)
+    let leftovers = (try? fm.contentsOfDirectory(atPath: scratch.path))?
         .filter { $0.hasSuffix(".tmp") } ?? []
-    check(leftovers.isEmpty, "the stopped batch write leaves no temp sibling",
+    check(leftovers.isEmpty, "no temp sibling remains",
           leftovers.joined(separator: ", "))
 }
 
@@ -5276,17 +5278,16 @@ func testExportProtectsSource() async {
         snapshot.format = .png
         let direct = ExportService.writeResult(rendered, snapshot: snapshot, to: source,
                                                colorSpace: sRGB, metadata: [:],
-                                               protecting: source, isCancelled: { false })
+                                               protecting: source)
         check(direct == .refusedOriginal, "the writer refuses the source at commit time")
         let directAlias = ExportService.writeResult(rendered, snapshot: snapshot, to: symlink,
                                                     colorSpace: sRGB, metadata: [:],
-                                                    protecting: source, isCancelled: { false })
+                                                    protecting: source)
         check(directAlias == .refusedOriginal, "the writer refuses a symlink at commit time")
         if linked {
             let directHardlink = ExportService.writeResult(rendered, snapshot: snapshot,
                                                            to: hardlink, colorSpace: sRGB,
-                                                           metadata: [:], protecting: source,
-                                                           isCancelled: { false })
+                                                           metadata: [:], protecting: source)
             check(directHardlink == .refusedOriginal,
                   "the writer refuses a hard link at commit time")
         }
@@ -6820,7 +6821,8 @@ func runAll() async {
     await testOperationCoordination()
     await testCancelBetweenRenderAndWrite()
     await testExportCancelsBeforeCommit()
-    await testBatchWriteKeepsFileInFlight()
+    await testCommitCancelKeepsExistingDestination()
+    await testUnwritableFolderReportsFailure()
     await testStaleExportTempsAreSweptSafely()
     await testBatchCancellationStopsInFlightFile()
     await testBatchWriteFailureIsNotCounted()

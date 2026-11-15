@@ -254,13 +254,9 @@ enum ExportService {
                       protecting protectedURL: URL? = nil) -> Bool {
         writeResult(rendered, snapshot: snapshot, to: url,
                     colorSpace: colorSpace, metadata: metadata, xmp: xmp,
-                    protecting: protectedURL,
-                    isCancelled: { false }) == .written
+                    protecting: protectedURL) == .written
     }
 
-    /// `isCancelled` defaults to false on purpose: a caller that does not name
-    /// its cancellation state (harnesses, self-check) must never lose a file it
-    /// asked to write. Export jobs pass their own state explicitly.
     static func writeResult(_ rendered: RenderedExport,
                             snapshot: ExportSnapshot,
                             to url: URL,
@@ -268,7 +264,7 @@ enum ExportService {
                             metadata: [CFString: Any],
                             xmp: CGImageMetadata? = nil,
                             protecting protectedURL: URL?,
-                            isCancelled: () -> Bool = { false }) -> WriteResult {
+                            isCancelled: () -> Bool = { Task.isCancelled }) -> WriteResult {
         if let protectedURL, referencesSameFile(url, protectedURL) {
             return .refusedOriginal
         }

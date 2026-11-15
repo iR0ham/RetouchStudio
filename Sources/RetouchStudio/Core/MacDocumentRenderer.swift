@@ -37,13 +37,6 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
     typealias Source = ExportSource
     typealias Output = RenderedExport
 
-    /// What a direct `write` asks at the commit point. A batch leaves this
-    /// false: a cancel that arrives while a file is being written must not
-    /// throw that file away — the loop stops before the next one. A single
-    /// export goes through `renderAndWrite`, which forwards its own job's
-    /// cancellation instead.
-    var commitCancellation: @Sendable () -> Bool = { false }
-
     func render(_ request: RenderRequest, source: ExportSource,
                 progress: ((RenderProgress) -> Void)?) throws -> RenderedExport {
         if Task.isCancelled { throw RenderError.cancelled }
@@ -63,30 +56,12 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
         }
     }
 
-    /// The batch's entry point. `EditorModel.exportOne` has already checked
-    /// cancellation before calling this, so a cancel seen only at the commit
-    /// point still finishes the file in flight.
+    /// Both single exports (`renderAndWrite`) and batch files reach here. A
+    /// task cancelled while the bytes are being written must not commit them:
+    /// the write is abandoned, so the cancelled file leaves nothing behind.
     func write(_ output: RenderedExport, request: RenderRequest,
                source: ExportSource, to destination: URL,
                protecting protectedURL: URL?) throws -> RenderResult {
-        try write(output, request: request, source: source, to: destination,
-                  protecting: protectedURL, isCancelled: commitCancellation)
-    }
-
-    /// The single-export entry point: the job's own cancellation decides
-    /// whether bytes already written may land.
-    func renderAndWrite(_ request: RenderRequest, source: ExportSource,
-                        to destination: URL, protecting protectedURL: URL? = nil,
-                        progress: ((RenderProgress) -> Void)? = nil) throws -> RenderResult {
-        let output = try render(request, source: source, progress: progress)
-        return try write(output, request: request, source: source, to: destination,
-                         protecting: protectedURL, isCancelled: { Task.isCancelled })
-    }
-
-    private func write(_ output: RenderedExport, request: RenderRequest,
-                       source: ExportSource, to destination: URL,
-                       protecting protectedURL: URL?,
-                       isCancelled: () -> Bool) throws -> RenderResult {
         if Task.isCancelled { throw RenderError.cancelled }
         let plan = RenderPolicy.plan(request, source: source.renderDescription)
         let colorSpace = plan.colorSpace == .sRGB
@@ -97,7 +72,7 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
                                          metadata: source.metadata,
                                          xmp: source.xmp,
                                          protecting: protectedURL,
-                                         isCancelled: isCancelled) {
+                                         isCancelled: { Task.isCancelled }) {
         case .written:
             return RenderResult(destination: destination,
                                 pixelSize: plan.pixelSize,
