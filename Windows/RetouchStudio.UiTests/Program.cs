@@ -1480,7 +1480,9 @@ internal static class Program
     /// </summary>
     private static void RunBatchCancel(Process process, string photo, string output)
     {
-        const int count = 16;
+        // Small frames finish in well under a second each; sixty-four of them
+        // keep the batch running long enough for a cancel to land mid-way.
+        const int count = 64;
         var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
             ?? throw new InvalidOperationException("the main window never appeared");
         var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
@@ -1565,9 +1567,10 @@ internal static class Program
                     "the batch never showed itself as running; the status says " +
                     DescribeTexts(window) + "; the folder holds " + RecentFiles(folder));
             }
+            string? progress = null;
             var counting = WaitFor(
-                () => BatchStatus(window) is { } text
-                      && Regex.IsMatch(text, @"^Exported \d+ of 16…$"),
+                () => (progress = BatchStatus(window)) is not null
+                      && Regex.IsMatch(progress, $@"^Exported \d+ of {count}…$"),
                 TimeSpan.FromSeconds(10));
             if (!counting)
             {
@@ -1575,9 +1578,18 @@ internal static class Program
                     "a running batch does not count its files; the status says " +
                     DescribeTexts(window));
             }
-            Ok($"the batch counted progress: '{BatchStatus(window)}'");
+            Ok($"the batch counted progress: '{progress}'");
 
-            Invoke(cancel);
+            try
+            {
+                Invoke(cancel);
+            }
+            catch (ElementNotEnabledException)
+            {
+                throw new InvalidOperationException(
+                    "the batch ended before the cancel was clicked; the status says " +
+                    DescribeTexts(window) + "; the folder holds " + RecentFiles(folder));
+            }
             var stopped = WaitFor(
                 () => BatchStatus(window)?.StartsWith("Export cancelled after ",
                                                       StringComparison.Ordinal) == true,
