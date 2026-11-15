@@ -982,6 +982,14 @@ internal static class Program
         Thread.Sleep(200);
         var x = rect.X + rect.Width / 2;
         var y = rect.Y + rect.Height / 2;
+        var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
+                              GetSystemMetrics(SmCyScreen));
+        if (!screen.Contains(new Point(x, y)))
+        {
+            throw new InvalidOperationException(
+                $"'{control.Current.Name}' sits at {rect}, outside the screen {screen}; " +
+                "the injected pointer cannot reach it");
+        }
         Console.WriteLine($"  clicking '{control.Current.Name}' at {x:0},{y:0}");
         SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
         Thread.Sleep(120);
@@ -1651,10 +1659,26 @@ internal static class Program
         Console.WriteLine($"  virtual screen: {screenWidth}x{screenHeight}");
         var rect = window.Current.BoundingRectangle;
         Console.WriteLine($"  window rect: {rect}");
-        if (rect.Left >= 0 && rect.Top >= 0
-            && rect.Right <= screenWidth && rect.Bottom <= screenHeight)
+        bool Fits(Rect bounds) => bounds.Left >= 0 && bounds.Top >= 0
+            && bounds.Right <= screenWidth && bounds.Bottom <= screenHeight;
+        if (Fits(rect))
         {
             return rect;
+        }
+        // The host's minimum window width can exceed a 1024-pixel runner
+        // desktop, and a control past the last screen pixel cannot be clicked.
+        // Maximizing is the one state the platform itself keeps on screen.
+        if (window.TryGetCurrentPattern(WindowPattern.Pattern, out var statePattern)
+            && statePattern is WindowPattern windowState && windowState.Current.CanMaximize)
+        {
+            windowState.SetWindowVisualState(WindowVisualState.Maximized);
+            Thread.Sleep(800);
+            rect = window.Current.BoundingRectangle;
+            Console.WriteLine($"  window rect after maximize: {rect}");
+            if (Fits(rect))
+            {
+                return rect;
+            }
         }
         if (!window.TryGetCurrentPattern(TransformPattern.Pattern, out var pattern)
             || pattern is not TransformPattern transform)
