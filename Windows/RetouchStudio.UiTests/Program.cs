@@ -1415,12 +1415,9 @@ internal static class Program
         // and call the rest duplicates of it.
         var sources = Directory.CreateTempSubdirectory("retouchstudio-ui-cancel-");
         var extension = Path.GetExtension(photo);
-        var selection = new List<string>(count);
         for (var index = 1; index <= count; index++)
         {
-            var copy = Path.Combine(sources.FullName, $"frame-{index:00}{extension}");
-            File.Copy(photo, copy);
-            selection.Add(copy);
+            File.Copy(photo, Path.Combine(sources.FullName, $"frame-{index:00}{extension}"));
         }
         var folder = Path.Combine(
             Path.GetDirectoryName(output)!, "retouchstudio-ui-batch-cancel");
@@ -1443,28 +1440,23 @@ internal static class Program
             var batch = FindButton(window, "Batch Export…")
                 ?? throw new InvalidOperationException("the Batch Export button is missing");
             Invoke(batch);
-            var photosHandle = WaitFileDialog(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            var photosDialog = WaitWindow(process.Id, "Batch Export", TimeSpan.FromSeconds(30))
                 ?? throw new InvalidOperationException(
-                    "the Batch Export click opened no dialog");
-            var photosDialog = AutomationElement.FromHandle(photosHandle);
-            // The common dialog takes several quoted paths in its File name box.
-            var photosEdit = SetFileName(photosDialog,
-                string.Join(" ", selection.Select(path => $"\"{path}\"")));
+                    "the Batch Export picker never appeared");
+            var photosHandle = (IntPtr)photosDialog.Current.NativeWindowHandle;
+            SelectAllInPicker(photosDialog, sources.FullName, extension, count);
             if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
             {
-                CommitFileName(photosEdit);
-                if (!WaitFor(() => !IsWindowVisible(photosHandle), TimeSpan.FromSeconds(30)))
-                {
-                    throw new InvalidOperationException(
-                        "the photo picker did not take the selection; " +
-                        DescribeWindow(photosDialog));
-                }
+                throw new InvalidOperationException(
+                    "the photo picker did not take the selection; " +
+                    DescribeWindow(photosDialog));
             }
             Ok($"the batch photo picker took {count} photos");
 
-            var folderHandle = WaitNewWindow(process.Id, mainHandle, TimeSpan.FromSeconds(30))
+            var folderDialog = WaitWindow(process.Id, "Export the selection to",
+                                          TimeSpan.FromSeconds(30))
                 ?? throw new InvalidOperationException("the folder picker never appeared");
-            var folderDialog = AutomationElement.FromHandle(folderHandle);
+            var folderHandle = (IntPtr)folderDialog.Current.NativeWindowHandle;
             var folderEdit = FindFolderEdit(folderDialog);
             if (folderEdit is null || !TypeInto(folderEdit, folder))
             {
@@ -1494,13 +1486,17 @@ internal static class Program
                     "the batch never showed itself as running; the status says " +
                     DescribeTexts(window) + "; the folder holds " + RecentFiles(folder));
             }
-            var progress = BatchStatus(window);
-            if (progress is null || !Regex.IsMatch(progress, @"^Exported \d+ of 16…$"))
+            var counting = WaitFor(
+                () => BatchStatus(window) is { } text
+                      && Regex.IsMatch(text, @"^Exported \d+ of 16…$"),
+                TimeSpan.FromSeconds(10));
+            if (!counting)
             {
                 throw new InvalidOperationException(
-                    $"a running batch does not count its files; the status says '{progress}'");
+                    "a running batch does not count its files; the status says " +
+                    DescribeTexts(window));
             }
-            Ok($"the batch counted progress: '{progress}'");
+            Ok($"the batch counted progress: '{BatchStatus(window)}'");
 
             Invoke(cancel);
             var stopped = WaitFor(
@@ -1550,6 +1546,82 @@ internal static class Program
 
         CloseCleanly(window, process);
         Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// Selects every file of a folder in a file picker. This dialog does not
+    /// parse several quoted paths, so it is navigated into the folder and the
+    /// files are selected the way a person does: click one, press Ctrl+A.
+    /// </summary>
+    private static void SelectAllInPicker(AutomationElement dialog, string folder,
+                                          string extension, int expected)
+    {
+        var edit = SetFileName(dialog, folder + Path.DirectorySeparatorChar);
+        CommitFileName(edit);
+        var items = new List<AutomationElement>();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            items = PickerItems(dialog, extension);
+            if (items.Count >= expected)
+            {
+                break;
+            }
+            Thread.Sleep(300);
+        }
+        if (items.Count < expected)
+        {
+            throw new InvalidOperationException(
+                $"the picker shows {items.Count} files instead of {expected} after entering " +
+                $"{folder}; the texts are " + DescribeWindow(dialog));
+        }
+        var first = items[0].Current.BoundingRectangle;
+        if (first.IsEmpty)
+        {
+            throw new InvalidOperationException("the picker's first file has no screen bounds");
+        }
+        var handle = (IntPtr)dialog.Current.NativeWindowHandle;
+        ClickControl(items[0], handle);
+        keybd_event(VkControl, 0, 0, IntPtr.Zero);
+        keybd_event(VkA, 0, 0, IntPtr.Zero);
+        keybd_event(VkA, 0, KeyUp, IntPtr.Zero);
+        keybd_event(VkControl, 0, KeyUp, IntPtr.Zero);
+        Thread.Sleep(300);
+        var selected = PickerItems(dialog, extension).Count(item =>
+            item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var pattern)
+            && pattern is SelectionItemPattern selection
+            && selection.Current.IsSelected);
+        if (selected != expected)
+        {
+            throw new InvalidOperationException(
+                $"Ctrl+A selected {selected} of {expected} files in the picker");
+        }
+        var open = FindButton(dialog, "Open")
+            ?? throw new InvalidOperationException(
+                "the photo picker has no Open button: " + DescribeWindow(dialog));
+        Invoke(open);
+    }
+
+    private static List<AutomationElement> PickerItems(AutomationElement dialog,
+                                                       string extension)
+    {
+        var items = new List<AutomationElement>();
+        foreach (AutomationElement candidate in dialog.FindAll(
+                     TreeScope.Descendants,
+                     new OrCondition(
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.ListItem),
+                         new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                               ControlType.DataItem))))
+        {
+            var name = candidate.Current.Name;
+            if (!string.IsNullOrEmpty(name)
+                && name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            {
+                items.Add(candidate);
+            }
+        }
+        return items;
     }
 
     /// <summary>The status line while a batch runs or after it stops.</summary>
@@ -2435,6 +2507,9 @@ internal static class Program
     private static extern bool SetCursorPos(int x, int y);
 
     [DllImport("user32.dll")]
+    private static extern void keybd_event(byte key, byte scan, uint flags, IntPtr extra);
+
+    [DllImport("user32.dll")]
     private static extern void mouse_event(uint flags, uint dx, uint dy,
                                            uint data, IntPtr extra);
 
@@ -2465,6 +2540,9 @@ internal static class Program
 
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
+    private const uint KeyUp = 0x0002;
+    private const byte VkControl = 0x11;
+    private const byte VkA = 0x41;
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr extra);
