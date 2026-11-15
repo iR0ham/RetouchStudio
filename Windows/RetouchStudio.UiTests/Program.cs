@@ -22,7 +22,7 @@ namespace RetouchStudio.UiTests;
 /// the real codec.
 ///
 ///   RetouchStudio.UiTests &lt;app.exe&gt; &lt;photo&gt; &lt;output.jpg&gt;
-///       [golden|recovery|guard|project|batch|crop]
+///       [golden|recovery|guard|project|batch|crop|compare]
 ///
 /// The app runs with an isolated recovery folder, so a leftover copy on the
 /// machine cannot put a prompt in front of the window under test. The recovery
@@ -39,11 +39,12 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: RetouchStudio.UiTests <app.exe> <photo> <output.jpg> " +
-                "[golden|recovery|guard|project|batch|crop]");
+                "[golden|recovery|guard|project|batch|crop|compare]");
             return 2;
         }
         var mode = args.Length == 4 ? args[3] : "golden";
-        if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch" or "crop"))
+        if (mode is not ("golden" or "recovery" or "guard" or "project" or "batch"
+                        or "crop" or "compare"))
         {
             Console.Error.WriteLine($"UI CHECK FAILED: unknown mode '{mode}'");
             return 2;
@@ -104,6 +105,10 @@ internal static class Program
             else if (mode == "crop")
             {
                 RunCrop(process, photo, output);
+            }
+            else if (mode == "compare")
+            {
+                RunCompare(process, photo);
             }
             else
             {
@@ -776,46 +781,14 @@ internal static class Program
             ?? throw new InvalidOperationException(
                 $"the crop badge shows no size; the texts are {DescribeTexts(window)}");
 
-        // The runner's virtual desktop can be smaller than the window's default
-        // 1280x840. A handle past the screen edge cannot be clicked — the
-        // injected pointer clamps to the last pixel — so the window is shrunk
-        // to the screen and only a corner the screen fully shows is used.
-        var screenWidth = GetSystemMetrics(SmCxScreen);
-        var screenHeight = GetSystemMetrics(SmCyScreen);
-        Console.WriteLine($"  virtual screen: {screenWidth}x{screenHeight}");
-        var windowRect = window.Current.BoundingRectangle;
-        Console.WriteLine($"  window rect: {windowRect}");
-        if (windowRect.Right > screenWidth || windowRect.Bottom > screenHeight
-            || windowRect.Width > screenWidth)
-        {
-            if (window.TryGetCurrentPattern(TransformPattern.Pattern, out var pattern)
-                && pattern is TransformPattern transform && transform.Current.CanResize)
-            {
-                transform.Resize(Math.Min(1100, screenWidth - 40),
-                                 Math.Min(780, screenHeight - 80));
-                Thread.Sleep(800);
-                handles = WaitForHandles(window, "Crop corner handle", 4,
-                                         TimeSpan.FromSeconds(15)) ?? handles;
-                windowRect = window.Current.BoundingRectangle;
-                Console.WriteLine($"  window rect after resize: {windowRect}");
-            }
-            else
-            {
-                Console.WriteLine("  the window does not accept a resize");
-            }
-        }
-
-        var screen = new Rect(0, 0, screenWidth, screenHeight);
-        var visible = handles.Where(item =>
-            screen.Contains(item.Current.BoundingRectangle)).ToList();
-        var pool = visible.Count > 0 ? visible : handles;
-        var corner = pool.OrderByDescending(item =>
-            item.Current.BoundingRectangle.Right + item.Current.BoundingRectangle.Bottom).First();
-        var rect = corner.Current.BoundingRectangle;
-        if (rect.IsEmpty || rect.Width < 1 || rect.Height < 1)
-        {
-            throw new InvalidOperationException("the crop handle has no screen bounds");
-        }
+        // The runner's virtual desktop can be smaller than the window. A handle
+        // past the screen edge cannot be clicked — the injected pointer clamps
+        // to the last pixel — so the window is moved fully onto the screen and
+        // only a corner the screen shows is used.
+        var windowRect = FitWindowToScreen(window);
+        var rect = WaitForUsableCorner(window, windowRect, TimeSpan.FromSeconds(10))
+            ?? throw new InvalidOperationException(
+                "no crop corner handle can be reached by the pointer");
         // Pull the corner towards the photo's centre: right/bottom corners move
         // left and up, left/top corners move right and down.
         var dx = rect.X + rect.Width / 2 < windowRect.X + windowRect.Width / 2 ? 70 : -70;
@@ -880,6 +853,98 @@ internal static class Program
         {
             Invoke(undo);
         }
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    /// <summary>
+    /// The before/after split is another pointer-only control: its Thumb has no
+    /// UIA pattern that moves it, so the divider is dragged with injected mouse
+    /// input and the only observable evidence is the Thumb's own screen
+    /// rectangle. The split starts at a fixed fraction and must come back when
+    /// the drag is reversed.
+    /// </summary>
+    private static void RunCompare(Process process, string photo)
+    {
+        var window = WaitWindow(process.Id, "Retouch Studio", StartUpPatience)
+            ?? throw new InvalidOperationException(
+                "the app window never appeared for UI Automation");
+        var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
+        Ok("the app opened a window UIA can see");
+        OpenPhoto(window, process, photo);
+        FitWindowToScreen(window);
+
+        var compare = FindButton(window, "Compare before and after")
+            ?? throw new InvalidOperationException("the Compare toggle is missing");
+        Toggle(compare);
+        var turnedOn = WaitFor(
+            () => compare.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
+                  && pattern is TogglePattern toggle
+                  && toggle.Current.ToggleState == ToggleState.On,
+            TimeSpan.FromSeconds(10));
+        if (!turnedOn)
+        {
+            throw new InvalidOperationException("the Compare toggle did not turn on");
+        }
+        Ok("Compare turned on through UIA");
+
+        var handles = WaitForHandles(window, "Compare split", 1, TimeSpan.FromSeconds(15));
+        if (handles is null || handles[0].Current.BoundingRectangle.IsEmpty)
+        {
+            throw new InvalidOperationException(
+                "the compare divider did not appear; the texts are " +
+                DescribeTexts(window));
+        }
+        var thumb = handles[0];
+        var start = thumb.Current.BoundingRectangle;
+        Console.WriteLine($"  compare divider at {start}");
+
+        var foreground = SetForegroundWindow(mainHandle);
+        Thread.Sleep(300);
+        Console.WriteLine($"  set foreground: {foreground}; " +
+                          $"active window is the app: {GetForegroundWindow() == mainHandle}");
+        Drag(start.X + start.Width / 2, start.Y + start.Height / 2, dx: 80, dy: 0, steps: 20);
+        var movedRight = WaitFor(
+            () => thumb.Current.BoundingRectangle.X >= start.X + 50,
+            TimeSpan.FromSeconds(10));
+        if (!movedRight)
+        {
+            throw new InvalidOperationException(
+                $"the divider stayed at {thumb.Current.BoundingRectangle.X}, " +
+                $"it started at {start.X}");
+        }
+        var shifted = thumb.Current.BoundingRectangle;
+        Ok($"dragging the divider moved it {shifted.X - start.X:0}px right");
+
+        Drag(shifted.X + shifted.Width / 2, shifted.Y + shifted.Height / 2,
+             dx: -80, dy: 0, steps: 20);
+        var returned = WaitFor(
+            () => Math.Abs(thumb.Current.BoundingRectangle.X - start.X) <= 6,
+            TimeSpan.FromSeconds(10));
+        if (!returned)
+        {
+            throw new InvalidOperationException(
+                $"the divider did not return: {thumb.Current.BoundingRectangle.X} " +
+                $"against a start of {start.X}");
+        }
+        Ok("dragging it back returned the divider to its start");
+
+        Toggle(compare);
+        var disappeared = WaitFor(() => HandleCount(window, "Compare split") == 0,
+                                  TimeSpan.FromSeconds(10));
+        if (!disappeared)
+        {
+            throw new InvalidOperationException(
+                "the divider stayed after Compare was turned off");
+        }
+        Ok("turning Compare off removed the divider");
+
+        CloseCleanly(window, process);
+        Console.WriteLine("UI HOST TESTS: PASS");
+    }
+
+    private static void CloseCleanly(AutomationElement window, Process process)
+    {
         var close = (WindowPattern)window.GetCurrentPattern(WindowPattern.Pattern);
         close.Close();
         if (!process.WaitForExit(30_000))
@@ -896,14 +961,27 @@ internal static class Program
                 $"the app exited with {process.ExitCode}");
         }
         Ok("the app closed cleanly");
-        Console.WriteLine("UI HOST TESTS: PASS");
     }
 
-    /// <summary>
-    /// Opens a photo through the Open Photo dialog and waits for the window
-    /// title to name it. The golden path and the crop path share it, so both
-    /// prove the same entry point.
-    /// </summary>
+    private static void Toggle(AutomationElement element)
+    {
+        if (element.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
+            && pattern is TogglePattern toggle)
+        {
+            toggle.Toggle();
+            return;
+        }
+        Invoke(element);
+    }
+
+    private static int HandleCount(AutomationElement window, string name) =>
+        window.FindAll(
+                TreeScope.Descendants,
+                new AndCondition(
+                    new PropertyCondition(AutomationElement.ControlTypeProperty,
+                                          ControlType.Thumb),
+                    new PropertyCondition(AutomationElement.NameProperty, name)))
+            .Count;
     private static void OpenPhoto(AutomationElement window, Process process, string photo)
     {
         var open = FindButton(window, "Open Photo")
@@ -1527,6 +1605,116 @@ internal static class Program
                 return (width, height);
             }
         }
+        return null;
+    }
+
+    /// <summary>
+    /// Brings the window fully onto the virtual desktop. Shrinking it would
+    /// relayout the crop overlay between measuring a handle and dragging it, so
+    /// a window that only hangs over an edge is moved instead.
+    /// Returns the window's rect on screen afterwards.
+    /// </summary>
+    private static Rect FitWindowToScreen(AutomationElement window)
+    {
+        var screenWidth = GetSystemMetrics(SmCxScreen);
+        var screenHeight = GetSystemMetrics(SmCyScreen);
+        Console.WriteLine($"  virtual screen: {screenWidth}x{screenHeight}");
+        var rect = window.Current.BoundingRectangle;
+        Console.WriteLine($"  window rect: {rect}");
+        if (rect.Left >= 0 && rect.Top >= 0
+            && rect.Right <= screenWidth && rect.Bottom <= screenHeight)
+        {
+            return rect;
+        }
+        if (!window.TryGetCurrentPattern(TransformPattern.Pattern, out var pattern)
+            || pattern is not TransformPattern transform)
+        {
+            Console.WriteLine("  the window does not accept a transform");
+            return rect;
+        }
+        if (rect.Width > screenWidth || rect.Height > screenHeight)
+        {
+            if (!transform.Current.CanResize)
+            {
+                Console.WriteLine("  the window is larger than the screen and cannot shrink");
+                return rect;
+            }
+            transform.Resize(screenWidth - 40, screenHeight - 80);
+            Thread.Sleep(800);
+            rect = window.Current.BoundingRectangle;
+            Console.WriteLine($"  window rect after resize: {rect}");
+        }
+        if (transform.Current.CanMove)
+        {
+            transform.Move(Math.Max(0, Math.Min(rect.Left, screenWidth - rect.Width)),
+                           Math.Max(0, Math.Min(rect.Top, screenHeight - rect.Height)));
+            Thread.Sleep(500);
+            rect = window.Current.BoundingRectangle;
+            Console.WriteLine($"  window rect after move: {rect}");
+        }
+        return rect;
+    }
+
+    /// <summary>
+    /// The bottom-right crop corner the pointer can actually reach: fully on
+    /// screen, inside the window, and the element under its centre is the
+    /// handle itself. UIA bounds are believed only once a hit test agrees.
+    /// </summary>
+    private static Rect? WaitForUsableCorner(AutomationElement window, Rect windowRect,
+                                             TimeSpan patience)
+    {
+        var deadline = DateTime.UtcNow + patience;
+        var screen = new Rect(0, 0, GetSystemMetrics(SmCxScreen),
+                              GetSystemMetrics(SmCyScreen));
+        var last = "no corner handle was reported";
+        while (DateTime.UtcNow < deadline)
+        {
+            var handles = WaitForHandles(window, "Crop corner handle", 4,
+                                         TimeSpan.FromMilliseconds(500));
+            if (handles is not null)
+            {
+                var inside = handles
+                    .Select(item => item.Current.BoundingRectangle)
+                    .Where(bounds => bounds.Width >= 1 && bounds.Height >= 1)
+                    .Where(bounds => windowRect.Contains(bounds) && screen.Contains(bounds))
+                    .OrderByDescending(bounds => bounds.Right + bounds.Bottom)
+                    .ToList();
+                if (inside.Count == 0)
+                {
+                    last = $"no corner sits inside {windowRect}; the corners are " +
+                           string.Join(", ", handles.Select(item =>
+                               item.Current.BoundingRectangle.ToString()));
+                }
+                else
+                {
+                    var corner = inside[0];
+                    var centre = new Point(corner.X + corner.Width / 2,
+                                           corner.Y + corner.Height / 2);
+                    AutomationElement? hit = null;
+                    try
+                    {
+                        hit = AutomationElement.FromPoint(centre);
+                    }
+                    catch (ElementNotAvailableException)
+                    {
+                    }
+                    if (hit is not null
+                        && hit.Current.ControlType == ControlType.Thumb
+                        && hit.Current.Name == "Crop corner handle")
+                    {
+                        Console.WriteLine($"  usable corner at {corner}; the pointer reaches it");
+                        return corner;
+                    }
+                    last = $"the pointer at {centre} hits " +
+                           (hit is null
+                               ? "nothing"
+                               : $"{hit.Current.ControlType.ProgrammaticName} " +
+                                 $"'{hit.Current.Name}'");
+                }
+            }
+            Thread.Sleep(300);
+        }
+        Console.WriteLine($"  no usable crop corner: {last}");
         return null;
     }
 

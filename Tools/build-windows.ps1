@@ -271,6 +271,13 @@ if (-not $SkipUiSmoke -and -not $SkipGuiSmoke -and -not $SkipPublish) {
     & dotnet run --project $uiProject -c $Configuration -- `
         $uiApp $uiPhoto $uiCropOutput crop
     Assert-ExitCode 'UI crop tests'
+
+    # The compare divider is dragged the same way; the Thumb's own rectangle is
+    # the evidence, because the split line and badges are not in the UIA tree.
+    $uiCompareOutput = Join-Path $uiTemp 'retouchstudio-ui-compare.jpg'
+    & dotnet run --project $uiProject -c $Configuration -- `
+        $uiApp $uiPhoto $uiCompareOutput compare
+    Assert-ExitCode 'UI compare tests'
 }
 
 # 7. The zip is what a release would ship, so the artifact itself is extracted
