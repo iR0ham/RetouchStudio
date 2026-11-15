@@ -1485,16 +1485,18 @@ internal static class Program
             ?? throw new InvalidOperationException("the main window never appeared");
         var mainHandle = (IntPtr)window.Current.NativeWindowHandle;
         Ok("the app opened a window UIA can see");
-        OpenPhoto(window, process, photo);
 
         // Every source needs its own name, or the batch would export one file
-        // and call the rest duplicates of it.
+        // and call the rest duplicates of it. The sources are made before the
+        // document opens so the picker, which remembers the folder the photo
+        // came from, starts in the folder that holds them.
         var sources = Directory.CreateTempSubdirectory("retouchstudio-ui-cancel-");
         var extension = Path.GetExtension(photo);
         for (var index = 1; index <= count; index++)
         {
             File.Copy(photo, Path.Combine(sources.FullName, $"frame-{index:00}{extension}"));
         }
+        OpenPhoto(window, process, Path.Combine(sources.FullName, $"frame-01{extension}"));
         var folder = Path.Combine(
             Path.GetDirectoryName(output)!, "retouchstudio-ui-batch-cancel");
         if (Directory.Exists(folder))
@@ -1626,44 +1628,38 @@ internal static class Program
     }
 
     /// <summary>
-    /// Hands the picker every file of a folder. This dialog does not parse
-    /// several quoted paths, so it is navigated into the folder and offered a
-    /// wildcard, which the shell expands into every match; a dialog that reads
-    /// the stars literally falls back to ticking the list like a person.
+    /// Hands the picker every file of a folder. The shell remembers the folder
+    /// the single-photo dialog last opened, so the files are usually in view
+    /// already and are ticked through the list. A picker that starts elsewhere
+    /// is navigated into the folder and offered a wildcard, which the shell
+    /// expands into every match.
     /// </summary>
     private static void SelectAllInPicker(AutomationElement dialog, string folder,
                                           string namePrefix, string pattern, int expected)
     {
         var handle = (IntPtr)dialog.Current.NativeWindowHandle;
-        var edit = SetFileName(dialog, folder + Path.DirectorySeparatorChar);
-        CommitFileName(edit);
-        Thread.Sleep(500);
-        SetFileName(dialog, pattern);
-        PressDefaultButton(dialog, "Open");
-        if (WaitFor(() => !IsWindowVisible(handle), TimeSpan.FromSeconds(10)))
+        var items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(5));
+        if (items.Count < expected)
         {
-            Ok($"the picker took the wildcard '{pattern}'");
-            return;
-        }
-
-        // The wildcard stays in the box and would win over a ticked list, so
-        // it is cleared before the list becomes the selection.
-        SetFileName(dialog, "");
-        var items = new List<AutomationElement>();
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        while (DateTime.UtcNow < deadline)
-        {
-            items = PickerItems(dialog, namePrefix);
-            if (items.Count >= expected)
+            var edit = SetFileName(dialog, folder + Path.DirectorySeparatorChar);
+            CommitFileName(edit);
+            Thread.Sleep(500);
+            SetFileName(dialog, pattern);
+            PressDefaultButton(dialog, "Open");
+            if (WaitFor(() => !IsWindowVisible(handle), TimeSpan.FromSeconds(10)))
             {
-                break;
+                Ok($"the picker took the wildcard '{pattern}'");
+                return;
             }
-            Thread.Sleep(300);
+            // The wildcard stays in the box and would win over a ticked list,
+            // so it is cleared before the list becomes the selection.
+            SetFileName(dialog, "");
+            items = PollPickerItems(dialog, namePrefix, expected, TimeSpan.FromSeconds(20));
         }
         if (items.Count < expected)
         {
             throw new InvalidOperationException(
-                $"the picker shows {items.Count} files instead of {expected} after entering " +
+                $"the picker shows {items.Count} files instead of {expected} in " +
                 $"{folder}; the items are {DescribePickerItems(dialog)}; the texts are " +
                 DescribeWindow(dialog));
         }
@@ -1691,6 +1687,24 @@ internal static class Program
             ?? throw new InvalidOperationException(
                 "the photo picker has no Open button: " + DescribeWindow(dialog));
         Invoke(open);
+    }
+
+    private static List<AutomationElement> PollPickerItems(AutomationElement dialog,
+                                                           string namePrefix, int expected,
+                                                           TimeSpan patience)
+    {
+        var items = new List<AutomationElement>();
+        var deadline = DateTime.UtcNow + patience;
+        while (DateTime.UtcNow < deadline)
+        {
+            items = PickerItems(dialog, namePrefix);
+            if (items.Count >= expected)
+            {
+                break;
+            }
+            Thread.Sleep(300);
+        }
+        return items;
     }
 
     /// <summary>
