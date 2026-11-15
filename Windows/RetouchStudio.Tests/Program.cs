@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -13,6 +14,10 @@ using RetouchStudio.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using IRandomAccessStream = Windows.Storage.Streams.IRandomAccessStream;
+// UseWPF replaces the SDK's implicit usings and drops System.IO, and
+// Windows.Storage brings its own FileAttributes (no Hidden), so the two are
+// named explicitly here.
+using FileAttributes = System.IO.FileAttributes;
 
 namespace RetouchStudio.Tests;
 
