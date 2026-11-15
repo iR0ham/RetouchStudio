@@ -160,9 +160,9 @@ public static class ExportRunner
                 {
                     rendered = rendered.ResizeLongEdge(edge);
                 }
+                var output = plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered;
                 cancellationToken.ThrowIfCancellationRequested();
-                await codec.EncodeAsync(plan.FlattensAlpha ? rendered.FlattenOntoWhite() : rendered,
-                                        temporary, plan.Format, quality,
+                await codec.EncodeAsync(output, temporary, plan.Format, quality,
                                         metadata, stripPrivacyMetadata);
             }
 
