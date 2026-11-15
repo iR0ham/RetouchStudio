@@ -8,9 +8,11 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Threading;
 using RetouchStudio.Core.Project;
 using RetouchStudio.Imaging;
-using ComTypes = System.Runtime.InteropServices.ComTypes;
 
 namespace RetouchStudio.UiTests;
 
@@ -1370,15 +1372,14 @@ internal static class Program
     }
 
     /// <summary>
-    /// Drop-to-open is an OLE operation no UIA pattern can express. A helper
-    /// STA thread is the drag source: a WPF DataObject hands the photo over as
-    /// CF_HDROP and an IOleDropSource ends the drag on the button release, both
-    /// passed to ole32's DoDragDrop. The test thread performs the gesture the
-    /// drag loop watches for — press inside PreviewHost, move, release. If the
-    /// loop still asks the source to continue once the pointer is verifiably on
-    /// the preview, the source drops there itself and records that end, so the
-    /// log says which end ran; the opened title plus the exported file prove
-    /// the drop reached the same open path the dialogs use.
+    /// Drop-to-open is an OLE operation no UIA pattern can express. The drag
+    /// source is a real WPF drag: a helper STA thread shows a small window at
+    /// the press point, the test presses inside it, and the window's own
+    /// pressed-button move starts DragDrop.DoDragDrop, so OLE's source owns a
+    /// capture that began on a genuine click. The moves then carry the pointer
+    /// into PreviewHost and the release drops the photo there; the opened title
+    /// plus the exported file prove the drop reached the same open path the
+    /// dialogs use.
     /// </summary>
     private static void RunDrop(Process process, string photo, string output)
     {
@@ -1412,157 +1413,249 @@ internal static class Program
                 $"the canvas at {target} is off the screen {screen}");
         }
 
-        // Not disposed: a failing check can leave the source thread waiting on
-        // one of them, and ManualResetEventSlim only allocates a handle when a
-        // wait handle is explicitly requested.
-        var ready = new ManualResetEventSlim(false);
-        var begin = new ManualResetEventSlim(false);
-        var finished = new ManualResetEventSlim(false);
-        var dropSource = new FileDropSource();
+        // Not disposed: a failing check can leave the helper waiting on one of
+        // them, and ManualResetEventSlim only allocates a handle when a wait
+        // handle is explicitly requested.
+        var helperReady = new ManualResetEventSlim(false);
+        var dragReturned = new ManualResetEventSlim(false);
+        Application? helperApp = null;
+        var helperHandle = IntPtr.Zero;
+        string? helperFailure = null;
         string? dragFailure = null;
-        var dragResult = -1;
-        uint dropEffect = 0;
-        var dragSource = new Thread(() =>
+        var dragStarted = new int[1];
+        var pressedMoves = new int[1];
+        var dragEffect = DragDropEffects.None;
+
+        void ShutHelperDown()
         {
-            var oleReady = false;
+            // BeginInvokeShutdown is the only shutdown member that is safe
+            // from another thread. It throws once the dispatcher has begun
+            // shutting down, which the check and the catch both cover.
+            var dispatcher = helperApp?.Dispatcher;
+            if (dispatcher is null || dispatcher.HasShutdownStarted
+                || dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
             try
             {
-                var initialize = OleInitialize(IntPtr.Zero);
-                if (initialize < 0)
+                dispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        var helper = new Thread(() =>
+        {
+            Application? app = null;
+            try
+            {
+                app = new Application
                 {
-                    throw new InvalidOperationException(
-                        $"OleInitialize failed with 0x{initialize:X8}");
-                }
-                oleReady = true;
-                var data = new DataObject(DataFormats.FileDrop, new[] { photo });
-                ready.Set();
-                if (!begin.Wait(TimeSpan.FromSeconds(30)))
+                    ShutdownMode = ShutdownMode.OnExplicitShutdown,
+                };
+                helperApp = app;
+                var source = new Window
                 {
-                    throw new InvalidOperationException(
-                        "the test thread never began the drag");
-                }
-                // DoDragDrop pumps the pointer loop and calls back into the
-                // source; it returns once the drag ends.
-                dragResult = DoDragDrop(
-                    (ComTypes.IDataObject)data, dropSource,
-                    DropEffectCopy, out dropEffect);
+                    Width = 24,
+                    Height = 24,
+                    SizeToContent = SizeToContent.Manual,
+                    WindowStyle = WindowStyle.None,
+                    ResizeMode = ResizeMode.NoResize,
+                    Topmost = true,
+                    ShowInTaskbar = false,
+                    Background = System.Windows.Media.Brushes.White,
+                };
+                source.PreviewMouseLeftButtonDown += (_, down) =>
+                {
+                    // The drag only exists if the press reached this window;
+                    // capturing keeps the button state flowing to it while the
+                    // pointer leaves.
+                    var captured = source.CaptureMouse();
+                    Console.WriteLine(
+                        $"  drop helper: button down at {down.GetPosition(source)}; " +
+                        $"mouse captured: {captured}");
+                };
+                source.PreviewMouseMove += (_, move) =>
+                {
+                    if (move.LeftButton != MouseButtonState.Pressed)
+                    {
+                        return;
+                    }
+                    Interlocked.Increment(ref pressedMoves[0]);
+                    if (Interlocked.Exchange(ref dragStarted[0], 1) != 0)
+                    {
+                        return;
+                    }
+                    // The canonical WPF drag: the window is the source, the
+                    // photo travels as CF_HDROP, and WPF's own drag loop ends
+                    // the drag on the button release.
+                    Console.WriteLine("  drop helper: a pressed-button move arrived; " +
+                                      "DoDragDrop starts");
+                    try
+                    {
+                        var data = new DataObject(
+                            DataFormats.FileDrop, new[] { photo });
+                        dragEffect = DragDrop.DoDragDrop(
+                            source, data, DragDropEffects.Copy);
+                        Console.WriteLine(
+                            $"  drop helper: DoDragDrop returned {dragEffect}; " +
+                            "the drag ended on the button-up");
+                    }
+                    catch (Exception error)
+                    {
+                        dragFailure = $"{error.GetType().Name}: {error.Message}";
+                    }
+                    finally
+                    {
+                        source.ReleaseMouseCapture();
+                        dragReturned.Set();
+                    }
+                };
+                source.Show();
+                // Window.Left/Top are DIPs and the press point is a device
+                // coordinate; the window's own DPI converts between them, so
+                // the helper really sits under the press.
+                var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(source);
+                source.Left = start.X / dpi.DpiScaleX;
+                source.Top = start.Y / dpi.DpiScaleY;
+                source.UpdateLayout();
+                helperHandle = new WindowInteropHelper(source).Handle;
+                Console.WriteLine(
+                    $"  drop helper: a {source.ActualWidth}x{source.ActualHeight} " +
+                    $"window covers {source.Left:0},{source.Top:0} at " +
+                    $"{dpi.PixelsPerInchX:0} dpi");
+                helperReady.Set();
+                app.Run();
             }
             catch (Exception error)
             {
-                dragFailure = error.Message;
+                helperFailure = $"{error.GetType().Name}: {error.Message}";
+                Console.WriteLine($"  drop helper: {helperFailure}");
+                helperReady.Set();
             }
             finally
             {
-                if (oleReady)
+                // A helper that failed before Run left nothing to wait for.
+                dragReturned.Set();
+                if (app is not null && !app.Dispatcher.HasShutdownStarted)
                 {
-                    OleUninitialize();
+                    try
+                    {
+                        app.Dispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
                 }
-                finished.Set();
             }
         })
         {
             IsBackground = true,
-            Name = "OLE drop source",
+            Name = "WPF drop helper",
         };
-        dragSource.SetApartmentState(ApartmentState.STA);
-        dragSource.Start();
+        helper.SetApartmentState(ApartmentState.STA);
+        helper.Start();
 
-        if (!ready.Wait(TimeSpan.FromSeconds(15)))
+        try
         {
-            // finished is only read after the source thread set it, which is
-            // the synchronization point for the failure text.
-            throw new InvalidOperationException(finished.IsSet
-                ? $"the OLE drag source never armed: {dragFailure}"
-                : "the OLE drag source never armed");
-        }
-        SetForegroundWindow(mainHandle);
-        Thread.Sleep(300);
-        var down = new NativePoint
-        {
-            X = (int)Math.Round(start.X),
-            Y = (int)Math.Round(start.Y),
-        };
-        SetCursorPos(down.X, down.Y);
-        Thread.Sleep(150);
-        if (!PointBelongsToProcess(down, process.Id))
-        {
-            throw new InvalidOperationException(
-                $"the press point ({down.X},{down.Y}) is not over the app; " +
-                $"the window is {windowRect}");
-        }
-
-        // A real drag has the button down before the source starts, which is
-        // what this holds while the source thread enters its loop.
-        Console.WriteLine($"  pressing at {down.X},{down.Y} and dragging to " +
-                          $"{target.X:0},{target.Y:0}");
-        mouse_event(MouseLeftDown, 0, 0, 0, IntPtr.Zero);
-        Thread.Sleep(150);
-        begin.Set();
-
-        // The loop takes the capture first; the moves then have it call the
-        // app's DragOver, and the release must land inside PreviewHost so the
-        // drop goes to the app's target.
-        Thread.Sleep(800);
-        const int steps = 12;
-        for (var step = 1; step <= steps; step++)
-        {
-            MovePointer(start.X + (target.X - start.X) * step / steps,
-                        start.Y + (target.Y - start.Y) * step / steps);
-            Thread.Sleep(50);
-        }
-        var arrival = new NativePoint
-        {
-            X = (int)Math.Round(target.X),
-            Y = (int)Math.Round(target.Y),
-        };
-        if (!PointBelongsToProcess(arrival, process.Id))
-        {
-            mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
-            throw new InvalidOperationException(
-                $"the drag left the preview: ({arrival.X},{arrival.Y}) is not over " +
-                $"the app; the window is {windowRect}");
-        }
-        // The pointer is verifiably on PreviewHost. A loop that still asks to
-        // continue past this point lets the source end the drop itself; these
-        // small moves give it calls to answer while the button is still held.
-        dropSource.Arrive();
-        for (var nudge = 0; nudge < 8 && !finished.IsSet; nudge++)
-        {
-            var offset = nudge % 2 == 0 ? 2 : -2;
-            MovePointer(target.X + offset, target.Y + offset);
+            if (!helperReady.Wait(TimeSpan.FromSeconds(15)))
+            {
+                throw new InvalidOperationException(
+                    "the drop helper never showed its window");
+            }
+            if (helperFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper failed: {helperFailure}");
+            }
+            SetForegroundWindow(helperHandle);
+            Thread.Sleep(300);
+            var down = new NativePoint
+            {
+                X = (int)Math.Round(start.X),
+                Y = (int)Math.Round(start.Y),
+            };
+            // The press must land on the helper, or no drag starts at all.
+            var under = WindowFromPoint(down);
+            if (under != helperHandle)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper's window 0x{helperHandle.ToInt64():X} is not " +
+                    $"under the press point ({down.X},{down.Y}); the window there " +
+                    $"is 0x{under.ToInt64():X}");
+            }
+            SetCursorPos(down.X, down.Y);
             Thread.Sleep(150);
-        }
-        mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+            Console.WriteLine($"  pressing at {down.X},{down.Y} inside the drop " +
+                              $"helper and dragging to {target.X:0},{target.Y:0}");
+            mouse_event(MouseLeftDown, 0, 0, 0, IntPtr.Zero);
+            // WPF must see the down before a move can start the drag.
+            Thread.Sleep(400);
 
-        if (!finished.Wait(TimeSpan.FromSeconds(30)))
-        {
-            throw new InvalidOperationException(dropSource.QueryCount == 0
-                ? "the drag loop received no mouse input from the injected gesture; " +
-                  "DoDragDrop is still waiting although the button was released"
-                : $"DoDragDrop did not return after the button was released; the " +
-                  $"source answered {dropSource.QueryCount} queries and " +
-                  $"{dropSource.FeedbackCount} feedback calls without a drop");
+            const int steps = 12;
+            for (var step = 1; step <= steps; step++)
+            {
+                MovePointer(start.X + (target.X - start.X) * step / steps,
+                            start.Y + (target.Y - start.Y) * step / steps);
+                Thread.Sleep(50);
+            }
+            var arrival = new NativePoint
+            {
+                X = (int)Math.Round(target.X),
+                Y = (int)Math.Round(target.Y),
+            };
+            if (!PointBelongsToProcess(arrival, process.Id))
+            {
+                mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+                throw new InvalidOperationException(
+                    $"the drag left the preview: ({arrival.X},{arrival.Y}) is not over " +
+                    $"the app; the window is {windowRect}");
+            }
+            // The release must land inside PreviewHost so the drop goes to the
+            // app's target; WPF's drag source ends the drag on that button-up.
+            mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+
+            if (!dragReturned.Wait(TimeSpan.FromSeconds(30)))
+            {
+                throw new InvalidOperationException(
+                    Volatile.Read(ref dragStarted[0]) == 0
+                        ? "the drop helper never started the drag: its window saw " +
+                          $"{Volatile.Read(ref pressedMoves[0])} pressed-button " +
+                          "moves, so DoDragDrop was never called"
+                        : "DoDragDrop in the drop helper never returned after the " +
+                          $"button was released; the helper saw " +
+                          $"{Volatile.Read(ref pressedMoves[0])} pressed-button moves");
+            }
+            if (dragFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    $"the drop helper's DoDragDrop failed: {dragFailure}");
+            }
+            if (Volatile.Read(ref dragStarted[0]) == 0)
+            {
+                throw new InvalidOperationException(
+                    "the drop helper never started the drag: its window saw " +
+                    $"{Volatile.Read(ref pressedMoves[0])} pressed-button moves, " +
+                    "so DoDragDrop was never called");
+            }
+            if (dragEffect != DragDropEffects.Copy)
+            {
+                throw new InvalidOperationException(
+                    $"the drop ended with effect {dragEffect}, not Copy (ended by: " +
+                    "WPF's drag source on the button-up); PreviewHost never " +
+                    "accepted the file drop");
+            }
+            Ok("the helper's own DragDrop.DoDragDrop dropped with Copy");
+            Ok("the drag ended by: WPF's drag source on the injected button-up");
         }
-        if (dragFailure is not null)
+        finally
         {
-            throw new InvalidOperationException(
-                $"the OLE drag source failed: {dragFailure}");
+            // However this ended, the helper must not keep the process alive
+            // or its window on screen during the evidence checks.
+            ShutHelperDown();
         }
-        if (dragResult < 0)
-        {
-            throw new InvalidOperationException(
-                $"DoDragDrop failed with 0x{dragResult:X8}");
-        }
-        if (dropEffect != DropEffectCopy)
-        {
-            throw new InvalidOperationException(
-                $"the drop ended with effect 0x{dropEffect:X8} (ended by: " +
-                $"{dropSource.EndReason ?? "unknown"}), not DROPEFFECT_COPY; " +
-                "PreviewHost never accepted the file drop");
-        }
-        Ok("PreviewHost accepted the drag and dropped with DROPEFFECT_COPY");
-        Ok($"the drag ended by: {dropSource.EndReason ?? "unknown"} after " +
-           $"{dropSource.QueryCount} queries and {dropSource.FeedbackCount} feedback calls");
 
         var photoName = Path.GetFileName(photo);
         var opened = WaitFor(
@@ -2964,20 +3057,6 @@ internal static class Program
     private const int SmCxScreen = 0;
     private const int SmCyScreen = 1;
 
-    [DllImport("ole32.dll")]
-    private static extern int OleInitialize(IntPtr reserved);
-
-    [DllImport("ole32.dll")]
-    private static extern void OleUninitialize();
-
-    [DllImport("ole32.dll", ExactSpelling = true)]
-    private static extern int DoDragDrop(
-        [MarshalAs(UnmanagedType.Interface)] ComTypes.IDataObject dataObject,
-        [MarshalAs(UnmanagedType.Interface)] IOleDropSource dropSource,
-        uint allowedEffects, out uint effect);
-
-    private const uint DropEffectCopy = 1;
-
     private const uint MouseLeftDown = 0x0002;
     private const uint MouseLeftUp = 0x0004;
     private const uint MouseMoveAbsolute = 0x0001 | 0x8000;
@@ -3071,120 +3150,4 @@ internal static class Program
     }
 
     private static void Ok(string message) => Console.WriteLine($"  ok {message}");
-}
-
-/// <summary>
-/// The source half of an OLE drag. OLE asks this object after every input
-/// event: S_OK keeps dragging, DRAGDROP_S_DROP drops where the pointer is, and
-/// Escape cancels. Returning DROP on the button release is what ends the drag
-/// loop with the pointer still over the app's window.
-/// </summary>
-[ComVisible(true)]
-[ComImport]
-[Guid("00000121-0000-0000-C000-000000000046")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-public interface IOleDropSource
-{
-    [PreserveSig]
-    int QueryContinueDrag(int escapePressed, int keyState);
-
-    [PreserveSig]
-    int GiveFeedback(int effect);
-}
-
-/// <summary>
-/// An OLE drop source that ends the drag on the button release, or from this
-/// side one second after the test proved the pointer is over the drop target,
-/// and counts every callback so a silent drag loop is visible in the log.
-/// </summary>
-[ComVisible(true)]
-public sealed class FileDropSource : IOleDropSource
-{
-    private const int SOk = 0;
-    private const int DragDropDrop = 0x00040100;
-    private const int DragDropCancel = 0x00040101;
-    private const int DragDropUseDefaultCursors = 0x00040102;
-    private const int MkLeftButton = 0x0001;
-    private const long SettleAfterArrival = 1000;
-
-    private readonly object _log = new();
-    private readonly HashSet<int> _logged = new();
-    private int _queries;
-    private int _feedbacks;
-    private string? _end;
-    private long _arrivedAt;
-
-    public int QueryCount => Volatile.Read(ref _queries);
-
-    public int FeedbackCount => Volatile.Read(ref _feedbacks);
-
-    public string? EndReason => Volatile.Read(ref _end);
-
-    /// <summary>
-    /// Called by the test once the pointer is verifiably over the drop target.
-    /// A loop that still asks to continue a second later is ended by the source
-    /// instead of leaving DoDragDrop waiting for input it never gets; where the
-    /// pointer is at that moment is where OLE performs the drop.
-    /// </summary>
-    public void Arrive() => Interlocked.CompareExchange(
-        ref _arrivedAt, Environment.TickCount64, 0);
-
-    public int QueryContinueDrag(int escapePressed, int keyState)
-    {
-        var call = Interlocked.Increment(ref _queries);
-        var escape = escapePressed != 0;
-        var buttonDown = (keyState & MkLeftButton) != 0;
-        string? end = null;
-        var answer = SOk;
-        if (escape)
-        {
-            end = "escape";
-            answer = DragDropCancel;
-        }
-        else if (!buttonDown)
-        {
-            end = "button released";
-            answer = DragDropDrop;
-        }
-        else if (ArrivedLongEnough())
-        {
-            end = "source-after-moves";
-            answer = DragDropDrop;
-        }
-        if (end is not null)
-        {
-            Interlocked.CompareExchange(ref _end, end, null);
-        }
-        // The first call for each key state is logged, and so is the one that
-        // ends the drag, so a silent loop and a loop that never drops are
-        // distinguishable from the CI log alone.
-        lock (_log)
-        {
-            if (end is not null || _logged.Add(keyState))
-            {
-                Console.WriteLine(
-                    $"  drop source: query #{call} keyState=0x{keyState:X4} " +
-                    $"escape={(escape ? 1 : 0)} -> " +
-                    (end is null ? "S_OK" : $"DROP ({end})"));
-            }
-        }
-        return answer;
-    }
-
-    public int GiveFeedback(int effect)
-    {
-        var call = Interlocked.Increment(ref _feedbacks);
-        if (call == 1)
-        {
-            Console.WriteLine($"  drop source: feedback #{call} effect=0x{effect:X8}");
-        }
-        return DragDropUseDefaultCursors;
-    }
-
-    private bool ArrivedLongEnough()
-    {
-        var arrived = Volatile.Read(ref _arrivedAt);
-        return arrived != 0
-            && Environment.TickCount64 - arrived >= SettleAfterArrival;
-    }
 }
