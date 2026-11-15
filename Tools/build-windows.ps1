@@ -140,10 +140,25 @@ Assert-ExitCode 'swiftc -print-target-info'
 # Copying every DLL from that directory bloats the app by hundreds of MiB.
 $runtimeDirs = @($targetInfo.paths.runtimeLibraryPaths) +
     @($targetInfo.paths.runtimeResourcePaths)
+# The runtime location is not purely runtime either: it also carries the
+# compiler/debugger side (LLDB, SourceKit, the index store, the SwiftScan
+# plugin, clang and LTO), and the zip shipped all of it. No StudioCore runtime
+# module imports these, which the publish step below checks from the import
+# tables, so they are never copied.
+$toolchainOnlyDlls = @(
+    'liblldb.dll', 'sourcekitdInProc.dll', '_InternalSwiftScan.dll',
+    'libclang.dll', 'LTO.dll', 'libIndexStore.dll',
+    '_InternalSwiftStaticMirror.dll'
+)
 $copied = @{}
+$leftOut = @{}
 foreach ($directory in $runtimeDirs) {
     if ($directory -and (Test-Path $directory)) {
         Get-ChildItem $directory -Filter *.dll -File | ForEach-Object {
+            if ($toolchainOnlyDlls -contains $_.Name) {
+                $leftOut[$_.Name] = $_.Length
+                return
+            }
             if (-not $copied.ContainsKey($_.Name)) {
                 Copy-Item $_.FullName $nativeDir -Force
                 $copied[$_.Name] = $true
@@ -152,6 +167,11 @@ foreach ($directory in $runtimeDirs) {
     }
 }
 Write-Host "   copied $($copied.Count) runtime DLLs"
+if ($leftOut.Count -gt 0) {
+    $leftOutMiB = ($leftOut.Values | Measure-Object -Sum).Sum / 1MB
+    Write-Host ("   left out {0} toolchain DLLs ({1:N1} MiB): {2}" -f
+        $leftOut.Count, $leftOutMiB, (($leftOut.Keys | Sort-Object) -join ', '))
+}
 
 # 4. A self-contained publish, so the folder runs from a zip with no installed
 #    .NET runtime.
@@ -171,15 +191,26 @@ if (-not $SkipPublish) {
 
     # Guard against accidentally shipping compiler/debugger tooling again.
     # These are not part of the StudioCore runtime dependency closure.
-    $forbiddenToolchainDlls = @(
-        'liblldb.dll', 'sourcekitdInProc.dll', '_InternalSwiftScan.dll',
-        'libclang.dll', 'LTO.dll', 'libIndexStore.dll',
-        '_InternalSwiftStaticMirror.dll'
-    )
-    foreach ($name in $forbiddenToolchainDlls) {
+    foreach ($name in $toolchainOnlyDlls) {
         if (Test-Path (Join-Path $appDir $name) -PathType Leaf) {
             throw "Unexpected Swift toolchain DLL in app payload: $name"
         }
+    }
+    if ($dumpbin) {
+        # Leaving a DLL out is only safe if nothing in the payload imports it.
+        Step 'checking the payload does not import toolchain DLLs'
+        $modules = @(Get-ChildItem $appDir -File |
+            Where-Object { $_.Extension -in '.dll', '.exe' })
+        foreach ($module in $modules) {
+            $imports = & dumpbin /nologo /dependents $module.FullName | Out-String
+            Assert-ExitCode "dumpbin /dependents $($module.Name)"
+            foreach ($name in $toolchainOnlyDlls) {
+                if ($imports -match "(?im)^\s+$([regex]::Escape($name))\s*$") {
+                    throw "$($module.Name) imports $name, so it cannot be left out"
+                }
+            }
+        }
+        Write-Host "   $($modules.Count) payload modules import none of the $($toolchainOnlyDlls.Count) excluded DLLs"
     }
 
     $appBytes = (Get-ChildItem $appDir -File -Recurse | Measure-Object -Property Length -Sum).Sum
