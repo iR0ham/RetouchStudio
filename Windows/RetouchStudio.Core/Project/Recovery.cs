@@ -191,6 +191,13 @@ public sealed class RecoveryStore
 
     private DateTimeOffset _lastSavedAt = Epoch;
 
+    /// <summary>
+    /// True while the working slot still holds a copy the launch could not
+    /// lift. It is then the only copy of that document, so an autosave must
+    /// leave the file alone until the owner restores or discards it.
+    /// </summary>
+    private bool _workingLocked;
+
     public RecoveryStore(string directory)
     {
         Directory = directory;
@@ -219,7 +226,7 @@ public sealed class RecoveryStore
     public bool WriteWorking(RecoverySnapshot snapshot, out RecoverySnapshot? written)
     {
         written = null;
-        if (InjectedFailures.Contains(Failure.WorkingWrite))
+        if (_workingLocked || InjectedFailures.Contains(Failure.WorkingWrite))
         {
             return false;
         }
@@ -328,6 +335,9 @@ public sealed class RecoveryStore
         }
 
         var list = new List<Candidate>();
+        // A slot that survived the lift is an unresolved copy and the only
+        // one there is: autosave must not overwrite it for this session.
+        _workingLocked = File.Exists(WorkingPath);
         if (TryReadFile(WorkingPath) is { } stuck)
         {
             // The lift failed, so the slot is offered as-is. No new document is
@@ -364,6 +374,12 @@ public sealed class RecoveryStore
         if (!File.Exists(candidate.Path))
         {
             return false;
+        }
+        if (string.Equals(candidate.Path, WorkingPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // Restoring the stuck slot is the owner's decision about it, so
+            // the slot may be written again.
+            _workingLocked = false;
         }
         if (!WriteWorking(candidate.Snapshot, out _))
         {
@@ -409,12 +425,17 @@ public sealed class RecoveryStore
             {
                 File.Delete(candidate.Path);
             }
-            return true;
         }
         catch (Exception)
         {
             return false;
         }
+        if (string.Equals(candidate.Path, WorkingPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // The owner dropped the stuck copy, so the slot is free again.
+            _workingLocked = false;
+        }
+        return true;
     }
 
     /// <summary>Moves an unreadable copy aside; its bytes are kept, never deleted.</summary>
