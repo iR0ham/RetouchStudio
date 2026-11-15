@@ -240,7 +240,8 @@ public sealed class WindowsImageCodec : IImageCodec
         // metadata graph does not always expose it under a property key.
         var exif = MetadataCarry.ReadExif(Path.GetFullPath(path));
         var xmp = MetadataCarry.ReadXmp(Path.GetFullPath(path));
-        return new ImageMetadata(values, decoder.DpiX, decoder.DpiY, exif, xmp);
+        var iptc = MetadataCarry.ReadIptc(Path.GetFullPath(path));
+        return new ImageMetadata(values, decoder.DpiX, decoder.DpiY, exif, xmp, iptc);
     }
 
     public async Task EncodeAsync(PixelBuffer image, string path, string format, double quality,
@@ -313,11 +314,12 @@ public sealed class WindowsImageCodec : IImageCodec
 
     /// <summary>
     /// Splices the colour profile and, unless the source is being stripped, the
-    /// source EXIF block and XMP packet into a finished file. The EXIF block is
-    /// described with the exported frame's size, so the carried tags name the
-    /// pixels that were actually written. The profile is not privacy metadata:
-    /// the pixels are sRGB whether or not the source's identity is kept, so the
-    /// file always declares the space it was written in.
+    /// source EXIF block, XMP packet and IPTC resource into a finished file. The
+    /// EXIF block is described with the exported frame's size, so the carried
+    /// tags name the pixels that were actually written. The profile is not
+    /// privacy metadata: the pixels are sRGB whether or not the source's
+    /// identity is kept, so the file always declares the space it was written
+    /// in. IPTC has a container only in JPEG, so a PNG export drops it.
     /// </summary>
     private static void CarryBlocks(string path, string format, ImageMetadata? metadata,
                                     bool stripPrivacyMetadata, int width, int height)
@@ -331,13 +333,14 @@ public sealed class WindowsImageCodec : IImageCodec
             ? MetadataCarry.NormalizeExif(tiff, width, height)
             : null;
         var xmp = carries && metadata!.Xmp is { } packet ? MetadataCarry.NormalizeXmp(packet) : null;
+        var iptc = carries && metadata!.Iptc is { Length: > 0 } resource ? resource : null;
         if (format == "png")
         {
             MetadataCarry.WritePng(path, exif, xmp, SrgbProfile.Bytes);
         }
         else
         {
-            MetadataCarry.WriteJpeg(path, exif, xmp, SrgbProfile.Bytes);
+            MetadataCarry.WriteJpeg(path, exif, xmp, SrgbProfile.Bytes, iptc);
         }
     }
 

@@ -64,7 +64,10 @@ Two mechanisms travel, and they are not interchangeable:
    block and XMP packet are spliced into JPEG and PNG at the container level,
    because the WinRT writer silently drops most EXIF keys and throws on
    `DateTaken`. The source's own EXIF and XMP therefore survive an export that
-   the WinRT metadata graph alone could not carry.
+   the WinRT metadata graph alone could not carry. A JPEG also carries the
+   source's IPTC resource (Photoshop APP13, 8BIM 0x0404) byte for byte; the
+   other resources in that Photoshop block are not carried, since digests and
+   resolution describe the old pixels. PNG and TIFF have no IPTC path here.
 
 The carried EXIF is rewritten to describe the pixels actually written:
 
@@ -75,11 +78,12 @@ The carried EXIF is rewritten to describe the pixels actually written:
   export names the cropped frame in EXIF", "a turned export is upright", "a
   resized export is upright").
 
-With stripping on, no EXIF block and no XMP packet are written for either
-container ("stripping leaves no carried EXIF", "stripping leaves no XMP"), and
-no GPS key appears in the allowlist path. An EXIF block that cannot be parsed is
-skipped and the export still succeeds ("an invalid EXIF block is skipped
-without failing the export").
+With stripping on, no EXIF block, XMP packet or IPTC resource is written
+("stripping leaves no carried EXIF", "stripping leaves no XMP", "stripping
+leaves no IPTC"), and no GPS key appears in the allowlist path. An EXIF or IPTC
+block that cannot be parsed is skipped and the export still succeeds ("an
+invalid EXIF block is skipped without failing the export", "a malformed IPTC
+block is skipped").
 
 Unsupported by design, and therefore absent rather than half-carried: GPS,
 `DateTaken`, exposure time, f-number, flash and white balance in the WinRT
@@ -92,7 +96,7 @@ only the allowlist.
 
 | Format | Export depth | Alpha | Metadata path |
 |---|---|---|---|
-| JPEG | 8, quality from the plan | flattened onto white | WinRT allowlist + EXIF/XMP splice |
+| JPEG | 8, quality from the plan | flattened onto white | WinRT allowlist + EXIF/XMP/IPTC splice |
 | PNG | 16 | kept straight | WinRT allowlist + EXIF/XMP splice |
 | TIFF | 16 | RGBA written; transparency not verified | WinRT allowlist only |
 | HEIC | refused | — | `EncodeAsync` throws `NotSupportedException` |

@@ -26,7 +26,13 @@ workstream landed on `windows/ui-automation` (`bb06e28`, green run
 43647604771) and is merged into `develop` as `7af20f2`: the Windows harness now
 drives the golden path (window → Open Photo dialog → Exposure slider → 150%
 zoom → Export dialog → typed path → decoded JPEG) and the launch recovery
-prompt. The next milestone PR carries that work plus these documents.
+prompt. On 2026-11-15 the branches were reconciled: `main` at `df289cf` was
+merged into `develop` at `63fdbd3` as `00a48d6`. The three commits `main` held
+that `develop` did not are merge commits with an empty net diff, so the merged
+tree equals the pre-merge develop tree; five checks are green on `develop` in
+run 43660568463. The same day, JPEG exports gained the source IPTC resource
+(`windows/iptc-carry`, `04dac17`, green run 43663201459, 268 checks).
+The next milestone PR carries that work plus these documents.
 
 ## Delivery infrastructure (completed in the 2026-11-14 batch)
 
@@ -40,8 +46,8 @@ prompt. The next milestone PR carries that work plus these documents.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
-| W4-1 | Metadata keep-safe / strip / allowlist for JPEG, TIFF, 16-bit PNG | TESTED (camera model + ISO, resolution; EXIF/XMP carry read back after crop, quarter turn and resize) | TIFF keeps only the WinRT allowlist; unsupported keys are documented in `WINDOWS_FORMAT_AUDIT.md` | none |
-| W4-2 | XMP write, IPTC write | NOT IMPLEMENTED | evaluate a distributable XMP packet writer; WIC exposes no write path | library choice (Lead decision), licence review |
+| W4-1 | Metadata keep-safe / strip / allowlist for JPEG, TIFF, 16-bit PNG | TESTED (camera model + ISO, resolution; EXIF/XMP carry read back after crop, quarter turn and resize; a JPEG also carries the source IPTC resource byte for byte, run 43663201459) | TIFF keeps only the WinRT allowlist; PNG and TIFF carry no IPTC; unsupported keys are documented in `WINDOWS_FORMAT_AUDIT.md` | none |
+| W4-2 | XMP write, IPTC write | Carry IMPLEMENTED for macOS parity (JPEG IPTC, EXIF/XMP in JPEG and PNG; macOS also only carries); composing new records NOT IMPLEMENTED | a source with no splice-able block (TIFF, HEIC) still loses these records; composing them needs a writer because WIC exposes no write path | library choice (Lead decision), licence review |
 | W4-3 | Full EXIF rewrite (GPS, date, exposure, lens) | NOT IMPLEMENTED | WIC drops most keys; needs an EXIF writer outside WIC | library choice (Lead decision) |
 | W4-4 | ICC preservation on write / wide-gamut output | PARTIAL | exports declare the generated sRGB profile (JPEG APP2, PNG iCCP) even when stripping, and the decoder skips re-conversion for its own profile; the source's wide gamut is still clipped on decode and its profile is not carried | carrying wide gamut is an owner-visible colour trade-off |
 | W4-5 | HEIC read on CI | BLOCKED | no HEIF decoder on `windows-2025` (`0x88982F8B`) | install the HEIF extension or accept and document the gap |

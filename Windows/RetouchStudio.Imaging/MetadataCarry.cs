@@ -5,13 +5,15 @@ using System.Text.RegularExpressions;
 namespace RetouchStudio.Imaging;
 
 /// <summary>
-/// Carries the source EXIF block and XMP packet into an encoded file at the
-/// container level. The WinRT metadata writer silently drops most EXIF keys, so
-/// the block travels as bytes instead: the TIFF structure is patched in place
-/// (orientation made upright, the frame's dimensions replaced, the thumbnail
-/// unlinked) and spliced into a JPEG APP1 or a PNG eXIf chunk. Every reader is
-/// bounds-checked; a block that fails validation is skipped, never guessed at,
-/// so a malformed photo cannot corrupt an export.
+/// Carries the source EXIF block, XMP packet and IPTC resource into an encoded
+/// file at the container level. The WinRT metadata writer silently drops most
+/// EXIF keys, so the block travels as bytes instead: the TIFF structure is
+/// patched in place (orientation made upright, the frame's dimensions replaced,
+/// the thumbnail unlinked) and spliced into a JPEG APP1 or a PNG eXIf chunk.
+/// IPTC travels in a JPEG APP13 Photoshop block; PNG has no container this
+/// writer puts it in. Every reader is bounds-checked; a block that fails
+/// validation is skipped, never guessed at, so a malformed photo cannot
+/// corrupt an export.
 /// </summary>
 public static class MetadataCarry
 {
@@ -20,6 +22,11 @@ public static class MetadataCarry
 
     /// <summary>An XMP packet larger than this is dropped rather than written.</summary>
     public const int MaxXmpBytes = 1 << 20;
+
+    /// <summary>
+    /// The largest APP13 payload, minus the fourteen-byte Photoshop signature.
+    /// </summary>
+    public const int MaxIptcBytes = 65519;
 
     /// <summary>An ICC profile larger than this is dropped rather than written.</summary>
     public const int MaxIccBytes = 1 << 22;
@@ -47,6 +54,13 @@ public static class MetadataCarry
 
     private static readonly byte[] XmpSignature =
         Encoding.ASCII.GetBytes("http://ns.adobe.com/xap/1.0/\0");
+
+    private static readonly byte[] IptcSignature = Encoding.ASCII.GetBytes("Photoshop 3.0\0");
+
+    private static readonly byte[] ResourceSignature =
+        { (byte)'8', (byte)'B', (byte)'I', (byte)'M' };
+
+    private const int IptcResourceId = 0x0404;
 
     private static readonly byte[] PngTextKeyword = Encoding.ASCII.GetBytes("XML:com.adobe.xmp");
 
@@ -80,6 +94,17 @@ public static class MetadataCarry
             return ReadPngXmp(file);
         }
         return null;
+    }
+
+    /// <summary>
+    /// The IPTC resource (Photoshop 8BIM 0x0404) of a JPEG APP13 segment, or
+    /// null when the file carries none or the block is malformed. Returns the
+    /// resource record itself, so a writer can put it back byte for byte.
+    /// </summary>
+    public static byte[]? ReadIptc(string path)
+    {
+        var file = File.ReadAllBytes(Path.GetFullPath(path));
+        return IsJpeg(file) ? ReadJpegIptc(file) : null;
     }
 
     /// <summary>
@@ -172,13 +197,14 @@ public static class MetadataCarry
     }
 
     /// <summary>
-    /// Replaces the JPEG's Exif and XMP APP1 segments, and its ICC profile
-    /// APP2 segments, with the supplied blocks. The file is left untouched when
-    /// it is not a complete JPEG or a segment is malformed; the rewrite goes
-    /// through a temporary file so an interrupted write cannot leave a
-    /// half-file behind.
+    /// Replaces the JPEG's Exif and XMP APP1 segments, its IPTC APP13 block and
+    /// its ICC profile APP2 segments with the supplied blocks. The file is left
+    /// untouched when it is not a complete JPEG or a segment is malformed; the
+    /// rewrite goes through a temporary file so an interrupted write cannot
+    /// leave a half-file behind.
     /// </summary>
-    public static void WriteJpeg(string path, byte[]? exif, byte[]? xmp, byte[]? icc = null)
+    public static void WriteJpeg(string path, byte[]? exif, byte[]? xmp, byte[]? icc = null,
+                                 byte[]? iptc = null)
     {
         var full = Path.GetFullPath(path);
         var file = File.ReadAllBytes(full);
@@ -190,14 +216,16 @@ public static class MetadataCarry
                         && exif.Length + ExifSignature.Length + 2 <= ushort.MaxValue;
         var writeXmp = xmp is { Length: > 0 }
                        && xmp.Length + XmpSignature.Length + 2 <= ushort.MaxValue;
+        var writeIptc = iptc is { Length: > 0 }
+                        && iptc.Length + IptcSignature.Length + 2 <= ushort.MaxValue;
         var writeIcc = icc is { Length: > 0 } && icc.Length <= MaxIccBytes;
-        if (!writeExif && !writeXmp && !writeIcc)
+        if (!writeExif && !writeXmp && !writeIptc && !writeIcc)
         {
             return;
         }
 
         using var output = new MemoryStream(
-            file.Length + (exif?.Length ?? 0) + (xmp?.Length ?? 0) + 64);
+            file.Length + (exif?.Length ?? 0) + (xmp?.Length ?? 0) + (iptc?.Length ?? 0) + 64);
         output.WriteByte(0xFF);
         output.WriteByte(0xD8);
         var inserted = false;
@@ -224,16 +252,19 @@ public static class MetadataCarry
                          && StartsWith(file, index + 4, length - 2, ExifSignature);
             var isXmp = writeXmp && marker == 0xE1
                         && StartsWith(file, index + 4, length - 2, XmpSignature);
+            var isIptc = writeIptc && marker == 0xED
+                         && StartsWith(file, index + 4, length - 2, IptcSignature);
             var isIcc = writeIcc && marker == 0xE2
                         && StartsWith(file, index + 4, length - 2, IccSignature);
-            if (!isExif && !isXmp && !isIcc)
+            if (!isExif && !isXmp && !isIptc && !isIcc)
             {
                 output.Write(file, index, 2 + length);
             }
             if (marker == 0xE0 && !inserted)
             {
                 WriteCarriedSegments(output, writeExif ? exif : null,
-                                     writeXmp ? xmp : null, writeIcc ? icc : null);
+                                     writeXmp ? xmp : null, writeIptc ? iptc : null,
+                                     writeIcc ? icc : null);
                 inserted = true;
             }
             index += 2 + length;
@@ -245,7 +276,8 @@ public static class MetadataCarry
         if (!inserted)
         {
             WriteCarriedSegments(output, writeExif ? exif : null,
-                                 writeXmp ? xmp : null, writeIcc ? icc : null);
+                                 writeXmp ? xmp : null, writeIptc ? iptc : null,
+                                 writeIcc ? icc : null);
         }
         output.Write(file, index, file.Length - index);
         Replace(full, output.ToArray());
@@ -316,7 +348,8 @@ public static class MetadataCarry
         Replace(full, output.ToArray());
     }
 
-    private static byte[]? ReadJpegSegment(byte[] file, byte[] signature, int maximum)
+    private static byte[]? ReadJpegSegment(byte[] file, byte[] signature, int maximum,
+                                           byte markerWanted = 0xE1)
     {
         var index = 2;
         while (index + 4 <= file.Length)
@@ -335,7 +368,7 @@ public static class MetadataCarry
             {
                 return null;
             }
-            if (marker == 0xE1
+            if (marker == markerWanted
                 && StartsWith(file, index + 4, length - 2, signature))
             {
                 var start = index + 4 + signature.Length;
@@ -345,6 +378,58 @@ public static class MetadataCarry
                     : null;
             }
             index += 2 + length;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Walks the 8BIM resources of a Photoshop APP13 payload and returns the IPTC
+    /// resource record exactly as it was written. The other resources in the
+    /// block (thumbnails, digests, resolution) are not IPTC and can be stale
+    /// against the exported pixels, so they are not carried.
+    /// </summary>
+    private static byte[]? ReadJpegIptc(byte[] file)
+    {
+        var payload = ReadJpegSegment(file, IptcSignature, MaxIptcBytes, 0xED);
+        if (payload is null)
+        {
+            return null;
+        }
+        var index = 0;
+        while (index + 12 <= payload.Length)
+        {
+            if (!StartsWith(payload, index, 4, ResourceSignature))
+            {
+                return null;
+            }
+            var id = (payload[index + 4] << 8) | payload[index + 5];
+            var nameStart = index + 6;
+            var nameLength = payload[nameStart];
+            var dataStart = nameStart + 1 + nameLength;
+            if ((nameLength + 1) % 2 != 0)
+            {
+                dataStart++;
+            }
+            if (dataStart + 4 > payload.Length)
+            {
+                return null;
+            }
+            var size = ReadU32Big(payload, dataStart);
+            if (size > (uint)(payload.Length - dataStart - 4))
+            {
+                return null;
+            }
+            var end = dataStart + 4 + (int)size;
+            var next = end + ((int)size % 2);
+            if (next > payload.Length)
+            {
+                next = end;
+            }
+            if (id == IptcResourceId && size > 0)
+            {
+                return payload.AsSpan(index, next - index).ToArray();
+            }
+            index = next;
         }
         return null;
     }
@@ -442,7 +527,7 @@ public static class MetadataCarry
     }
 
     private static void WriteCarriedSegments(MemoryStream output, byte[]? exif,
-                                             byte[]? xmp, byte[]? icc)
+                                             byte[]? xmp, byte[]? iptc, byte[]? icc)
     {
         if (exif is not null)
         {
@@ -452,10 +537,25 @@ public static class MetadataCarry
         {
             WriteApp1(output, XmpSignature, xmp);
         }
+        if (iptc is not null)
+        {
+            WriteApp13(output, iptc);
+        }
         if (icc is not null)
         {
             WriteApp2Profile(output, icc);
         }
+    }
+
+    private static void WriteApp13(MemoryStream output, byte[] payload)
+    {
+        var length = IptcSignature.Length + payload.Length + 2;
+        output.WriteByte(0xFF);
+        output.WriteByte(0xED);
+        output.WriteByte((byte)(length >> 8));
+        output.WriteByte((byte)length);
+        output.Write(IptcSignature, 0, IptcSignature.Length);
+        output.Write(payload, 0, payload.Length);
     }
 
     /// <summary>

@@ -1794,12 +1794,22 @@ internal static class Program
         codec.EncodeAsync(image, source, "jpeg", 0.95).GetAwaiter().GetResult();
         MetadataCarry.WriteJpeg(source, exif, xmp);
 
+        // An editor's Photoshop block: the IPTC resource this writer must carry
+        // and a resolution resource it must not, since the exported frame has a
+        // different size.
+        var expectedIptc = BuildResource(0x0404, IptcTitle("IPTC carry"));
+        InsertApp13(source, Join(
+            BuildResource(0x03ED, new byte[] { 0, 72, 0, 0, 0, 1, 0, 1, 0, 72, 0, 0, 0, 1, 0, 1 }),
+            expectedIptc));
+
         var sourceRead = codec.ReadMetadataAsync(source).GetAwaiter().GetResult();
         Check("the Windows decoder reads a carried EXIF block",
               Text(sourceRead, "System.Photo.CameraModel") == "RS-Carry");
         Check("the carried XMP packet is readable",
               sourceRead.Xmp is { } sourceXmp
               && Encoding.UTF8.GetString(sourceXmp).Contains("Carry test"));
+        Check("the IPTC resource is read from a Photoshop APP13 block",
+              sourceRead.Iptc is not null && sourceRead.Iptc.SequenceEqual(expectedIptc));
 
         using var session = ProjectSession.Create(source);
         var kept = Path.Combine(root, "carry-kept.jpg");
@@ -1826,12 +1836,16 @@ internal static class Program
         Check("the carried XMP is upright",
               keptXmp is not null
               && Encoding.UTF8.GetString(keptXmp).Contains("tiff:Orientation=\"1\""));
+        var keptIptc = MetadataCarry.ReadIptc(kept);
+        Check("a kept JPEG export carries the source IPTC resource",
+              keptIptc is not null && keptIptc.SequenceEqual(expectedIptc));
 
         var stripped = Path.Combine(root, "carry-stripped.jpg");
         ExportRunner.ExportAsync(session, codec, stripped, "jpeg", 0.9, 0)
                              .GetAwaiter().GetResult();
         Check("stripping leaves no carried EXIF", MetadataCarry.ReadExif(stripped) is null);
         Check("stripping leaves no XMP", MetadataCarry.ReadXmp(stripped) is null);
+        Check("stripping leaves no IPTC", MetadataCarry.ReadIptc(stripped) is null);
 
         var png = Path.Combine(root, "carry-kept.png");
         ExportRunner.ExportAsync(session, codec, png, "png", 1.0, 0,
@@ -1840,6 +1854,16 @@ internal static class Program
         Check("a kept 16-bit PNG carries the EXIF block", pngExif is not null);
         Check("the PNG EXIF is upright", TiffNumber(pngExif, 0x0112) == 1);
         Check("the PNG carries the XMP packet", MetadataCarry.ReadXmp(png) is not null);
+        Check("a PNG export has no IPTC container", MetadataCarry.ReadIptc(png) is null);
+
+        var badIptc = Path.Combine(root, "carry-bad-iptc.jpg");
+        codec.EncodeAsync(image, badIptc, "jpeg", 0.95).GetAwaiter().GetResult();
+        InsertApp13(badIptc, new byte[]
+        {
+            (byte)'8', (byte)'B', (byte)'I', (byte)'M', 0x04, 0x04, 0, 0,
+            0x7F, 0xFF, 0xFF, 0xFF,
+        });
+        Check("a malformed IPTC block is skipped", MetadataCarry.ReadIptc(badIptc) is null);
 
         var broken = Path.Combine(root, "carry-broken.jpg");
         codec.EncodeAsync(image, broken, "jpeg", 0.95).GetAwaiter().GetResult();
@@ -1939,6 +1963,78 @@ internal static class Program
                   && TiffNumber(exif, 0xA003) == size.Height);
             Check("a resized export is upright", TiffNumber(exif, 0x0112) == 1);
         }
+    }
+
+    /// <summary>
+    /// One Photoshop image resource: the 8BIM signature, the id, an empty
+    /// Pascal name padded to an even width, the data length and the data,
+    /// padded as the format requires.
+    /// </summary>
+    private static byte[] BuildResource(ushort id, byte[] data)
+    {
+        var resource = new byte[12 + data.Length + (data.Length % 2)];
+        resource[0] = (byte)'8';
+        resource[1] = (byte)'B';
+        resource[2] = (byte)'I';
+        resource[3] = (byte)'M';
+        resource[4] = (byte)(id >> 8);
+        resource[5] = (byte)id;
+        resource[6] = 0;
+        resource[8] = (byte)(data.Length >> 24);
+        resource[9] = (byte)(data.Length >> 16);
+        resource[10] = (byte)(data.Length >> 8);
+        resource[11] = (byte)data.Length;
+        data.CopyTo(resource, 12);
+        return resource;
+    }
+
+    /// <summary>An IPTC IIM dataset: 0x1C, record 2, dataset 5 (Object Name).</summary>
+    private static byte[] IptcTitle(string text)
+    {
+        var bytes = Encoding.ASCII.GetBytes(text);
+        var dataset = new byte[5 + bytes.Length];
+        dataset[0] = 0x1C;
+        dataset[1] = 0x02;
+        dataset[2] = 0x05;
+        dataset[3] = (byte)(bytes.Length >> 8);
+        dataset[4] = (byte)bytes.Length;
+        bytes.CopyTo(dataset, 5);
+        return dataset;
+    }
+
+    private static byte[] Join(params byte[][] parts)
+    {
+        var joined = new byte[parts.Sum(part => part.Length)];
+        var at = 0;
+        foreach (var part in parts)
+        {
+            part.CopyTo(joined, at);
+            at += part.Length;
+        }
+        return joined;
+    }
+
+    /// <summary>Splices an APP13 segment after the JPEG's APP0, where a reader looks.</summary>
+    private static void InsertApp13(string path, byte[] resources)
+    {
+        var file = File.ReadAllBytes(path);
+        var at = 2;
+        if (file.Length >= 6 && file[2] == 0xFF && file[3] == 0xE0)
+        {
+            at = 4 + ((file[4] << 8) | file[5]);
+        }
+        var signature = Encoding.ASCII.GetBytes("Photoshop 3.0\0");
+        var segment = signature.Length + resources.Length + 2;
+        using var output = new MemoryStream();
+        output.Write(file, 0, at);
+        output.WriteByte(0xFF);
+        output.WriteByte(0xED);
+        output.WriteByte((byte)(segment >> 8));
+        output.WriteByte((byte)segment);
+        output.Write(signature, 0, signature.Length);
+        output.Write(resources, 0, resources.Length);
+        output.Write(file, at, file.Length - at);
+        File.WriteAllBytes(path, output.ToArray());
     }
 
     private static byte[] BuildExif(ushort orientation, int width, int height)
