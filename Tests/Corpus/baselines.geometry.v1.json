@@ -1,0 +1,142 @@
+{
+  "additive" : true,
+  "approval" : "W4-8 Option A — additive Crop\/Straighten fixtures; no existing corpus data is regenerated or replaced.",
+  "approved" : "2026-11-15",
+  "captureNote" : "Digests and reference PNGs are exact on the machine that captured them. Windows compares against these references in GeometryEvidence() and records the measured difference.",
+  "cases" : [
+    {
+      "category" : "geometry",
+      "deterministic" : true,
+      "digest" : "ebaa4483b94378031508a6b749f3807b2941bddcd3ad158038c5f68bbc060529",
+      "fixture" : "F13_GEOMETRY_GRID",
+      "height" : 192,
+      "id" : "Q01_CROP_CENTER",
+      "note" : "A centred 50% crop takes exact pixel edges.",
+      "params" : "crop x0.25 y0.25 w0.5 h0.5",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 117.986397,
+        "lumaStdDev" : 84.409852000000001
+      },
+      "width" : 256
+    },
+    {
+      "category" : "geometry",
+      "deterministic" : true,
+      "digest" : "dab359fd443aebda5fdfa37fc60348a70a1e4d0998b6e0db52f55b28fcead3f0",
+      "fixture" : "F13_GEOMETRY_GRID",
+      "height" : 192,
+      "id" : "Q02_CROP_EDGE",
+      "note" : "A crop anchored at the top-left corner keeps its origin.",
+      "params" : "crop x0 y0 w0.375 h0.5",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 70.537232000000003,
+        "lumaStdDev" : 25.4984
+      },
+      "width" : 192
+    },
+    {
+      "category" : "geometry",
+      "deterministic" : true,
+      "digest" : "9eedff0f434df8973eac19a4cfa25cbc3397c97f1399e8dbba4711f60a1b3356",
+      "fixture" : "F13_GEOMETRY_GRID",
+      "height" : 384,
+      "id" : "Q03_STRAIGHTEN_CW",
+      "note" : "A +5° straighten keeps the frame and trims the corners.",
+      "params" : "angle +5",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 113.13281600000001,
+        "lumaStdDev" : 67.701418000000004
+      },
+      "width" : 512
+    },
+    {
+      "category" : "geometry",
+      "deterministic" : true,
+      "digest" : "c62be1bab24d2223abf4f759c20350b394ebd7ce1ce80fa8cfe7a173e25d3b85",
+      "fixture" : "F13_GEOMETRY_GRID",
+      "height" : 384,
+      "id" : "Q04_STRAIGHTEN_CCW",
+      "note" : "A -7.5° straighten rotates the other way without flipping.",
+      "params" : "angle -7.5",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 113.913927,
+        "lumaStdDev" : 68.909113000000005
+      },
+      "width" : 512
+    },
+    {
+      "category" : "geometry",
+      "deterministic" : true,
+      "digest" : "3db6a148569483163dced55f8fde15232e28a6db841395048c99bae1ffa072c5",
+      "fixture" : "F13_GEOMETRY_GRID",
+      "height" : 192,
+      "id" : "Q05_STRAIGHTEN_CROP",
+      "note" : "The straighten is applied before the crop in the new frame.",
+      "params" : "angle +4, crop x0.125 y0.125 w0.5 h0.5",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 89.695504999999997,
+        "lumaStdDev" : 71.132698000000005
+      },
+      "width" : 256
+    },
+    {
+      "category" : "geometry",
+      "deterministic" : true,
+      "digest" : "c1deb55f21cf4985c1ccf4c9dd7da10197ba8a9581ec5e8d2506888c5461cd75",
+      "fixture" : "F13_GEOMETRY_GRID",
+      "height" : 256,
+      "id" : "Q06_TURN_STRAIGHTEN_CROP",
+      "note" : "A quarter turn swaps the frame, then the straighten and crop follow.",
+      "params" : "quarterTurns 1, angle +3, crop x0.125 y0.25 w0.5 h0.5",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 123.45492400000001,
+        "lumaStdDev" : 84.705174
+      },
+      "width" : 192
+    },
+    {
+      "category" : "geometry",
+      "deterministic" : true,
+      "digest" : "984fe5d38f5221123503191488679dd9a0fa3c42b092a7f5a1d777de4ec485c5",
+      "fixture" : "F13_GEOMETRY_GRID",
+      "height" : 288,
+      "id" : "Q07_MIRROR_CROP",
+      "note" : "A mirrored frame is cropped in its own coordinates.",
+      "params" : "flipped, crop x0.25 y0.125 w0.5 h0.75",
+      "reference" : true,
+      "stats" : {
+        "lumaMean" : 115.02621600000001,
+        "lumaStdDev" : 77.490536000000006
+      },
+      "width" : 256
+    }
+  ],
+  "createdBy" : "Tests\/CorpusTests.swift",
+  "fixture" : {
+    "bitsPerComponent" : 8,
+    "bitsPerPixel" : 32,
+    "characteristics" : "512x384, 8-bit sRGB, four colour quadrants, 64 px grid, central checkerboard, 6 px edge bars, diagonal marker.",
+    "colorSpace" : "kCGColorSpaceSRGB",
+    "decodedKey" : "512x384|bpc=8|bpp=32|cs=kCGColorSpaceSRGB|1b4cf962f7cb74b00c48d3341e77f2d058218debf8ce276b156fcde19de7a7f2",
+    "file" : "F13_geometry_grid.png",
+    "height" : 384,
+    "id" : "F13_GEOMETRY_GRID",
+    "necessity" : "Geometry needs a frame with exact pixel edges, orientation markers and measurable resampling; the portrait fixtures do not provide it.",
+    "operations" : "crop fractions, straighten angles, quarter turn, mirror, coordinate mapping, interpolation and edge behaviour.",
+    "purpose" : "Crop and straighten geometry (added 2026-11-15, W4-8 Option A).",
+    "sha256" : "7a20140616ca4b0349588591688689b28097ba100a8caead556aebdea8ad2f9a",
+    "width" : 512
+  },
+  "host" : {
+    "arch" : "arm64",
+    "languageMode" : "swift5",
+    "os" : "Version 27.2 (Build 26B123)"
+  },
+  "schemaVersion" : 1
+}

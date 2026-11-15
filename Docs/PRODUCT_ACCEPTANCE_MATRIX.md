@@ -37,7 +37,7 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
 | Unknown fields | VERIFIED | VERIFIED | VERIFIED | Top-level across save and reopen; modelled records preserved; unmodelled nested records dropped by documented design. |
 | Undo/redo | VERIFIED | VERIFIED | N/A | `DocumentHistory`, 55 Windows host checks; the Undo and Redo buttons move a slider through UIA (runs 43654765580, 43658018867). |
 | Image import and adjustments | VERIFIED | TESTED | PARTIAL | Nine adjustments render on Windows (preview median 721 ms, run 43618132157); the Open Photo dialog and all nine sliders are driven end to end through UIA (runs 43647604771, 43659238621); cross-host MAE: exposure 0.01, levels 0.007, clarity 0.06, vignette 0.47, each gated at one level. |
-| Crop/rotation/mirror/straighten | VERIFIED | TESTED | PARTIAL | Windows crop arithmetic, orientation order and turn/straighten/mirror composition are tested pixel for pixel; the overlay drag is not driven by CI (2026-11-15: superseded — the corner drag, Apply and the exported frame are driven through injected pointer input, run 43681175327); no cross-host straighten pixel reference (corpus protected). |
+| Crop/rotation/mirror/straighten | VERIFIED | TESTED | PARTIAL | Windows crop arithmetic, orientation order and turn/straighten/mirror composition are tested pixel for pixel; the overlay drag is not driven by CI (2026-11-15: superseded — the corner drag, Apply and the exported frame are driven through injected pointer input, run 43681175327). 2026-11-15 (W4-8 Option A): additive `F13_GEOMETRY_GRID` with `Q01`–`Q07` and `baselines.geometry.v1.json`; macOS harness `428 checks, 0 failures` locally, and its crop/mirror references were proven byte-exact crops/mirrors of the fixture (max error 0). Windows `GeometryEvidence()` gates those three cases at MAE 0 and prints measured MAE/PSNR for the four straighten cases; no numeric straighten tolerance is approved, so cross-platform straighten parity remains unproven until CI runs and the owner decides a bound. |
 | Face detection/landmarks/regions | VERIFIED | ABSENT | N/A | macOS Vision, ≥0.35 confidence, largest-first, ~76 points plus derived regions. In-box Windows detector returns boxes only, which cannot drive masks. |
 | Mask generation/edit/persistence | VERIFIED | ABSENT | N/A | macOS geometric masks, 1024 px preview, 4096 px export, feather and gates; no standalone mask layers or stable per-face identities anywhere. |
 | Heal/stamps/stickers/watermarks | VERIFIED | ABSENT | N/A | macOS edits exist; Windows keeps the records and asks before exporting pixels without them. The export guard names every macOS-only adjustment group (skin, face, makeup, look, grain, curves, HSL, body, background, hair, lens) and the prompt itself is driven through UIA: a project with `smooth` 30 names skin retouching, and No writes nothing (run 43653664500). |
@@ -67,7 +67,10 @@ NOT VERIFIED, ABSENT, BLOCKED, NOT APPLICABLE.
   through the app shell. A crash between a temp write and its replace is
   simulated by leaving the temp behind, not by killing the process.
 - macOS window launch and clean-machine installation.
-- Rendering parity for straighten and freeform crop across hosts.
+- Rendering parity for straighten interpolation across hosts. Crop and mirror
+  are now gated exactly against the additive corpus; a straighten uses a
+  different resampling filter on each host and has no approved tolerance
+  (W4-8, see `Docs/GOLDEN_IMAGE_CORPUS.md` §7a).
 - Real AI inference, notarization, or an update feed.
 
 These limits are requirements of the plan, not temporary caveats: the matrix
