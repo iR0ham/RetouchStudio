@@ -151,6 +151,14 @@ final class EditorModel: ObservableObject {
             updateCleanState()
         }
     }
+    /// Masks the owner drew for generative edits, stored against the original
+    /// photo. They are user data and undo and save with the document; a refined
+    /// mask's raster is a cache in `MaskStore`, never the authority.
+    @Published private(set) var masks: [MaskRecord] = []
+    /// The people those masks attach to. Records that came from the file stay
+    /// even when today's detection no longer finds them: opening and saving
+    /// must not drop a person the owner worked with.
+    @Published private(set) var storedFaceIdentities: [FaceIdentityRecord] = []
 
     // Quick Edit
     /// True while the canvas is waiting for the click that marks the object.
@@ -258,6 +266,13 @@ final class EditorModel: ObservableObject {
         let id: Int
     }
 
+    /// What a finished Quick Edit brings back: the edit itself, and the mask
+    /// record it was drawn from with its raster reference filled in.
+    private struct QuickEditJob {
+        let edit: AIEdit
+        let mask: MaskRecord?
+    }
+
     /// The job that owns `isBusy`. A completion only clears the flag when its
     /// token is still the active one, so a slow preview can never end an export
     /// that started after it.
@@ -341,7 +356,9 @@ final class EditorModel: ObservableObject {
                       stickers: stickers, aiEdits: aiEdits, analysis: analysis,
                       crop: appliedCrop.map(StudioRect.init),
                       orientation: documentOrientation,
-                      selectedFaceIndex: selectedFaceIndex)
+                      selectedFaceIndex: selectedFaceIndex,
+                      masks: masks,
+                      faceIdentities: storedFaceIdentities)
     }
 
     /// Slider drags fire continuously; recording every tick would make ⌘Z step
@@ -409,6 +426,8 @@ final class EditorModel: ObservableObject {
         stickers = state.stickers
         aiEdits = state.aiEdits
         analysis = state.analysis
+        masks = state.masks
+        storedFaceIdentities = state.faceIdentities
         // History stores an index. Where it resolves it names the chosen
         // person in the frame on screen; where it does not, automatic is the
         // honest answer and the remembered identity must not resurface.
@@ -1113,6 +1132,14 @@ final class EditorModel: ObservableObject {
         // A photo, a recovery copy or a v3 project saves as v3. Only the file
         // the document actually came from can keep it on v4.
         projectWriteContext = projectFile?.context ?? .v3
+        masks = restoration.state.masks
+        storedFaceIdentities = restoration.state.faceIdentities
+        // The saved boxes are evidence, not a detection cache: they only bind
+        // to a person Vision found in the pixels just installed.
+        faceIdentities.attach(restoration.state.faceIdentities, to: faces,
+                              crop: restoration.state.crop?.cgRect,
+                              orientation: restoration.state.orientation,
+                              orientedSize: sourcePixelSize)
 
         if let format = restoration.exportFormat { exportFormat = format }
         if let quality = restoration.exportQuality { exportQuality = quality }
@@ -1132,6 +1159,7 @@ final class EditorModel: ObservableObject {
         selectedSticker = nil
         rebuildSpotMasks()
         refreshAnalysisOverlay()
+        restoreMaskSelection()
 
         cropAspect = .free
         session.markClean(currentState)
@@ -1632,6 +1660,84 @@ final class EditorModel: ObservableObject {
             .flatMap(AIMaskRenderer.alphaMask)
     }
 
+    // MARK: - Stored masks
+
+    /// Shows the latest stored mask that was drawn against the pixels now open.
+    /// A mask recorded for a photo of another size is never placed on this one:
+    /// its coordinates would point somewhere the owner never marked.
+    private func restoreMaskSelection() {
+        guard hasImage else { return }
+        let width = Int(sourcePixelSize.width.rounded())
+        let height = Int(sourcePixelSize.height.rounded())
+        guard let record = masks.last(where: {
+            $0.kind == MaskRecord.selectionKind
+                && $0.space == MaskRecord.sourceNormalized
+                && $0.applies(toWidth: width, height: height)
+                && $0.hasContent
+        }) else { return }
+        let crop = appliedCrop
+        aiMaskStrokes = record.strokes.map { stroke in
+            AIMaskStroke(points: stroke.points.map { MaskGeometry.workingPoint($0, crop: crop) },
+                         width: CGFloat(MaskGeometry.workingWidth(stroke.width, crop: crop)),
+                         erase: stroke.erase)
+        }
+        aiMaskBox = record.box.map { MaskGeometry.workingRect($0, crop: crop) }
+        // The raster is a cache: a file that no longer matches its digest is
+        // dropped, and the geometry above still describes the mask.
+        aiMaskRefined = record.refined.flatMap { MaskStore.load($0, id: record.id) }
+        aiMaskInverted = record.inverted
+        refreshAIMaskPreview()
+    }
+
+    /// The record a running Quick Edit will leave behind. Geometry is captured
+    /// before the job starts, against the frame it was drawn on; the raster is
+    /// added by the job once it exists. The model suite calls this directly,
+    /// because reaching it through a job would need the AI helper.
+    func captureMask(_ mask: AIMaskSelection, id: UUID) -> MaskRecord {
+        let crop = appliedCrop
+        var record = MaskRecord(
+            id: id,
+            updatedAt: Date(),
+            frame: MaskSourceFrame(width: Int(sourcePixelSize.width.rounded()),
+                                   height: Int(sourcePixelSize.height.rounded())),
+            strokes: mask.strokes.map { stroke in
+                MaskStroke(points: stroke.points.map { MaskGeometry.sourcePoint($0, crop: crop) },
+                           width: MaskGeometry.sourceWidth(Double(stroke.width), crop: crop),
+                           erase: stroke.erase)
+            },
+            box: mask.box.map { MaskGeometry.sourceRect($0, crop: crop) },
+            inverted: mask.inverted)
+        record.faceId = chosenPerson(for: record)
+        return record
+    }
+
+    /// The selected person, when this mask actually covers part of them. A
+    /// brush on the shirt while a face is selected is not that face's mask.
+    private func chosenPerson(for record: MaskRecord) -> UUID? {
+        guard let index = faceSelection.index(in: faces),
+              let identity = faces[index].identity,
+              let bounds = MaskGeometry.bounds(of: record) else { return nil }
+        let box = FaceIdentityTracker.topLeftRect(
+            from: FaceIdentityTracker.originalFrameBox(faces[index].boundingBox,
+                                                       crop: appliedCrop,
+                                                       orientation: documentOrientation,
+                                                       orientedSize: sourcePixelSize))
+        guard box.contains(StudioPoint(x: bounds.midX, y: bounds.midY)) else { return nil }
+        return faceIdentities.persistentID(for: identity)
+    }
+
+    /// Adds the people the stored masks name, keeping the file's own records
+    /// and order so an unchanged document writes back the same list.
+    private func syncFaceIdentities() {
+        let needed = Set(masks.compactMap(\.faceId))
+        var seen = Set(storedFaceIdentities.map(\.id))
+        for person in faceIdentities.persistedPeople
+        where needed.contains(person.id) && !seen.contains(person.id) {
+            storedFaceIdentities.append(person)
+            seen.insert(person.id)
+        }
+    }
+
     /// Worker errors that mean "the machine is not set up" get a sentence the
     /// owner can act on instead of the helper's internal wording.
     private func localizedAIFailure(_ error: Error) -> String {
@@ -1669,11 +1775,16 @@ final class EditorModel: ObservableObject {
         let seed = Int.random(in: 1...Int(Int32.max))
         let dilate = Int(aiMaskExpand.rounded())
         let feather = Int(aiMaskFeather.rounded())
+        // The record is built from what was drawn, before the job clears it.
+        // Reimagine ignores a mask, so it stores none.
+        let maskID = UUID()
+        let maskRecord = !fullFrame && mask.hasContent
+            ? captureMask(mask, id: maskID) : nil
 
         aiTask = Task { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<AIEdit, Error> in
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<QuickEditJob, Error> in
                 do {
-                    return .success(try QuickEditRunner.run(
+                    let edit = try QuickEditRunner.run(
                         image: source, point: point, mask: mask, crop: crop,
                         preset: preset, prompt: prompt, seed: seed,
                         fullFrame: fullFrame,
@@ -1690,7 +1801,16 @@ final class EditorModel: ObservableObject {
                             Task { @MainActor in
                                 self?.quickEditStage = .denoising(step: step)
                             }
-                        }))
+                        })
+                    // The refined raster is a cache beside the record. A store
+                    // that cannot take it leaves the geometry, which is the
+                    // part that belongs to the owner.
+                    var record = maskRecord
+                    if let base = record, let refined = mask.refined,
+                       let reference = try? MaskStore.adopt(id: base.id, image: refined) {
+                        record?.refined = reference
+                    }
+                    return .success(QuickEditJob(edit: edit, mask: record))
                 } catch {
                     return .failure(error)
                 }
@@ -1705,15 +1825,16 @@ final class EditorModel: ObservableObject {
             // approve. Its store files go with it.
             let cancelled = self.quickEditCancelRequested
             switch outcome {
-            case .success(let edit) where cancelled:
-                AIEditStore.remove(edit)
+            case .success(let job) where cancelled:
+                AIEditStore.remove(job.edit)
+                if let record = job.mask { MaskStore.remove(id: record.id) }
                 self.quickEditStage = .idle
                 self.statusToken = .none
-            case .success(let edit):
-                self.quickEditStage = .finished(seconds: edit.seconds)
+            case .success(let job):
+                self.quickEditStage = .finished(seconds: job.edit.seconds)
                 self.quickEditPoint = nil
                 self.clearAIMaskContents()
-                self.addAIEdit(edit)
+                self.addAIEdit(job.edit, mask: job.mask)
             case .failure(let error):
                 // The card carries the reason, so the status line must not
                 // keep claiming the helper is still generating.
@@ -1749,11 +1870,16 @@ final class EditorModel: ObservableObject {
         updateUndoFlags()
     }
 
-    /// Records an edit whose pixels are already in the store. One history step
-    /// covers it exactly as it was before and after, so the slider debounce
-    /// cannot fold the edit into an earlier slider drag.
-    func addAIEdit(_ edit: AIEdit) {
+    /// Records an edit whose pixels are already in the store, and the mask it
+    /// came from when there was one. One history step covers it exactly as it
+    /// was before and after, so the slider debounce cannot fold the edit into
+    /// an earlier slider drag.
+    func addAIEdit(_ edit: AIEdit, mask: MaskRecord? = nil) {
         commitAdjustments()
+        if let mask {
+            masks.append(mask)
+            syncFaceIdentities()
+        }
         aiEdits.append(edit)
         statusToken = .aiApplied
         // The append happens after the commit above, so the toolbar needs an

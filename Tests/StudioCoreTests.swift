@@ -896,6 +896,188 @@ let nestedStoreChecks: () -> Void = {
 }
 nestedStoreChecks()
 
+print("\n[M8] persistent masks and the v5 document")
+
+let v5FixtureURL = URL(fileURLWithPath: root)
+    .appendingPathComponent("Tests/Fixtures/ProjectV5/project-v5-full.retouch")
+let v4FixtureURL = URL(fileURLWithPath: root)
+    .appendingPathComponent("Tests/Fixtures/ProjectV4/project-v4-full.retouch")
+
+if let v4Bytes = try? Data(contentsOf: v4FixtureURL),
+   let v4File = try? ProjectCodec.read(v4Bytes) {
+    check(v4File.context.version == 4, "the v4 fixture reads as a v4 file")
+    check(v4File.project.masks == nil,
+          "a v4 document carries no masks")
+    check((try? ProjectCodec.encode(v4File.project, context: v4File.context)) == v4Bytes,
+          "a v4 fixture still resaves as v4, byte for byte")
+} else {
+    check(false, "the v4 fixture is readable", v4FixtureURL.path)
+}
+
+/// One face and two masks with every field the v5 record owns, including an
+/// erase stroke, a box, parameters, a cache reference and a face association.
+let v5FaceID = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
+let v5MaskA = MaskRecord(
+    id: UUID(uuidString: "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB")!,
+    revision: 4,
+    updatedAt: Date(timeIntervalSinceReferenceDate: 721700000),
+    frame: MaskSourceFrame(width: 6000, height: 4000),
+    strokes: [
+        MaskStroke(points: [StudioPoint(x: 0.2, y: 0.3),
+                            StudioPoint(x: 0.25, y: 0.32)], width: 0.05),
+        MaskStroke(points: [StudioPoint(x: 0.24, y: 0.31)],
+                   width: 0.01, erase: true),
+    ],
+    box: StudioRect(x: 0.18, y: 0.28, width: 0.1, height: 0.08),
+    inverted: true,
+    parameters: MaskParameters(feather: 0.02, opacity: 0.8),
+    refined: MaskRasterReference(file: "mask.png",
+                                 sha256: String(repeating: "ab", count: 32),
+                                 width: 640, height: 480),
+    faceId: v5FaceID)
+let v5MaskB = MaskRecord(
+    id: UUID(uuidString: "CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC")!,
+    frame: MaskSourceFrame(width: 6000, height: 4000),
+    box: StudioRect(x: 0.6, y: 0.55, width: 0.2, height: 0.2))
+let v5Face = FaceIdentityRecord(id: v5FaceID,
+                                box: StudioRect(x: 0.18, y: 0.28, width: 0.1, height: 0.08))
+var v5Project = RetouchProject(
+    imagePath: "/photos/portrait.heic", adjustments: Adjustments(),
+    exportFormat: "jpeg", exportQuality: 0.9, autoRetouchStrength: 50,
+    crop: StudioRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8),
+    masks: [v5MaskA, v5MaskB], faceIdentities: [v5Face])
+v5Project.adjustments.exposure = 7
+
+let v5Bytes = try! ProjectCodec.encodeV5(v5Project)
+let v5Read = try! ProjectCodec.read(v5Bytes)
+check(v5Read.context.version == 5, "a document with masks saves as v5")
+check(v5Read.project.masks == [v5MaskA, v5MaskB],
+      "both masks keep their ids, strokes, box, inversion and parameters")
+check(v5Read.project.masks?.first?.updatedAt == v5MaskA.updatedAt,
+      "a mask keeps its revision timestamp")
+check(v5Read.project.faceIdentities == [v5Face],
+      "the people masks are attached to survive the save")
+check(v5Read.project.masks?.first?.faceId == v5FaceID
+      && v5Read.project.faceIdentities?.contains(where: { $0.id == v5FaceID }) == true,
+      "a mask's face association resolves to a stored identity")
+check((try! ProjectCodec.encodeV5(v5Project)) == v5Bytes,
+      "encoding the same document twice writes identical bytes")
+let v5Resave = try! ProjectCodec.encode(v5Read.project, context: v5Read.context)
+check(v5Resave == v5Bytes, "an unchanged v5 read-modify-write is byte identical")
+
+if let v5FixtureBytes = try? Data(contentsOf: v5FixtureURL),
+   let v5FixtureFile = try? ProjectCodec.read(v5FixtureBytes) {
+    check(v5FixtureFile.context.version == 5,
+          "the v5 fixture reads as a v5 file")
+    check(v5FixtureFile.project.masks?.count == 2,
+          "the v5 fixture carries its two masks")
+    check(v5FixtureFile.project.masks?.first?.kind == MaskRecord.selectionKind,
+          "the v5 fixture's first mask is a selection")
+    check(v5FixtureFile.project.faceIdentities?.first?.id
+          == v5FixtureFile.project.masks?.first?.faceId,
+          "the v5 fixture's mask points at its stored person")
+    check((try? ProjectCodec.encode(v5FixtureFile.project,
+                                    context: v5FixtureFile.context)) == v5FixtureBytes,
+          "the v5 fixture resaves byte for byte")
+} else {
+    check(false, "the v5 fixture is readable", v5FixtureURL.path)
+}
+
+// A v3 or v4 file that gains masks is upgraded because no earlier version can
+// hold them; a file without masks keeps its version.
+let upgradedFromV3 = try? ProjectCodec.encode(v5Project, context: .v3)
+check(upgradedFromV3.flatMap { try? ProjectCodec.read($0) }?.context.version == 5,
+      "masks raise a v3 document to v5 on save")
+let plainV3Project = RetouchProject(imagePath: "/portable/plain.heic",
+                                    adjustments: Adjustments(), exportFormat: "jpeg",
+                                    exportQuality: 0.9, autoRetouchStrength: 50)
+let plainV3Bytes = try! ProjectCodec.encode(plainV3Project, context: .v3)
+check(try! ProjectCodec.read(plainV3Bytes).context.version == 3,
+      "a document without masks keeps its v3 version")
+let plainV4Context = ProjectWriteContext(version: 4, unknownFields: [:],
+                                         requiredFeatures: ["portable_geometry"])
+let plainV4Bytes = try! ProjectCodec.encode(plainV3Project, context: plainV4Context)
+check(try! ProjectCodec.read(plainV4Bytes).context.version == 4,
+      "a document without masks keeps its v4 version")
+check(ProjectCodec.writeVersion(for: v5Project, context: .v3) == 5,
+      "the write version is v5 when masks are present")
+
+// Unknown data at the top level and inside a mask survives a save; the
+// identity is what reattaches it, even when the masks are reordered.
+let v5JSONEncoder = JSONEncoder()
+v5JSONEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+if var v5Object = try? JSONDecoder().decode([String: ProjectJSONValue].self,
+                                            from: v5Bytes),
+   case .array(var v5MaskArray)? = v5Object["masks"],
+   case .object(var v5FirstMask) = v5MaskArray[0] {
+    v5Object["futureDocumentField"] = .string("kept")
+    v5FirstMask["futureFeatherCurve"] = .object(["kind": .string("soft")])
+    v5MaskArray[0] = .object(v5FirstMask)
+    v5Object["masks"] = .array(v5MaskArray)
+    let staged = try! v5JSONEncoder.encode(v5Object)
+    let stagedFile = try! ProjectCodec.read(staged)
+    var stagedProject = stagedFile.project
+    stagedProject.masks = stagedProject.masks?.reversed()
+    let saved = try! ProjectCodec.encode(stagedProject, context: stagedFile.context)
+    let savedObject = try! JSONDecoder().decode([String: ProjectJSONValue].self,
+                                                from: saved)
+    check(savedObject["futureDocumentField"] == .string("kept"),
+          "a v5 save keeps an unknown top-level key")
+    if case .array(let savedMasks)? = savedObject["masks"],
+       case .object(let rebuiltFirst)? = savedMasks.last {
+        check(rebuiltFirst["futureFeatherCurve"]
+              == .object(["kind": .string("soft")]),
+              "unknown data follows its mask by id when the order changes")
+    } else {
+        check(false, "the saved masks are an array")
+    }
+    var withoutFirst = stagedProject
+    withoutFirst.masks?.removeAll { $0.id == v5MaskA.id }
+    let removed = try! ProjectCodec.encode(withoutFirst, context: stagedFile.context)
+    let removedObject = try! JSONDecoder().decode([String: ProjectJSONValue].self,
+                                                  from: removed)
+    if case .array(let remaining)? = removedObject["masks"] {
+        check(remaining.count == 1
+              && !String(decoding: removed, as: UTF8.self).contains("futureFeatherCurve"),
+              "a removed mask does not hand its unknown data to a neighbour")
+    } else {
+        check(false, "the remaining masks are an array")
+    }
+} else {
+    check(false, "the v5 document is a JSON object with masks")
+}
+
+// Coordinates are source-normalized, so a crop or a turn never rewrites them;
+// a frame mismatch is what makes a mask inapplicable.
+var croppedV5 = v5Read.project
+croppedV5.crop = StudioRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4)
+croppedV5.orientation = DocumentOrientation(quarterTurns: 2, flipped: false, angle: 0)
+let croppedBytes = try! ProjectCodec.encode(croppedV5, context: v5Read.context)
+let croppedRead = try! ProjectCodec.read(croppedBytes)
+check(croppedRead.project.masks == v5Read.project.masks,
+      "a crop and a turn leave mask coordinates untouched")
+check(v5MaskA.applies(toWidth: 6000, height: 4000),
+      "a mask applies to the photo it was drawn on")
+check(!v5MaskA.applies(toWidth: 4000, height: 6000),
+      "a mask refuses a photo of a different frame")
+check(v5MaskB.hasContent && v5MaskB.refined == nil,
+      "a mask is useful without its derived raster")
+
+// A build that reads v5 must still refuse a newer file rather than guess.
+let tooNewV6 = try! v5JSONEncoder.encode({
+    var object = try! JSONDecoder().decode([String: ProjectJSONValue].self, from: v5Bytes)
+    object["version"] = .int(ProjectCodec.currentVersion + 1)
+    return object
+}())
+do {
+    _ = try ProjectCodec.read(tooNewV6)
+    check(false, "a v6 file is refused")
+} catch ProjectCodecError.tooNew(let version) {
+    check(version == 6, "a v6 file is refused as too new")
+} catch {
+    check(false, "a v6 file is refused with tooNew", "\(error)")
+}
+
 // The recovery snapshot stores the write context as JSON, so the nested
 // overlay has to survive that encoding unchanged.
 let overlayContext = ProjectWriteContext(

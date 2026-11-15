@@ -2480,6 +2480,30 @@ internal static class Program
             Check("a v3 save keeps the unkeyed geometry", saved["crop"] is JsonArray);
             Check("a v3 save keeps every record", JsonNode.DeepEquals(saved, v3Fixture));
         }
+
+        var v5Path = Path.Combine(repo, "Tests/Fixtures/ProjectV5/project-v5-full.retouch");
+        var v5Fixture = JsonNode.Parse(File.ReadAllText(v5Path))!;
+        using (var session = ProjectSession.Open(v5Path))
+        {
+            var model = session.Document;
+            Check("a macOS v5 project opens as v5", model.Version == 5);
+            Check("the masks reach the Windows document",
+                  model.Root["masks"] is JsonArray masks && masks.Count == 2);
+            Check("the mask's face association reaches the Windows document",
+                  model.Root["masks"]![0]!["faceId"]!.GetValue<string>()
+                  == "11111111-1111-4111-8111-111111111111");
+            Check("a masked project names the edit this host cannot render",
+                  model.UnsupportedEdits.Contains("masked selections"));
+
+            var savedPath = Path.Combine(root, "from-macos-v5.retouch");
+            session.Save(savedPath);
+            var saved = JsonNode.Parse(File.ReadAllText(savedPath))!;
+            Check("a saved v5 project keeps every record",
+                  JsonNode.DeepEquals(saved, v5Fixture));
+            Check("a v5 save keeps the mask ids",
+                  saved["masks"]![0]!["id"]!.GetValue<string>()
+                  == "22222222-2222-4222-8222-222222222222");
+        }
     }
 
     /// <summary>

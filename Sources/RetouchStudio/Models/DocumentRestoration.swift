@@ -34,6 +34,8 @@ struct DocumentRestoration: Equatable {
         state.crop = project.crop
         state.orientation = project.orientation ?? .identity
         state.selectedFaceIndex = project.selectedFace
+        state.masks = project.masks ?? []
+        state.faceIdentities = project.faceIdentities ?? []
 
         return DocumentRestoration(exportFormat: ExportFormat(rawValue: project.exportFormat) ?? .jpeg,
                                    exportQuality: project.exportQuality,

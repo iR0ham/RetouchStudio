@@ -21,11 +21,78 @@ struct FaceIdentityTracker {
     /// outside the crop. Keeping those is what lets a reset crop restore the
     /// chosen person instead of handing the slot to someone else.
     private var remembered: [Int: CGRect] = [:]
+    /// Ids a project file can record, keyed by the runtime identity. A runtime
+    /// identity dies with the process; this mapping is what outlives it.
+    private var persistent: [Int: UUID] = [:]
 
     /// A replacement document starts a fresh identity space.
     mutating func reset() {
         nextIdentity = 1
         remembered.removeAll()
+        persistent.removeAll()
+    }
+
+    /// The id this person is saved under. Minted on first use and unchanged for
+    /// as long as this tracker lives, so a mask can name the person.
+    mutating func persistentID(for identity: Int) -> UUID {
+        if let existing = persistent[identity] { return existing }
+        let id = UUID()
+        persistent[identity] = id
+        return id
+    }
+
+    /// Every identity with both a persistent id and a remembered box, in the
+    /// original photo's normalized top-left space — the project file's space.
+    /// Ordered by identity so the result is deterministic.
+    var persistedPeople: [FaceIdentityRecord] {
+        remembered.sorted { $0.key < $1.key }.compactMap { identity, box in
+            guard let id = persistent[identity] else { return nil }
+            return FaceIdentityRecord(id: id,
+                                      box: Self.topLeftRect(from: box),
+                                      source: "vision")
+        }
+    }
+
+    /// Binds persisted people to the faces just detected, one-to-one by box
+    /// overlap, so a reopened document keeps naming the same people.
+    ///
+    /// Never rebinds an identity that already holds a persistent id, and never
+    /// gives one record's id to two identities; such a record is skipped.
+    mutating func attach(_ records: [FaceIdentityRecord], to faces: [FaceGeometry],
+                         crop: CGRect?, orientation: DocumentOrientation,
+                         orientedSize: CGSize) {
+        guard !records.isEmpty, !faces.isEmpty else { return }
+        let boxes = faces.map {
+            Self.originalFrameBox($0.boundingBox, crop: crop,
+                                  orientation: orientation, orientedSize: orientedSize)
+        }
+        let recordBoxes = records.map { Self.bottomLeftRect(from: $0.box) }
+
+        var candidates: [(overlap: CGFloat, face: Int, record: Int)] = []
+        for (face, box) in boxes.enumerated() {
+            for (record, old) in recordBoxes.enumerated() {
+                let overlap = Self.overlap(box, old)
+                if overlap >= Self.matchThreshold {
+                    candidates.append((overlap, face, record))
+                }
+            }
+        }
+        // Greedy one-to-one, with the same deterministic tie-breaks as assign.
+        candidates.sort {
+            if $0.overlap != $1.overlap { return $0.overlap > $1.overlap }
+            if $0.face != $1.face { return $0.face < $1.face }
+            return $0.record < $1.record
+        }
+        var bound = Set<Int>()
+        for candidate in candidates {
+            guard !bound.contains(candidate.record),
+                  let identity = faces[candidate.face].identity,
+                  persistent[identity] == nil else { continue }
+            let id = records[candidate.record].id
+            guard !persistent.values.contains(id) else { continue }
+            persistent[identity] = id
+            bound.insert(candidate.record)
+        }
     }
 
     /// Gives every face an identity, matching new detections to the remembered
@@ -101,6 +168,17 @@ struct FaceIdentityTracker {
         }
         return CGRect(x: rect.minX, y: 1 - rect.maxY,
                       width: rect.width, height: rect.height)
+    }
+
+    /// A normalized bottom-left box → the same box with a top-left origin.
+    static func topLeftRect(from box: CGRect) -> StudioRect {
+        StudioRect(x: Double(box.minX), y: Double(1 - box.maxY),
+                   width: Double(box.width), height: Double(box.height))
+    }
+
+    /// A normalized top-left box → the same box with a bottom-left origin.
+    static func bottomLeftRect(from box: StudioRect) -> CGRect {
+        CGRect(x: box.minX, y: 1 - box.maxY, width: box.width, height: box.height)
     }
 
     /// Intersection over union. Disjoint or degenerate boxes overlap by zero.

@@ -6570,6 +6570,16 @@ func runAll() async {
     testDocumentStateValueSemantics()
     testDocumentSessionHistoryValue()
     testFaceSelectionFollowsIdentity()
+    testFaceIdentityPersistsTopLeftBox()
+    testFaceIdentityAttachSurvivesReorder()
+    testFaceIdentityAttachRespectsThreshold()
+    testFaceIdentityAttachNeverDuplicates()
+    testFaceIdentityResetClearsPersistedIDs()
+    testMaskGeometryCrossesTheCrop()
+    testMaskStoreKeepsTheRasterHonest()
+    testDocumentRestorationCarriesMasks()
+    testRecoverySnapshotCarriesMasks()
+    await testModelStoresMaskBesideEdit()
 
     // Invalidate any debounced write left by the last scenario: the scratch
     // directory is about to disappear, and no timer may outlive it.
@@ -6592,3 +6602,373 @@ Task { @MainActor in
     await runAll()
 }
 dispatchMain()
+
+// MARK: - Project Schema v5 persisted people
+
+/// Rectangle equality with a tolerance, for geometry that crosses spaces.
+func fi5Within(_ a: StudioRect, _ b: StudioRect, tolerance: Double = 1e-9) -> Bool {
+    abs(a.x - b.x) <= tolerance && abs(a.y - b.y) <= tolerance
+        && abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
+}
+
+/// A runtime identity used to die with the process. The project file now keeps
+/// a persistent id per person, and the saved box is re-matched on reopen.
+@MainActor
+func testFaceIdentityPersistsTopLeftBox() {
+    print("\n[v5] a face identity can be persisted and re-attached")
+
+    let fi5Size = CGSize(width: 1000, height: 800)
+    let fi5LeftBox = CGRect(x: 0.10, y: 0.20, width: 0.30, height: 0.40)
+    let fi5RightBox = CGRect(x: 0.58, y: 0.24, width: 0.24, height: 0.36)
+
+    var fi5Tracker = FaceIdentityTracker()
+    var fi5Faces = [identityFace(fi5LeftBox), identityFace(fi5RightBox)]
+    fi5Tracker.assign(to: &fi5Faces, crop: nil, orientation: .identity, orientedSize: fi5Size)
+
+    let fi5First = fi5Tracker.persistentID(for: fi5Faces[0].identity!)
+    let fi5Again = fi5Tracker.persistentID(for: fi5Faces[0].identity!)
+    check(fi5First == fi5Again, "a minted persistent id stays stable")
+    check(fi5First != fi5Tracker.persistentID(for: fi5Faces[1].identity!),
+          "different people receive different persistent ids")
+
+    let fi5People = fi5Tracker.persistedPeople
+    check(fi5People.count == 2, "every identified face persists one person")
+    let fi5Expected = StudioRect(x: 0.10, y: 1 - (0.20 + 0.40),
+                                 width: 0.30, height: 0.40)
+    let fi5Stored = fi5People.first { $0.id == fi5First }
+    check(fi5Stored.map { fi5Within($0.box, fi5Expected) } == true,
+          "a persisted box is stored top-left normalized")
+}
+
+/// After a reopen the detection list may arrive in another order; the saved
+/// box must still hand each person back the same persistent id.
+@MainActor
+func testFaceIdentityAttachSurvivesReorder() {
+    print("\n[v5] a persisted person is re-attached after the list is reordered")
+
+    let fi5Size = CGSize(width: 1000, height: 800)
+    let fi5LeftBox = CGRect(x: 0.10, y: 0.20, width: 0.30, height: 0.40)
+    let fi5RightBox = CGRect(x: 0.58, y: 0.24, width: 0.24, height: 0.36)
+
+    var fi5Original = FaceIdentityTracker()
+    var fi5Faces = [identityFace(fi5LeftBox), identityFace(fi5RightBox)]
+    fi5Original.assign(to: &fi5Faces, crop: nil, orientation: .identity, orientedSize: fi5Size)
+    let fi5LeftID = fi5Original.persistentID(for: fi5Faces[0].identity!)
+    let fi5RightID = fi5Original.persistentID(for: fi5Faces[1].identity!)
+    let fi5Records = fi5Original.persistedPeople
+
+    var fi5Reloaded = FaceIdentityTracker()
+    var fi5Reordered = [identityFace(fi5RightBox), identityFace(fi5LeftBox)]
+    fi5Reloaded.assign(to: &fi5Reordered, crop: nil, orientation: .identity, orientedSize: fi5Size)
+    fi5Reloaded.attach(fi5Records, to: fi5Reordered, crop: nil,
+                       orientation: .identity, orientedSize: fi5Size)
+
+    check(fi5Reloaded.persistentID(for: fi5Reordered[0].identity!) == fi5RightID,
+          "the first face of the new order keeps the right person")
+    check(fi5Reloaded.persistentID(for: fi5Reordered[1].identity!) == fi5LeftID,
+          "the second face of the new order keeps the left person")
+}
+
+/// A saved box that overlaps too little is not the same person.
+@MainActor
+func testFaceIdentityAttachRespectsThreshold() {
+    print("\n[v5] an attached record needs half its box in common")
+
+    let fi5Size = CGSize(width: 1000, height: 800)
+    let fi5Box = CGRect(x: 0.20, y: 0.20, width: 0.40, height: 0.40)
+
+    var fi5Source = FaceIdentityTracker()
+    var fi5Face = [identityFace(fi5Box)]
+    fi5Source.assign(to: &fi5Face, crop: nil, orientation: .identity, orientedSize: fi5Size)
+    _ = fi5Source.persistentID(for: fi5Face[0].identity!)
+    var fi5Record = fi5Source.persistedPeople[0]
+    fi5Record.box.x += 0.25
+
+    var fi5Target = FaceIdentityTracker()
+    var fi5Same = [identityFace(fi5Box)]
+    fi5Target.assign(to: &fi5Same, crop: nil, orientation: .identity, orientedSize: fi5Size)
+    fi5Target.attach([fi5Record], to: fi5Same, crop: nil,
+                     orientation: .identity, orientedSize: fi5Size)
+    check(fi5Target.persistentID(for: fi5Same[0].identity!) != fi5Record.id,
+          "a record that overlaps too little stays unbound")
+}
+
+/// One saved person can never end up naming two faces.
+@MainActor
+func testFaceIdentityAttachNeverDuplicates() {
+    print("\n[v5] one persisted id never lands on two identities")
+
+    let fi5Size = CGSize(width: 1000, height: 800)
+    let fi5LeftBox = CGRect(x: 0.10, y: 0.20, width: 0.30, height: 0.40)
+    let fi5RightBox = CGRect(x: 0.58, y: 0.24, width: 0.24, height: 0.36)
+
+    let fi5Shared = UUID()
+    let fi5Records = [
+        FaceIdentityRecord(id: fi5Shared,
+                           box: StudioRect(x: 0.10, y: 0.40, width: 0.30, height: 0.40)),
+        FaceIdentityRecord(id: fi5Shared,
+                           box: StudioRect(x: 0.58, y: 0.40, width: 0.24, height: 0.36)),
+    ]
+    var fi5Tracker = FaceIdentityTracker()
+    var fi5Faces = [identityFace(fi5LeftBox), identityFace(fi5RightBox)]
+    fi5Tracker.assign(to: &fi5Faces, crop: nil, orientation: .identity, orientedSize: fi5Size)
+    fi5Tracker.attach(fi5Records, to: fi5Faces, crop: nil,
+                      orientation: .identity, orientedSize: fi5Size)
+
+    let fi5A = fi5Tracker.persistentID(for: fi5Faces[0].identity!)
+    let fi5B = fi5Tracker.persistentID(for: fi5Faces[1].identity!)
+    check(fi5A != fi5B, "a shared persisted id binds to only one identity")
+    check(fi5A == fi5Shared || fi5B == fi5Shared,
+          "one identity still receives the shared id")
+}
+
+/// A replacement document starts a fresh persistent space.
+@MainActor
+func testFaceIdentityResetClearsPersistedIDs() {
+    print("\n[v5] a replacement document forgets persisted ids")
+
+    let fi5Size = CGSize(width: 1000, height: 800)
+    let fi5Box = CGRect(x: 0.25, y: 0.30, width: 0.20, height: 0.28)
+
+    var fi5Tracker = FaceIdentityTracker()
+    var fi5Faces = [identityFace(fi5Box)]
+    fi5Tracker.assign(to: &fi5Faces, crop: nil, orientation: .identity, orientedSize: fi5Size)
+    let fi5Before = fi5Tracker.persistentID(for: fi5Faces[0].identity!)
+    check(fi5Tracker.persistedPeople.count == 1, "a minted id is part of the persisted people")
+
+    fi5Tracker.reset()
+    check(fi5Tracker.persistedPeople.isEmpty, "a reset clears the persisted people")
+    var fi5Next = [identityFace(fi5Box)]
+    fi5Tracker.assign(to: &fi5Next, crop: nil, orientation: .identity, orientedSize: fi5Size)
+    check(fi5Tracker.persistentID(for: fi5Next[0].identity!) != fi5Before,
+          "the next document mints new ids")
+}
+
+// MARK: - Project Schema v5 masks in the app
+
+/// The canvas draws on the cropped frame; the record is stored against the
+/// whole photo. A crop must not leave a mask pointing at another place.
+@MainActor
+func testMaskGeometryCrossesTheCrop() {
+    print("\n[v5] a mask drawn on the crop is stored against the photo")
+
+    let m5Crop = CGRect(x: 0.2, y: 0.1, width: 0.5, height: 0.6)
+    let m5Working = CGPoint(x: 0.3, y: 0.4)
+    let m5Stored = MaskGeometry.sourcePoint(m5Working, crop: m5Crop)
+    check(abs(m5Stored.x - 0.35) < 1e-9 && abs(m5Stored.y - 0.34) < 1e-9,
+          "a brush point is stored in source coordinates")
+    let m5Back = MaskGeometry.workingPoint(m5Stored, crop: m5Crop)
+    check(abs(m5Back.x - m5Working.x) < 1e-9 && abs(m5Back.y - m5Working.y) < 1e-9,
+          "the stored point maps back onto the canvas")
+
+    let m5Width = MaskGeometry.sourceWidth(0.05, crop: m5Crop)
+    check(abs(m5Width - 0.025) < 1e-9, "a brush width scales with the crop width")
+    check(abs(MaskGeometry.workingWidth(m5Width, crop: m5Crop) - 0.05) < 1e-9,
+          "the stored width returns to the canvas")
+
+    let m5Rect = MaskGeometry.sourceRect(CGRect(x: 0.1, y: 0.2, width: 0.2, height: 0.2),
+                                         crop: m5Crop)
+    check(abs(m5Rect.x - 0.25) < 1e-9 && abs(m5Rect.y - 0.22) < 1e-9
+            && abs(m5Rect.width - 0.1) < 1e-9 && abs(m5Rect.height - 0.12) < 1e-9,
+          "a box is stored in source coordinates")
+    let m5RectBack = MaskGeometry.workingRect(m5Rect, crop: m5Crop)
+    check(abs(m5RectBack.minX - 0.1) < 1e-9 && abs(m5RectBack.width - 0.2) < 1e-9,
+          "the stored box maps back onto the canvas")
+    check(MaskGeometry.sourcePoint(CGPoint(x: 0.4, y: 0.6), crop: nil)
+            == StudioPoint(x: 0.4, y: 0.6),
+          "with no crop the point is already the stored one")
+}
+
+/// The raster is a cache: it loads only while its bytes match the record, and
+/// removing the mask takes the folder with it.
+@MainActor
+func testMaskStoreKeepsTheRasterHonest() {
+    print("\n[v5] the mask raster is a cache, and a changed file is refused")
+
+    let m5Root = workDir.appendingPathComponent("masks-\(UUID().uuidString)", isDirectory: true)
+    let m5Previous = MaskStore.rootOverride
+    MaskStore.rootOverride = m5Root
+    defer {
+        MaskStore.rootOverride = m5Previous
+        try? FileManager.default.removeItem(at: m5Root)
+    }
+
+    guard let m5Image = makeImage(width: 16, height: 12),
+          let m5Reference = try? MaskStore.adopt(id: UUID(), image: m5Image) else {
+        check(false, "the raster is adopted")
+        return
+    }
+    let m5ID = UUID()
+    guard let m5Stored = try? MaskStore.adopt(id: m5ID, image: m5Image) else {
+        check(false, "a second mask adopts its own raster")
+        return
+    }
+    check(m5Stored.width == 16 && m5Stored.height == 12 && m5Stored.sha256.count == 64,
+          "the reference records the raster's size and digest")
+    check(MaskStore.load(m5Stored, id: m5ID) != nil, "an unchanged raster loads back")
+
+    // Replace the bytes under the same name, as a stale or copied file would.
+    let m5File = MaskStore.folder(for: m5ID).appendingPathComponent(m5Stored.file)
+    if let m5Other = makeImage(width: 8, height: 8) {
+        try? FileManager.default.removeItem(at: m5File)
+        _ = writePNG(m5Other, to: m5File)
+    }
+    check(MaskStore.load(m5Stored, id: m5ID) == nil,
+          "a raster whose bytes changed is refused")
+
+    MaskStore.remove(id: m5ID)
+    check(!FileManager.default.fileExists(atPath: MaskStore.folder(for: m5ID).path),
+          "removing a mask removes its folder")
+    check(m5Reference.sha256 == m5Stored.sha256,
+          "the same raster digests the same under two mask ids")
+}
+
+/// A project file's masks reach the editor's document value unchanged.
+@MainActor
+func testDocumentRestorationCarriesMasks() {
+    print("\n[v5] a project's masks and people reach the document")
+
+    let m5Mask = MaskRecord(
+        frame: MaskSourceFrame(width: 480, height: 600),
+        strokes: [MaskStroke(points: [StudioPoint(x: 0.2, y: 0.3)],
+                             width: 0.04, erase: false)],
+        box: StudioRect(x: 0.1, y: 0.1, width: 0.5, height: 0.5),
+        inverted: true)
+    let m5Person = FaceIdentityRecord(id: m5Mask.id, box: StudioRect(x: 0.2, y: 0.2,
+                                                                     width: 0.3, height: 0.3))
+    let m5Project = RetouchProject(imagePath: "/codec/photo.jpg",
+                                   adjustments: .zero, exportFormat: "jpeg",
+                                   exportQuality: 0.9, autoRetouchStrength: 0,
+                                   masks: [m5Mask], faceIdentities: [m5Person])
+
+    let m5Restoration = DocumentRestoration.project(m5Project, url: nil)
+    check(m5Restoration.state.masks == [m5Mask], "the mask travels into the document")
+    check(m5Restoration.state.faceIdentities == [m5Person],
+          "the people the masks name travel with it")
+    let m5Plain = DocumentRestoration.photo()
+    check(m5Plain.state.masks.isEmpty && m5Plain.state.faceIdentities.isEmpty,
+          "a plain photo starts with no masks and no people")
+}
+
+/// Autosave is a save too: a crash copy carries masks and the people they
+/// name, while the frozen v3 body it wraps stays v3.
+@MainActor
+func testRecoverySnapshotCarriesMasks() {
+    print("\n[v5] a crash copy keeps masks and the people they name")
+
+    let m5Person = FaceIdentityRecord(box: StudioRect(x: 0.2, y: 0.2,
+                                                      width: 0.3, height: 0.3))
+    let m5Mask = MaskRecord(
+        frame: MaskSourceFrame(width: 480, height: 600),
+        strokes: [MaskStroke(points: [StudioPoint(x: 0.3, y: 0.4)],
+                             width: 0.05, erase: false)],
+        box: StudioRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4),
+        faceId: m5Person.id)
+    let m5Project = RetouchProject(imagePath: "/codec/photo.jpg",
+                                   adjustments: .zero, exportFormat: "jpeg",
+                                   exportQuality: 0.9, autoRetouchStrength: 0,
+                                   masks: [m5Mask], faceIdentities: [m5Person])
+
+    let m5Snapshot = RecoverySnapshot.capture(m5Project,
+                                              savedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    check(m5Snapshot.masks == [m5Mask] && m5Snapshot.faceIdentities == [m5Person],
+          "capture keeps them beside the project body")
+
+    let m5Encoder = JSONEncoder()
+    m5Encoder.outputFormatting = [.sortedKeys]
+    guard let m5Data = try? m5Encoder.encode(m5Snapshot),
+          let m5Object = try? JSONSerialization.jsonObject(with: m5Data) as? [String: Any],
+          let m5Body = m5Object["project"] as? [String: Any] else {
+        check(false, "the snapshot encodes")
+        return
+    }
+    check(m5Object["masks"] != nil && m5Object["faceIdentities"] != nil,
+          "they are in the bytes, which the frozen v3 body cannot write")
+    check(m5Body["masks"] == nil && m5Body["faceIdentities"] == nil,
+          "the wrapped project body stays v3")
+
+    let m5Decoded = RecoveryPolicy.snapshot(from: m5Data, modified: nil)
+    check(m5Decoded?.project.masks == [m5Mask],
+          "a restore hands the mask back to the document")
+    check(m5Decoded?.project.faceIdentities == [m5Person],
+          "and the person the mask names")
+
+    let m5Plain = RecoverySnapshot.capture(
+        RetouchProject(imagePath: "/codec/photo.jpg", adjustments: .zero,
+                       exportFormat: "jpeg", exportQuality: 0.9,
+                       autoRetouchStrength: 0))
+    guard let m5PlainData = try? m5Encoder.encode(m5Plain),
+          let m5PlainObject = try? JSONSerialization.jsonObject(
+              with: m5PlainData) as? [String: Any] else {
+        check(false, "a document without masks encodes")
+        return
+    }
+    check(m5PlainObject["masks"] == nil && m5PlainObject["faceIdentities"] == nil,
+          "a v3 snapshot keeps its exact shape")
+
+    // The bare project older releases wrote still decodes; the v3 body never
+    // carried masks, so a legacy copy restores with none.
+    guard let m5Bare = try? JSONEncoder().encode(m5Project) else {
+        check(false, "a bare project encodes")
+        return
+    }
+    let m5BareSnapshot = RecoveryPolicy.snapshot(from: m5Bare, modified: nil)
+    check(m5BareSnapshot?.version == 0 && m5BareSnapshot?.project.masks == nil,
+          "a bare project still decodes as a legacy copy")
+}
+
+/// The model records the mask beside the edit as one undo step, so ⌘Z takes
+/// both back and redo restores both.
+@MainActor
+func testModelStoresMaskBesideEdit() async {
+    print("\n[v5] a Quick Edit keeps its mask with the document")
+
+    let m5Source = workDir.appendingPathComponent("v5-mask-source.png")
+    check(makeImage(width: 480, height: 600).map { writePNG($0, to: m5Source) } ?? false,
+          "fixture written")
+    let m5Root = workDir.appendingPathComponent("masks-\(UUID().uuidString)", isDirectory: true)
+    let m5Previous = MaskStore.rootOverride
+    MaskStore.rootOverride = m5Root
+    defer {
+        MaskStore.rootOverride = m5Previous
+        try? FileManager.default.removeItem(at: m5Root)
+    }
+
+    let m5Model = EditorModel()
+    m5Model.load(url: m5Source)
+    check(await waitUntil { m5Model.hasImage && !m5Model.isBusy }, "fixture loads")
+
+    m5Model.appendMaskStroke(AIMaskStroke(points: [CGPoint(x: 0.3, y: 0.3),
+                                                   CGPoint(x: 0.6, y: 0.6)],
+                                          width: 0.05, erase: false))
+    let m5ID = UUID()
+    let m5Record = m5Model.captureMask(m5Model.aiMaskSelection, id: m5ID)
+    let m5PixelW = Int(m5Model.sourcePixelSize.width.rounded())
+    let m5PixelH = Int(m5Model.sourcePixelSize.height.rounded())
+    check(m5Record.frame.width == m5PixelW && m5Record.frame.height == m5PixelH,
+          "the mask records the photo it was drawn on")
+    check(m5Record.applies(toWidth: m5PixelW, height: m5PixelH),
+          "the mask belongs to these pixels")
+    check(m5Record.strokes.count == 1 && m5Record.strokes[0].points.count == 2,
+          "the drawn stroke is part of the record")
+
+    guard let m5Edit = storedAIEdit(box: CGRect(x: 0.30, y: 0.35,
+                                                 width: 0.40, height: 0.30)) else {
+        check(false, "the edit files are staged")
+        return
+    }
+    defer { AIEditStore.remove(m5Edit) }
+    m5Model.addAIEdit(m5Edit, mask: m5Record)
+    check(m5Model.masks.count == 1 && m5Model.masks[0].id == m5ID,
+          "the mask joins the document with the edit")
+    check(m5Model.canUndo, "one undo step covers both")
+
+    m5Model.undo()
+    check(m5Model.masks.isEmpty, "undo takes the mask back with the edit")
+    check(await waitUntil { !m5Model.isBusy }, "the preview settles")
+    m5Model.redo()
+    check(m5Model.masks.count == 1 && m5Model.masks[0].id == m5ID,
+          "redo brings the mask back")
+    check(await waitUntil { !m5Model.isBusy }, "the preview settles again")
+}
+
