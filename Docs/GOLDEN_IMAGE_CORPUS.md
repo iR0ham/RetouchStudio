@@ -28,17 +28,19 @@ Captured baselines are **not** a claim of cross-platform correctness. They are e
 
 | Item | Count | Location | State |
 |---|---|---|---|
-| Planned fixtures | 12 | `Tests/CorpusSupport.swift` (`FixtureSpec`) | **CREATED** 12/12 |
-| Fixture files | 12 | `Tests/Corpus/Fixtures/` | **CREATED** |
+| Planned fixtures | 13 | `Tests/CorpusSupport.swift` (`FixtureSpec`) | **CREATED** 13/13 |
+| Fixture files | 13 | `Tests/Corpus/Fixtures/` | **CREATED** |
 | Manifest | 1 | `Tests/Corpus/Fixtures/MANIFEST.json` | **CREATED** |
-| Operation cases | 78 | `Tests/CorpusTests.swift` (`buildCases`) | **CAPTURED** 78/78 |
-| Reference PNGs | 21 | `Tests/Corpus/References/` | **CAPTURED** |
-| Baselines | 1 | `Tests/Corpus/baselines.json` | **CAPTURED** |
+| Operation cases | 85 | `Tests/CorpusTests.swift` (`buildCases`) | **CAPTURED** 85/85 |
+| Reference PNGs | 28 | `Tests/Corpus/References/` | **CAPTURED** |
+| Baselines | 2 | `Tests/Corpus/baselines.json` + `baselines.geometry.v1.json` | **CAPTURED** |
 | Export artifacts | 11 | `Tests/Corpus/Exports/` | **CAPTURED** |
 | Harness | 2 scripts | `Tests/run-corpus.sh`, `Tests/CorpusTests.swift` + `Tests/CorpusSupport.swift` | **CREATED** |
-| Reference comparison | 78 digest checks + 21 PNG checks | verify mode of the harness | **VALIDATED** on this host |
+| Reference comparison | 85 digest checks + 28 PNG checks | verify mode of the harness | **VALIDATED** on this host |
 
 Final verification on the capture host (2026-11-11): **376 checks, 0 failures**, including 78 digest matches, 21 exact reference-PNG matches, fixture integrity and export checks.
+
+After the additive geometry extension (2026-11-15): **428 checks, 0 failures** on the same host — the original 376 results are unchanged, plus 7 geometry cases with dimension, digest and exact reference checks. The capture was run in a scratch directory (`RETOUCH_CORPUS_DIR=/tmp/geo-capture`), and only the new fixture, the seven `Q*` references and the new baseline file were copied in; `baselines.json`, every existing fixture and every existing reference kept their bytes.
 
 Baseline host recorded in `baselines.json`:
 
@@ -66,8 +68,9 @@ Every fixture is generated procedurally from code in `Tests/CorpusSupport.swift`
 | `F08_HIGHRES_PORTRAIT` | `F08_highres_portrait.png` | 1600×1067, 8-bit sRGB | Full-resolution behaviour | Radius scaling and preview/export parity require an image well above 1400 px | load dimensions, 256 px export; hash-only no-op |
 | `F09_ALPHA_CUTOUT` | `F09_alpha_cutout.png` | 512×512, 8-bit sRGB + alpha | Transparency and alpha export | Alpha handling and JPEG flattening cannot be verified on opaque photos | load alpha, PNG alpha export, JPEG flatten |
 | `F10_EXIF_ORIENT6` | `F10_exif_orient6.jpg` | stored 720×480, 8-bit JPEG, orientation 6 | EXIF orientation handling | Camera files are commonly stored rotated; the corpus must prove the mapping | decode, upright baking (480×720), quadrant mapping, oriented export |
-| `F11_P3_16BIT` | `F11_p3_16bit.png` | 512×512, 16-bit Display P3 | Wide gamut and deep storage | Colour management and bit-depth behaviour need a non-sRGB, non-8-bit source | 16-bit decode, P3 preservation, 16-bit PNG export |
+| `F11_P3_16BIT` | `F11_p3_16bit.png` | 512×512, 16-bit Display P3 | Wide gamut and deep storage | Colour management and bit-depth behaviour need a non-sRGB, non-8-bit source | 16-bit decode, P3 source profile, 16-bit PNG export (converted to sRGB since 2026-11-15, W4-4) |
 | `F12_GRAY_8` | `F12_gray_8.png` | 640×480, 8-bit Gray Gamma 2.2 | Grayscale source | A grayscale source exercises a colour model the RGB fixtures cannot | decode only; the current loader refuses it (see §6) |
+| `F13_GEOMETRY_GRID` | `F13_geometry_grid.png` | 512×384, 8-bit sRGB | Crop and straighten geometry (added 2026-11-15, W4-8 Option A) | Geometry needs a frame with exact pixel edges, orientation markers and measurable resampling; the portrait fixtures do not provide it | crop fractions, straighten angles, quarter turn, mirror, coordinate mapping, interpolation, edge behaviour |
 
 The manifest records for each fixture: `id`, `file`, `width`, `height`, `bitsPerComponent`, `bitsPerPixel`, `colorSpace`, `sha256`, `decodedKey`, `purpose`, `characteristics`, `operations`, `necessity`.
 
@@ -138,7 +141,7 @@ The explicit sRGB digest proves the decoded pixels are stable even though the no
 
 ## 7. Coverage gaps in the fixture set
 
-**Planned and created:** all 12 fixtures listed above exist.
+**Planned and created:** all 13 fixtures listed above exist.
 
 **Created but not exercised by a case:** `F07_LOWLIGHT_NOISE` is generated and manifested but no current case consumes it. `F12_GRAY_8` has no processing case because the loader refuses it; only the load observation is captured.
 
@@ -155,6 +158,37 @@ These exclusions are intentional. They keep the corpus small enough to regenerat
 
 ---
 
+## 7a. Additive geometry set (W4-8 Option A)
+
+**Approved:** 2026-11-15 by the Product Owner (W4-8 Option A). The approval explicitly requires that existing fixtures stay untouched, that new fixtures be added incrementally and versioned, and that any unresolved tolerance be presented to the owner instead of invented. The approval and its date are recorded inside `Tests/Corpus/baselines.geometry.v1.json`.
+
+**What was added:**
+
+| Case | Operation | Parameters | Output |
+|---|---|---|---|
+| `Q01_CROP_CENTER` | crop | x 0.25, y 0.25, w 0.5, h 0.5 | 256×192 |
+| `Q02_CROP_EDGE` | crop anchored at the origin | x 0, y 0, w 0.375, h 0.5 | 192×192 |
+| `Q03_STRAIGHTEN_CW` | clockwise straighten | angle +5° | 512×384 |
+| `Q04_STRAIGHTEN_CCW` | counter-clockwise straighten | angle −7.5° | 512×384 |
+| `Q05_STRAIGHTEN_CROP` | straighten then crop | angle +4°, crop 0.125/0.125/0.5/0.5 | 256×192 |
+| `Q06_TURN_STRAIGHTEN_CROP` | quarter turn, straighten, crop | turn 1, angle +3°, crop 0.125/0.25/0.5/0.5 | 192×256 |
+| `Q07_MIRROR_CROP` | mirror then crop | flipped, crop 0.25/0.125/0.5/0.75 | 256×288 |
+
+`F13_GEOMETRY_GRID` is 512×384 with four colour quadrants, a 2 px grid every 64 px, a 16 px checkerboard in the centre, a crisp diagonal and a distinct 6 px bar on each edge. Every crop parameter lands on an exact integer pixel boundary (128/256 etc.), so a failing crop case measures a real coordinate error rather than fractional-pixel rounding. The fixture's own property checks assert all four quadrants and all four edge bars at known points.
+
+**What the macOS harness records:** expected dimensions for every case (asserted directly), a pixel digest in `baselines.geometry.v1.json`, and an exact reference PNG. The harness also proved, with a separate CoreGraphics-only script, that the `Q01`, `Q02` and `Q07` references are byte-exact crops/mirrors of `F13_GEOMETRY_GRID` (max error 0), so those three are pure coordinate transforms with no resampling.
+
+**Windows comparison:** `GeometryEvidence()` in `Windows/RetouchStudio.Tests/Program.cs` decodes the same fixture, renders `orientation → crop → adjustments` through `ExportRunner.RenderDocument`, and compares against the macOS references:
+
+- `Q01`, `Q02`, `Q07` are **parity gates**: they must match the macOS reference with MAE 0, because neither host resamples for these transforms.
+- `Q03`–`Q06` resample with different filters (Core Image affine versus the Windows bilinear rotation), and no numeric cross-host tolerance has been approved. They gate the dimensions and the rotation direction (the opposite-signed angle must be measurably further from the reference) and print MAE/PSNR as measurement. A numeric tolerance for the interpolation cases is **NOT APPROVED** and must be decided by the Product Owner if one is wanted.
+
+`baselines.geometry.v1.json` has schema version 1 and its own `fixture` + `cases` arrays. `baselines.json` is not modified by this set; verify mode merges the two case lists for the ID-matrix and digest checks. A fixture may be added to `MANIFEST.json` without a recapture only when an approved versioned baseline names it first.
+
+The R1 conformance gate pins the additive set as deliberately as the original corpus: `Tests/Conformance/Fixtures/corpus-lock.json` records the manifest hash, the 13-fixture count, the SHA-256 of `baselines.geometry.v1.json`, its 7 case ids and the SHA-256 of each of its 7 reference PNGs. Changing a geometry reference byte fails the gate (`corpus geometry reference hash mismatch`) until the lock is reviewed and updated; this was verified locally on 2026-11-15.
+
+---
+
 ## 8. Layout and schema
 
 ```
@@ -164,10 +198,10 @@ Tests/
   run-corpus.sh                opt-in harness (same SDK probe as Tests/run.sh)
   Corpus/
     Fixtures/
-      F01…F12.<ext>
+      F01…F13.<ext>
       MANIFEST.json
     References/
-      <CASE_ID>.png            one per reference case (21)
+      <CASE_ID>.png            one per reference case (28, including Q01–Q07)
     Exports/
       F01_export_256.<png|jpg|tif|heic>
       F01_stripped.png
@@ -177,6 +211,7 @@ Tests/
       F10_upright.png
       F11_export_256.png
     baselines.json
+    baselines.geometry.v1.json   additive Crop/Straighten set (W4-8)
 ```
 
 `baselines.json` top-level keys:
@@ -192,6 +227,17 @@ Tests/
 | `cases` | one object per case: id, fixture, category, note, params, reference flag, determinism, digest, dimensions, luma stats, optional no-op metrics |
 | `exports` | output dimensions/bit depths and source-protection results |
 | `grayscale` | the F12 load observation above |
+
+`baselines.geometry.v1.json`:
+
+| Key | Contents |
+|---|---|
+| `schemaVersion` | `1` |
+| `approved`, `approval`, `additive` | approval date (2026-11-15), the approved decision, and `true` |
+| `createdBy`, `captureNote` | provenance and the cross-platform measurement warning |
+| `host` | `arch`, `languageMode`, `os` of the capture |
+| `fixture` | the `F13_GEOMETRY_GRID` manifest object (same fields as `MANIFEST.json`) |
+| `cases` | `Q01`–`Q07`: id, category, note, params, dimensions, digest, reference flag, luma stats |
 
 Case metrics (`vsNoop`) are defined in `Docs/IMAGE_COMPARISON_METHODOLOGY.md`.
 
@@ -220,8 +266,9 @@ The harness is opt-in and is **not** part of the default 840-check gate (`Tests/
 Behaviour:
 
 - No `baselines.json` present → capture mode.
-- `RETOUCH_CORPUS_RECAPTURE=1` → force capture/overwrite.
-- Otherwise → verify mode: fixtures are checked against the manifest and decoded key, every case is rendered twice, every digest is compared, every reference PNG is decoded and compared, and export checks are rerun.
+- `RETOUCH_CORPUS_RECAPTURE=1` → force capture/overwrite; capture also writes `baselines.geometry.v1.json`.
+- Otherwise → verify mode: fixtures are checked against the manifest and decoded key, every case is rendered twice, every digest is compared (merging `baselines.json` with the geometry baseline), every reference PNG is decoded and compared, and export checks are rerun.
+- A manifest that lacks a fixture declared by the geometry baseline is extended with that one entry; an undeclared missing fixture is a failing check.
 - Exit status is non-zero if any check fails.
 
 ---
@@ -233,3 +280,5 @@ Behaviour:
 3. **Regenerate, do not patch.** If a fixture must change, change its generator, recapture, and review the new manifest and references as a whole.
 4. **Never mix hosts.** A baseline captured on arm64 must not be compared against a run on another architecture as if it were expected to match exactly. Use the methodology document.
 5. **Keep private photos out.** The corpus has no mechanism to ingest user images and must not gain one for this purpose.
+6. **One authorised export renewal.** On 2026-11-15 the Product Owner approved the sRGB output policy (W4-4 Option A) and authorised renewing exactly one tracked artifact, `Exports/F11_export_256.png`, because its source is Display P3. No fixture, reference PNG or baseline digest changed, and every other export kept its hash; see `Docs/OUTPUT_COLOR_POLICY.md`.
+7. **Additive fixtures are declared first.** A new fixture may join `MANIFEST.json` without a recapture only when an approved, versioned baseline (`baselines.geometry.v1.json`) names its ID and fingerprints. The harness refuses to extend the manifest for an undeclared fixture, and verify mode requires every manifest entry except the declared addition to keep its SHA-256 and decoded key.

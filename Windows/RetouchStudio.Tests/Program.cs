@@ -57,6 +57,7 @@ internal static class Program
             ExportRefusals(root);
             StaleSweep(root);
             AdjustmentEvidence();
+            GeometryEvidence();
             FormatProbes(root);
             Metadata(root);
             Carry(root);
@@ -505,6 +506,89 @@ internal static class Program
                 // rounding on the detail chart's hard edges.
                 Check("G09 stays within one level of the macOS clarity", mae <= 1.0);
             }
+        }
+    }
+
+    /// <summary>
+    /// The additive Crop/Straighten set (W4-8 Option A, approved 2026-11-15)
+    /// rendered through the same orientation → crop → adjustments order the
+    /// export uses, compared against the macOS references.
+    ///
+    /// Crop and mirror resample nothing, and the macOS harness proved its
+    /// references are the exact cropped and mirrored fixture pixels, so those
+    /// cases are parity gates: one differing level fails the run.
+    ///
+    /// A straighten resamples each host with a different filter (Core Image's
+    /// affine versus this host's bilinear), and no numeric tolerance has been
+    /// approved, so those cases measure and print MAE/PSNR without inventing a
+    /// bound. They still gate the dimensions and the direction: a render with
+    /// the angle negated must be measurably further from the reference than the
+    /// one with the documented sign.
+    /// </summary>
+    private static void GeometryEvidence()
+    {
+        var repo = RepoRoot();
+        var fixtures = Path.Combine(repo, "Tests/Corpus/Fixtures");
+        var references = Path.Combine(repo, "Tests/Corpus/References");
+        var codec = new WindowsImageCodec();
+        var source = codec.DecodeAsync(Path.Combine(fixtures, "F13_geometry_grid.png"))
+                          .GetAwaiter().GetResult();
+
+        var cases = new (string Id, CropValue? Crop, OrientationValue Orientation,
+                         int Width, int Height, bool Exact)[]
+        {
+            ("Q01_CROP_CENTER", new CropValue(0.25, 0.25, 0.5, 0.5),
+             OrientationValue.Identity, 256, 192, true),
+            ("Q02_CROP_EDGE", new CropValue(0, 0, 0.375, 0.5),
+             OrientationValue.Identity, 192, 192, true),
+            ("Q03_STRAIGHTEN_CW", null, OrientationValue.Identity.WithAngle(5),
+             512, 384, false),
+            ("Q04_STRAIGHTEN_CCW", null, OrientationValue.Identity.WithAngle(-7.5),
+             512, 384, false),
+            ("Q05_STRAIGHTEN_CROP", new CropValue(0.125, 0.125, 0.5, 0.5),
+             OrientationValue.Identity.WithAngle(4), 256, 192, false),
+            ("Q06_TURN_STRAIGHTEN_CROP", new CropValue(0.125, 0.25, 0.5, 0.5),
+             OrientationValue.Identity.WithQuarterTurn(1).WithAngle(3), 192, 256, false),
+            ("Q07_MIRROR_CROP", new CropValue(0.25, 0.125, 0.5, 0.75),
+             OrientationValue.Identity.WithFlip(), 256, 288, true),
+        };
+
+        foreach (var (id, crop, orientation, width, height, exact) in cases)
+        {
+            var reference = codec.DecodeAsync(Path.Combine(references, id + ".png"))
+                                 .GetAwaiter().GetResult();
+            var rendered = ExportRunner.RenderDocument(source,
+                new DocumentModel(new JsonObject())
+                {
+                    Crop = crop,
+                    Orientation = orientation,
+                });
+            Check($"{id} renders the approved size",
+                  rendered.Width == width && rendered.Height == height
+                  && rendered.Width == reference.Width && rendered.Height == reference.Height);
+            if (rendered.Width != reference.Width || rendered.Height != reference.Height)
+            {
+                continue;
+            }
+
+            var (mae, _, psnr, changed, _) = Compare(rendered, reference);
+            Console.WriteLine($"  case {id}: mae {mae:0.###} psnr {psnr:0.##} dB " +
+                              $"changed {changed:P1}");
+
+            if (exact)
+            {
+                Check($"{id} matches the macOS reference exactly", mae == 0);
+                continue;
+            }
+
+            var wrong = ExportRunner.RenderDocument(source,
+                new DocumentModel(new JsonObject())
+                {
+                    Crop = crop,
+                    Orientation = orientation with { Angle = -orientation.Angle },
+                });
+            var wrongMae = Compare(wrong, reference).Mae;
+            Check($"{id} rotates in the documented direction", mae < wrongMae);
         }
     }
 

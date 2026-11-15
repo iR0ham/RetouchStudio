@@ -65,7 +65,7 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
         if Task.isCancelled { throw RenderError.cancelled }
         let plan = RenderPolicy.plan(request, source: source.renderDescription)
         let colorSpace = plan.colorSpace == .sRGB
-            ? RenderColorSpace.sRGB.cgColorSpace
+            ? Self.sRGBOutput(for: source.colorSpace)
             : source.colorSpace
         switch ExportService.writeResult(output, snapshot: request, to: destination,
                                          colorSpace: colorSpace,
@@ -89,6 +89,19 @@ struct MacDocumentRenderer: DocumentRenderPipeline {
         case .failed:
             throw RenderError.writeFailed
         }
+    }
+
+    /// A photo that already carries the sRGB profile is written through its own
+    /// space, so its bytes stay exactly as before. Converting into the canonical
+    /// sRGB object instead would nudge a few samples by one 16-bit step.
+    private static func sRGBOutput(for sourceSpace: CGColorSpace?) -> CGColorSpace? {
+        guard let sourceSpace,
+              let sourceICC = sourceSpace.copyICCData() as Data?,
+              let sRGBICC = CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData() as Data?,
+              sourceICC == sRGBICC else {
+            return RenderColorSpace.sRGB.cgColorSpace
+        }
+        return sourceSpace
     }
 
     private static func map(_ error: Error) -> RenderError {

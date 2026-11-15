@@ -762,6 +762,11 @@ let fixtureSpecs: [FixtureSpec] = [
                 characteristics: "640x480, 8-bit grayscale PNG, gradient, bars and discs.",
                 operations: "decode, grayscale colour model, export to colour formats.",
                 necessity: "A grayscale source exercises a colour model the RGB fixtures cannot."),
+    FixtureSpec(id: "F13_GEOMETRY_GRID", file: "F13_geometry_grid.png",
+                purpose: "Crop and straighten geometry (added 2026-11-15, W4-8 Option A).",
+                characteristics: "512x384, 8-bit sRGB, four colour quadrants, 64 px grid, central checkerboard, 6 px edge bars, diagonal marker.",
+                operations: "crop fractions, straighten angles, quarter turn, mirror, coordinate mapping, interpolation and edge behaviour.",
+                necessity: "Geometry needs a frame with exact pixel edges, orientation markers and measurable resampling; the portrait fixtures do not provide it."),
 ]
 
 func fixtureURL(_ id: String) -> URL {
@@ -983,6 +988,53 @@ func buildFixture(_ id: String) -> (CGImage, UTType, [CFString: Any])? {
                                         width: radius * 2, height: radius * 2),
                         gray(index % 2 == 0 ? 0.16 : 0.84))
         }
+        guard let image = context.makeImage() else { return nil }
+        return (image, .png, [:])
+
+    case "F13_GEOMETRY_GRID":
+        let size = CGSize(width: 512, height: 384)
+        guard let context = makeContext(width: 512, height: 384) else { return nil }
+        // Top-left visual coordinates, converted into the context's y-up space.
+        func visual(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> CGRect {
+            CGRect(x: x * size.width, y: (1 - y - h) * size.height,
+                   width: w * size.width, height: h * size.height)
+        }
+        fill(context, visual(0, 0, 0.5, 0.5), rgba(0.85, 0.10, 0.10))
+        fill(context, visual(0.5, 0, 0.5, 0.5), rgba(0.10, 0.70, 0.20))
+        fill(context, visual(0, 0.5, 0.5, 0.5), rgba(0.10, 0.20, 0.80))
+        fill(context, visual(0.5, 0.5, 0.5, 0.5), rgba(0.92, 0.82, 0.10))
+        // Central checkerboard: 8x8 cells of 16 px across a 128 px square.
+        for row in 0..<8 {
+            for column in 0..<8 {
+                let on = (row + column) % 2 == 0
+                fill(context, CGRect(x: CGFloat(192 + column * 16),
+                                     y: CGFloat(240 - row * 16),
+                                     width: 16, height: 16),
+                     on ? rgba(0.95, 0.95, 0.95) : rgba(0.05, 0.05, 0.05))
+            }
+        }
+        // A 2 px grid every 64 px marks integer pixel edges for crop checks.
+        context.saveGState()
+        context.setShouldAntialias(false)
+        context.setFillColor(rgba(0.10, 0.10, 0.10))
+        for x in stride(from: 64, to: 512, by: 64) {
+            context.fill(CGRect(x: CGFloat(x), y: 0, width: 2, height: size.height))
+        }
+        for y in stride(from: 64, to: 384, by: 64) {
+            context.fill(CGRect(x: 0, y: CGFloat(y), width: size.width, height: 2))
+        }
+        // A crisp diagonal proves the frame is not accidentally mirrored.
+        context.setStrokeColor(rgba(1, 1, 1))
+        context.setLineWidth(3)
+        context.move(to: CGPoint(x: 6, y: 6))
+        context.addLine(to: CGPoint(x: 506, y: 378))
+        context.strokePath()
+        context.restoreGState()
+        // Edge bars last: 6 px, one distinct colour per side.
+        fill(context, CGRect(x: 0, y: 378, width: 512, height: 6), rgba(0.05, 0.85, 0.90))
+        fill(context, CGRect(x: 0, y: 0, width: 512, height: 6), rgba(0.90, 0.10, 0.80))
+        fill(context, CGRect(x: 0, y: 0, width: 6, height: 384), rgba(0.95, 0.55, 0.05))
+        fill(context, CGRect(x: 506, y: 0, width: 6, height: 384), rgba(0.55, 0.10, 0.90))
         guard let image = context.makeImage() else { return nil }
         return (image, .png, [:])
 

@@ -269,3 +269,21 @@ difference is 8-bit rounding. The clarity and vignette numbers are from CI run
 are unchanged since the run that introduced them. They are observations backed
 by that derivation; they must not be loosened or generalised without the same
 evidence.
+
+### 9.2 Geometry cases (2026-11-15, W4-8 Option A, additive)
+
+`F13_GEOMETRY_GRID` and `Q01`–`Q07` were added on top of the existing corpus
+without touching it; see `Docs/GOLDEN_IMAGE_CORPUS.md` §7a and
+`baselines.geometry.v1.json`. The comparison rules are fixed before any Windows
+measurement exists:
+
+- **Crop and mirror (`Q01`, `Q02`, `Q07`) are parity gates.** The macOS harness
+  proved its references are byte-exact crops/mirrors of the fixture (max error
+  0), and neither host resamples these transforms, so Windows must match with
+  MAE 0.
+- **Straighten (`Q03`–`Q06`) is measurement, not a gate.** Core Image's affine
+  resampling and the Windows bilinear rotation produce different pixels, and
+  §4.4 still has no approved tolerance. The Windows suite checks the dimensions
+  and the rotation direction (a negated angle must be measurably further from
+  the reference) and prints MAE/PSNR. A numeric bound must come from CI
+  measurements and an owner decision; it must not be invented here.
