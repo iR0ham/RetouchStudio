@@ -876,7 +876,7 @@ internal static class Program
 
         var compare = FindButton(window, "Compare before and after")
             ?? throw new InvalidOperationException("the Compare toggle is missing");
-        ClickToggle(compare);
+        ClickControl(compare, mainHandle);
         var turnedOn = WaitFor(
             () => compare.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
                   && pattern is TogglePattern toggle
@@ -884,16 +884,18 @@ internal static class Program
             TimeSpan.FromSeconds(10));
         if (!turnedOn)
         {
-            throw new InvalidOperationException("the Compare toggle did not turn on");
+            throw new InvalidOperationException(
+                $"the Compare toggle reads {ToggleStateText(compare)} after a click at " +
+                $"{compare.Current.BoundingRectangle}");
         }
-        Ok("Compare turned on through UIA");
+        Ok("Compare turned on through a real click");
 
         var handles = WaitForHandles(window, "Compare split", 1, TimeSpan.FromSeconds(15));
         if (handles is null || handles[0].Current.BoundingRectangle.IsEmpty)
         {
             throw new InvalidOperationException(
                 $"the compare divider did not appear; the toggle reads {ToggleStateText(compare)}; " +
-                "the texts are " + DescribeTexts(window));
+                $"the thumbs are {DescribeThumbs(window)}; the texts are " + DescribeTexts(window));
         }
         var thumb = handles[0];
         var start = thumb.Current.BoundingRectangle;
@@ -929,7 +931,7 @@ internal static class Program
         }
         Ok("dragging it back returned the divider to its start");
 
-        ClickToggle(compare);
+        ClickControl(compare, mainHandle);
         var disappeared = WaitFor(() => HandleCount(window, "Compare split") == 0,
                                   TimeSpan.FromSeconds(10));
         if (!disappeared)
@@ -964,27 +966,37 @@ internal static class Program
     }
 
     /// <summary>
-    /// Clicks a toggle the way a pointer does. Compare is applied from the
-    /// control's Click handler, so TogglePattern alone flips IsChecked and
-    /// leaves the overlay hidden.
+    /// Clicks the middle of a control with injected pointer input. The WPF
+    /// ToggleButton exposes no InvokePattern, and TogglePattern flips IsChecked
+    /// without raising Click, which is where the app reads its state.
     /// </summary>
-    private static void ClickToggle(AutomationElement element)
+    private static void ClickControl(AutomationElement control, IntPtr mainHandle)
     {
-        if (element.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke)
-            && invoke is InvokePattern click)
+        var rect = control.Current.BoundingRectangle;
+        if (rect.IsEmpty || rect.Width < 1 || rect.Height < 1)
         {
-            click.Invoke();
-            return;
+            throw new InvalidOperationException(
+                $"'{control.Current.Name}' has no screen bounds");
         }
-        if (element.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
-            && pattern is TogglePattern toggle)
-        {
-            toggle.Toggle();
-            return;
-        }
-        throw new InvalidOperationException(
-            $"'{element.Current.Name}' exposes neither Invoke nor Toggle");
+        SetForegroundWindow(mainHandle);
+        Thread.Sleep(200);
+        var x = rect.X + rect.Width / 2;
+        var y = rect.Y + rect.Height / 2;
+        Console.WriteLine($"  clicking '{control.Current.Name}' at {x:0},{y:0}");
+        SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
+        Thread.Sleep(120);
+        mouse_event(MouseLeftDown, 0, 0, 0, IntPtr.Zero);
+        Thread.Sleep(60);
+        mouse_event(MouseLeftUp, 0, 0, 0, IntPtr.Zero);
+        Thread.Sleep(250);
     }
+
+    private static string DescribeThumbs(AutomationElement window) =>
+        string.Join(" | ", window.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Thumb))
+            .Cast<AutomationElement>()
+            .Select(item => $"'{item.Current.Name}' {item.Current.BoundingRectangle}"));
 
     private static string ToggleStateText(AutomationElement element) =>
         element.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
