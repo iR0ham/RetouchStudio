@@ -136,6 +136,11 @@ unverifiable-entry rule (DR-5) is enforced.
 **Does not:** fetch a remote catalog, delete an unleased model without
 explicit consent, or download weights in the job path.
 
+**Status (2026-11-16):** implemented on macOS and Windows; PR #68. Hosted CI
+run 43932552840 is green on both hosts (macOS and Windows model-store suites).
+The Windows worker does not load model weights yet (W5-3 owns inference), so
+its shared-lease attachment is pending; Windows Swin2SR remains blocked.
+
 ### W5-3 — Platform adapters and truthful capability reporting
 
 **Depends on:** W5-1, W5-2.

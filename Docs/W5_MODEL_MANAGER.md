@@ -1,7 +1,7 @@
 # W5-2 — Cross-platform Model Manager
 
-**Status:** implementation contract for W5-2. It follows the frozen decisions in
-[W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
+**Status:** implemented for W5-2 on both hosts (PR #68). It follows the frozen
+decisions in [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
 §3.7–3.10 and does not change them.
 **Date:** 2026-11-16.
 **Platforms:** macOS Swift host + Python worker; Windows C# host + C# worker.
@@ -208,7 +208,29 @@ The following required cases are exercised by both suites unless noted:
 | Worker reads `active.json` and waits on the lease | 17 | W5-3 (not yet loading models) |
 
 macOS local evidence: `RETOUCH_ARCH=arm64 ./Tests/run.sh` passes the model-store
-suite and the existing engine/model/runtime suites on this machine. Windows
-evidence is the hosted `windows-2025` CI job; it is not native-hardware
-evidence and is labelled as such in the W5-2 report.
+suite (129 checks) and the existing engine/model/runtime-process suites on this
+machine; the runtime-v2 suite needs `worker/.venv`, which CI creates. The
+model-store suite was re-run standalone after the last store change and passed.
+`RETOUCH_SKIP_WORKER=1 ./build.sh release` validates the bundle and its catalog
+copy.
+
+Cross-check evidence for the C# implementation was also run on this macOS
+host with the .NET 10 SDK: `RetouchStudio.AI.Tests` (M1–M17) passed, and the WPF
+host compiled with `-p:EnableWindowsTargeting=true`. That exercises Unix paths
+and Unix file sharing, not Windows path syntax or Windows share modes; the
+hosted `windows-2025` job is the authoritative Windows evidence. On that job
+the model-store checks reported PASS before the unrelated UI smoke check caught
+the top-bar layout regression, which was fixed by moving the manager entry to
+the status bar.
+
+Windows evidence is hosted-runner CI; it is not native-hardware evidence and is
+labelled as such in the W5-2 report.
+
+Hosted CI run 43932552840 on head `094e9df` was green for all jobs. The macOS
+Integration job (133528747939) logged `MODEL STORE TESTS: PASS` and
+`RUNTIME V2 TESTS: PASS`; the Windows App job (133528748314) logged
+`MODEL STORE CHECKS: PASS`, `AI RUNTIME TESTS: PASS`, built the MSI and passed
+the GUI smoke check. These are hosted macOS/Windows runners, not the owner's
+hardware.
+
 
