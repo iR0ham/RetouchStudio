@@ -194,7 +194,7 @@ if (File.Exists(worker))
         process.StandardError.ReadToEnd());
 }
 
-ModelStoreChecks.Run(Check);
+ModelStoreChecks.Run((condition, label, detail) => Check(condition, label, detail));
 
 Console.WriteLine();
 if (failures.Count == 0)
