@@ -1031,7 +1031,26 @@ public sealed class ModelStore
             stream.Write(bytes, 0, bytes.Length);
             stream.Flush(true);
         }
-        File.Move(temporary, path, true);
+        Exception? last = null;
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            try
+            {
+                File.Move(temporary, path, true);
+                last = null;
+                break;
+            }
+            catch (IOException error)
+            {
+                last = error;
+                Thread.Sleep(10);
+            }
+        }
+        if (last is not null)
+        {
+            try { File.Delete(temporary); } catch (IOException) { }
+            throw last;
+        }
         if (!durable) return;
         // Flush(true) above is the durability point for the file. File.Move is
         // atomic on NTFS; the parent directory entry is durable once the move

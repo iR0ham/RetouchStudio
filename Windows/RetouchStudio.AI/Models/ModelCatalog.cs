@@ -71,7 +71,8 @@ public sealed class ModelCatalogEntry
     }
 
     public bool Supports(string platform) =>
-        Platforms.Contains(platform, StringComparer.OrdinalIgnoreCase);
+        Platforms.Any(value => string.Equals(value, platform,
+            StringComparison.OrdinalIgnoreCase));
 }
 
 public sealed class ModelCatalog
