@@ -47,7 +47,7 @@ run_suite() {
   work="$(mktemp -d)"
   cp "$suite" "$work/main.swift"
   out="$work/$name"
-  swiftc -O -target "${TARGET_ARCH}-apple-macosx14.0" -sdk "$SDK" -o "$out" \
+  swiftc -O -D RETOUCH_TESTING -target "${TARGET_ARCH}-apple-macosx14.0" -sdk "$SDK" -o "$out" \
     -I "$CORE_DIR" \
     "$work/main.swift" \
     $SOURCES "$CORE_DIR/libStudioCore.a" \
@@ -60,5 +60,6 @@ run_suite() {
 
 run_suite Tests/EngineTests.swift enginetests
 run_suite Tests/ModelTests.swift modeltests
+run_suite Tests/ModelStoreTests.swift modelstoretests
 run_suite Tests/RuntimeProcessTests.swift runtimeprocesstests
 run_suite Tests/RuntimeV2Tests.swift runtimev2tests

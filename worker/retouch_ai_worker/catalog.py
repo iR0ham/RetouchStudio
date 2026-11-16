@@ -8,8 +8,12 @@ offer "download" in one case and nothing in the other.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
+import json
 import os
+import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,7 +61,42 @@ class ModelEntry:
         }
 
     def installed(self, root: Path) -> bool:
-        return all((root / self.id / f.path).exists() for f in self.files)
+        try:
+            model_root = resolve_model_root(root, self.id)
+        except (OSError, ValueError):
+            return False
+        return all((model_root / f.path).exists() for f in self.files)
+
+
+_SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _safe_component(value: object, field: str) -> str:
+    if not isinstance(value, str) or not _SAFE_COMPONENT.fullmatch(value) or ".." in value:
+        raise ValueError(f"unsafe {field}")
+    return value
+
+
+def resolve_model_root(root: Path, model_id: str) -> Path:
+    """Active version directory, or the legacy flat folder when no pointer exists.
+
+    Legacy flat folders predate the versioned store; reading them keeps an
+    already-installed model usable. Once `active.json` exists it is the only
+    answer: a dangling pointer is an error, never a silent fallback.
+    """
+    _safe_component(model_id, "model id")
+    model_root = root / model_id
+    pointer = model_root / "active.json"
+    if not pointer.is_file():
+        return model_root
+    data = json.loads(pointer.read_text(encoding="utf-8"))
+    if data.get("schema") != "retouchstudio.model-active/1" or data.get("modelId") != model_id:
+        raise ValueError("active pointer identity mismatch")
+    version = _safe_component(data.get("version"), "model version")
+    target = model_root / version
+    if not target.is_dir():
+        raise FileNotFoundError(f"active version {version} is missing")
+    return target
 
 
 CATALOG: tuple[ModelEntry, ...] = (
@@ -144,6 +183,41 @@ class Catalog:
         if allow_uncleared is None:
             allow_uncleared = os.environ.get("RETOUCH_AI_EVAL_MODELS") == "1"
         self.allow_uncleared = allow_uncleared
+        # Shared leases held for the process lifetime: a loaded model cannot be
+        # deleted or replaced under the running job, and the kernel releases
+        # them if this process dies.
+        self._leases: dict[tuple[str, str], int] = {}
+
+    def _lease(self, entry: ModelEntry, version: str) -> None:
+        if (entry.id, version) in self._leases:
+            return
+        locks = self.root / ".locks"
+        locks.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = locks / f"{entry.id}-{version}"
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    os.close(fd)
+                    raise WorkerError(
+                        MODEL_MISSING,
+                        f"{entry.id} {version} is leased by an install or delete",
+                        {"model": entry.id, "version": version, "reason": "leased"},
+                    )
+                time.sleep(0.05)
+        self._leases[(entry.id, version)] = fd
+
+    def close(self) -> None:
+        for fd in self._leases.values():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self._leases.clear()
 
     def list(self) -> list[dict]:
         return [entry.public(self.root) for entry in CATALOG]
@@ -163,13 +237,27 @@ class Catalog:
                 f"{entry.id} is not cleared for commercial use ({entry.license_id})",
                 {"model": entry.id, "license": entry.license_id},
             )
+        try:
+            model_root = resolve_model_root(self.root, entry.id)
+        except (OSError, ValueError) as error:
+            raise WorkerError(MODEL_MISSING, f"{entry.id} has no usable active version",
+                              {"model": entry.id, "reason": str(error)})
+        version = model_root.name
+        flat_root = self.root / entry.id
+        if model_root == flat_root:
+            pass  # Legacy flat install: no versioned lease exists to take.
+        elif model_root.parent == flat_root:
+            self._lease(entry, version)
+        else:
+            raise WorkerError(MODEL_MISSING, f"{entry.id} resolved outside its folder",
+                              {"model": entry.id})
         for spec in entry.files:
-            target = self.root / entry.id / spec.path
+            target = model_root / spec.path
             if not target.exists():
                 raise WorkerError(MODEL_MISSING, f"{entry.id} is not installed",
                                   {"model": entry.id, "missing": spec.path,
                                    "download": entry.source})
-        return self.root / entry.id
+        return model_root
 
     def health(self) -> dict:
         """Cheap launch check: catalog loads and every installed file is whole.
@@ -183,8 +271,9 @@ class Catalog:
             installed = entry.installed(self.root)
             state = {"model": entry.id, "installed": installed, "ok": True}
             if installed:
+                model_root = resolve_model_root(self.root, entry.id)
                 for spec in entry.files:
-                    target = self.root / entry.id / spec.path
+                    target = model_root / spec.path
                     if spec.bytes is not None and target.stat().st_size != spec.bytes:
                         state["ok"] = False
                         state.setdefault("problems", []).append(
@@ -195,11 +284,16 @@ class Catalog:
 
     def verify(self, model_id: str) -> dict:
         entry = self.get(model_id)
+        try:
+            model_root = resolve_model_root(self.root, entry.id)
+        except (OSError, ValueError) as error:
+            raise WorkerError(MODEL_MISSING, f"{entry.id} has no usable active version",
+                              {"model": entry.id, "reason": str(error)})
         checked, failed = 0, []
         for spec in entry.files:
             if spec.sha256 is None:
                 continue
-            target = self.root / entry.id / spec.path
+            target = model_root / spec.path
             if not target.exists():
                 failed.append({"file": spec.path, "reason": "missing"})
                 continue

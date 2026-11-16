@@ -59,6 +59,16 @@ if ! codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
 fi
 
 WORKER="$APP/Contents/Resources/Worker"
+CATALOG="$APP/Contents/Resources/model-catalog.json"
+if [ -f "$CATALOG" ]; then
+  grep -q '"schema": "retouchstudio.model-catalog/1"' "$CATALOG" \
+    || fail "model catalog has an unknown schema"
+  if grep -q '{base}' "$CATALOG"; then
+    fail "model catalog still contains the test {base} placeholder"
+  fi
+else
+  fail "Contents/Resources/model-catalog.json is missing"
+fi
 if [ -d "$WORKER" ]; then
   [ -x "$WORKER/bin/python3" ] || fail "worker interpreter bin/python3 is missing"
   [ -d "$WORKER/retouch_ai_worker" ] || fail "worker package retouch_ai_worker is missing"

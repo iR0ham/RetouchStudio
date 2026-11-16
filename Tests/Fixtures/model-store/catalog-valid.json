@@ -1,0 +1,147 @@
+{
+  "schema": "retouchstudio.model-catalog/1",
+  "catalogVersion": "fixture-1",
+  "entries": [
+    {
+      "id": "fixture-good",
+      "name": "fixture-good",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 12,
+          "sha256": "5a15b8070a29a440f6d9ee66b79a1c58affda21d4f48d71758fd4c292d085def",
+          "sourceUrl": "{base}/good/payload.bin"
+        }
+      ],
+      "sizeBytes": 12,
+      "sha256": "dd054126cce3eb81aba8aef5f2247fc607a5f5769818ef4e6d08b0cc41e53a28",
+      "sourceUrl": "{base}/good",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "{base}/good",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Deterministic test fixture; never a product model."
+    },
+    {
+      "id": "fixture-sha",
+      "name": "fixture-sha",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 12,
+          "sha256": "f299609cee9c50e2f17f0126f9f444330bc101eb44e066d40e61af593c702ff6",
+          "sourceUrl": "{base}/good/payload.bin"
+        }
+      ],
+      "sizeBytes": 12,
+      "sha256": "b5e19c1f20de1f1801e9f37073c9f8e5e6271ab08a0cada50ee5eaf07c98f7b0",
+      "sourceUrl": "{base}/good",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "{base}/good",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Deterministic test fixture; never a product model."
+    },
+    {
+      "id": "fixture-size",
+      "name": "fixture-size",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 99,
+          "sha256": "7ec33a200f869bdfa127dd22aca0f6a5ac70d53a6a0e920ad57d653ba7875ddf",
+          "sourceUrl": "{base}/good/payload.bin"
+        }
+      ],
+      "sizeBytes": 99,
+      "sha256": "432c7e710088d68ded81e7d0625445ffa4711d64b8922a7ca46b59f224b81445",
+      "sourceUrl": "{base}/good",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "{base}/good",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Deterministic test fixture; never a product model."
+    },
+    {
+      "id": "fixture-unverifiable",
+      "name": "fixture-unverifiable",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": null,
+          "sha256": null,
+          "sourceUrl": "{base}/good/payload.bin"
+        }
+      ],
+      "sizeBytes": null,
+      "sha256": null,
+      "sourceUrl": "{base}/good",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "{base}/good",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Deterministic test fixture; never a product model.",
+      "unverifiableReason": "fixture without size or SHA-256"
+    }
+  ]
+}

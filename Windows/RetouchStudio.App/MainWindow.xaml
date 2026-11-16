@@ -23,6 +23,8 @@
                 IsEnabled="{Binding CanStartExport}" />
         <Button Content="Batch Export…" Style="{StaticResource ToolButton}" Click="BatchExport_Click"
                 IsEnabled="{Binding CanStartBatch}" />
+        <Button Content="AI Models…" Style="{StaticResource ToolButton}" Click="OpenModels_Click"
+                ToolTip="Download, verify, switch or remove local AI models" />
         <Button Content="Cancel Batch" Style="{StaticResource ToolButton}" Click="CancelBatch_Click"
                 IsEnabled="{Binding IsBatchRunning}"
                 ToolTip="Stop the batch before its next photo" />

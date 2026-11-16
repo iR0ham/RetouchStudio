@@ -680,6 +680,59 @@ final class PersianL10n: L10n {
     override var modelsRemoveAction: String { "حذف" }
     override func modelsRemoved(_ name: String) -> String { "\(name) حذف شد." }
     override var modelsSizeUnknown: String { "اندازه نامعلوم" }
+
+    // Versioned model store (W5-2)
+    override func modelsVersionLabel(_ version: String) -> String {
+        "نسخهٔ \(version)"
+    }
+    override var modelsActiveChip: String { "فعال" }
+    override var modelsUseVersion: String { "استفاده" }
+    override var modelsInstallVersion: String { "نصب…" }
+    override var modelsUpdate: String { "به‌روزرسانی…" }
+    override var modelsUnavailablePlatform: String { "روی این پلتفرم در دسترس نیست" }
+    override func modelsUnverifiable(_ reason: String) -> String {
+        "قابل نصب نیست: \(reason)"
+    }
+    override func modelsLegacyFound(_ size: String) -> String {
+        "یک نصب قدیمی‌تر (\(size)) روی دیسک هست."
+    }
+    override var modelsAdopt: String { "پذیرفتن…" }
+    override func modelsAdoptTitle(_ name: String) -> String {
+        "فایل‌های موجود \(name) پذیرفته شوند؟"
+    }
+    override func modelsAdoptBody(_ size: String) -> String {
+        "اپ \(size) موجود روی این مک را با کاتالوگ هش می‌کند. اگر همهٔ فایل‌ها مطابق باشند، بدون دانلود و بدون اینترنت به انبار نسخه‌دار منتقل می‌شوند. اگر چیزی متفاوت باشد، هیچ فایلی جابه‌جا نمی‌شود."
+    }
+    override func modelsMigrated(_ name: String) -> String {
+        "\(name) به انبار نسخه‌دار منتقل شد."
+    }
+    override func modelsActivated(_ name: String, _ version: String) -> String {
+        "\(name) اکنون از نسخهٔ \(version) استفاده می‌کند."
+    }
+    override var modelsInUseRetry: String {
+        "این نسخه در حال استفاده توسط کاری در حال اجرا یا پنجرهٔ دیگری است. کار را تمام کن و دوباره تلاش کن."
+    }
+    override func modelsUnverified(_ detail: String) -> String {
+        "بررسی ناموفق بود: \(detail)"
+    }
+    override func modelsMissingFile(_ detail: String) -> String {
+        "مشکل فایل مدل: \(detail)"
+    }
+    override func modelsConsentTitle(_ name: String, _ version: String) -> String {
+        "نصب \(name)، نسخهٔ \(version)؟"
+    }
+    override func modelsConsentBody(files: Int, size: String, codeLicense: String,
+                                    weightsLicense: String, host: String, sha: String) -> String {
+        """
+        \(files) فایل، \(size)، از \(host).
+        مجوز کد: \(codeLicense). مجوز وزن‌ها: \(weightsLicense).
+        SHA-256 (مانیفست): \(sha)…
+        این تنها مرحله‌ای است که از اینترنت استفاده می‌کند. چیزی نصب نمی‌شود مگر آنکه هر فایل با اندازه و چک‌سام خودش مطابقت داشته باشد.
+        """
+    }
+    override func modelsDiskUsage(used: String, free: String) -> String {
+        "روی دیسک: \(used) · آزاد: \(free)"
+    }
     override var aiRuntimeTitle: String { "دستیار هوش مصنوعی" }
     override var aiRuntimeInstalledChip: String { "نصب شده" }
     override var aiRuntimeMissingChip: String { "نصب نیست" }

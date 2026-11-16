@@ -31,6 +31,19 @@ public partial class App : Application
         }
 
         DispatcherUnhandledException += OnUnhandledException;
+        // Removes only stale, unlocked staging/quarantine trees; it never
+        // downloads and never touches an installed version.
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                RetouchStudio.AI.Models.ModelStore.CreateProduction().Cleanup();
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"model cleanup skipped: {error.Message}");
+            }
+        });
         base.OnStartup(e);
     }
 

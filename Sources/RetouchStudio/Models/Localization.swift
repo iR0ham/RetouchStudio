@@ -666,6 +666,48 @@ class L10n {
     var modelsSizeUnknown: String { "Size unknown" }
     var modelsHelperMissing: String { "The AI helper is not available on this Mac." }
 
+    // Versioned model store (W5-2)
+    func modelsVersionLabel(_ version: String) -> String { "Version \(version)" }
+    var modelsActiveChip: String { "Active" }
+    var modelsUseVersion: String { "Use" }
+    var modelsInstallVersion: String { "Install…" }
+    var modelsUpdate: String { "Update…" }
+    var modelsUnavailablePlatform: String { "Not available on this platform" }
+    func modelsUnverifiable(_ reason: String) -> String { "Not installable: \(reason)" }
+    func modelsLegacyFound(_ size: String) -> String {
+        "An older installation is on disk (\(size))."
+    }
+    var modelsAdopt: String { "Adopt…" }
+    func modelsAdoptTitle(_ name: String) -> String { "Adopt the existing \(name) files?" }
+    func modelsAdoptBody(_ size: String) -> String {
+        "The app will hash the \(size) already on this Mac against the catalog. If every file matches, they are moved into the versioned store, with no download and no network use. If anything differs, nothing is moved."
+    }
+    func modelsMigrated(_ name: String) -> String { "\(name) was moved into the versioned store." }
+    func modelsActivated(_ name: String, _ version: String) -> String {
+        "\(name) now uses version \(version)."
+    }
+    var modelsInUseRetry: String {
+        "This version is in use by a running job or another window. Finish that job, then try again."
+    }
+    func modelsUnverified(_ detail: String) -> String { "Verification failed: \(detail)" }
+    func modelsMissingFile(_ detail: String) -> String { "Model file problem: \(detail)" }
+    func modelsConsentTitle(_ name: String, _ version: String) -> String {
+        "Install \(name), version \(version)?"
+    }
+    func modelsConsentBody(files: Int, size: String, codeLicense: String,
+                           weightsLicense: String, host: String, sha: String) -> String {
+        let count = files == 1 ? "1 file" : "\(files) files"
+        return """
+        \(count), \(size), from \(host).
+        Code licence: \(codeLicense). Weights licence: \(weightsLicense).
+        SHA-256 (manifest): \(sha)…
+        This is the only step that uses the internet. Nothing is installed unless every file matches its size and checksum.
+        """
+    }
+    func modelsDiskUsage(used: String, free: String) -> String {
+        "On disk: \(used) · Free: \(free)"
+    }
+
     var aiRuntimeTitle: String { "AI runtime" }
     var aiRuntimeInstalledChip: String { "Installed" }
     var aiRuntimeMissingChip: String { "Not installed" }
