@@ -23,8 +23,6 @@
                 IsEnabled="{Binding CanStartExport}" />
         <Button Content="Batch Export…" Style="{StaticResource ToolButton}" Click="BatchExport_Click"
                 IsEnabled="{Binding CanStartBatch}" />
-        <Button Content="AI Models…" Style="{StaticResource ToolButton}" Click="OpenModels_Click"
-                ToolTip="Download, verify, switch or remove local AI models" />
         <Button Content="Cancel Batch" Style="{StaticResource ToolButton}" Click="CancelBatch_Click"
                 IsEnabled="{Binding IsBatchRunning}"
                 ToolTip="Stop the batch before its next photo" />
@@ -54,6 +52,9 @@
                 Click="CancelExport_Click" IsEnabled="{Binding IsExportRunning}"
                 Margin="0,0,10,0"
                 ToolTip="Stop the export before it publishes the photo" />
+        <Button DockPanel.Dock="Left" Content="AI Models…" Style="{StaticResource ToolButton}"
+                Click="OpenModels_Click" Margin="0,0,10,0"
+                ToolTip="Download, verify, switch or remove local AI models" />
         <TextBlock DockPanel.Dock="Right" Text="{Binding DimensionText}"
                    Foreground="{StaticResource MutedBrush}" FontSize="11" />
         <TextBlock DockPanel.Dock="Right" Text="·  drag to pan · Ctrl+wheel to zoom · hold Space to compare  ·"
