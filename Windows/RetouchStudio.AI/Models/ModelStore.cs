@@ -1032,7 +1032,7 @@ public sealed class ModelStore
             stream.Flush(true);
         }
         Exception? last = null;
-        for (var attempt = 0; attempt < 50; attempt++)
+        for (var attempt = 0; attempt < 200; attempt++)
         {
             try
             {
@@ -1040,7 +1040,7 @@ public sealed class ModelStore
                 last = null;
                 break;
             }
-            catch (IOException error)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
                 last = error;
                 Thread.Sleep(10);
@@ -1048,7 +1048,8 @@ public sealed class ModelStore
         }
         if (last is not null)
         {
-            try { File.Delete(temporary); } catch (IOException) { }
+            try { File.Delete(temporary); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             throw last;
         }
         if (!durable) return;
