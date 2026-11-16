@@ -1,13 +1,17 @@
 # W5 Implementation Decision Record — Multi-Platform AI (W5-0)
 
-**Status:** Proposed W5-0 decision record for owner review. It freezes no
-runtime behavior, changes no application code, project schema, catalog or
-release artifact, and authorizes no download.
-**Date:** 2026-11-16.
+**Status:** W5-0 decision record after the owner review of 2026-11-16. The
+owner decisions in §7 are answered (§7 states each outcome); the contract
+sections remain PROPOSED and freeze on final approval of this PR. It changes
+no application code, project schema, catalog or release artifact, and
+authorizes no download.
+**Date:** 2026-11-16 (revised after the owner review).
 **Base:** `main` at `8000c9d` (PR #65 merge, 2026-11-16).
-**Authority:** the product-owner direction of 2026-11-16, recorded in
+**Authority:** the product-owner decisions of 2026-11-16, recorded in §7 and
 [AI_11_MULTI_PLATFORM_ADDENDUM.md](AI_11_MULTI_PLATFORM_ADDENDUM.md) §1, over
-the AI-01 research where they differ. Master Execution Plan V4 is unchanged.
+the AI-01 research where they differ. Master Execution Plan V4's text is
+unchanged; A1/A2 approval and its exact consequences are recorded in the
+addendum §4.
 **Companions:** [AI_11_MULTI_PLATFORM_ADDENDUM.md](AI_11_MULTI_PLATFORM_ADDENDUM.md),
 [W5_ROADMAP.md](W5_ROADMAP.md),
 [AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md) §6,
@@ -35,8 +39,8 @@ Decision status vocabulary:
 | Status | Meaning |
 |---|---|
 | **FROZEN (on approval)** | W5-1..W5-5 implement it; a later change needs a dated revision of this record. |
-| **PROPOSED** | Recommended here; approval turns it into a freeze. |
-| **OPEN (owner)** | A product-direction decision listed in §7. |
+| **PROPOSED** | Recommended here; final approval freezes it. |
+| **DECIDED (owner)** | Answered by the owner; the outcome is in §7 and it no longer blocks W5-0. |
 | **DEFERRED** | Deliberately after a measurement or licence step; not dropped. |
 
 **Delivery exception.** [WORKFLOW.md](WORKFLOW.md) discourages documentation-only
@@ -61,23 +65,29 @@ an implementation library, and no AI type enters `StudioCore` or the C ABI.
 The existing 13 JSON-only C ABI exports stay untouched. Each host implements
 the contract natively.
 
-**DR-2 (PROPOSED) — macOS keeps the Python worker for 1.1.** This follows
-AI-01 ADR-4. Rewriting a measured worker for an unmeasured one adds no
-capability. W5-1 makes its source reproducible and fixes the protocol-2
-mismatch; it does not change the inference stack.
+**DR-2 (DECIDED 2026-11-16) — macOS keeps the Python worker for 1.1, with its
+source in this repository.** This follows AI-01 ADR-4. Rewriting a measured
+worker for an unmeasured one adds no capability. The owner's preferred option,
+chosen on 2026-11-16, is to bring the complete worker source into the
+repository, preserving its licence and dependency notices, with every
+dependency pinned by version and hash. An external mutable branch or an
+unverified download is not used. W5-1 makes the worker reproducible and fixes
+the protocol-2 mismatch; it does not change the inference stack.
 
-**DR-3 (PROPOSED) — Windows uses a separate C# worker with ONNX Runtime CPU.**
-The worker is its own process so an ONNX Runtime fault cannot kill the WPF
-host; it is contained by a job object that kills it on host exit. The CPU
-execution provider is the only mandatory provider; DirectML may be enabled
-when present and measured, and its absence must never fail a job or a
-capability claim. A Python sidecar is rejected as the default: it adds a
+**DR-3 (DECIDED 2026-11-16) — Windows uses a separate C# worker with ONNX
+Runtime CPU.** The worker is its own process so an ONNX Runtime fault cannot
+kill the WPF host; it is contained by a job object that kills it on host exit.
+The CPU execution provider is the only mandatory provider; DirectML may be
+enabled when present and measured, and its absence must never fail a job or a
+capability claim. No GPU performance claim is made without native hardware
+validation. A Python sidecar is rejected as the default: it adds a
 1.29 GiB-class runtime, interpreter lifecycle and a second scripting surface
 for no measured capability that a C# ORT adapter cannot provide. Reopening
 this decision requires measured evidence and named alternatives, per the
-owner direction. The ONNX Runtime .NET binding, its version and its native
-payload are **NOT VERIFIED** in this repository; selecting and pinning them is
-W5-1 work under the dependency decision in §7.
+owner direction. The owner approved ONNX Runtime CPU and its required native
+payload as a Windows application dependency on 2026-11-16. The binding
+version, the payload size and its hash are still **NOT VERIFIED** in this
+repository; selecting and pinning them is W5-1 work.
 
 ## 3. Contracts frozen at W5-0
 
@@ -319,10 +329,15 @@ here.
 
 ### 4.1 macOS
 
-- The worker source becomes reproducible: in the repository or a pinned,
-  hash-verified dependency with a lockfile and a licence inventory. The
-  existing 60 worker regression tests under `Docs/worker-regressions` must run
-  from a fresh checkout.
+- The worker source is brought into this repository with its complete licence
+  and dependency notices; every dependency is pinned by version and hash. No
+  external mutable branch and no unverified download is used. The existing 60
+  worker regression tests under `Docs/worker-regressions` must run from a
+  fresh checkout.
+- W5-1 ships a reproducible, source-built runtime. The build produces a
+  self-contained app runtime, so end users never install Python manually. No
+  package URL, size or hash is invented; packaging and signing are finalized
+  with verified build artifacts.
 - The protocol-2 handshake currently expected by the host
   (`HelperRegistry.protocolVersion = 2`, `WorkerClient` check at
   `Sources/RetouchStudio/Core/WorkerClient.swift:296`, VERIFIED) must be
@@ -330,21 +345,25 @@ here.
   macOS exit.
 - Capability discovery replaces hard-coded UI offers; no capability is offered
   because a button exists.
-- `AIRuntime.package` stays nil until an approved package exists. W5 does not
-  fabricate metadata (`Sources/RetouchStudio/Core/AIRuntime.swift:34-41`,
-  VERIFIED at `8000c9d`).
+- `AIRuntime.package` stays nil in W5-1: a source-built runtime is not a
+  downloadable package (`Sources/RetouchStudio/Core/AIRuntime.swift:34-41`,
+  VERIFIED at `8000c9d`). A downloadable package is not part of W5-1; packaging
+  and signing are finalized with verified build artifacts.
 
 ### 4.2 Windows
 
 - A separate C# worker executable, per-user model store, named-pipe transport
   recommended, same JSON frames.
 - ONNX Runtime CPU EP is the baseline and must work on the `windows-2025`
-  runner with no GPU and no Python.
+  runner with no GPU and no Python. The owner approved ONNX Runtime CPU and
+  its required native payload as a Windows application dependency on
+  2026-11-16, including its presence in the MSI.
 - DirectML is optional: detected, reported and used only when present and
   measured; never a requirement and never the source of a capability claim.
+  No GPU performance claim is made without native hardware validation.
 - The WPF host currently has no package dependency by design. Adding the ORT
-  binding and its native payload to the per-machine MSI is the §7 dependency
-  decision, not an engineering default.
+  binding and its native payload is now an approved dependency; pinning its
+  version, size and hash is W5-1 work.
 - The Windows export guard keeps naming preserved records until a real render
   path exists; a `supported` capability must render and export, not merely
   record.
@@ -380,26 +399,32 @@ product behavior (export-time, fixed 4×, 1500 s timeout, tile progress,
    macOS keeps `supported` only for the measured arm64 build.
 8. **Model provenance.** The Windows Swin2SR ONNX artifact's conversion source,
    file size and SHA-256 are recorded in the catalog. The official Swin2SR
-   release is a PyTorch checkpoint; a community ONNX conversion is
-   **NOT VERIFIED** here and cannot be adopted without an owner-approved
-   source and hash.
+   release is a PyTorch checkpoint. The owner did not approve an unverified
+   community ONNX conversion (2026-11-16); adoption requires a reproducible
+   conversion procedure, the source checkpoint, the opset, the output
+   artifact, its size, its SHA-256, licence evidence and quality validation.
+   Until that evidence is reviewed and approved, **Windows W5-4 is BLOCKED**.
+   W5-1, W5-2 and W5-3 continue independently.
 
 ## 5. W5-0 exit criteria
 
 W5-0 closes when all of these are true:
 
-1. This record and the addendum are approved, and V4 amendment A1/A2 is
-   approved, modified or explicitly declined with its consequence accepted.
+1. This record and the addendum receive final owner approval. A1/A2 was
+   approved on 2026-11-16 and its exact consequences are recorded in
+   [AI_11_MULTI_PLATFORM_ADDENDUM.md](AI_11_MULTI_PLATFORM_ADDENDUM.md) §4;
+   Master Plan V4's text is unchanged.
 2. The capability vocabulary, states and job lifecycle (§3.2–3.4) are frozen.
-3. The catalog, provenance and model-store rules (§3.6–3.9) are frozen, and
-   the Swin2SR x4 entry has an owner-approved source, size, SHA-256 and
-   licence for the Windows ONNX artifact — or W5-4 is explicitly marked
-   BLOCKED pending it.
-4. The Windows dependency policy (§7) is decided, so W5-1 can pin the ORT
-   binding and W5-2 can size the MSI.
-5. The worker-source publication decision (§7) is made.
-6. The remaining owner decisions have an answer or an accepted deferral with
-   the affected milestone named.
+3. The catalog, provenance and model-store rules (§3.6–3.9) are frozen. The
+   Swin2SR x4 Windows ONNX entry has no approved source, size, SHA-256 or
+   licence evidence yet, so **Windows W5-4 is explicitly BLOCKED** pending
+   that review; W5-1–W5-3 proceed.
+4. The Windows dependency policy is decided: ONNX Runtime CPU and its native
+   payload are approved (2026-11-16); DirectML stays optional.
+5. The worker-source publication decision is made: the complete source enters
+   this repository with notices and pinned, hashed dependencies.
+6. Every owner decision has an answer or an accepted deferral with the
+   affected milestone named (§7).
 
 No runtime implementation starts before this list is complete.
 
@@ -407,38 +432,50 @@ No runtime implementation starts before this list is complete.
 
 | Step | Deliverable | Exit evidence |
 |---|---|---|
-| W5-0 | This freeze | Approved documents; owner decisions resolved |
-| W5-1 | Reproducible runtime, both platforms | Fresh checkout builds; real process starts; protocol handshake on macOS and Windows |
+| W5-0 | This freeze | Owner decisions resolved; final document approval |
+| W5-1 | Reproducible runtime, both platforms | Fresh checkout builds; real process starts; protocol handshake on macOS and Windows; worker source and dependencies pinned |
 | W5-2 | Model manager, both platforms | Consent, hash verification, stage/rename, update/rollback, leases, delete and cleanup; race tests |
 | W5-3 | Adapters and capability reporting | Capability list derived from adapter; unsupported refused and named; no interface-only support |
-| W5-4 | Upscaler 4x acceptance | Both platforms run, quality/tolerance, cancel, memory, bit depth, provenance |
+| W5-4 | Upscaler 4x acceptance | macOS run, quality/tolerance, cancel, memory, bit depth, provenance; Windows run only after the ONNX artifact is approved |
 | W5-5 | CI and acceptance | Contract tests in existing contexts; CPU correctness separated from hardware/performance evidence |
 
 Detailed deliverables, capability preservation and follow-on milestones:
 [W5_ROADMAP.md](W5_ROADMAP.md).
 
-## 7. Remaining owner decisions
+## 7. Owner decisions (answered 2026-11-16)
 
-| # | Decision | Options | Impact | Recommendation | Blocks |
-|---|---|---|---|---|---|
-| 1 | V4 amendment A1/A2 | approve / modify / decline | Declining keeps a circular stage-4 criterion and keeps W5 behind W3 | Approve A1/A2 | W5-0, W5 start |
-| 2 | Windows ML dependency policy | allow ORT/WinML package + native payload in the MSI / keep zero-dependency host and no Windows AI | No dependency ⇒ no Windows inference baseline | Allow the ORT CPU baseline; DirectML optional | W5-1 Windows, W5-2 |
-| 3 | Worker source publication | move into repo / pinned fetchable dependency | A fresh clone cannot reproduce inference today | Move in, or pin with hashes and licence inventory | W5-1 macOS |
-| 4 | Runtime package distribution | approve URL+size+SHA-256 / source-built only for W5-1 | No approved package ⇒ `AIRuntime.package` stays nil | Approve metadata or accept source-built only | W5-1, W5-2 |
-| 5 | Windows landmark backend (F1) | distributable offline landmark model / accept no Windows face+mask | Blocks Windows face analysis, landmarks, masks and W3 | Choose a model with cleared weights | W3, face/mask capabilities (not W5-4) |
-| 6 | Windows ONNX artifact for Swin2SR x4 | approve a recorded conversion source + hash / no Windows upscale | Without it W5-4 Windows is BLOCKED | Approve an official-or-recorded conversion | W5-4 |
-| 7 | Model hosting | official sources only / project mirror | A mirror adds hosting, integrity and licence duties | Official sources only for W5 | W5-2 |
-| 8 | Bit-depth advertising | 8-bit claim / 16-bit only if measured | Determines what the product may say | Measure first; advertise what survives | W5-4 claim |
-| 9 | GPU (DirectML) direction | opportunistic only / require hardware validation / no GPU claims | A GPU claim needs hardware not in CI | Opportunistic, no claim in W5 | W5-5 |
-| 10 | Follow-on weight grants (fine matte, LaMa, outpainting) | pursue written grants / exclude | Blocks B1 detail, H1 medium tier, G1 outpainting | Decide per capability later | Follow-on milestones |
-| 11 | AI Enhancer presets and quality corpus | define presets / defer | Needed before any same-size AI claim | Defer to E1 with its own corpus | E1 |
+The owner reviewed W5-0 on 2026-11-16 and answered every decision below. The
+five decisions that blocked W5-0 are resolved; the remaining blockers are
+evidence-bound work items, not open product-direction questions.
+
+| # | Decision | Owner outcome (2026-11-16) | Remaining work / effect |
+|---|---|---|---|
+| 1 | V4 amendment A1/A2 | **Approved.** A1 moves the Windows "AI edits" completion criterion from stage 4 to W5 completion for the W5-adopted set. A2 lets W5-0/W5-1/W5-2/W5-3 proceed after W4 while W3 proceeds independently. W3 still precedes any Windows face, landmark or mask support claim. No other V4 sequencing changes. | V4 text stays unedited by owner instruction; the approval and its consequences are recorded in the addendum §4. No owner action remains. |
+| 2 | Windows runtime dependencies | **Approved.** ONNX Runtime CPU and its required native payload are a Windows application dependency. DirectML stays optional. No GPU performance claims without native hardware validation. | Pin the binding version, native payload size and hash in W5-1; size the MSI in W5-2. |
+| 3 | macOS worker source | **Decided.** The owner's preferred option: bring the complete worker source into this repository; preserve its licence and dependency notices; pin every dependency by version and hash; no external mutable branch and no unverified download. | Import the source and prove the 60 regressions from a fresh checkout in W5-1 (macOS). |
+| 4 | macOS runtime distribution | **Decided.** W5-1 ships a reproducible, source-built runtime. The build produces a self-contained app runtime; end users never install Python manually. Do not invent package URLs, sizes or hashes. Packaging and signing are finalized with verified build artifacts. | `AIRuntime.package` stays nil in W5-1; a downloadable package's metadata is finalized with verified build artifacts. |
+| 5 | Windows face analysis, landmarks and masks | **Decided.** They remain mandatory product requirements. The exact Windows landmark model is deferred to F1. Offline inference and cleared commercial distribution rights for the weights are required. No Windows face/mask capability is marked supported before real Windows validation. This does not block unrelated W5 infrastructure or Upscaler work. | F1 chooses and licenses the model; W3 needs it before Windows face/mask claims. W5-1–W5-4 do not wait on it. |
+| 6 | Windows ONNX artifact for Swin2SR x4 | **Decided.** An unverified community ONNX conversion is not approved. Adoption requires a reproducible conversion procedure, the source checkpoint, the opset, the output artifact, its size, its SHA-256, licence evidence and quality validation. Windows W5-4 stays **BLOCKED** until that evidence is reviewed and approved. W5-1–W5-3 continue independently. | Submit the artifact evidence for owner review; only then can W5-4 Windows start. |
+| 7 | Model hosting | **Decided.** Official model sources only for W5. | The catalog records the official source; no mirror. |
+| 8 | Bit-depth advertising | **Decided.** Measure the round trip before advertising; 16-bit only if it survives. | W5-4 measures; 8-bit is the default claim. |
+| 9 | DirectML / GPU direction | **Decided.** DirectML remains opportunistic. No GPU performance claims without native hardware validation. | Never mandatory; never a capability-claim source. |
+| 10 | Follow-on weight grants (fine matte, LaMa, outpainting) | **Deferred.** The licence decisions remain in their respective follow-on milestones. | B1, H1 and G1 each carry their own grant gate. |
+| 11 | AI Enhancer presets and quality corpus | **Deferred.** AI Enhancer retains its separate E1 milestone and its own quality corpus. | E1 defines the presets and corpus; never aliased to Upscaler. |
+
+**What still blocks a step.** Windows W5-4 waits on decision 6's evidence;
+Windows face, landmark and mask support waits on F1 (decision 5); the ORT
+binding pin (decision 2) is W5-1 engineering work; runtime package metadata
+(decision 4) is needed only for a later downloadable distribution. Nothing in
+this table blocks W5-1, W5-2 or W5-3.
 
 ## 8. NOT VERIFIED register
 
-- ONNX Runtime integration, package version, native payload size and CPU
-  performance inside the Windows host and MSI.
+- ONNX Runtime integration, the binding version, native payload size and CPU
+  performance inside the Windows host and MSI. The dependency itself is
+  approved (2026-11-16); the specific pin is not yet verified.
 - The Swin2SR x4 ONNX artifact: export source, opset, file size, SHA-256 and
-  numerical parity with the macOS checkpoint.
+  numerical parity with the macOS checkpoint. No conversion is approved;
+  Windows W5-4 is blocked on this evidence.
 - Windows CPU latency, peak memory, thermal behavior and quality for every
   model.
 - DirectML availability, behavior and performance on any hardware; Windows ML
@@ -447,7 +484,8 @@ Detailed deliverables, capability preservation and follow-on milestones:
   recovery.
 - Whether more than 8 bits survives the upscale round trip on either platform.
 - The worker source's internal behavior, catalog, preprocessing and job
-  routing; it is outside this repository.
+  routing. The source is being brought into the repository in W5-1 and remains
+  unverified here until it lands.
 - C# protocol-parity of the contract frames (only fixtures can prove it, in
   W5-1).
 - Windows ARM64 and any non-x64 Windows target: out of scope and unmeasured.
@@ -455,7 +493,7 @@ Detailed deliverables, capability preservation and follow-on milestones:
 ## 9. Non-goals
 
 No code, tests, catalog entries, schema keys, C ABI exports, model downloads,
-runtime package, MSI dependency, GPU claim, release or tag is added by this
-record. No capability is declared supported. No approved capability is
-removed; all follow-on milestones are retained in
-[W5_ROADMAP.md](W5_ROADMAP.md) §4.
+runtime package, MSI payload, GPU claim, release or tag is added by this
+record. The ONNX Runtime dependency is approved for W5-1, not added here. No
+capability is declared supported. No approved capability is removed; all
+follow-on milestones are retained in [W5_ROADMAP.md](W5_ROADMAP.md) §4.

@@ -103,8 +103,9 @@ platform from the start of W5; the W5 plan is now
 [`W5_IMPLEMENTATION_DECISION_RECORD.md`](W5_IMPLEMENTATION_DECISION_RECORD.md)
 and the resolved conflicts in
 [`AI_11_MULTI_PLATFORM_ADDENDUM.md`](AI_11_MULTI_PLATFORM_ADDENDUM.md). The
-delivery queue at the end of this file remains the operative order until the
-owner approves W5-0 and the V4 amendment A1/A2.
+delivery queue at the end of this file remains the operative order until W5-0
+receives final owner approval; A1/A2 was approved on 2026-11-16 and is
+recorded in the addendum §4.
 
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|

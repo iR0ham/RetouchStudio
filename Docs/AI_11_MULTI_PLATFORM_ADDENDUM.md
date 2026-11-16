@@ -1,11 +1,12 @@
 # AI-01 — Multi-Platform Addendum (2026-11-16)
 
-**Status:** Proposed review record of an owner-approved direction. It changes
-no application code, project schema, catalog, runtime package or release
-artifact, and it authorizes no download. Its resolutions and the proposed V4
-amendment await owner review. It does not modify the Master Execution Plan V4;
-where V4 sequencing must change, §4 states the exact conflict and a proposed
-amendment that waits for product-owner approval.
+**Status:** Review record of an owner-approved direction, revised after the
+owner review of 2026-11-16. A1/A2 are approved and the decisions in §7 are
+answered; the exact consequences are recorded here because Master Plan V4's
+text stays unedited by owner instruction. It changes no application code,
+project schema, catalog, runtime package or release artifact, and it
+authorizes no download. This revision no longer asks the owner to decide the
+W5-0 questions; it records the answers.
 **Milestone:** AI-01 / W5-0 under the RetouchStudio Master Execution Plan V4.
 **Base:** `main` at `8000c9d` (PR #65 merge, 2026-11-16), which contains the
 AI-01 research package
@@ -15,7 +16,8 @@ AI-01 research package
 to that commit; the dated pointers added to those files move their current
 line numbers.
 **Owner direction:** the W5 multi-platform approval brief of 2026-11-16
-(recorded here in §1; no external document is cited because none was supplied).
+(recorded here in §1; no external document is cited because none was supplied)
+and the W5-0 owner review of the same date (recorded in §4 and §7).
 **Companions:**
 [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md),
 [W5_ROADMAP.md](W5_ROADMAP.md),
@@ -39,6 +41,13 @@ only as an optional backend, GPU acceleration never mandatory, and native
 Windows model storage and lifecycle management. A Python sidecar on Windows is
 not the preferred architecture; changing that requires concrete evidence and
 alternatives, neither of which exists in the repository today.
+
+The W5-0 owner review of 2026-11-16 approved the V4 amendments A1/A2 (§4),
+the ONNX Runtime CPU dependency, bringing the macOS worker source into this
+repository, a source-built self-contained macOS runtime for W5-1, keeping
+Windows face analysis, landmarks and masks as mandatory but gated by F1 and
+real Windows validation, and blocking Windows W5-4 until the Swin2SR x4 ONNX
+artifact's evidence is reviewed and approved. §7 records each outcome.
 
 This addendum exists because three statements in the AI-01 package were written
 under the earlier assumption and now conflict with the owner's direction. Each
@@ -151,30 +160,34 @@ Windows masks ([AI_11_ROADMAP.md](AI_11_ROADMAP.md) §4, lines 262–271).
   "Windows AI parity", because Windows AI is now W5 work. Leaving the phrase
   undefined is exactly how an approved capability gets silently dropped.
 
-**Proposed amendment (requires owner approval; not applied).** A minimal,
-additive proposal for V4 §2 and §6; A3 is a reading, not a change:
+**Approved amendment (2026-11-16; V4 text unchanged).** The owner approved A1
+and A2. By explicit owner instruction the Master Plan V4 file is not edited;
+this section is the record of the approved sequencing and its exact
+consequences. A reader of V4 alone still sees the old stage-4 bullet; this
+addendum is the approved operative exception.
 
-- **A1 — Move one bullet.** In V4 §2 item 4 and §6 (line 253), Windows "AI
-  edits when runtime is available" stops being a stage-4 completion criterion.
-  It becomes a W5 completion criterion, satisfied for the W5-adopted capability
-  set — initially `upscale.4x` — with the remaining edits still preserved,
-  named and refused as today. The capability is moved, not removed.
-- **A2 — Make the interleaving explicit.** V4 §2 items 5 and 6 may run
-  concurrently after stage 3: W5-0/1/2/3 may start once W4 is complete, and W3
-  may consume the frozen face/mask contract. W3 still precedes any Windows
-  face, landmark or mask capability claim, and F1 remains an owner decision.
-  Every other V4 stage and ordering constraint is unchanged.
-- **A3 — Define "feasible".** No wording change; W5 defines feasibility
-  through its exit gates ([W5_ROADMAP.md](W5_ROADMAP.md) §3) so "feasible W5"
-  in V4 §2 item 6 cannot be read as "whatever happens to work".
+- **A1 — approved: move one bullet.** In V4 §2 item 4 and §6 (line 253),
+  Windows "AI edits when runtime is available" stops being a stage-4
+  completion criterion. It becomes a W5 completion criterion, satisfied for
+  the W5-adopted capability set — initially `upscale.4x` — with the remaining
+  edits still preserved, named and refused as today. The capability is moved,
+  not removed.
+- **A2 — approved: make the interleaving explicit.** After W4 completes,
+  W5-0, W5-1, W5-2 and W5-3 may proceed while W3 proceeds independently. W3
+  still precedes any Windows face, landmark or mask support claim; the exact
+  Windows landmark model remains an F1 decision. Every other V4 stage and
+  ordering constraint is unchanged.
+- **A3 — reading, not a change.** "Feasible W5" is defined by the W5 exit
+  gates ([W5_ROADMAP.md](W5_ROADMAP.md) §3), not by "whatever happens to
+  work".
 
-If the owner declines A1/A2, the documentation still stands, but the W5
-contract sequence stays behind W3 completion and stage 4 keeps a completion
-criterion that only stage 6 can satisfy. That consequence is recorded here
-rather than hidden.
+The approval does not edit Master V4, does not add Windows face/mask
+capabilities to W5, does not make GPU acceleration mandatory and does not
+permit a support claim without a recorded run. If V4 is edited later, that is
+a separate authorized change and must reproduce these consequences exactly.
 
-The V4 file itself is not edited by this addendum. The amendment is a proposal
-in the review package; applying it is a separate, owner-authorized change.
+The V4 file itself is not edited by this addendum. The approval is recorded
+here as the operative sequencing; the amendment changes no code.
 
 ## 5. What does not change
 
@@ -208,7 +221,7 @@ summary:
 | Healing and object removal | MI-GAN + FLUX.2 klein (shipped) | H1 after W5-2; ONNX port to be verified | H1 |
 | Background editing | Vision person matte + composite (shipped) | B1 after masking exists | B1 |
 | Generative editing and outpainting | FLUX.2 klein patch (shipped); outpainting refused | G1 with a CPU-viable or optional-GPU licensed engine; outpainting refused until licensed | G1 |
-| Upscaling | Swin2SR 4x, export-time (shipped) | **W5-4**, ONNX Runtime CPU | U1 / W5-4 |
+| Upscaling | Swin2SR 4x, export-time (shipped) | **W5-4**, ONNX Runtime CPU; BLOCKED pending approved artifact evidence | U1 / W5-4 |
 | Enhancement, restoration and AI Enhancer | classical same-size tools only | E1 with its own corpus and same-size contract | E1 |
 
 A follow-on milestone is a concrete path with named gates; it is not a claim
@@ -218,30 +231,44 @@ that the capability works on Windows today.
 implemented as, or labelled, Upscaler. `upscale.*` changes dimensions;
 `enhance.photo` and `restore.photo` do not.
 
-## 7. Remaining owner decisions
+## 7. Owner decisions (answered 2026-11-16)
 
-The complete list, with options, impact and blocking milestones, is
+The complete record, with each outcome and its effect, is
 [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
-§7. The decisions that block W5-0 from closing are:
+§7. In summary, the owner:
 
-1. **V4 amendment A1/A2** (§4 above) — approve, modify or decline.
-2. **Windows ML dependency policy** — the WPF host currently has no package
-   dependency by design; adding an ONNX Runtime / Windows ML package and its
-   native payload to the MSI needs approval.
-3. **Worker source publication** — move the external Python worker into the
-   repository or pin a fetchable, hash-verified dependency.
-4. **Runtime package distribution** — approve the macOS runtime package
-   metadata (URL, size, SHA-256) or accept that W5-1 ships a source-built
-   runtime only.
-5. **Windows landmark backend (F1)** — needed before Windows face/landmark or
-   mask capabilities, not before W5-4.
+1. **Approved V4 A1/A2** (§4 above); V4's text is unchanged and the approval
+   is recorded here.
+2. **Approved ONNX Runtime CPU** and its required native payload as a Windows
+   application dependency; DirectML stays optional and no GPU performance
+   claim is made without native hardware validation.
+3. **Decided to bring the complete macOS worker source into this repository**
+   (the owner's preferred option), preserving its licence and dependency
+   notices and pinning every dependency by version and hash; no mutable
+   branch or unverified download.
+4. **Chose a source-built, self-contained macOS runtime for W5-1**; end users
+   never install Python manually. No package URL, size or hash was invented;
+   packaging and signing follow verified build artifacts. `AIRuntime.package`
+   stays nil in W5-1.
+5. **Kept Windows face analysis, landmarks and masks mandatory**, with the
+   exact landmark model deferred to F1; offline inference and cleared
+   commercial weight rights are required, and no support is claimed before
+   real Windows validation. This does not block W5 infrastructure or Upscaler.
+6. **Did not approve any unverified community Swin2SR x4 ONNX conversion.**
+   Windows W5-4 stays BLOCKED until a reproducible conversion, source
+   checkpoint, opset, artifact, size, SHA-256, licence evidence and quality
+   validation are reviewed and approved. W5-1–W5-3 continue independently.
 
-Decisions that can follow a measurement or a licence step: bit-depth
-advertising for upscaling (16-bit only if measured), whether any GPU
-(DirectML) claim is needed at all, fine-matte and LaMa weight grants, the
-outpainting engine, and the AI Enhancer's preset corpus. Model hosting needs a
-decision only if official sources prove insufficient; official sources are
-the default for W5.
+The remaining decisions are recorded as fixed policy or deferred, not open:
+official model sources only for W5; bit depth measured before advertising;
+DirectML opportunistic; AI Enhancer keeps E1 and its own quality corpus;
+fine-matte, LaMa and outpainting licence grants stay in their follow-on
+milestones. No capability is removed.
+
+**Remaining evidence-bound blockers (not owner decisions):** the Swin2SR x4
+Windows artifact (blocks W5-4 Windows only), the F1 landmark model (blocks
+Windows face/mask claims only), the ORT binding pin (W5-1 engineering) and
+packaged-runtime metadata (a later distribution step).
 
 ## 8. Consistency review of the resulting documents
 
@@ -249,7 +276,7 @@ Reviewed against `main` at `8000c9d` on 2026-11-16.
 
 | Document | Verdict | Note |
 |---|---|---|
-| `ORIGINAL_MASTER_PLAN.md` (V4) | **Conflict recorded; amendment proposed** | §2 order, §5 W3 Windows requirements and §6 line 253 circular bullet; A1/A2 wait for owner approval. V4 unmodified. |
+| `ORIGINAL_MASTER_PLAN.md` (V4) | **Conflict recorded; A1/A2 approved; file unmodified** | §2 order, §5 W3 Windows requirements and §6 line 253 circular bullet. A1/A2 were approved on 2026-11-16; their exact consequences are §4 above. By owner instruction the V4 file itself is not edited. |
 | `AI_11_ARCHITECTURE.md` | **Consistent after supersession** | §13 "Apple-silicon-only" and §7.3 adapter choice resolved by §3 above; §2.2 current-state rows and ADR-4/ADR-5 retained. |
 | `AI_11_ROADMAP.md` | **Consistent after supersession** | §1 consequence 2 and §4 N1 re-baselined by §2; R0–R4, F1/F2, S1/S2, U1, E1, H1, B1, P1, G1 kept. |
 | `AI_11_MODEL_EVALUATION.md` | **Consistent; current-state only** | §9 upscale facts, §12/§13 Windows "no path" rows and §15 NOT VERIFIED register remain accurate today; §13's "before a landmark decision" is now scoped to face/mask capabilities. |
@@ -263,7 +290,8 @@ Reviewed against `main` at `8000c9d` on 2026-11-16.
 
 ## 9. Definition of done for this addendum
 
-It resolves the three named conflicts with dated markers, keeps the full AI
-scope, leaves V4 and the schema untouched, states the exact V4 amendment for
-approval, and lists the owner decisions W5-0 still needs. It claims no
-implementation, no download and no support on either platform.
+It resolves the three named conflicts with dated markers, records A1/A2 as
+approved and their exact consequences, keeps the full AI scope, leaves V4 and
+the schema untouched, states the owner decisions with their outcomes and
+names the remaining evidence-bound blockers. It claims no implementation, no
+download and no support on either platform.
