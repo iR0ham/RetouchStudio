@@ -210,8 +210,11 @@ public partial class ModelManagerWindow : Window
         if (MessageBox.Show(this, text, $"Install {entry.Name}, version {entry.Version}?",
                 MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
             return;
-        await RunTransfer(entry, () => _store.InstallAsync(entry,
-            TransferProgress(entry), _installCancel!.Token), null);
+        // Build Progress<T> on the UI thread; inside Task.Run it would capture
+        // no synchronization context and update the bar from a pool thread.
+        var progress = TransferProgress(entry);
+        await RunTransfer(entry, () => _store.InstallAsync(entry, progress,
+            _installCancel!.Token), null);
     }
 
     private async void BeginAdopt(ModelCatalogEntry entry, long legacy)
@@ -223,8 +226,9 @@ public partial class ModelManagerWindow : Window
         if (MessageBox.Show(this, text, $"Adopt the existing {entry.Name} files?",
                 MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
             return;
-        await RunTransfer(entry, () => _store.MigrateLegacyAsync(entry,
-            TransferProgress(entry), _installCancel!.Token), "adopted");
+        var progress = TransferProgress(entry);
+        await RunTransfer(entry, () => _store.MigrateLegacyAsync(entry, progress,
+            _installCancel!.Token), "adopted");
     }
 
     private async Task RunTransfer(ModelCatalogEntry entry, Func<Task<ModelVersionState>> work,

@@ -364,7 +364,7 @@ public static class ModelStoreChecks
         ExpectCode(() => store.InstallAsync(entry).GetAwaiter().GetResult(),
             "E_MODEL_LEASED", "install refuses while a reader holds the version", c);
         c(store.Verify(entry, "1.0.0", true).Ok, "verify works under a shared lease");
-        reader.Kill();
+        Stop(reader);
         reader.WaitForExit();
         Thread.Sleep(100);
         store.Delete(entry, "1.0.0");
@@ -376,7 +376,7 @@ public static class ModelStoreChecks
         c(writerLine == "locked", "child holds a real exclusive handle");
         ExpectCode(() => store.Verify(entry, "1.0.0", true), "E_MODEL_LEASED",
             "verify needs a shared lease and is refused", c);
-        writer.Kill();
+        Stop(writer);
         writer.WaitForExit();
     }
 
@@ -397,7 +397,7 @@ public static class ModelStoreChecks
             Thread.Sleep(20);
         ExpectCode(() => store.Delete(entry, "1.0.0"), "E_MODEL_LEASED",
             "delete refuses while a download holds the version", c);
-        downloading.Kill(true);
+        Stop(downloading);
         downloading.WaitForExit();
         c(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "killed download installed nothing");
@@ -433,7 +433,7 @@ public static class ModelStoreChecks
             "the running job's files were not moved");
         ExpectCode(() => store.Delete(v1, "1.0.0"), "E_MODEL_LEASED",
             "delete of a version in use is refused", c);
-        oldJob.Kill();
+        Stop(oldJob);
         oldJob.WaitForExit();
 
         var lock2 = store.Layout.LockPath("fixture-good", "2.0.0");
@@ -446,7 +446,7 @@ public static class ModelStoreChecks
         c(server.Count == downloads, "rollback downloaded nothing");
         c(Directory.Exists(store.Layout.VersionDirectory("fixture-good", "2.0.0")),
             "the running job's version stayed intact");
-        newJob.Kill();
+        Stop(newJob);
         newJob.WaitForExit();
         Thread.Sleep(100);
 
@@ -544,7 +544,7 @@ public static class ModelStoreChecks
                !Directory.EnumerateDirectories(e.Layout.Staging).Any())
             Thread.Sleep(20);
         Thread.Sleep(300);
-        slow.Kill(true);
+        Stop(slow);
         slow.WaitForExit();
         c(!Directory.Exists(e.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "killed download installed nothing");
@@ -607,7 +607,7 @@ public static class ModelStoreChecks
         c(Directory.Exists(unknown), "quarantine without identity is kept");
         c(decisions.Any(d => d.Action == "keep" && d.Reason.Contains("live lease")),
             "a live-lease decision is recorded");
-        holder.Kill();
+        Stop(holder);
         holder.WaitForExit();
     }
 
@@ -785,6 +785,15 @@ public static class ModelStoreChecks
         start.Environment["RETOUCH_MODEL_TESTING"] = "1";
         if (crash is not null) start.Environment["RETOUCH_MODEL_TEST_CRASH"] = crash;
         return Process.Start(start)!;
+    }
+
+    private static void Stop(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(true);
+        }
+        catch (InvalidOperationException) { }
     }
 
     private static Process StartDelete(string catalog, string root, string id,
