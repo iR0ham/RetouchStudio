@@ -1125,6 +1125,8 @@ do {
 print("\n\(failures.isEmpty ? "✓ all model-store checks passed" : "✗ \(failures.count) checks failed")")
 if !failures.isEmpty {
     for failure in failures { print("  ✗ \(failure)") }
+    print("MODEL STORE TESTS: FAIL (\(failures.count))")
     exit(1)
 }
+print("MODEL STORE TESTS: PASS")
 exit(0)
