@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>RetouchStudio.AI.Worker</RootNamespace>
+    <AssemblyName>RetouchStudio.AI.Worker</AssemblyName>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RetouchStudio.AI\RetouchStudio.AI.csproj" />
+  </ItemGroup>
+</Project>

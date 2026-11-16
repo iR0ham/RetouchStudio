@@ -3,38 +3,76 @@
 #
 # The helper is a Python package. Shipping it means shipping an interpreter and
 # its wheels too, since the owner's Mac may have neither Homebrew nor a venv.
-# The interpreter is the Homebrew framework this checkout was built against;
-# its only absolute references are the two binaries rewritten below. Everything
-# in site-packages already uses @rpath or @loader_path.
+# The interpreter comes from Tools/build-python-runtime.sh; the source stamp
+# below refuses any other framework. Its Homebrew-linked modules are relinked
+# into the bundle, so the installed app has no Homebrew dependency.
 #
 # Usage: bundle-worker.sh <app bundle> [--force]
 set -euo pipefail
 
 APP="${1:?usage: bundle-worker.sh <app bundle> [--force]}"
 FORCE="${2:-}"
-WORKER_ROOT="${RETOUCH_WORKER_ROOT:-$HOME/RetouchStudio-Phase0/worker}"
-VENV="${RETOUCH_WORKER_VENV:-$HOME/RetouchStudio-Phase0/.venv}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORKER_ROOT="${RETOUCH_WORKER_ROOT:-$REPO_ROOT/worker}"
+VENV="${RETOUCH_WORKER_VENV:-$WORKER_ROOT/.venv}"
 DEST="$APP/Contents/Resources/Worker"
 
 [ -d "$WORKER_ROOT/retouch_ai_worker" ] || {
   echo "worker source not found: $WORKER_ROOT" >&2
-  echo "  Set RETOUCH_WORKER_ROOT to the folder that contains retouch_ai_worker/." >&2
+  echo "  The source lives at worker/; run Tools/setup-worker-venv.sh --full." >&2
   echo "  A build without the helper is also valid: set RETOUCH_SKIP_WORKER=1." >&2
   exit 1
 }
 [ -x "$VENV/bin/python3" ] || {
   echo "worker venv not found: $VENV" >&2
-  echo "  Set RETOUCH_WORKER_VENV to a Python environment with the worker requirements." >&2
-  echo "  A build without the helper is also valid: set RETOUCH_SKIP_WORKER=1." >&2
+  echo "  Run Tools/setup-worker-venv.sh --full, or set RETOUCH_SKIP_WORKER=1." >&2
   exit 1
 }
+
+# Copying a venv whose packages drifted from the lock would ship an untested
+# runtime, so compare every locked distribution before doing any work.
+"$VENV/bin/python3" - "$WORKER_ROOT/requirements.lock" <<'PY' || exit 1
+import importlib.metadata as metadata
+import sys
+
+missing, wrong = [], []
+with open(sys.argv[1], encoding="utf-8") as lock:
+    for line in lock:
+        line = line.split("#", 1)[0].strip().rstrip("\\").strip()
+        if not line or line.startswith(("#", "-", " ")):
+            continue
+        name, _, version = line.partition("==")
+        try:
+            installed = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            missing.append(name)
+            continue
+        if installed != version:
+            wrong.append(f"{name} {installed} != {version}")
+if missing or wrong:
+    for item in missing:
+        print(f"missing from workspace: {item}", file=sys.stderr)
+    for item in wrong:
+        print(f"version differs: {item}", file=sys.stderr)
+    sys.exit("worker environment does not match requirements.lock")
+PY
 
 BASE_PREFIX="$("$VENV/bin/python3" -c 'import sys; print(sys.base_prefix)')"
 FRAMEWORK="$(cd "$BASE_PREFIX/../.." && pwd)"   # .../Python.framework
 VERSION="$(basename "$BASE_PREFIX")"            # 3.13
+if [ ! -f "$FRAMEWORK/../../.source-stamp" ] &&
+   [ "${RETOUCH_ALLOW_EXTERNAL_PYTHON:-}" != "1" ]; then
+  echo "the worker environment does not use the source-built runtime" >&2
+  echo "  Run Tools/setup-worker-venv.sh --full in a new worker/.venv." >&2
+  echo "  For a local experiment only, set RETOUCH_ALLOW_EXTERNAL_PYTHON=1." >&2
+  exit 1
+fi
+[ "$VERSION" = "3.13" ] || {
+  echo "the worker runtime must be Python 3.13, found $VERSION" >&2
+  exit 1
+}
 STAMP_CONTENT="$("$VENV/bin/python3" -c 'import sys; print(sys.version.split()[0])')"
-SOURCE_HASH="$(cd "$WORKER_ROOT" && find retouch_ai_worker -name '*.py' -type f -print0 \
-    | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')"
+SOURCE_HASH="$(cd "$WORKER_ROOT" && { find retouch_ai_worker -name '*.py' -type f -print0 | xargs -0 shasum -a 256; shasum -a 256 requirements.lock; } | shasum -a 256 | awk '{print $1}')"
 PACKAGES_HASH="$("$VENV/bin/python3" -m pip freeze 2>/dev/null | shasum -a 256 | awk '{print $1}')"
 STAMP_CONTENT="$(printf '%s\n%s\n%s\n' "$STAMP_CONTENT" "$SOURCE_HASH" "$PACKAGES_HASH" \
     | shasum -a 256 | awk '{print $1}')"
@@ -71,6 +109,8 @@ fi
 
 rsync -a --exclude '__pycache__' --exclude '*.pyc' \
   "$WORKER_ROOT/retouch_ai_worker" "$DEST/"
+cp "$WORKER_ROOT/LICENSE" "$WORKER_ROOT/THIRD_PARTY_NOTICES.md" \
+  "$WORKER_ROOT/requirements.lock" "$DEST/"
 rsync -a --exclude '__pycache__' --exclude '*.pyc' \
   "$VENV/lib/python$VERSION/site-packages/" "$DEST/site-packages/"
 

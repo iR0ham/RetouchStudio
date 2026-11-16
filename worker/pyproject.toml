@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retouch-ai-worker"
+version = "0.1.0"
+description = "Local, offline AI worker for Retouch Studio"
+requires-python = ">=3.13"
+dependencies = [
+    # Pinned in requirements.lock; runtime model deps are listed separately so
+    # the protocol/server can be tested on a machine without them.
+    "numpy",
+    "Pillow",
+]
+
+[project.optional-dependencies]
+models = [
+    "mlx==0.32.4",
+    "mflux==0.24.0",
+    "opencv-python",
+    "torch",
+    "spandrel",
+    # CPU inference for the licensed MI-GAN inpaint pipeline.
+    "onnxruntime",
+]
+
+[project.scripts]
+retouch-ai-worker = "retouch_ai_worker.__main__:main"
+
+[tool.setuptools]
+packages = ["retouch_ai_worker"]

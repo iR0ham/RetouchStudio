@@ -16,9 +16,9 @@ import Foundation
 // L. a stale `preparing` record is replaced only while U_EX is held from the
 //    probe through the CAS, so no consumer can enter in between.
 //
-// The protocol-v2 worker package is not published yet, so the helper's own
-// CAS and readiness handshake cannot be exercised here; those steps are
-// reported as NOT VERIFIED rather than simulated as if they passed.
+// M starts the real in-repository worker from a fresh support tree and makes
+// the host verify its protocol-2 readiness and identity handshake. A stub
+// would not prove that the worker source and the host agree.
 
 let rawArguments = CommandLine.arguments
 if rawArguments.count > 2, rawArguments[1].hasPrefix("--child-") {
@@ -39,8 +39,11 @@ func check(_ condition: Bool, _ label: String, _ detail: String = "") {
     }
 }
 
-let rootDirectory = FileManager.default.temporaryDirectory
-    .appendingPathComponent("retouch-runtimev2-\(UUID().uuidString)", isDirectory: true)
+// AF_UNIX caps a socket path at 104 bytes. The system temporary directory is
+// longer than that once the per-test UUID is appended, so keep the tree at the
+// short /tmp path instead.
+let rootDirectory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+    .appendingPathComponent("rsv2-\(UUID().uuidString.prefix(8))", isDirectory: true)
 try? FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
 
 func freshSupport(_ name: String) -> URL {
@@ -695,6 +698,155 @@ func testStalePreparingReplacementHoldsExclusiveLease() {
     free?.release()
 }
 
+// MARK: - M
+
+/// A real helper process, started the way the app starts one, answering the
+/// protocol-2 handshake the host enforces. A stub or an in-process fake would
+/// not prove that the shipped worker source and the host agree.
+func testRealHelperHandshake() {
+    print("\n[M] a real helper process completes the protocol-2 handshake")
+    let environment = ProcessInfo.processInfo.environment
+    let root = URL(fileURLWithPath: environment["RETOUCH_TESTS_ROOT"]
+                   ?? FileManager.default.currentDirectoryPath, isDirectory: true)
+    let workerRoot = root.appendingPathComponent("worker", isDirectory: true)
+    let python = environment["RETOUCH_WORKER_PYTHON"].map { URL(fileURLWithPath: $0) }
+        ?? workerRoot.appendingPathComponent(".venv/bin/python3")
+    guard FileManager.default.isExecutableFile(atPath: python.path) else {
+        check(false, "M: a worker interpreter is available",
+              "set RETOUCH_WORKER_PYTHON or create worker/.venv with Tools/setup-worker-venv.sh")
+        return
+    }
+    guard FileManager.default.fileExists(
+        atPath: workerRoot.appendingPathComponent("retouch_ai_worker").path) else {
+        check(false, "M: the worker source is in this checkout")
+        return
+    }
+
+    let support = freshSupport("protocol2")
+    let jobs = support.appendingPathComponent("jobs")
+    let models = support.appendingPathComponent("models")
+    let socket = support.appendingPathComponent("worker.sock")
+    let log = support.appendingPathComponent("worker.log")
+    try? FileManager.default.createDirectory(at: jobs, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
+
+    guard let parent = ProcessIdentity.capture(getpid()) else {
+        check(false, "M: this process has an identity")
+        return
+    }
+    let store: HelperRegistryStore
+    do {
+        store = try HelperRegistryStore(root: support)
+        let preparing = RuntimeBootstrap.preparingRecord(parent: parent, socket: socket,
+                                                         previous: nil)
+        try store.update { _ in (preparing, ()) }
+        let lease = try RuntimeUsageLease.acquireShared(support: support)
+        let arguments = RuntimeBootstrap.arguments(
+            socket: socket, jobs: jobs, models: models, allowRoots: [jobs, models],
+            generation: preparing.generation, nonce: preparing.launchNonce,
+            registry: support.appendingPathComponent(HelperRegistry.fileName))
+        var childEnvironment = [
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": environment["HOME"] ?? NSHomeDirectory(),
+            "TMPDIR": NSTemporaryDirectory(),
+            "PYTHONPATH": workerRoot.path,
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        ]
+        if let lang = environment["LANG"] { childEnvironment["LANG"] = lang }
+        let child = try RuntimeBootstrap.spawn(RuntimeBootstrap.Configuration(
+            executable: python, arguments: arguments,
+            environment: childEnvironment, log: log, lease: lease))
+        defer {
+            if child.isRunning {
+                _ = try? WorkerClient(socketPath: socket.path).call("shutdown", timeout: 5)
+                _ = child.wait(timeout: 5)
+                child.terminate()
+            }
+        }
+
+        guard let ready = RuntimeBootstrap.waitForReady(
+            store: store, generation: preparing.generation,
+            nonce: preparing.launchNonce, timeout: 30) else {
+            let detail = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+            check(false, "M: the helper publishes a ready registry record",
+                  String(detail.suffix(400)))
+            return
+        }
+        check(ready.state == .ready && ready.helper?.pid == child.pid,
+              "M: the helper publishes a ready registry record naming its process")
+        guard let helper = ready.helper else {
+            check(false, "M: the ready record carries the helper identity")
+            return
+        }
+
+        let client = WorkerClient(socketPath: socket.path)
+        let health: [String: Any]
+        do {
+            health = try client.verifiedHealth(generation: ready.generation,
+                                               nonce: ready.launchNonce,
+                                               helper: helper)
+        } catch {
+            check(false, "M: the host verifies the helper's identity", "\(error)")
+            return
+        }
+        check(health["protocol_version"] as? Int == 2,
+              "M: health reports protocol_version 2")
+        check(health["contractVersion"] as? String == "1",
+              "M: health carries the shared contract version")
+        check(health["helper_generation"] as? String == ready.generation,
+              "M: health echoes the generation")
+        check(health["launch_nonce"] as? String == ready.launchNonce,
+              "M: health echoes the launch nonce")
+        check((health["providers"] as? [[String: Any]])?.first?["execution_providers"]
+                as? [String] == ["CPU"],
+              "M: health reports the worker's CPU execution provider")
+
+        // The same field set both platforms must answer, read from the shared
+        // fixture rather than repeated here.
+        let fixture = root.appendingPathComponent("Tests/Contract/protocol2.json")
+        if let data = try? Data(contentsOf: fixture),
+           let contract = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let expected = (contract["health"] as? [String: Any])?["result"]
+                as? [String: Any] {
+            check(expected.keys.allSatisfy { health[$0] != nil },
+                  "M: health replies with every field the shared fixture requires")
+            if let methods = contract["requiredMethods"] as? [String] {
+                let answered = Set(["hello", "health", "ping", "provider.list", "shutdown"])
+                check(methods.allSatisfy { answered.contains($0) },
+                      "M: the host answers every method the shared fixture requires")
+            } else {
+                check(false, "M: the shared fixture lists required methods")
+            }
+        } else {
+            check(false, "M: the shared protocol fixture is readable")
+        }
+
+        let hello = (try? client.call("hello")) as? [String: Any] ?? [:]
+        check(hello["protocol_version"] as? Int == 2,
+              "M: hello reports protocol_version 2")
+        let providers = (try? client.call("provider.list")) as? [String: Any]
+        check(providers?["contractVersion"] as? String == "1",
+              "M: provider.list carries the shared contract version")
+        check((providers?["providers"] as? [[String: Any]])?.isEmpty == false,
+              "M: provider.list returns a provider record")
+        let pong = (try? client.call("ping")) as? [String: Any]
+        check(pong?["pong"] as? Bool == true,
+              "M: ping answers pong")
+
+        _ = try? client.call("shutdown", timeout: 5)
+        check(child.wait(timeout: 10), "M: the helper exits after shutdown")
+        let deadline = Date().addingTimeInterval(2)
+        while FileManager.default.fileExists(atPath: socket.path), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        check(!FileManager.default.fileExists(atPath: socket.path),
+              "M: shutdown removes the socket")
+    } catch {
+        check(false, "M: the real helper starts", "\(error)")
+    }
+}
+
 // MARK: - Run
 
 testRegistryRecordAndCAS()
@@ -704,6 +856,7 @@ testChildOwnedLeaseSurvivesParentDeath()
 testShutdownOwnershipCAS()
 testLockFileHardening()
 testStalePreparingReplacementHoldsExclusiveLease()
+testRealHelperHandshake()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 

@@ -1,0 +1,64 @@
+{
+  "protocolVersion": 2,
+  "contractVersion": "1",
+  "frame": "newline-delimited JSON-RPC 2.0, UTF-8, one object per line",
+  "maxFrameBytes": 1048576,
+  "requiredMethods": [
+    "hello",
+    "health",
+    "ping",
+    "provider.list",
+    "shutdown"
+  ],
+  "hello": {
+    "result": {
+      "contractVersion": "string",
+      "protocol": "string",
+      "protocol_version": "int",
+      "worker": "string",
+      "pid": "int",
+      "helper_generation": "string|null",
+      "launch_nonce": "string|null",
+      "providers": "array"
+    }
+  },
+  "health": {
+    "result": {
+      "contractVersion": "string",
+      "protocol": "string",
+      "protocol_version": "int",
+      "pid": "int",
+      "helper_generation": "string|null",
+      "launch_nonce": "string|null",
+      "providers": "array"
+    }
+  },
+  "providerList": {
+    "result": {
+      "contractVersion": "string",
+      "providers": "array"
+    }
+  },
+  "ping": {
+    "result": {
+      "pong": "bool"
+    }
+  },
+  "provider": {
+    "id": "string",
+    "state": "available|unavailable",
+    "execution_providers": "array"
+  },
+  "shutdown": {
+    "result": {
+      "stopping": "bool"
+    }
+  },
+  "errors": {
+    "parse": -32700,
+    "invalidRequest": -32600,
+    "methodNotFound": -32601,
+    "invalidParams": -32602,
+    "internal": -32603
+  }
+}

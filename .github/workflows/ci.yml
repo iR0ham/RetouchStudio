@@ -116,10 +116,34 @@ jobs:
           swiftc --version
           xcode-select -p
 
+      # The handshake suite must run on the interpreter the app ships, not on
+      # the runner's Python. Build the pinned source runtime, then create the
+      # hashed test environment from that exact interpreter.
+      - name: Build the pinned source runtime
+        run: |
+          set -euo pipefail
+          for formula in openssl@3 xz sqlite; do
+            brew list --versions "$formula" >/dev/null 2>&1 || brew install "$formula"
+          done
+          runtime="$(./Tools/build-python-runtime.sh)"
+          echo "source runtime: $runtime"
+          "$runtime" -c 'import ssl, sqlite3, lzma, zlib, sys; print(sys.version)'
+
+      - name: Create the hashed worker environment
+        run: |
+          set -euo pipefail
+          runtime="$(./Tools/build-python-runtime.sh)"
+          RETOUCH_PYTHON="$runtime" ./Tools/setup-worker-venv.sh
+
+      - name: Run the worker regressions
+        run: |
+          set -euo pipefail
+          ./Tests/run-worker.sh 2>&1 | tee "$RUNNER_TEMP/macos-integration.log"
+
       - name: Run StudioCore gate
         run: |
           set -euo pipefail
-          ./Tests/run-studiocore.sh 2>&1 | tee "$RUNNER_TEMP/macos-integration.log"
+          ./Tests/run-studiocore.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-integration.log"
 
       - name: Run engine, model and runtime suites
         env:
@@ -132,6 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           for verdict in \
+            'Ran 67 tests' \
             'StudioCore: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
             'MODEL TESTS: PASS' \
@@ -146,7 +171,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-integration-log
-          path: ${{ runner.temp }}/macos-integration.log
+          path: |
+            ${{ runner.temp }}/macos-integration.log
+            build/python-runtime/configure.log
+            build/python-runtime/make.log
+            build/python-runtime/install.log
           if-no-files-found: ignore
 
   windows-core:

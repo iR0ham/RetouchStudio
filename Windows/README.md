@@ -11,6 +11,9 @@ in-box Windows Imaging Component.
 | `RetouchStudio.Core` | `net10.0`. The C ABI wrapper, the v4 document model, the undo session, the BGRA8 preview buffer and the 16-bit export buffer, crop/orientation/adjustment passes at both depths and the export runner. No WinRT, no WPF. |
 | `RetouchStudio.Imaging` | WIC decode and encode through `Windows.Graphics.Imaging`. |
 | `RetouchStudio.App` | The WPF window (`net10.0-windows10.0.19041.0`). |
+| `RetouchStudio.AI` | `net10.0`. Protocol 2 framing, registry, Job Object containment and the ONNX Runtime CPU provider. |
+| `RetouchStudio.AI.Worker` | The local AI helper executable. No Python sidecar. |
+| `RetouchStudio.AI.Tests` | A real worker process, named-pipe handshake, ORT CPU and containment. |
 | `RetouchStudio.Tests` | Headless checks against the real DLL and the real WIC codec. |
 | `native/studioscore_core.def` | The complete export surface of the DLL. |
 
@@ -31,7 +34,8 @@ Requires a Swift toolchain for Windows (`swiftc.exe` with its `clang.exe` and
    folder does not require the toolchain,
 4. publishes the app self-contained to `build/windows/app` (x64; Intel and AMD
    run the same binary),
-5. runs the headless host tests, and
+5. runs the headless host tests and the AI runtime tests (a real worker, pipe
+   handshake and Job Object containment),
 6. starts the published exe and waits for it to open a window,
 7. turns the publish folder into a zip, and
 8. with WiX Toolset v3 present, builds an MSI, installs it silently, starts the
@@ -42,6 +46,35 @@ folder into one zip plus a SHA-256 file.
 `Tools/package-windows-msi.ps1 -AppDir build/windows/app -Version 1.0.0` builds
 the installer from `Windows/installer/Product.wxs`; it is skipped, not faked,
 when WiX is absent, and CI passes `-RequireMsi` so the skip cannot happen there.
+
+## AI runtime
+
+W5-1 ships a C# worker, not a Python sidecar. It speaks the same protocol 2
+contract as macOS (`Docs/AI_PROTOCOL_V2.md`, fixture
+`Tests/Contract/protocol2.json`) over a named pipe, writes the same readiness
+record, and runs inside a Job Object with kill-on-close. `hello`, `health` and
+`provider.list` are implemented; jobs and models belong to W5-2 and later, so
+no job method exists yet.
+
+The only required execution provider is CPU. `Microsoft.ML.OnnxRuntime` is
+pinned to **1.32.0**; the published nupkg is **184,391,411 bytes** with SHA-256
+`a9150bc2992cbbb6722070da9910e1ffa989a8bfc67bdd5bb8e745ca755641db`, and
+`Tools/build-windows.ps1` refuses a different package. The worker initialises
+ORT and reports `CPU` only after the native library loads
+(`Providers.Ensure()`), without downloading a model. DirectML is optional and
+never required. ONNX Runtime is MIT-licensed; its `LICENSE` and
+`ThirdPartyNotices.txt` are copied from the pinned package into `AI/` beside
+the native payload.
+
+`RetouchStudio.AI.Tests` starts `RetouchStudio.AI.Worker.exe` from the build
+output, verifies the ready record against the launched pid, runs every required
+protocol method over a real pipe, refuses a foreign contract version, proves
+`shutdown` exits the process, and proves closing the Job Object terminates the
+worker. These checks only run on Windows; a macOS compile cannot stand in for
+them. They pass on CI run
+[43878989037](https://github.com/iR0ham/RetouchStudio/actions/runs/43878989037)
+(`windows-2025`), which is a hosted-runner result, not physical hardware or GPU
+evidence.
 
 ## Install
 
