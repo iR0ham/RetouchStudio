@@ -183,7 +183,7 @@ public sealed class ModelLease : IDisposable
             try
             {
                 using var created = new FileStream(path, FileMode.CreateNew,
-                    FileAccess.Write, FileShare.None, 1, FileOptions.None);
+                    FileAccess.Write, FileShare.ReadWrite, 1, FileOptions.None);
             }
             catch (IOException) { }
             if (!File.Exists(path)) Thread.Sleep(5);

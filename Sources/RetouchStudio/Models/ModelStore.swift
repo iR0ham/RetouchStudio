@@ -929,6 +929,14 @@ private final class ModelDownloadTransfer: NSObject, URLSessionDownloadDelegate,
                    totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil)
     }
 
+    /// A redirect is a different source than the one the owner approved.
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
         if let response = downloadTask.response as? HTTPURLResponse,
