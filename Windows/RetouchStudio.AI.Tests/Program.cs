@@ -267,10 +267,16 @@ sealed class PipeClient : IDisposable
         _pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut,
             PipeOptions.Asynchronous);
         _reader = new StreamReader(_pipe, Encoding.UTF8);
-        _writer = new StreamWriter(_pipe, new UTF8Encoding(false)) { AutoFlush = true };
+        // AutoFlush would write the UTF-8 preamble during construction, which
+        // throws until the pipe connects; enable it on connect instead.
+        _writer = new StreamWriter(_pipe, new UTF8Encoding(false));
     }
 
-    public void Connect(TimeSpan timeout) => _pipe.Connect((int)timeout.TotalMilliseconds);
+    public void Connect(TimeSpan timeout)
+    {
+        _pipe.Connect((int)timeout.TotalMilliseconds);
+        _writer.AutoFlush = true;
+    }
 
     public JsonObject? Call(string method, string? contractVersion = null)
     {
@@ -289,7 +295,8 @@ sealed class PipeClient : IDisposable
 
     public void Dispose()
     {
-        _writer.Dispose();
+        // Disposing the writer flushes, which throws if the pipe never connected.
+        if (_pipe.IsConnected) _writer.Dispose();
         _reader.Dispose();
         _pipe.Dispose();
     }

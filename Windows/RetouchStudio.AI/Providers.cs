@@ -29,10 +29,14 @@ public static class Providers
             var environment = OrtEnv.Instance();
             using var options = new SessionOptions();
             options.AppendExecutionProvider_CPU(0);
-            if (!environment.GetAvailableProviders().Contains("CPU",
-                    StringComparer.Ordinal))
+            // The native runtime names its providers with the C API suffix, so
+            // CPU arrives as "CPUExecutionProvider"; report the short name.
+            var native = environment.GetAvailableProviders();
+            if (!native.Contains("CPUExecutionProvider", StringComparer.Ordinal) &&
+                !native.Contains("CPU", StringComparer.Ordinal))
             {
-                return new Result(false, "the native runtime does not expose CPU");
+                return new Result(false,
+                    $"the native runtime exposes no CPU provider ({string.Join(",", native)})");
             }
             return new Result(true, null);
         }
