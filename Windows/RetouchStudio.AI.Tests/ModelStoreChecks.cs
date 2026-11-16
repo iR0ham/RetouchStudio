@@ -106,62 +106,66 @@ public static class ModelStoreChecks
 
     // MARK: - Entry point
 
+    private static Action<bool, string, string?> _check = (_, _, _) => { };
+    private static int _failures;
+
+    private static void C(bool condition, string label, string? detail = null)
+    {
+        _check(condition, label, detail);
+        if (!condition) _failures++;
+    }
+
     public static void Run(Action<bool, string, string?> check)
     {
-        var failures = 0;
-        void C(bool condition, string label, string? detail = null)
-        {
-            check(condition, label, detail);
-            if (!condition) failures++;
-        }
-
-        RunCatalog(C);
-        RunNoNetwork(C);
-        RunInstall(C);
-        RunBadBytes(C);
-        RunInterruption(C);
-        RunCancellation(C);
-        RunDisk(C);
-        RunSourceAndReparse(C);
-        RunLeases(C);
-        RunDelete(C);
-        RunUpdateRollback(C);
-        RunConcurrentInstalls(C);
-        RunCrashBoundaries(C);
-        RunCleanup(C);
-        RunPointers(C);
-        RunLegacy(C);
-        RunProductionCatalog(C);
-        Console.WriteLine(failures == 0
+        _check = check;
+        _failures = 0;
+        RunCatalog();
+        RunNoNetwork();
+        RunInstall();
+        RunBadBytes();
+        RunInterruption();
+        RunCancellation();
+        RunDisk();
+        RunSourceAndReparse();
+        RunLeases();
+        RunDelete();
+        RunUpdateRollback();
+        RunConcurrentInstalls();
+        RunCrashBoundaries();
+        RunCleanup();
+        RunPointers();
+        RunLegacy();
+        RunProductionCatalog();
+        Console.WriteLine(_failures == 0
             ? "MODEL STORE CHECKS: PASS"
-            : $"MODEL STORE CHECKS: FAIL ({failures})");
+            : $"MODEL STORE CHECKS: FAIL ({_failures})");
     }
 
     // MARK: - Sections
 
-    private static void RunCatalog(Action<bool, string, string?> c)
+    private static void RunCatalog()
     {
         Console.WriteLine("[M1] shared catalog: mandatory metadata, DR-5, source rules");
         using var server = new FixtureServer();
         server.Serve("/good/payload.bin", "fixture-one\n");
         server.Serve("/v2/payload.bin", "fixture-two\n");
         var valid = LoadCatalog("catalog-valid.json", server.Base);
-        c(valid.Entries.Count == 4, "installable fixture catalog decodes");
+        C(valid.Entries.Count == 4, "installable fixture catalog decodes");
         var good = valid.Entry("fixture-good")!;
-        c(good.IsVerifiable, "complete entry is verifiable");
+        C(good.IsVerifiable, "complete entry is verifiable");
         var unverifiable = valid.Entry("fixture-unverifiable")!;
-        c(!unverifiable.IsVerifiable && unverifiable.SizeBytes is null &&
+        C(!unverifiable.IsVerifiable && unverifiable.SizeBytes is null &&
           unverifiable.Sha256 is null, "null size/hash is unverifiable (DR-5)");
         var full = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(FixtureDirectory, "catalog-fixture.json")));
-        c(full.RootElement.GetProperty("entries").GetArrayLength() == 7,
+        C(full.RootElement.GetProperty("entries").GetArrayLength() == 7,
             "full fixture lists the rejected cases");
-        c(!tryLoadFull(server.Base), "a catalog with an insecure entry is rejected as a whole");
+        C(!tryLoadFull(server.Base), "a catalog with an insecure entry is rejected as a whole");
         foreach (var id in new[] { "fixture-http", "fixture-offhost", "fixture-traversal" })
-            c(!TryLoadSingle(id, server.Base), $"{id} is rejected at catalog load");
+            C(!TryLoadSingle(id, server.Base), $"{id} is rejected at catalog load");
     }
 
-    private static void RunNoNetwork(Action<bool, string, string?> c)
+    private static void RunNoNetwork()
     {
         Console.WriteLine("[M2] snapshot/verify/cleanup never touch the network");
         using var server = new FixtureServer();
@@ -174,17 +178,17 @@ public static class ModelStoreChecks
         try
         {
             _ = store.Verify(store.Catalog.Entry("fixture-good")!, "1.0.0", true);
-            c(false, "verify reports a missing version");
+            C(false, "verify reports a missing version");
         }
         catch (ModelStoreError error)
         {
-            c(error.Code == "E_MODEL_MISSING", "verify reports E_MODEL_MISSING");
+            C(error.Code == "E_MODEL_MISSING", "verify reports E_MODEL_MISSING");
         }
-        c(server.Count == 0, "zero HTTP requests outside an approved install",
+        C(server.Count == 0, "zero HTTP requests outside an approved install",
             $"{server.Count}");
     }
 
-    private static void RunInstall(Action<bool, string, string?> c)
+    private static void RunInstall()
     {
         Console.WriteLine("[M3] staged install, manifest, atomic pointer, retry");
         using var server = new FixtureServer();
@@ -195,57 +199,57 @@ public static class ModelStoreChecks
         var result = store.InstallAsync(entry,
             new SyncProgress<ModelTransferProgress>(_ => Interlocked.Increment(ref progress)))
             .GetAwaiter().GetResult();
-        c(result.Version == "1.0.0", "install succeeds");
-        c(store.ActivePointer("fixture-good")?.Version == "1.0.0",
+        C(result.Version == "1.0.0", "install succeeds");
+        C(store.ActivePointer("fixture-good")?.Version == "1.0.0",
             "pointer names the installed version");
         var manifestPath = store.Layout.ManifestPath("fixture-good", "1.0.0");
-        c(File.Exists(manifestPath), "manifest exists");
-        c(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
+        C(File.Exists(manifestPath), "manifest exists");
+        C(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
             "staging is empty after success");
-        c(server.Count == 1, "exactly the catalog file was fetched", $"{server.Count}");
-        c(Volatile.Read(ref progress) > 0, "progress was reported");
+        C(server.Count == 1, "exactly the catalog file was fetched", $"{server.Count}");
+        C(Volatile.Read(ref progress) > 0, "progress was reported");
         var report = store.Verify(entry, "1.0.0", true);
-        c(report.Ok && report.Checked == 1, "full verify passes");
+        C(report.Ok && report.Checked == 1, "full verify passes");
         var record = store.Records().First(r => r.Id == "fixture-good");
-        c(record.ActiveVersion == "1.0.0" && record.Versions.Count == 1,
+        C(record.ActiveVersion == "1.0.0" && record.Versions.Count == 1,
             "snapshot shows one active version");
         var before = server.Count;
         store.InstallAsync(entry).GetAwaiter().GetResult();
-        c(server.Count == before, "verified reinstall downloads nothing");
-        c(store.InstalledVersions(entry).Count == 1, "reinstall does not duplicate");
+        C(server.Count == before, "verified reinstall downloads nothing");
+        C(store.InstalledVersions(entry).Count == 1, "reinstall does not duplicate");
     }
 
-    private static void RunBadBytes(Action<bool, string, string?> c)
+    private static void RunBadBytes()
     {
         Console.WriteLine("[M4] SHA mismatch, size mismatch, unverifiable metadata");
         using var server = new FixtureServer();
         server.Serve("/good/payload.bin", "fixture-one\n");
         var store = MakeStore(server);
         ExpectCode(() => store.InstallAsync(store.Catalog.Entry("fixture-sha")!).GetAwaiter().GetResult(),
-            "E_MODEL_UNVERIFIED", "SHA mismatch is refused", c);
-        c(!Directory.Exists(store.Layout.VersionDirectory("fixture-sha", "1.0.0")),
+            "E_MODEL_UNVERIFIED", "SHA mismatch is refused", C);
+        C(!Directory.Exists(store.Layout.VersionDirectory("fixture-sha", "1.0.0")),
             "no version from a SHA mismatch");
         ExpectCode(() => store.InstallAsync(store.Catalog.Entry("fixture-size")!).GetAwaiter().GetResult(),
-            "E_MODEL_UNVERIFIED", "size mismatch is refused", c);
+            "E_MODEL_UNVERIFIED", "size mismatch is refused", C);
         var before = server.Count;
         ExpectCode(() => store.InstallAsync(
                 store.Catalog.Entry("fixture-unverifiable")!).GetAwaiter().GetResult(),
-            "E_MODEL_UNVERIFIED", "unverifiable entry is refused before any byte", c);
-        c(server.Count == before, "unverifiable entry made no request");
-        c(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
+            "E_MODEL_UNVERIFIED", "unverifiable entry is refused before any byte", C);
+        C(server.Count == before, "unverifiable entry made no request");
+        C(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
             "failed downloads left no staging tree");
 
         var corruptStore = MakeStore(server);
         var corruptEntry = corruptStore.Catalog.Entry("fixture-good")!;
         corruptStore.InstallAsync(corruptEntry).GetAwaiter().GetResult();
         File.WriteAllText(corruptStore.Layout.ManifestPath("fixture-good", "1.0.0"), "{}");
-        c(!corruptStore.Verify(corruptEntry, "1.0.0", true).Ok,
+        C(!corruptStore.Verify(corruptEntry, "1.0.0", true).Ok,
             "a corrupt manifest fails verification");
         ExpectCode(() => corruptStore.Activate(corruptEntry, "1.0.0"),
-            "E_MODEL_UNVERIFIED", "a corrupt manifest cannot be activated", c);
+            "E_MODEL_UNVERIFIED", "a corrupt manifest cannot be activated", C);
     }
 
-    private static void RunInterruption(Action<bool, string, string?> c)
+    private static void RunInterruption()
     {
         Console.WriteLine("[M5] interruption and safe retry");
         using var server = new FixtureServer();
@@ -253,17 +257,17 @@ public static class ModelStoreChecks
         var store = MakeStore(server);
         var entry = store.Catalog.Entry("fixture-good")!;
         ExpectCode(() => store.InstallAsync(entry).GetAwaiter().GetResult(),
-            "E_INVALID_INPUT", "a dropped connection is a typed failure", c);
-        c(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+            "E_INVALID_INPUT", "a dropped connection is a typed failure", C);
+        C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "no version after interruption");
-        c(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
+        C(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
             "staging is cleaned after interruption");
         server.Serve("/good/payload.bin", "fixture-one\n");
         store.InstallAsync(entry).GetAwaiter().GetResult();
-        c(store.Verify(entry, "1.0.0", true).Ok, "retry after the network returns succeeds");
+        C(store.Verify(entry, "1.0.0", true).Ok, "retry after the network returns succeeds");
     }
 
-    private static void RunCancellation(Action<bool, string, string?> c)
+    private static void RunCancellation()
     {
         Console.WriteLine("[M6] cancellation leaves nothing installed");
         using var server = new FixtureServer();
@@ -275,15 +279,15 @@ public static class ModelStoreChecks
         Thread.Sleep(250);
         cancel.Cancel();
         ExpectCode(() => task.GetAwaiter().GetResult(), "E_CANCELLED",
-            "cancellation is E_CANCELLED", c);
-        c(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+            "cancellation is E_CANCELLED", C);
+        C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "cancellation installed no version");
-        c(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
+        C(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
             "cancellation cleaned staging");
-        c(store.ActivePointer("fixture-good") is null, "cancellation wrote no pointer");
+        C(store.ActivePointer("fixture-good") is null, "cancellation wrote no pointer");
     }
 
-    private static void RunDisk(Action<bool, string, string?> c)
+    private static void RunDisk()
     {
         Console.WriteLine("[M7] insufficient disk is refused before any request");
         using var server = new FixtureServer();
@@ -320,11 +324,11 @@ public static class ModelStoreChecks
         };
         var before = server.Count;
         ExpectCode(() => store.InstallAsync(entry).GetAwaiter().GetResult(),
-            "E_INVALID_INPUT", "disk check refuses an impossible size", c);
-        c(server.Count == before, "disk refusal made no request");
+            "E_INVALID_INPUT", "disk check refuses an impossible size", C);
+        C(server.Count == before, "disk refusal made no request");
     }
 
-    private static void RunSourceAndReparse(Action<bool, string, string?> c)
+    private static void RunSourceAndReparse()
     {
         Console.WriteLine("[M8] production refuses loopback HTTP; junctions are refused");
         using var server = new FixtureServer();
@@ -332,22 +336,22 @@ public static class ModelStoreChecks
         var production = MakeStore(server, allowLocalHttp: false);
         ExpectCode(() => production.InstallAsync(
                 production.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult(),
-            "E_INVALID_INPUT", "store without local-HTTP opt-in refuses the test source", c);
+            "E_INVALID_INPUT", "store without local-HTTP opt-in refuses the test source", C);
 
         var store = MakeStore(server);
         Directory.CreateDirectory(store.Layout.Root);
         var outside = Path.Combine(Path.GetTempPath(), $"rs-outside-{Guid.NewGuid():N}");
         Directory.CreateDirectory(outside);
         if (Directory.Exists(store.Layout.Staging)) Directory.Delete(store.Layout.Staging);
-        c(TryCreateJunction(store.Layout.Staging, outside), "a junction was created for the escape test");
+        C(TryCreateJunction(store.Layout.Staging, outside), "a junction was created for the escape test");
         ExpectCode(() => store.InstallAsync(
                 store.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult(),
-            "E_INVALID_INPUT", "a junctioned .staging is refused", c);
-        c(!Directory.EnumerateFileSystemEntries(outside).Any(),
+            "E_INVALID_INPUT", "a junctioned .staging is refused", C);
+        C(!Directory.EnumerateFileSystemEntries(outside).Any(),
             "nothing was written through the junction");
     }
 
-    private static void RunLeases(Action<bool, string, string?> c)
+    private static void RunLeases()
     {
         Console.WriteLine("[M9] leases: shared reader, exclusive delete/install, death release");
         using var server = new FixtureServer();
@@ -358,29 +362,29 @@ public static class ModelStoreChecks
         var lockPath = store.Layout.LockPath("fixture-good", "1.0.0");
 
         var (reader, readerLine) = LaunchHolder(lockPath, false);
-        c(readerLine == "locked", "child holds a real shared handle");
+        C(readerLine == "locked", "child holds a real shared handle");
         ExpectCode(() => store.Delete(entry, "1.0.0"), "E_MODEL_LEASED",
-            "delete refuses while a job holds a shared lease", c);
+            "delete refuses while a job holds a shared lease", C);
         ExpectCode(() => store.InstallAsync(entry).GetAwaiter().GetResult(),
-            "E_MODEL_LEASED", "install refuses while a reader holds the version", c);
-        c(store.Verify(entry, "1.0.0", true).Ok, "verify works under a shared lease");
+            "E_MODEL_LEASED", "install refuses while a reader holds the version", C);
+        C(store.Verify(entry, "1.0.0", true).Ok, "verify works under a shared lease");
         Stop(reader);
         reader.WaitForExit();
         Thread.Sleep(100);
         store.Delete(entry, "1.0.0");
-        c(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "death released the lease; delete proceeds");
 
         store.InstallAsync(entry).GetAwaiter().GetResult();
         var (writer, writerLine) = LaunchHolder(lockPath, true);
-        c(writerLine == "locked", "child holds a real exclusive handle");
+        C(writerLine == "locked", "child holds a real exclusive handle");
         ExpectCode(() => store.Verify(entry, "1.0.0", true), "E_MODEL_LEASED",
-            "verify needs a shared lease and is refused", c);
+            "verify needs a shared lease and is refused", C);
         Stop(writer);
         writer.WaitForExit();
     }
 
-    private static void RunDelete(Action<bool, string, string?> c)
+    private static void RunDelete()
     {
         Console.WriteLine("[M10] delete removes the pointer and the version");
         using var server = new FixtureServer();
@@ -396,24 +400,24 @@ public static class ModelStoreChecks
                !Directory.EnumerateDirectories(store.Layout.Staging).Any())
             Thread.Sleep(20);
         ExpectCode(() => store.Delete(entry, "1.0.0"), "E_MODEL_LEASED",
-            "delete refuses while a download holds the version", c);
+            "delete refuses while a download holds the version", C);
         Stop(downloading);
         downloading.WaitForExit();
-        c(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "killed download installed nothing");
         server.Serve("/good/payload.bin", "fixture-one\n");
         store.InstallAsync(entry).GetAwaiter().GetResult();
         store.Delete(entry, "1.0.0");
-        c(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "version directory is gone");
-        c(store.ActivePointer("fixture-good") is null, "active pointer is gone");
-        c(!Directory.EnumerateDirectories(store.Layout.Quarantine).Any(),
+        C(store.ActivePointer("fixture-good") is null, "active pointer is gone");
+        C(!Directory.EnumerateDirectories(store.Layout.Quarantine).Any(),
             "quarantine was emptied");
         ExpectCode(() => store.Delete(entry, "1.0.0"), "E_MODEL_MISSING",
-            "deleting a missing version is typed", c);
+            "deleting a missing version is typed", C);
     }
 
-    private static void RunUpdateRollback(Action<bool, string, string?> c)
+    private static void RunUpdateRollback()
     {
         Console.WriteLine("[M11] update beside a leased old version; rollback switches the pointer");
         using var server = new FixtureServer();
@@ -425,26 +429,26 @@ public static class ModelStoreChecks
         store.InstallAsync(v1).GetAwaiter().GetResult();
         var lock1 = store.Layout.LockPath("fixture-good", "1.0.0");
         var (oldJob, oldLine) = LaunchHolder(lock1, false);
-        c(oldLine == "locked", "a job holds the old version");
+        C(oldLine == "locked", "a job holds the old version");
         store.InstallAsync(v2).GetAwaiter().GetResult();
-        c(store.InstalledVersions(v1).Count == 2, "update kept both versions");
-        c(store.ActivePointer("fixture-good")?.Version == "2.0.0", "update switched the pointer");
-        c(Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(store.InstalledVersions(v1).Count == 2, "update kept both versions");
+        C(store.ActivePointer("fixture-good")?.Version == "2.0.0", "update switched the pointer");
+        C(Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "the running job's files were not moved");
         ExpectCode(() => store.Delete(v1, "1.0.0"), "E_MODEL_LEASED",
-            "delete of a version in use is refused", c);
+            "delete of a version in use is refused", C);
         Stop(oldJob);
         oldJob.WaitForExit();
 
         var lock2 = store.Layout.LockPath("fixture-good", "2.0.0");
         var (newJob, newLine) = LaunchHolder(lock2, false);
-        c(newLine == "locked", "a job holds the new version");
+        C(newLine == "locked", "a job holds the new version");
         var downloads = server.Count;
         store.Activate(v1, "1.0.0");
-        c(store.ActivePointer("fixture-good")?.Version == "1.0.0",
+        C(store.ActivePointer("fixture-good")?.Version == "1.0.0",
             "rollback works while a job holds another version");
-        c(server.Count == downloads, "rollback downloaded nothing");
-        c(Directory.Exists(store.Layout.VersionDirectory("fixture-good", "2.0.0")),
+        C(server.Count == downloads, "rollback downloaded nothing");
+        C(Directory.Exists(store.Layout.VersionDirectory("fixture-good", "2.0.0")),
             "the running job's version stayed intact");
         Stop(newJob);
         newJob.WaitForExit();
@@ -454,12 +458,12 @@ public static class ModelStoreChecks
         File.WriteAllText(Path.Combine(
             store.Layout.VersionDirectory("fixture-good", "1.0.0"), "payload.bin"), "corrupt");
         ExpectCode(() => store.Activate(v1, "1.0.0"), "E_MODEL_UNVERIFIED",
-            "rollback refuses a corrupt target", c);
-        c(store.ActivePointer("fixture-good")?.Version == "2.0.0",
+            "rollback refuses a corrupt target", C);
+        C(store.ActivePointer("fixture-good")?.Version == "2.0.0",
             "failed rollback left the pointer on the good version");
     }
 
-    private static void RunConcurrentInstalls(Action<bool, string, string?> c)
+    private static void RunConcurrentInstalls()
     {
         Console.WriteLine("[M12] two child processes installing the same version");
         using var server = new FixtureServer();
@@ -472,16 +476,16 @@ public static class ModelStoreChecks
         first.WaitForExit();
         second.WaitForExit();
         var statuses = new[] { first.ExitCode, second.ExitCode }.OrderBy(x => x).ToArray();
-        c(statuses.SequenceEqual(new[] { 0, 3 }),
+        C(statuses.SequenceEqual(new[] { 0, 3 }),
             "one installed and the other was refused as leased",
             string.Join(",", statuses));
-        c(store.Verify(store.Catalog.Entry("fixture-good")!, "1.0.0", true).Ok,
+        C(store.Verify(store.Catalog.Entry("fixture-good")!, "1.0.0", true).Ok,
             "the winning install is complete");
-        c(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
+        C(!Directory.EnumerateDirectories(store.Layout.Staging).Any(),
             "no staging debris from the losing process");
     }
 
-    private static void RunCrashBoundaries(Action<bool, string, string?> c)
+    private static void RunCrashBoundaries()
     {
         Console.WriteLine("[M13] crash after verification, rename, pointer removal and during download");
         using var server = new FixtureServer();
@@ -492,48 +496,48 @@ public static class ModelStoreChecks
         var crashA = StartInstall(catalog, a.Layout.Root, "fixture-good", server.Base,
             "after-verify");
         crashA.WaitForExit();
-        c(crashA.ExitCode == 86, "child died after verification", $"{crashA.ExitCode}");
-        c(!Directory.Exists(a.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(crashA.ExitCode == 86, "child died after verification", $"{crashA.ExitCode}");
+        C(!Directory.Exists(a.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "no version before the rename");
-        c(Directory.EnumerateDirectories(a.Layout.Staging).Any(),
+        C(Directory.EnumerateDirectories(a.Layout.Staging).Any(),
             "the verified staging tree survived the crash");
         a.InstallAsync(a.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult();
-        c(a.ActivePointer("fixture-good")?.Version == "1.0.0", "restart installed and activated");
+        C(a.ActivePointer("fixture-good")?.Version == "1.0.0", "restart installed and activated");
         foreach (var child in Directory.EnumerateDirectories(a.Layout.Staging))
             Directory.SetLastWriteTimeUtc(child, DateTime.UtcNow.AddHours(-25));
         _ = a.Cleanup(DateTime.UtcNow.AddHours(2));
-        c(!Directory.EnumerateDirectories(a.Layout.Staging).Any(),
+        C(!Directory.EnumerateDirectories(a.Layout.Staging).Any(),
             "aged crash staging is reclaimed");
-        c(Directory.Exists(a.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(Directory.Exists(a.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "cleanup left the installed version");
 
         var b = MakeStore(server);
         var crashB = StartInstall(catalog, b.Layout.Root, "fixture-good", server.Base,
             "after-rename");
         crashB.WaitForExit();
-        c(crashB.ExitCode == 86, "child died after the rename", $"{crashB.ExitCode}");
-        c(Directory.Exists(b.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(crashB.ExitCode == 86, "child died after the rename", $"{crashB.ExitCode}");
+        C(Directory.Exists(b.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "version directory survived");
-        c(b.ActivePointer("fixture-good") is null, "pointer was not written");
+        C(b.ActivePointer("fixture-good") is null, "pointer was not written");
         var recordB = b.Records().First(r => r.Id == "fixture-good");
-        c(recordB.Versions.Count == 1 && recordB.ActiveVersion is null,
+        C(recordB.Versions.Count == 1 && recordB.ActiveVersion is null,
             "snapshot shows the inactive version");
         var downloadsB = server.Count;
         b.InstallAsync(b.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult();
-        c(server.Count == downloadsB, "restart used verified files, not the network");
+        C(server.Count == downloadsB, "restart used verified files, not the network");
 
         var d = MakeStore(server);
         d.InstallAsync(d.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult();
         var crashD = StartDelete(catalog, d.Layout.Root, "fixture-good", "1.0.0",
             server.Base, "after-pointer-removal");
         crashD.WaitForExit();
-        c(crashD.ExitCode == 86, "delete child died after removing the pointer",
+        C(crashD.ExitCode == 86, "delete child died after removing the pointer",
             $"{crashD.ExitCode}");
-        c(d.ActivePointer("fixture-good") is null, "pointer is gone");
-        c(Directory.Exists(d.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(d.ActivePointer("fixture-good") is null, "pointer is gone");
+        C(Directory.Exists(d.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "files survived the delete crash");
         d.Delete(d.Catalog.Entry("fixture-good")!, "1.0.0");
-        c(!Directory.Exists(d.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(!Directory.Exists(d.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "a repeated delete completes the interrupted one");
 
         var e = MakeStore(server);
@@ -546,20 +550,20 @@ public static class ModelStoreChecks
         Thread.Sleep(300);
         Stop(slow);
         slow.WaitForExit();
-        c(!Directory.Exists(e.Layout.VersionDirectory("fixture-good", "1.0.0")),
+        C(!Directory.Exists(e.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "killed download installed nothing");
         foreach (var child in Directory.EnumerateDirectories(e.Layout.Staging))
             Directory.SetLastWriteTimeUtc(child, DateTime.UtcNow.AddHours(-25));
         _ = e.Cleanup(DateTime.UtcNow.AddHours(2));
-        c(!Directory.EnumerateDirectories(e.Layout.Staging).Any(),
+        C(!Directory.EnumerateDirectories(e.Layout.Staging).Any(),
             "identity-less stale staging is reclaimed");
         server.Serve("/good/payload.bin", "fixture-one\n");
         e.InstallAsync(e.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult();
-        c(e.Verify(e.Catalog.Entry("fixture-good")!, "1.0.0", true).Ok,
+        C(e.Verify(e.Catalog.Entry("fixture-good")!, "1.0.0", true).Ok,
             "a fresh install succeeds after the killed one");
     }
 
-    private static void RunCleanup(Action<bool, string, string?> c)
+    private static void RunCleanup()
     {
         Console.WriteLine("[M14] cleanup: grace, live lease, unidentifiable trees");
         using var server = new FixtureServer();
@@ -595,23 +599,23 @@ public static class ModelStoreChecks
 
         var lockPath = store.Layout.LockPath("fixture-good", "9.9.0");
         var (holder, line) = LaunchHolder(lockPath, true);
-        c(line == "locked", "cleanup test holds a real lease");
+        C(line == "locked", "cleanup test holds a real lease");
         var decisions = store.Cleanup(DateTime.UtcNow.AddHours(2));
-        c(Directory.Exists(young), "young staging is kept");
-        c(!Directory.Exists(stale), "stale identified staging is removed");
-        c(!Directory.Exists(unreadable), "stale identity-less staging is removed");
-        c(Directory.Exists(locked), "stale staging under a live lease is kept");
-        c(!Directory.Exists(staleLock),
+        C(Directory.Exists(young), "young staging is kept");
+        C(!Directory.Exists(stale), "stale identified staging is removed");
+        C(!Directory.Exists(unreadable), "stale identity-less staging is removed");
+        C(Directory.Exists(locked), "stale staging under a live lease is kept");
+        C(!Directory.Exists(staleLock),
             "stale staging whose lock file is no longer held is removed");
-        c(!Directory.Exists(quarantine), "older identified quarantine is removed");
-        c(Directory.Exists(unknown), "quarantine without identity is kept");
-        c(decisions.Any(d => d.Action == "keep" && d.Reason.Contains("live lease")),
+        C(!Directory.Exists(quarantine), "older identified quarantine is removed");
+        C(Directory.Exists(unknown), "quarantine without identity is kept");
+        C(decisions.Any(d => d.Action == "keep" && d.Reason.Contains("live lease")),
             "a live-lease decision is recorded");
         Stop(holder);
         holder.WaitForExit();
     }
 
-    private static void RunPointers(Action<bool, string, string?> c)
+    private static void RunPointers()
     {
         Console.WriteLine("[M15] atomic pointer replacement and dangling pointers");
         using var server = new FixtureServer();
@@ -632,14 +636,14 @@ public static class ModelStoreChecks
         }
         catch (AggregateException error)
         {
-            c(false, "concurrent pointer writes completed", error.InnerException?.Message);
+            C(false, "concurrent pointer writes completed", error.InnerException?.Message);
         }
         var pointer = JsonSerializer.Deserialize<ModelActivePointer>(
             File.ReadAllText(store.Layout.ActivePath("fixture-good")),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        c(pointer is not null && new[] { "1.0.0", "2.0.0" }.Contains(pointer.Version),
+        C(pointer is not null && new[] { "1.0.0", "2.0.0" }.Contains(pointer.Version),
             "concurrent writes leave one valid pointer", pointer?.Version);
-        c(!Directory.EnumerateFiles(store.Layout.ModelDirectory("fixture-good"))
+        C(!Directory.EnumerateFiles(store.Layout.ModelDirectory("fixture-good"))
                 .Any(path => path.EndsWith(".tmp")),
             "atomic writes leave no temporary files");
         File.WriteAllText(store.Layout.ActivePath("fixture-good"),
@@ -649,13 +653,13 @@ public static class ModelStoreChecks
                 Version = "9.9.9", ManifestSha256 = "0", ActivatedAt = 0,
             }));
         var record = store.Records().First(r => r.Id == "fixture-good");
-        c(record.ActiveVersion is null, "a dangling pointer is not reported as active");
+        C(record.ActiveVersion is null, "a dangling pointer is not reported as active");
         store.InstallAsync(v1).GetAwaiter().GetResult();
-        c(store.ActivePointer("fixture-good")?.Version == "1.0.0",
+        C(store.ActivePointer("fixture-good")?.Version == "1.0.0",
             "reinstalling an existing version repairs the pointer");
     }
 
-    private static void RunLegacy(Action<bool, string, string?> c)
+    private static void RunLegacy()
     {
         Console.WriteLine("[M16] verified flat installs are adopted without network");
         using var server = new FixtureServer();
@@ -665,13 +669,13 @@ public static class ModelStoreChecks
         var flat = store.Layout.ModelDirectory("fixture-good");
         Directory.CreateDirectory(flat);
         File.WriteAllText(Path.Combine(flat, "payload.bin"), "fixture-one\n");
-        c(store.LegacyBytes(entry) == 12, "legacy bytes are detected");
-        c(server.Count == 0, "detection made no request");
+        C(store.LegacyBytes(entry) == 12, "legacy bytes are detected");
+        C(server.Count == 0, "detection made no request");
         store.MigrateLegacyAsync(entry).GetAwaiter().GetResult();
-        c(server.Count == 0, "adoption used hashes, not the network");
-        c(!File.Exists(Path.Combine(flat, "payload.bin")), "flat file was moved");
-        c(store.ActivePointer("fixture-good")?.Version == "1.0.0", "adopted version is active");
-        c(store.Verify(entry, "1.0.0", true).Ok, "adopted version verifies");
+        C(server.Count == 0, "adoption used hashes, not the network");
+        C(!File.Exists(Path.Combine(flat, "payload.bin")), "flat file was moved");
+        C(store.ActivePointer("fixture-good")?.Version == "1.0.0", "adopted version is active");
+        C(store.Verify(entry, "1.0.0", true).Ok, "adopted version verifies");
 
         var bad = MakeStore(server);
         var badEntry = bad.Catalog.Entry("fixture-good")!;
@@ -679,24 +683,24 @@ public static class ModelStoreChecks
         Directory.CreateDirectory(badFlat);
         File.WriteAllText(Path.Combine(badFlat, "payload.bin"), "different\n");
         ExpectCode(() => bad.MigrateLegacyAsync(badEntry).GetAwaiter().GetResult(),
-            "E_MODEL_UNVERIFIED", "a mismatching flat file is not adopted", c);
-        c(File.Exists(Path.Combine(badFlat, "payload.bin")),
+            "E_MODEL_UNVERIFIED", "a mismatching flat file is not adopted", C);
+        C(File.Exists(Path.Combine(badFlat, "payload.bin")),
             "the mismatching file stayed where it was");
     }
 
-    private static void RunProductionCatalog(Action<bool, string, string?> c)
+    private static void RunProductionCatalog()
     {
         Console.WriteLine("[M17] shipped catalog: DR-5, capability and platform facts");
         var path = Path.Combine(RepositoryRoot, "Resources", "model-catalog.json");
         var catalog = ModelCatalog.Load(path);
-        c(catalog.Entries.Count >= 4, "shipped catalog loads", $"{catalog.Entries.Count}");
-        c(catalog.Entry("sam2.1-hiera-tiny")?.IsVerifiable == false,
+        C(catalog.Entries.Count >= 4, "shipped catalog loads", $"{catalog.Entries.Count}");
+        C(catalog.Entry("sam2.1-hiera-tiny")?.IsVerifiable == false,
             "SAM 2.1 is listed but unverifiable");
-        c(catalog.Entry("swin2sr-x4")?.Supports("windows-x64") == false,
+        C(catalog.Entry("swin2sr-x4")?.Supports("windows-x64") == false,
             "Swin2SR is not advertised on Windows");
-        c(catalog.Entry("migan")?.Supports("windows-x64") == true,
+        C(catalog.Entry("migan")?.Supports("windows-x64") == true,
             "MI-GAN is advertised on Windows");
-        c(catalog.Entries.All(e => e.LicenseEvidenceUrl.StartsWith("https://",
+        C(catalog.Entries.All(e => e.LicenseEvidenceUrl.StartsWith("https://",
             StringComparison.OrdinalIgnoreCase)),
             "every shipped entry has an HTTPS licence evidence URL");
     }
