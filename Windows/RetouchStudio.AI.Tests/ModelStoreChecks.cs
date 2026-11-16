@@ -63,7 +63,8 @@ public static class ModelStoreChecks
                 {
                     var catalog = LoadExpandedCatalog(args[1], args[4]);
                     var entry = catalog.Entry(args[3]) ?? throw new InvalidOperationException("no entry");
-                    var store = new ModelStore(args[2], catalog, allowLocalHttp: true);
+                    var store = new ModelStore(args[2], catalog, "windows-x64",
+                        allowLocalHttp: true);
                     try
                     {
                         store.InstallAsync(entry).GetAwaiter().GetResult();
@@ -72,7 +73,7 @@ public static class ModelStoreChecks
                     }
                     catch (ModelStoreError error)
                     {
-                        Console.WriteLine($"code={error.Code}");
+                        Console.WriteLine($"code={error.Code} {error.Message}");
                         Environment.Exit(error.Code == "E_MODEL_LEASED" ? 3 : 2);
                     }
                     return;
@@ -81,7 +82,8 @@ public static class ModelStoreChecks
                 {
                     var catalog = LoadExpandedCatalog(args[1], args[5]);
                     var entry = catalog.Entry(args[3]) ?? throw new InvalidOperationException("no entry");
-                    var store = new ModelStore(args[2], catalog, allowLocalHttp: true);
+                    var store = new ModelStore(args[2], catalog, "windows-x64",
+                        allowLocalHttp: true);
                     try
                     {
                         store.Delete(entry, args[4]);
@@ -845,20 +847,33 @@ public static class ModelStoreChecks
 
     private static bool TryCreateJunction(string link, string target)
     {
-        var start = new ProcessStartInfo("cmd.exe")
+        try
         {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        start.ArgumentList.Add("/c");
-        start.ArgumentList.Add("mklink");
-        start.ArgumentList.Add("/J");
-        start.ArgumentList.Add(link);
-        start.ArgumentList.Add(target);
-        using var process = Process.Start(start)!;
-        process.WaitForExit();
+            var start = new ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            start.ArgumentList.Add("/c");
+            start.ArgumentList.Add("mklink");
+            start.ArgumentList.Add("/J");
+            start.ArgumentList.Add(link);
+            start.ArgumentList.Add(target);
+            using var process = Process.Start(start)!;
+            process.WaitForExit();
+        }
+        catch (Exception)
+        {
+            // Not Windows (or no cmd.exe); the symlink fallback below proves
+            // the same reparse-point rule on this host.
+        }
+        if (!Directory.Exists(link))
+        {
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception) { }
+        }
         return Directory.Exists(link);
     }
 
