@@ -13,6 +13,15 @@ without changing this document's findings.
 [AI_RUNTIME.md](AI_RUNTIME.md),
 [STUDIOCORE_ARCHITECTURE.md](STUDIOCORE_ARCHITECTURE.md).
 
+> **Addendum 2026-11-16 (owner decision).** The product owner made Windows a
+> first-class AI platform from the start of W5. Two statements below are read
+> through [AI_11_MULTI_PLATFORM_ADDENDUM.md](AI_11_MULTI_PLATFORM_ADDENDUM.md):
+> §13's "AI remains Apple-silicon-only for now" is a current-state statement
+> about the 1.0/1.1 macOS artifacts, not the target scope; §7.3's open Windows
+> adapter choice is resolved to ONNX Runtime on Windows, not a Python sidecar.
+> The current-state tables, §2.2 and ADR-4/ADR-5 are unchanged. This note adds
+> no claim of Windows AI support.
+
 ## 1. Purpose and limits
 
 This document defines how a complete, local-only AI editing system should be

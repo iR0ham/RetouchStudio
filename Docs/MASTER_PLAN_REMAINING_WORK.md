@@ -96,6 +96,16 @@ fixed: a batch request copies `aiEdits` where macOS clears them per file
 
 ## WS-4 — W5 AI runtime
 
+**2026-11-16 note (additive).** The rows below stay the current-state record
+and their statuses do not change. The owner made Windows a first-class AI
+platform from the start of W5; the W5 plan is now
+[`W5_ROADMAP.md`](W5_ROADMAP.md), with the contract freeze in
+[`W5_IMPLEMENTATION_DECISION_RECORD.md`](W5_IMPLEMENTATION_DECISION_RECORD.md)
+and the resolved conflicts in
+[`AI_11_MULTI_PLATFORM_ADDENDUM.md`](AI_11_MULTI_PLATFORM_ADDENDUM.md). The
+delivery queue at the end of this file remains the operative order until the
+owner approves W5-0 and the V4 amendment A1/A2.
+
 | ID | Item | Current status | Remaining work | Dependency |
 |---|---|---|---|---|
 | W5-1 | Approved runtime package, packaging/versioning | BLOCKED | `AIRuntime.package` is nil by design; no approved protocol-v2 package | owner-approved package URL, size, SHA-256 |
