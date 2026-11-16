@@ -11,6 +11,15 @@ payload-size fix (PR #63); the AI-01 dependency order is unchanged by it.
 [ORIGINAL_MASTER_PLAN.md](ORIGINAL_MASTER_PLAN.md),
 [MASTER_PRODUCT_COMPLETION_STATUS.md](MASTER_PRODUCT_COMPLETION_STATUS.md).
 
+> **Addendum 2026-11-16 (owner decision).** "Windows AI is last on purpose"
+> (§1, consequence 2) is superseded as a sequencing principle: Windows AI is
+> scheduled inside W5. The evidence behind it — no Windows runtime, landmarks
+> or mask rendering, and no support claim before a real Windows run — becomes
+> a gate instead of a delay. N1's dependency on F1 and Windows masks still
+> holds for face/mask capabilities. See
+> [AI_11_MULTI_PLATFORM_ADDENDUM.md](AI_11_MULTI_PLATFORM_ADDENDUM.md) §2 and
+> [W5_ROADMAP.md](W5_ROADMAP.md) §3–4. No capability is removed.
+
 ## 1. How this roadmap relates to Master V4
 
 Master V4 §2 sets the delivery order: audit → W4 image engine and Windows

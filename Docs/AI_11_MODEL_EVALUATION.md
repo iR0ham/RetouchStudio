@@ -8,6 +8,15 @@ payload-size fix (PR #63); no model-evaluation finding changed.
 **Companions:** [AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md),
 [AI_11_ROADMAP.md](AI_11_ROADMAP.md), [AI_RUNTIME.md](AI_RUNTIME.md).
 
+> **Addendum 2026-11-16 (owner decision).** Windows is a first-class AI
+> platform from W5. The Windows rows in §12–§14 stay accurate as current
+> state (no runtime, no models, nothing supported); they are no longer a
+> statement that Windows AI is out of scope. The planned path and its gates
+> are in [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
+> §3–4 and [W5_ROADMAP.md](W5_ROADMAP.md) §3. §13's "before a Windows
+> landmark decision" now scopes to face/mask capabilities only; upscaling does
+> not depend on F1.
+
 ## 1. Method and labels
 
 - **VERIFIED** — read from the official repository, release asset, model card
