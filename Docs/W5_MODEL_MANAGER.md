@@ -256,11 +256,14 @@ Unix file sharing, not Windows path syntax or Windows share modes; the hosted
 Windows evidence is hosted-runner CI; it is not native-hardware evidence and is
 labelled as such in the W5-2 report.
 
-Hosted CI run 43932552840 on head `094e9df` was green for all jobs. The macOS
-Integration job (133528747939) logged `MODEL STORE TESTS: PASS` and
-`RUNTIME V2 TESTS: PASS`; the Windows App job (133528748314) logged
-`MODEL STORE CHECKS: PASS`, `AI RUNTIME TESTS: PASS`, built the MSI and passed
-the GUI smoke check. These are hosted macOS/Windows runners, not the owner's
-hardware.
+Hosted CI run 43977895702 on head `83f116a` was green for all five jobs. The
+macOS Integration job (133686500403) logged `ABI TESTS: PASS (104 checks)`,
+`ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `MODEL STORE TESTS: PASS` (the
+148-check suite, including the `[18]` Python-worker legacy lease races) and
+`RUNTIME V2 TESTS: PASS`. The Windows App job (133686500287) logged
+`[M18]` with its ten legacy-lease checks, `MODEL STORE CHECKS: PASS` and
+`AI RUNTIME TESTS: PASS`, then built the MSI and smoke-loaded the upgraded app
+(`WINDOWS APP BUILD: PASS`). These are hosted macOS/Windows runners, not the
+owner's hardware.
 
 
