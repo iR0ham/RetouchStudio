@@ -81,6 +81,7 @@ if (Test-Path $vswhere) {
 
 $nativeDir = Join-Path $root 'build/windows/native'
 $appDir = Join-Path $root 'build/windows/app'
+$aiTestDir = Join-Path $root 'build/windows/ai'
 $cacheDir = Join-Path $root 'build/windows/swift-cache'
 New-Item -ItemType Directory -Force -Path $nativeDir, $cacheDir | Out-Null
 
@@ -173,8 +174,36 @@ if ($leftOut.Count -gt 0) {
         $leftOut.Count, $leftOutMiB, (($leftOut.Keys | Sort-Object) -join ', '))
 }
 
-# 4. A self-contained publish, so the folder runs from a zip with no installed
-#    .NET runtime.
+# 4. The pinned runtime package is verified before anything consumes it, so a
+#    cache or feed substitution cannot silently change the shipped CPU provider.
+Step 'restoring and verifying the pinned ONNX Runtime package'
+& dotnet restore (Join-Path $root 'Windows/RetouchStudio.AI/RetouchStudio.AI.csproj')
+Assert-ExitCode 'ONNX Runtime restore'
+$nugetRoot = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } `
+    else { Join-Path $env:USERPROFILE '.nuget/packages' }
+$nupkg = Join-Path $nugetRoot `
+    'microsoft.ml.onnxruntime/1.32.0/microsoft.ml.onnxruntime.1.32.0.nupkg'
+if (-not (Test-Path $nupkg)) {
+    throw "the pinned ONNX Runtime package is missing at $nupkg"
+}
+$package = Get-Item $nupkg
+$packageHash = (Get-FileHash $nupkg -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($package.Length -ne 184391411 -or
+    $packageHash -ne 'a9150bc2992cbbb6722070da9910e1ffa989a8bfc67bdd5bb8e745ca755641db') {
+    throw "ONNX Runtime package differs: $($package.Length) bytes, SHA-256 $packageHash"
+}
+Write-Host '   ONNX Runtime 1.32.0 matches the recorded size and SHA-256'
+
+# The worker the tests launch is a framework-dependent publish of the real
+# project. The app gets its own self-contained publish under AI/ below.
+Step 'publishing the AI worker for the runtime tests'
+& dotnet publish (Join-Path $root 'Windows/RetouchStudio.AI.Worker/RetouchStudio.AI.Worker.csproj') `
+    -c $Configuration -r win-x64 --self-contained false -o $aiTestDir
+Assert-ExitCode 'AI worker publish'
+$env:RETOUCH_AI_WORKER = Join-Path $aiTestDir 'RetouchStudio.AI.Worker.exe'
+
+# 4b. A self-contained publish, so the folder runs from a zip with no installed
+#     .NET runtime.
 if (-not $SkipPublish) {
     Step 'publishing the WPF host (win-x64, self-contained)'
     # The assembly takes the same version as the zip and the MSI. Without this
@@ -185,9 +214,35 @@ if (-not $SkipPublish) {
         -p:Version=$PackageVersion
     Assert-ExitCode 'dotnet publish'
 
+    Step 'publishing the AI worker and its native payload into the app'
+    $appAiDir = Join-Path $appDir 'AI'
+    & dotnet publish (Join-Path $root 'Windows/RetouchStudio.AI.Worker/RetouchStudio.AI.Worker.csproj') `
+        -c $Configuration -r win-x64 --self-contained true -o $appAiDir `
+        -p:Version=$PackageVersion
+    Assert-ExitCode 'AI worker app publish'
+
+    # The package's licence and third-party notices travel beside the native
+    # payload they cover.
+    foreach ($notice in @('LICENSE', 'ThirdPartyNotices.txt')) {
+        $source = Join-Path (Split-Path $nupkg -Parent) $notice
+        if (Test-Path $source) {
+            Copy-Item $source $appAiDir -Force
+        }
+    }
+
     Get-ChildItem $nativeDir -Filter *.dll -File | ForEach-Object {
         Copy-Item $_.FullName $appDir -Force
     }
+
+    # The runtime the host will launch must travel with the host: the worker
+    # executable, the protocol library and ORT's native DLL, with no Python.
+    foreach ($required in @('AI/RetouchStudio.AI.Worker.exe',
+            'AI/RetouchStudio.AI.dll', 'AI/onnxruntime.dll')) {
+        if (-not (Test-Path (Join-Path $appDir $required) -PathType Leaf)) {
+            throw "the published app is missing $required"
+        }
+    }
+    Write-Host '   AI worker, protocol library and ORT CPU payload present'
 
     # Guard against accidentally shipping compiler/debugger tooling again.
     # These are not part of the StudioCore runtime dependency closure.
@@ -225,6 +280,15 @@ if (-not $SkipTests) {
     & dotnet run --project (Join-Path $root 'Windows/RetouchStudio.Tests/RetouchStudio.Tests.csproj') `
         -c $Configuration
     Assert-ExitCode 'host tests'
+
+    # A real worker process, a real named pipe and a real Job Object: this is
+    # the evidence that the C# runtime speaks protocol 2, not just that it
+    # compiles.
+    Step 'running the AI runtime tests'
+    $env:RETOUCH_TESTS_ROOT = $root
+    & dotnet run --project (Join-Path $root 'Windows/RetouchStudio.AI.Tests/RetouchStudio.AI.Tests.csproj') `
+        -c $Configuration
+    Assert-ExitCode 'AI runtime tests'
 }
 
 # 6. A real window from the published exe is the only proof that the GUI, the

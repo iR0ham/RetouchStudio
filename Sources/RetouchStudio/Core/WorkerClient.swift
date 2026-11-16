@@ -92,6 +92,7 @@ final class WorkerClient {
     private func callOnce(_ method: String, _ params: [String: Any],
                           timeout: TimeInterval) throws -> Any {
         let payload: [String: Any] = ["jsonrpc": "2.0", "id": 1,
+                                      "contractVersion": "1",
                                       "method": method, "params": params]
         let data = try JSONSerialization.data(withJSONObject: payload)
         let reply = try exchange(data + Data([0x0A]), timeout: timeout)
@@ -273,6 +274,7 @@ final class WorkerClient {
     func verifiedHealth(generation: String, nonce: String,
                         helper: ProcessIdentity) throws -> [String: Any] {
         let payload: [String: Any] = ["jsonrpc": "2.0", "id": 1,
+                                      "contractVersion": "1",
                                       "method": "health", "params": [String: Any]()]
         let data = try JSONSerialization.data(withJSONObject: payload)
         let exchange = try exchangeWithPeer(data + Data([0x0A]), timeout: 10)
@@ -293,7 +295,8 @@ final class WorkerClient {
             throw AIWorkerFailure(code: -32000,
                                   message: "the AI helper is not the recorded process")
         }
-        guard result["protocol_version"] as? Int == HelperRegistry.protocolVersion,
+        guard result["contractVersion"] as? String == "1",
+              result["protocol_version"] as? Int == HelperRegistry.protocolVersion,
               result["helper_generation"] as? String == generation,
               result["launch_nonce"] as? String == nonce,
               result["pid"] as? Int == Int(helper.pid) else {

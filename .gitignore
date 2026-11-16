@@ -9,6 +9,11 @@ build/
 *.xcuserstate
 Windows/**/bin/
 Windows/**/obj/
+
+# Worker environments and bytecode (the source and locks are tracked)
+worker/.venv/
+worker/**/__pycache__/
+worker/**/*.pyc
 # The *.app rule above is for macOS bundles; the Windows host's project
 # directory happens to end in .App, so re-include it explicitly.
 !Windows/RetouchStudio.App/

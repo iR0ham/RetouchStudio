@@ -138,24 +138,10 @@ fi
 
 # Python interpreter, wheels and the worker package, so the app does not depend
 # on this checkout or on Homebrew. Model weights stay out: they are downloaded
-# by explicit consent. A checkout without the private worker still builds; the
-# AI tools then report that the helper is not installed.
-WORKER_ROOT="${RETOUCH_WORKER_ROOT:-}"
-if [ -z "$WORKER_ROOT" ]; then
-  if [ -d "$PWD/worker/retouch_ai_worker" ]; then
-    WORKER_ROOT="$PWD/worker"
-  else
-    WORKER_ROOT="$HOME/RetouchStudio-Phase0/worker"
-  fi
-fi
-WORKER_VENV="${RETOUCH_WORKER_VENV:-}"
-if [ -z "$WORKER_VENV" ]; then
-  if [ -x "$PWD/.venv/bin/python3" ]; then
-    WORKER_VENV="$PWD/.venv"
-  else
-    WORKER_VENV="$HOME/RetouchStudio-Phase0/.venv"
-  fi
-fi
+# by explicit consent. The worker source and its hashed lockfile live in this
+# repository, so a build creates the environment instead of asking for one.
+WORKER_ROOT="${RETOUCH_WORKER_ROOT:-$PWD/worker}"
+WORKER_VENV="${RETOUCH_WORKER_VENV:-$WORKER_ROOT/.venv}"
 if [ "${RETOUCH_SKIP_WORKER:-}" = "1" ]; then
   # Park a cached runtime instead of shipping it, so a later build can reuse it.
   if [ -d "$APP_BUNDLE/Contents/Resources/Worker" ]; then
@@ -163,12 +149,17 @@ if [ "${RETOUCH_SKIP_WORKER:-}" = "1" ]; then
     mv "$APP_BUNDLE/Contents/Resources/Worker" "$WORKER_CACHE"
   fi
   echo "  · helper runtime skipped (RETOUCH_SKIP_WORKER=1)"
-elif [ -d "$WORKER_ROOT/retouch_ai_worker" ] && [ -x "$WORKER_VENV/bin/python3" ]; then
+else
+  [ -d "$WORKER_ROOT/retouch_ai_worker" ] || {
+    echo "worker source is missing: $WORKER_ROOT/retouch_ai_worker" >&2
+    exit 1
+  }
+  if [ ! -x "$WORKER_VENV/bin/python3" ]; then
+    echo "  · creating the worker environment from pinned hashes"
+    RETOUCH_WORKER_VENV="$WORKER_VENV" Tools/setup-worker-venv.sh --full
+  fi
   RETOUCH_WORKER_ROOT="$WORKER_ROOT" RETOUCH_WORKER_VENV="$WORKER_VENV" \
     Tools/bundle-worker.sh "$APP_BUNDLE" ${RETOUCH_REBUNDLE:+--force}
-else
-  echo "  ! helper runtime not bundled — AI tools will be unavailable."
-  echo "    Set RETOUCH_WORKER_ROOT and RETOUCH_WORKER_VENV, or RETOUCH_SKIP_WORKER=1 to silence this."
 fi
 
 # --- امضا ---

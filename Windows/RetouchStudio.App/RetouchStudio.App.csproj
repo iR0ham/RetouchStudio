@@ -20,5 +20,9 @@
   <ItemGroup>
     <ProjectReference Include="..\RetouchStudio.Core\RetouchStudio.Core.csproj" />
     <ProjectReference Include="..\RetouchStudio.Imaging\RetouchStudio.Imaging.csproj" />
+    <!-- The protocol library ships with the host so a later W5-2 UI can start
+         the same contained runtime the tests prove. The worker executable is
+         published into AI/ by Tools/build-windows.ps1. -->
+    <ProjectReference Include="..\RetouchStudio.AI\RetouchStudio.AI.csproj" />
   </ItemGroup>
 </Project>

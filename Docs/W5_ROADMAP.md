@@ -99,6 +99,24 @@ mock is not this exit.
 Runtime CPU dependency is approved; adding it does not authorize an unverified
 version or an unpinned payload.
 
+**Implementation (2026-11-16, in review):** the worker source and 67 tests live
+under `worker/` with hashed test and runtime locks. `Tools/build-python-runtime.sh`
+builds CPython 3.13.15 from the pinned source tarball and records a source
+stamp; `Tools/setup-worker-venv.sh --full` installs the lock into that
+interpreter, and `Tools/bundle-worker.sh` refuses any interpreter without the
+stamp. Locally, the source-built runtime created the full environment, the full
+hashed lock check passed, the bundled 1.5 GB runtime started outside Homebrew
+with no Homebrew load-command references, and it completed the protocol-2
+handshake (`hello`, `health`, `provider.list` CPU, `ping`, `shutdown`, socket
+removed); 67 worker tests, the Swift engine/model/runtime suites and the
+StudioCore/ABI gates passed on that tree. Protocol
+2, the readiness registry and `Tests/Contract/protocol2.json` are documented in
+`Docs/AI_PROTOCOL_V2.md`. Windows adds `RetouchStudio.AI`, `.AI.Worker` and
+`.AI.Tests`, with ONNX Runtime 1.32.0 (size and SHA-256 recorded in
+`Windows/README.md`) and Job Object containment; the projects compile locally
+with 0 errors, but the real-process handshake and containment are verified only
+when the `windows-app` CI job runs. A macOS compile is not that evidence.
+
 ### W5-2 — Model Manager
 
 **Depends on:** W5-0 semantics, W5-1 workers.
