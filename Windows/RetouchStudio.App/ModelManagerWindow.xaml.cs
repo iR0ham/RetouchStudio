@@ -28,6 +28,7 @@ public partial class ModelManagerWindow : Window
             NoticeText.Text = $"The model catalog could not be loaded: {error.Message}";
         }
         Loaded += async (_, _) => await RefreshAsync();
+        Closed += (_, _) => _installCancel?.Cancel();
     }
 
     private async Task RefreshAsync()

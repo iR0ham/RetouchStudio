@@ -13,7 +13,7 @@ public sealed class ModelCatalogFile
 
     [JsonIgnore]
     public bool IsVerifiable =>
-        SizeBytes is > 0 && IsSha256(Sha256);
+        SizeBytes is long size && size > 0 && IsSha256(Sha256);
 
     public static bool IsSha256(string? value) =>
         value is { Length: 64 } && value.All(c =>
@@ -51,7 +51,7 @@ public sealed class ModelCatalogEntry
 
     [JsonIgnore]
     public bool IsVerifiable =>
-        UnverifiableReason is null && SizeBytes is > 0 &&
+        UnverifiableReason is null && SizeBytes is long total && total > 0 &&
         ModelCatalogFile.IsSha256(Sha256) &&
         Files.Count > 0 && Files.All(f => f.IsVerifiable);
 
@@ -61,7 +61,8 @@ public sealed class ModelCatalogEntry
         get
         {
             if (UnverifiableReason is { Length: > 0 } reason) return reason;
-            if (SizeBytes is not > 0) return "the total size is missing";
+            if (SizeBytes is not { } total || total <= 0)
+                return "the total size is missing";
             if (!ModelCatalogFile.IsSha256(Sha256)) return "the manifest SHA-256 is missing";
             if (Files.Count == 0) return "the file list is empty";
             var bad = Files.FirstOrDefault(f => !f.IsVerifiable);
@@ -159,9 +160,9 @@ public static class ModelCatalogRules
                     StringComparison.OrdinalIgnoreCase))
                 throw Unsafe($"{entry.Id}/{file.Path} does not come from the recorded source");
         }
-        if (entry.UnverifiableReason is null && entry.SizeBytes is > 0 &&
+        if (entry.UnverifiableReason is null && entry.SizeBytes is { } total && total > 0 &&
             entry.Files.All(f => f.SizeBytes is not null) &&
-            entry.Files.Sum(f => f.SizeBytes ?? 0) != entry.SizeBytes)
+            entry.Files.Sum(f => f.SizeBytes ?? 0) != total)
             throw Unsafe($"{entry.Id} total size does not match its files");
     }
 
