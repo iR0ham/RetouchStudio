@@ -171,7 +171,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-integration-log
-          path: ${{ runner.temp }}/macos-integration.log
+          path: |
+            ${{ runner.temp }}/macos-integration.log
+            build/python-runtime/configure.log
+            build/python-runtime/make.log
+            build/python-runtime/install.log
           if-no-files-found: ignore
 
   windows-core:

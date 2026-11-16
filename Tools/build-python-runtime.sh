@@ -62,13 +62,24 @@ tar -xzf "$TARBALL" -C "$BUILD" --strip-components=1
 
 echo "  · building CPython $VERSION from source" >&2
 cd "$BUILD"
-CPPFLAGS="-I$OPENSSL/include -I$XZ/include -I$SQLITE/include" \
-LDFLAGS="-L$OPENSSL/lib -L$XZ/lib -L$SQLITE/lib" \
-./configure --prefix="$ROOT/install" --enable-framework="$ROOT/install" \
+
+run_logged() {
+  local logfile="$1"; shift
+  if ! "$@" >"$logfile" 2>&1; then
+    echo "failed: $*" >&2
+    tail -n 60 "$logfile" >&2
+    exit 1
+  fi
+}
+
+run_logged "$ROOT/configure.log" \
+  env CPPFLAGS="-I$OPENSSL/include -I$XZ/include -I$SQLITE/include" \
+      LDFLAGS="-L$OPENSSL/lib -L$XZ/lib -L$SQLITE/lib" \
+  ./configure --prefix="$ROOT/install" --enable-framework="$ROOT/install" \
   --with-openssl="$OPENSSL" --with-ensurepip=install \
-  MACOSX_DEPLOYMENT_TARGET=14.0 >"$ROOT/configure.log" 2>&1
-make -j"$(sysctl -n hw.ncpu)" >"$ROOT/make.log" 2>&1
-make install >"$ROOT/install.log" 2>&1
+  MACOSX_DEPLOYMENT_TARGET=14.0
+run_logged "$ROOT/make.log" make -j"$(sysctl -n hw.ncpu)"
+run_logged "$ROOT/install.log" make install
 cd "$OLDPWD"
 
 "$PYTHON" -c 'import ssl, sqlite3, lzma, zlib' || {
