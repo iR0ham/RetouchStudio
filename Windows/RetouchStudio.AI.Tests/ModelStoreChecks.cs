@@ -204,7 +204,7 @@ public static class ModelStoreChecks
             "pointer names the installed version");
         var manifestPath = store.Layout.ManifestPath("fixture-good", "1.0.0");
         C(File.Exists(manifestPath), "manifest exists");
-        C(!StagingDirs(store.Layout.Staging).Any(),
+        C(!StagingDirs(store).Any(),
             "staging is empty after success");
         C(server.Count == 1, "exactly the catalog file was fetched", $"{server.Count}");
         C(Volatile.Read(ref progress) > 0, "progress was reported");
@@ -236,7 +236,7 @@ public static class ModelStoreChecks
                 store.Catalog.Entry("fixture-unverifiable")!).GetAwaiter().GetResult(),
             "E_MODEL_UNVERIFIED", "unverifiable entry is refused before any byte", C);
         C(server.Count == before, "unverifiable entry made no request");
-        C(!StagingDirs(store.Layout.Staging).Any(),
+        C(!StagingDirs(store).Any(),
             "failed downloads left no staging tree");
 
         var corruptStore = MakeStore(server);
@@ -260,7 +260,7 @@ public static class ModelStoreChecks
             "E_INVALID_INPUT", "a dropped connection is a typed failure", C);
         C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "no version after interruption");
-        C(!StagingDirs(store.Layout.Staging).Any(),
+        C(!StagingDirs(store).Any(),
             "staging is cleaned after interruption");
         server.Serve("/good/payload.bin", "fixture-one\n");
         store.InstallAsync(entry).GetAwaiter().GetResult();
@@ -282,7 +282,7 @@ public static class ModelStoreChecks
             "cancellation is E_CANCELLED", C);
         C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "cancellation installed no version");
-        C(!StagingDirs(store.Layout.Staging).Any(),
+        C(!StagingDirs(store).Any(),
             "cancellation cleaned staging");
         C(store.ActivePointer("fixture-good") is null, "cancellation wrote no pointer");
     }
@@ -397,7 +397,7 @@ public static class ModelStoreChecks
             server.Base);
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (DateTime.UtcNow < deadline &&
-               !StagingDirs(store.Layout.Staging).Any())
+               !StagingDirs(store).Any())
             Thread.Sleep(20);
         ExpectCode(() => store.Delete(entry, "1.0.0"), "E_MODEL_LEASED",
             "delete refuses while a download holds the version", C);
@@ -482,7 +482,7 @@ public static class ModelStoreChecks
             string.Join(",", statuses));
         C(store.Verify(store.Catalog.Entry("fixture-good")!, "1.0.0", true).Ok,
             "the winning install is complete");
-        C(!StagingDirs(store.Layout.Staging).Any(),
+        C(!StagingDirs(store).Any(),
             "no staging debris from the losing process");
     }
 
@@ -500,14 +500,14 @@ public static class ModelStoreChecks
         C(crashA.ExitCode == 86, "child died after verification", $"{crashA.ExitCode}");
         C(!Directory.Exists(a.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "no version before the rename");
-        C(StagingDirs(a.Layout.Staging).Any(),
+        C(StagingDirs(a).Any(),
             "the verified staging tree survived the crash");
         a.InstallAsync(a.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult();
         C(a.ActivePointer("fixture-good")?.Version == "1.0.0", "restart installed and activated");
-        foreach (var child in StagingDirs(a.Layout.Staging))
+        foreach (var child in StagingDirs(a))
             Directory.SetLastWriteTimeUtc(child, DateTime.UtcNow.AddHours(-25));
         _ = a.Cleanup(DateTime.UtcNow.AddHours(2));
-        C(!StagingDirs(a.Layout.Staging).Any(),
+        C(!StagingDirs(a).Any(),
             "aged crash staging is reclaimed");
         C(Directory.Exists(a.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "cleanup left the installed version");
@@ -546,17 +546,17 @@ public static class ModelStoreChecks
         var slow = StartInstall(catalog, e.Layout.Root, "fixture-good", server.Base);
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (DateTime.UtcNow < deadline &&
-               !StagingDirs(e.Layout.Staging).Any())
+               !StagingDirs(e).Any())
             Thread.Sleep(20);
         Thread.Sleep(300);
         Stop(slow);
         slow.WaitForExit();
         C(!Directory.Exists(e.Layout.VersionDirectory("fixture-good", "1.0.0")),
             "killed download installed nothing");
-        foreach (var child in StagingDirs(e.Layout.Staging))
+        foreach (var child in StagingDirs(e))
             Directory.SetLastWriteTimeUtc(child, DateTime.UtcNow.AddHours(-25));
         _ = e.Cleanup(DateTime.UtcNow.AddHours(2));
-        C(!StagingDirs(e.Layout.Staging).Any(),
+        C(!StagingDirs(e).Any(),
             "identity-less stale staging is reclaimed");
         server.Serve("/good/payload.bin", "fixture-one\n");
         e.InstallAsync(e.Catalog.Entry("fixture-good")!).GetAwaiter().GetResult();
