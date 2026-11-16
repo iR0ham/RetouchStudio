@@ -71,7 +71,10 @@ output, verifies the ready record against the launched pid, runs every required
 protocol method over a real pipe, refuses a foreign contract version, proves
 `shutdown` exits the process, and proves closing the Job Object terminates the
 worker. These checks only run on Windows; a macOS compile cannot stand in for
-them.
+them. They pass on CI run
+[43878989037](https://github.com/iR0ham/RetouchStudio/actions/runs/43878989037)
+(`windows-2025`), which is a hosted-runner result, not physical hardware or GPU
+evidence.
 
 ## Install
 

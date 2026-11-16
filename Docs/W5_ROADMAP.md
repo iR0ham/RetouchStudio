@@ -113,9 +113,14 @@ StudioCore/ABI gates passed on that tree. Protocol
 2, the readiness registry and `Tests/Contract/protocol2.json` are documented in
 `Docs/AI_PROTOCOL_V2.md`. Windows adds `RetouchStudio.AI`, `.AI.Worker` and
 `.AI.Tests`, with ONNX Runtime 1.32.0 (size and SHA-256 recorded in
-`Windows/README.md`) and Job Object containment; the projects compile locally
-with 0 errors, but the real-process handshake and containment are verified only
-when the `windows-app` CI job runs. A macOS compile is not that evidence.
+`Windows/README.md`) and Job Object containment. CI run 43878989037 passed on
+macos-15 and windows-2025: the macOS job rebuilt the source runtime from the
+tarball, installed the hashed environment and passed all suites, and the
+Windows job passed the AI runtime tests, including ONNX Runtime CPU without a
+model, the real worker's ready registry record, the protocol-2 handshake,
+foreign-contract refusal, shutdown exit, Job Object containment and the
+protocol-1 refusal. That is CI-on-a-hosted-runner evidence, not physical
+Windows hardware or GPU evidence.
 
 ### W5-2 — Model Manager
 
