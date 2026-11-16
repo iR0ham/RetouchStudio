@@ -53,7 +53,7 @@ release architecture or replace the existing worker.
 | Quick Edit | Three presets: remove object and reimagine route to the generative `patch` engine; heal area routes to the small-hole `inpaint` engine. A masked generative patch is 512 px with 4 steps; a whole-frame reimagine is a separate explicit request. Measured on the owner's M3: about 24 s for the fastest masked patch and about 47 s under load; the guard timeout is 300 s. | `QuickEdit.swift:36-45`, `:65`, `:93-95`, `:107-122`, `:137` |
 | Non-destructive AI edits | A result is a patch plus an alpha file stored beside the edit id; the compositor uses `CIBlendWithMask` and crops the blend to the edit's rectangle, so pixels outside the authorized box stay the input pixels; preview and export rebuild the same layers at their own sizes. | `Sources/RetouchStudio/Core/AICompositor.swift:63-83` |
 | 4× upscaling | Export-time only: render at source size, send the pixels to the `upscale` job (Swin2SR x4), show tile progress, then apply analysis callouts at the enlarged size. The job timeout is 1500 s. A real 4× upscale from the bundled runtime was recorded. | `ExportService.swift:137-165`, `:204-242`, [AI_RUNTIME.md](AI_RUNTIME.md) §3 |
-| Model manager | The catalog, plan, verify and download operations live in the worker CLI; the host shows the list, a consent plan with a manifest hash, progress, verify and remove. A missing size makes progress indeterminate rather than fake. | `Sources/RetouchStudio/Models/ModelManager.swift:34-207` |
+| Model manager | Catalog, plan and verify are worker RPC methods; download runs in the worker's model CLI. The host shows the list, a consent plan with a manifest hash, progress, verify and remove. A missing size makes progress indeterminate rather than fake. | `Sources/RetouchStudio/Models/ModelManager.swift:70-239` |
 | Consent and integrity | Each model sheet shows file count, total size and licence; the download runs only after approval with the manifest hash; catalog SHA256 files are verified. SAM 2.1 tiny has neither a size nor a SHA256 in the inspected catalog, so it cannot be checksum-verified. | [AI_RUNTIME.md](AI_RUNTIME.md) §3, §6.3 |
 | Runtime v2 host lifecycle | Transactional install with staging, backup, functional validation, rollback and recovery; registry, generation, nonce and CAS; process identity checks; a shared usage lease inherited by the child through fd 197. | `AIRuntime.swift`, `AIRuntimeTransaction.swift`, `AIRuntimeValidation.swift`, `HelperRegistry.swift`, `RuntimeUsageLease.swift` |
 | Network behavior | Measured zero TCP/UDP endpoints while idle and during a real upscale; exactly two HTTPS connections during an approved download. | [PRIVACY_AUDIT.md](PRIVACY_AUDIT.md) §3 |
@@ -290,9 +290,9 @@ the same ONNX weights; the host's separate worker process is the right shape
 so an ORT fault cannot kill the WPF process. Two real costs: the Windows host
 currently has no package dependency by design, and Windows ML adds a
 Windows-specific package, native runtime payload and size to the per-machine
-MSI. Whether Windows
-ships a Python sidecar, an ONNX adapter or both remains an owner decision in
-W5; no parity claim may be made before a Windows run proves the workflow.
+MSI. Whether Windows ships a Python sidecar, an ONNX adapter or both remains
+an owner decision in W5; no parity claim may be made before a Windows run
+proves the workflow.
 
 ## 8. Data flow
 

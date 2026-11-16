@@ -300,7 +300,7 @@ second platform; M9 is optimization. V4 still decides which stage is active.
 | Upscale | Swin2SR 4× at export; 2× output | Face-aware upscale, batch queue |
 | Enhance | Classical same-size tools; AI enhancement refused until measured | Denoise/deblur/low-light/restore models |
 | Generative | 512 px masked patch; whole-frame reimagine | Outpainting, multi-reference edits |
-| Windows | Preserve and declare AI edits | ONNX adapter after F1 |
+| Windows | Preserve and declare AI edit records | ONNX adapter after F1 |
 
 ## 7. Testing and acceptance
 
