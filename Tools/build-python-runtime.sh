@@ -79,7 +79,15 @@ run_logged "$ROOT/configure.log" \
   --with-openssl="$OPENSSL" --with-ensurepip=install \
   MACOSX_DEPLOYMENT_TARGET=14.0
 run_logged "$ROOT/make.log" make -j"$(sysctl -n hw.ncpu)"
-run_logged "$ROOT/install.log" make install
+# installapps writes Python Launcher/IDLE into /Applications, which a CI
+# runner cannot write. Stage the install, then keep only the framework prefix.
+STAGE="$ROOT/stage"
+rm -rf "$ROOT/install" "$STAGE"
+mkdir -p "$STAGE"
+run_logged "$ROOT/install.log" make install DESTDIR="$STAGE"
+mkdir -p "$ROOT/install"
+ditto "$STAGE$ROOT/install" "$ROOT/install"
+rm -rf "$STAGE"
 cd "$OLDPWD"
 
 "$PYTHON" -c 'import ssl, sqlite3, lzma, zlib' || {

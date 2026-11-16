@@ -183,8 +183,9 @@ public sealed class WorkerServer
         {
             ["id"] = Providers.Id,
             ["state"] = result.Available ? "available" : "unavailable",
-            ["execution_providers"] = new JsonArray(
-                result.Available ? new JsonArray("CPU") : new JsonArray()),
+            ["execution_providers"] = result.Available
+                ? new JsonArray("CPU")
+                : new JsonArray(),
         };
         if (!result.Available) record["error"] = result.Error;
         return record;
