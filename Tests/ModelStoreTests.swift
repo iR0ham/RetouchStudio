@@ -1054,10 +1054,12 @@ print("\n[17] worker resolves active.json and honours the same OS lease")
 do {
     let server = makeServer()
     defer { server.stop() }
-    let python = "/usr/bin/python3"
-    if !FileManager.default.isExecutableFile(atPath: python) {
-        check(false, "python3 is available for the worker conformance test")
-    } else {
+    let python = [
+        ProcessInfo.processInfo.environment["RETOUCH_WORKER_PYTHON"],
+        testsRoot.appendingPathComponent("worker/.venv/bin/python3").path,
+        "/usr/bin/python3",
+    ].compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    if let python {
         let paths = makeStore(server)
         let good = entry(paths, "fixture-good")
         _ = runBlocking { _ = try await paths.store.install(good) }
@@ -1115,6 +1117,8 @@ do {
         usleep(100_000)
         let after = workerRequire(miganRoot)
         check(after.0 == 0, "worker loads after the install releases the lease", after.1)
+    } else {
+        check(false, "python3 is available for the worker conformance test")
     }
 }
 

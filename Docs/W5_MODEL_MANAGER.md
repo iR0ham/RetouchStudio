@@ -42,7 +42,9 @@ installed in the bundled worker.
 
 Source rules: HTTPS only; the file URL must use the same host and scheme as the
 entry's recorded source; no credentials, fragments or non-default ports in
-production. Local HTTP is accepted only by tests through an injected flag.
+production. Redirects are not followed: an HTTP 3xx is a non-200 failure, so a
+download cannot silently move to another host. Local HTTP is accepted only by
+tests through an injected flag.
 Only URLs already recorded from the official source may appear; none is
 invented.
 
