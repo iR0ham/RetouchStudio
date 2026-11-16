@@ -102,7 +102,7 @@ and only one changes:
 
 | Claim | Status |
 |---|---|
-| The shipped 1.0/1.1 macOS AI artifact is arm64-only, and Intel Macs have no AI today | **Retained.** This is a fact about the current build, not a product decision ([AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md) §12; [AI_RUNTIME.md](AI_RUNTIME.md)). |
+| The shipped AI helper is arm64-only, and Intel Macs have no AI today | **Retained.** This is a fact about the current build, not a product decision ([AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md) §12; [AI_RUNTIME.md](AI_RUNTIME.md)). |
 | The *target architecture* is Apple-silicon-only | **Superseded.** Windows is a first-class AI target from W5, with an ONNX Runtime CPU baseline and native model management. |
 | The Windows adapter shape (Python sidecar vs ONNX adapter) is an open owner decision | **Resolved by the owner.** ONNX Runtime on Windows, not a Python sidecar; DirectML optional. |
 
@@ -134,11 +134,14 @@ Windows masks ([AI_11_ROADMAP.md](AI_11_ROADMAP.md) §4, lines 262–271).
   completed under its own definition before stage 6 exists, and stage 6
   cannot be started under §2's ordering until stage 5 (W3 on both platforms)
   is complete.
-- **False serialization.** W5's first cross-platform capability is Upscaler 4x
-  ([W5_ROADMAP.md](W5_ROADMAP.md) §3, W5-4). It needs the contract, runtime
-  and model manager — not face landmarks, masks or Windows face analysis. V4's
-  "W3 fully before W5" ordering delays an independent capability behind an
-  unrelated one.
+- **Mis-ordered dependency.** W5's first cross-platform capability is
+  Upscaler 4x ([W5_ROADMAP.md](W5_ROADMAP.md) §3, W5-4). It needs the
+  contract, runtime and model manager — not face landmarks, masks or Windows
+  face analysis. V4 §2 opens with "Proceed continuously; parallelize
+  independent work", so limited overlap is arguably permitted, but the
+  numbered order is the stated delivery order and AI-01 reads it as one
+  ([AI_11_ROADMAP.md](AI_11_ROADMAP.md) §1). As written, the first W5
+  capability is placed behind unrelated W3 work.
 - **Contract direction.** W3-2 (portable face/mask contract) and W3-5
   (orientation canonicalization) are inputs to the W5 contract freeze, not
   outputs of it ([MASTER_PLAN_REMAINING_WORK.md](MASTER_PLAN_REMAINING_WORK.md)
@@ -149,26 +152,26 @@ Windows masks ([AI_11_ROADMAP.md](AI_11_ROADMAP.md) §4, lines 262–271).
   undefined is exactly how an approved capability gets silently dropped.
 
 **Proposed amendment (requires owner approval; not applied).** A minimal,
-additive change to V4 §2 and §6:
+additive proposal for V4 §2 and §6; A3 is a reading, not a change:
 
 - **A1 — Move one bullet.** In V4 §2 item 4 and §6 (line 253), Windows "AI
   edits when runtime is available" stops being a stage-4 completion criterion.
   It becomes a W5 completion criterion, satisfied for the W5-adopted capability
   set — initially `upscale.4x` — with the remaining edits still preserved,
   named and refused as today. The capability is moved, not removed.
-- **A2 — Allow interleaving.** V4 §2 items 5 and 6 may run concurrently after
-  stage 3: W5-0/1/2/3 may start once W4 is complete, and W3 may consume the
-  frozen face/mask contract. W3 still precedes any Windows face, landmark or
-  mask capability claim, and F1 remains an owner decision. Every other V4
-  stage and ordering constraint is unchanged.
+- **A2 — Make the interleaving explicit.** V4 §2 items 5 and 6 may run
+  concurrently after stage 3: W5-0/1/2/3 may start once W4 is complete, and W3
+  may consume the frozen face/mask contract. W3 still precedes any Windows
+  face, landmark or mask capability claim, and F1 remains an owner decision.
+  Every other V4 stage and ordering constraint is unchanged.
 - **A3 — Define "feasible".** No wording change; W5 defines feasibility
   through its exit gates ([W5_ROADMAP.md](W5_ROADMAP.md) §3) so "feasible W5"
   in V4 §2 item 6 cannot be read as "whatever happens to work".
 
-If the owner declines A1/A2, the documentation still stands, but W5
-implementation would have to wait for W3 completion and stage 4 would keep a
-completion criterion that only stage 6 can satisfy. That consequence is
-recorded here rather than hidden.
+If the owner declines A1/A2, the documentation still stands, but the W5
+contract sequence stays behind W3 completion and stage 4 keeps a completion
+criterion that only stage 6 can satisfy. That consequence is recorded here
+rather than hidden.
 
 The V4 file itself is not edited by this addendum. The amendment is a proposal
 in the review package; applying it is a separate, owner-authorized change.

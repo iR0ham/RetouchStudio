@@ -19,8 +19,8 @@ under Master Execution Plan V4, whose proposed amendment A1/A2 is still open.
 Master V4 §2 remains the delivery authority. This roadmap is the W5 execution
 view: it does not reorder V4 by itself. It assumes the proposed amendment in
 [AI_11_MULTI_PLATFORM_ADDENDUM.md](AI_11_MULTI_PLATFORM_ADDENDUM.md) §4 (move
-the Windows "AI edits" bullet from stage 4 to W5, and allow W3/W5 to
-interleave after W4). If the owner declines that amendment, W5 waits for W3
+the Windows "AI edits" bullet from stage 4 to W5, and make W3/W5 interleaving
+explicit after W4). If the owner declines that amendment, W5 waits for W3
 completion and this roadmap's W5-1..W5-3 start moves accordingly; the content
 does not change.
 

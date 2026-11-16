@@ -421,7 +421,7 @@ Detailed deliverables, capability preservation and follow-on milestones:
 
 | # | Decision | Options | Impact | Recommendation | Blocks |
 |---|---|---|---|---|---|
-| 1 | V4 amendment A1/A2 | approve / modify / decline | Declining keeps a circular stage-4 criterion and serializes W5 behind W3 | Approve A1/A2 | W5-0, W5 start |
+| 1 | V4 amendment A1/A2 | approve / modify / decline | Declining keeps a circular stage-4 criterion and keeps W5 behind W3 | Approve A1/A2 | W5-0, W5 start |
 | 2 | Windows ML dependency policy | allow ORT/WinML package + native payload in the MSI / keep zero-dependency host and no Windows AI | No dependency ⇒ no Windows inference baseline | Allow the ORT CPU baseline; DirectML optional | W5-1 Windows, W5-2 |
 | 3 | Worker source publication | move into repo / pinned fetchable dependency | A fresh clone cannot reproduce inference today | Move in, or pin with hashes and licence inventory | W5-1 macOS |
 | 4 | Runtime package distribution | approve URL+size+SHA-256 / source-built only for W5-1 | No approved package ⇒ `AIRuntime.package` stays nil | Approve metadata or accept source-built only | W5-1, W5-2 |
