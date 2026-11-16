@@ -214,6 +214,146 @@
       "notes": "Deterministic test fixture; never a product model."
     },
     {
+      "id": "fixture-file-port",
+      "name": "fixture-file-port",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 12,
+          "sha256": "5a15b8070a29a440f6d9ee66b79a1c58affda21d4f48d71758fd4c292d085def",
+          "sourceUrl": "https://example.com:8443/models/payload.bin"
+        }
+      ],
+      "sizeBytes": 12,
+      "sha256": "dd054126cce3eb81aba8aef5f2247fc607a5f5769818ef4e6d08b0cc41e53a28",
+      "sourceUrl": "https://example.com/models",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "https://example.com/models",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Rejected: the file uses a non-default port."
+    },
+    {
+      "id": "fixture-file-scheme",
+      "name": "fixture-file-scheme",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 12,
+          "sha256": "5a15b8070a29a440f6d9ee66b79a1c58affda21d4f48d71758fd4c292d085def",
+          "sourceUrl": "https://127.0.0.1:9/models/payload.bin"
+        }
+      ],
+      "sizeBytes": 12,
+      "sha256": "dd054126cce3eb81aba8aef5f2247fc607a5f5769818ef4e6d08b0cc41e53a28",
+      "sourceUrl": "{base}/models",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "{base}/models",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Rejected: the file scheme differs from the recorded source."
+    },
+    {
+      "id": "fixture-file-userinfo",
+      "name": "fixture-file-userinfo",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 12,
+          "sha256": "5a15b8070a29a440f6d9ee66b79a1c58affda21d4f48d71758fd4c292d085def",
+          "sourceUrl": "https://user:secret@example.com/models/payload.bin"
+        }
+      ],
+      "sizeBytes": 12,
+      "sha256": "dd054126cce3eb81aba8aef5f2247fc607a5f5769818ef4e6d08b0cc41e53a28",
+      "sourceUrl": "https://example.com/models",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "https://example.com/models",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Rejected: the file URL carries credentials."
+    },
+    {
+      "id": "fixture-file-fragment",
+      "name": "fixture-file-fragment",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "1.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 12,
+          "sha256": "5a15b8070a29a440f6d9ee66b79a1c58affda21d4f48d71758fd4c292d085def",
+          "sourceUrl": "https://example.com/models/payload.bin#fragment"
+        }
+      ],
+      "sizeBytes": 12,
+      "sha256": "dd054126cce3eb81aba8aef5f2247fc607a5f5769818ef4e6d08b0cc41e53a28",
+      "sourceUrl": "https://example.com/models",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "https://example.com/models",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Rejected: the file URL carries a fragment."
+    },
+    {
       "id": "fixture-traversal",
       "name": "fixture-traversal",
       "capabilities": [

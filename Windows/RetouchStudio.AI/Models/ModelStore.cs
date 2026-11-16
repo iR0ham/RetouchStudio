@@ -147,6 +147,14 @@ public sealed class ModelStoreLayout
         System.IO.Path.Combine(ModelDirectory(id), "active.json");
     public string LockPath(string id, string version) =>
         System.IO.Path.Combine(Locks, $"{id}-{version}");
+
+    /// <summary>
+    /// A flat install has no version, so it gets a distinct identity. `@`
+    /// cannot appear in a model id or version, so this can never collide with
+    /// a versioned lock.
+    /// </summary>
+    public string LegacyLockPath(string id) =>
+        System.IO.Path.Combine(Locks, $"{id}@legacy");
 }
 
 /// <summary>
@@ -173,6 +181,19 @@ public sealed class ModelLease : IDisposable
         AcquireFile(store.Layout.InstallGate, true, timeout,
             () => new ModelStoreError("E_MODEL_LEASED",
                 "another model install is already running"));
+
+    /// <summary>
+    /// The worker takes this shared while it reads a flat install; adoption
+    /// takes it exclusive before moving any file. Same file name on every host.
+    /// </summary>
+    public static ModelLease AcquireLegacy(ModelStore store, string model, bool exclusive,
+        TimeSpan? timeout = null)
+    {
+        ModelCatalogRules.RequireComponent(model, "model id");
+        return AcquireFile(store.Layout.LegacyLockPath(model), exclusive, timeout,
+            () => new ModelStoreError("E_MODEL_LEASED",
+                $"{model}'s flat installation is in use by a running job"));
+    }
 
     private static ModelLease AcquireFile(string path, bool exclusive, TimeSpan? timeout,
         Func<ModelStoreError> busy)
@@ -480,7 +501,7 @@ public sealed class ModelStore
         Action<ModelTransferProgress> report, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-            !ModelCatalogRules.IsAllowedSource(url, AllowLocalHttp))
+            !ModelCatalogRules.IsRecordedFileSource(url, entry.SourceUrl, AllowLocalHttp))
             throw ModelStoreError.Invalid("refusing an unrecorded source");
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         try
@@ -716,6 +737,10 @@ public sealed class ModelStore
             throw ModelStoreError.Missing($"{entry.Id} has no flat installation to adopt");
         cancellationToken.ThrowIfCancellationRequested();
         using var gate = ModelLease.AcquireInstallGate(this);
+        // The flat lease is what the worker holds while it reads this install.
+        // It is taken before hashing and released only after the files moved or
+        // were put back, so a reader never sees a half-moved tree.
+        using var legacyLease = ModelLease.AcquireLegacy(this, entry.Id, true);
         using var lease = ModelLease.Acquire(this, entry.Id, entry.Version, true);
         var versionDirectory = Layout.VersionDirectory(entry.Id, entry.Version);
         if (Directory.Exists(versionDirectory))

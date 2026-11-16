@@ -148,18 +148,13 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
             throw ModelCatalog.LoadError.unsafe("\(id) has an invalid capability id")
         }
         guard Self.isAllowedSource(sourceUrl, allowLocalHTTP: allowLocalHTTP),
-              let entryURL = URL(string: sourceUrl), let entryHost = entryURL.host else {
+              let entryURL = URL(string: sourceUrl), entryURL.host != nil else {
             throw ModelCatalog.LoadError.unsafe("\(id) has a non-HTTPS source")
-        }
-        if let port = entryURL.port, port != 443, !Self.isLoopback(entryURL) {
-            throw ModelCatalog.LoadError.unsafe("\(id) uses a non-default source port")
         }
         for file in files {
             try Self.requireFileComponent(file.path, model: id)
-            guard Self.isAllowedSource(file.sourceUrl, allowLocalHTTP: allowLocalHTTP),
-                  let url = URL(string: file.sourceUrl),
-                  let host = url.host,
-                  host.caseInsensitiveCompare(entryHost) == .orderedSame else {
+            guard Self.isRecordedFileSource(file.sourceUrl, entrySource: sourceUrl,
+                                            allowLocalHTTP: allowLocalHTTP) else {
                 throw ModelCatalog.LoadError.unsafe(
                     "\(id)/\(file.path) does not come from the recorded HTTPS source")
             }
@@ -172,15 +167,41 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
         }
     }
 
-    /// Production accepts HTTPS only. A test may opt into loopback HTTP; a
-    /// non-loopback HTTP source is rejected either way.
+    /// Production accepts HTTPS on its default port only. A test may opt into
+    /// loopback HTTP; that exception also covers the ephemeral port a local
+    /// fixture server listens on. A non-default port is never accepted in
+    /// production, even on loopback.
     static func isAllowedSource(_ url: String, allowLocalHTTP: Bool) -> Bool {
-        guard let parsed = URL(string: url), parsed.host != nil,
+        guard let parsed = URL(string: url), let host = parsed.host, !host.isEmpty,
               parsed.user == nil, parsed.password == nil, parsed.fragment == nil else {
             return false
         }
-        if parsed.scheme?.lowercased() == "https" { return true }
-        return allowLocalHTTP && isLoopback(parsed) && parsed.scheme?.lowercased() == "http"
+        switch parsed.scheme?.lowercased() {
+        case "https": break
+        case "http" where allowLocalHTTP && isLoopback(parsed): break
+        default: return false
+        }
+        return isAllowedPort(parsed, allowLocalHTTP: allowLocalHTTP)
+    }
+
+    static func isAllowedPort(_ url: URL, allowLocalHTTP: Bool) -> Bool {
+        guard let port = url.port else { return true }
+        if url.scheme?.lowercased() == "https" && port == 443 { return true }
+        return allowLocalHTTP && isLoopback(url)
+    }
+
+    /// A file must come from the entry's recorded source: same scheme, same
+    /// host, and the same port rules. A redirect cannot change any of these.
+    static func isRecordedFileSource(_ url: String, entrySource: String,
+                                     allowLocalHTTP: Bool) -> Bool {
+        guard isAllowedSource(url, allowLocalHTTP: allowLocalHTTP),
+              isAllowedSource(entrySource, allowLocalHTTP: allowLocalHTTP),
+              let fileURL = URL(string: url), let recordedURL = URL(string: entrySource),
+              let fileHost = fileURL.host, let recordedHost = recordedURL.host,
+              fileHost.caseInsensitiveCompare(recordedHost) == .orderedSame,
+              fileURL.scheme?.lowercased() == recordedURL.scheme?.lowercased()
+        else { return false }
+        return true
     }
 
     static func isLoopback(_ url: URL) -> Bool {

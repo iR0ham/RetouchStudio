@@ -142,6 +142,14 @@ func fixturePath(_ name: String) -> String {
     fixtureDirectory.appendingPathComponent(name).path
 }
 
+func workerPython() -> String? {
+    [
+        ProcessInfo.processInfo.environment["RETOUCH_WORKER_PYTHON"],
+        testsRoot.appendingPathComponent("worker/.venv/bin/python3").path,
+        "/usr/bin/python3",
+    ].compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
 func makeStore(_ server: FixtureServer, _ name: String = "fixture-good",
                fixture: String = "catalog-valid.json",
                allowLocalHTTP: Bool = true) -> StorePaths {
@@ -208,7 +216,7 @@ func launchHolder(_ lockPath: String, exclusive: Bool) -> (Process, Pipe) {
     return (process, pipe)
 }
 
-func waitForLocked(_ pipe: Pipe) -> Bool {
+func waitForLine(_ pipe: Pipe, containing marker: String) -> Bool {
     var data = Data()
     while !data.contains(0x0A) {
         let chunk = pipe.fileHandleForReading.availableData
@@ -216,7 +224,11 @@ func waitForLocked(_ pipe: Pipe) -> Bool {
         data.append(chunk)
         if data.count > 4096 { break }
     }
-    return String(data: data, encoding: .utf8)?.contains("locked") == true
+    return String(data: data, encoding: .utf8)?.contains(marker) == true
+}
+
+func waitForLocked(_ pipe: Pipe) -> Bool {
+    waitForLine(pipe, containing: "locked")
 }
 
 func launchInstall(catalog: String, root: URL, id: String, base: String,
@@ -435,20 +447,24 @@ do {
 
     let raw = try! Data(contentsOf: URL(fileURLWithPath: fixturePath("catalog-fixture.json")))
     let rawObject = try! JSONSerialization.jsonObject(with: raw) as! [String: Any]
-    check((rawObject["entries"] as! [[String: Any]]).count == 7,
+    check((rawObject["entries"] as! [[String: Any]]).count == 11,
           "full fixture catalog lists the rejected cases")
 
     var fullRejected = false
     do {
         _ = try ModelCatalog.load(data: catalogData(containing: [
             "fixture-good", "fixture-http", "fixture-offhost", "fixture-traversal",
+            "fixture-file-port", "fixture-file-scheme", "fixture-file-userinfo",
+            "fixture-file-fragment",
         ], base: server.base), allowLocalHTTP: true)
     } catch {
         fullRejected = true
     }
     check(fullRejected, "a catalog with an insecure entry is rejected as a whole")
 
-    for entryID in ["fixture-http", "fixture-offhost", "fixture-traversal"] {
+    for entryID in ["fixture-http", "fixture-offhost", "fixture-traversal",
+                    "fixture-file-port", "fixture-file-scheme",
+                    "fixture-file-userinfo", "fixture-file-fragment"] {
         var rejected = false
         do {
             _ = try ModelCatalog.load(data: catalogData(containing: [entryID],
@@ -459,6 +475,36 @@ do {
         }
         check(rejected, "\(entryID) is rejected at catalog load")
     }
+
+    // The port rule is production-specific: the same rejected file is refused
+    // with and without the test opt-in, and loopback HTTP is test-only.
+    var productionPortRejected = false
+    do {
+        _ = try ModelCatalog.load(data: catalogData(containing: ["fixture-file-port"],
+                                                    base: server.base),
+                                  allowLocalHTTP: false)
+    } catch {
+        productionPortRejected = true
+    }
+    check(productionPortRejected, "a non-default file port is refused in production")
+
+    var productionHTTPRejected = false
+    do {
+        _ = try ModelCatalog.load(data: catalogData(containing: ["fixture-good"],
+                                                    base: server.base),
+                                  allowLocalHTTP: false)
+    } catch {
+        productionHTTPRejected = true
+    }
+    check(productionHTTPRejected, "production refuses the loopback HTTP test source")
+    check((try? ModelCatalog.load(data: catalogData(containing: ["fixture-good"],
+                                                    base: server.base),
+                                  allowLocalHTTP: true)) != nil,
+          "the explicit test opt-in accepts loopback HTTP")
+    let productionHTTPS = try! catalogData(containing: ["fixture-good"],
+                                           base: "https://example.com")
+    check((try? ModelCatalog.load(data: productionHTTPS, allowLocalHTTP: false)) != nil,
+          "a default-port HTTPS source loads in production")
 
     let production = try! ModelCatalog.load(
         url: testsRoot.appendingPathComponent("Resources/model-catalog.json"))
@@ -1120,6 +1166,125 @@ do {
     } else {
         check(false, "python3 is available for the worker conformance test")
     }
+}
+
+// MARK: - [18] Legacy flat lease across worker and adoption
+
+print("\n[18] legacy flat installs share one lease with adoption")
+if let python = workerPython() {
+    let zeroSha = "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+    let manifestSha = String(repeating: "0", count: 64)
+    let json = """
+    {"schema":"retouchstudio.model-catalog/1","catalogVersion":"fixture-legacy",
+     "entries":[{"id":"migan","name":"migan legacy fixture",
+     "capabilities":["inpaint"],"version":"1.0.0","format":"fixture",
+     "files":[{"path":"migan_pipeline_v2.onnx","sizeBytes":1,"sha256":"\(zeroSha)",
+     "sourceUrl":"https://example.com/migan_pipeline_v2.onnx"}],
+     "sizeBytes":1,"sha256":"\(manifestSha)","sourceUrl":"https://example.com/migan",
+     "codeLicense":"MIT","weightsLicense":"MIT",
+     "licenseEvidenceUrl":"https://example.com/migan",
+     "platforms":["macos-arm64"],"requiredProvider":"cpu",
+     "minimumContractVersion":"1","preprocess":{"id":"fixture","version":"1"},
+     "deterministic":true,"notes":"fixture"}]}
+    """
+    let legacyCatalog = try! ModelCatalog.load(data: Data(json.utf8))
+    let workerPath = testsRoot.appendingPathComponent("worker").path
+
+    func makeLegacyStore() -> (store: ModelStore, root: URL) {
+        let root = scratchRoot.appendingPathComponent(UUID().uuidString)
+        let flat = root.appendingPathComponent("migan")
+        try! FileManager.default.createDirectory(at: flat, withIntermediateDirectories: true)
+        try! Data([0]).write(to: flat.appendingPathComponent("migan_pipeline_v2.onnx"))
+        return (ModelStore(root: root, catalog: legacyCatalog, platform: "macos-arm64"), root)
+    }
+
+    func launchWorker(_ root: URL, sleepAfterLoad: Bool) -> (Process, Pipe) {
+        let script = sleepAfterLoad ? """
+        import sys, time
+        sys.path.insert(0, sys.argv[1])
+        from pathlib import Path
+        from retouch_ai_worker.catalog import Catalog
+        print(Catalog(Path(sys.argv[2])).require("migan"), flush=True)
+        time.sleep(60)
+        """ : """
+        import sys
+        sys.path.insert(0, sys.argv[1])
+        from pathlib import Path
+        from retouch_ai_worker.catalog import Catalog
+        print(Catalog(Path(sys.argv[2])).require("migan"), flush=True)
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = ["-c", script, workerPath, root.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try! process.run()
+        return (process, pipe)
+    }
+
+    func workerRequire(_ root: URL) -> (Int32, String) {
+        let (process, pipe) = launchWorker(root, sleepAfterLoad: false)
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+    }
+
+    // A running worker holds the shared flat lease; adoption must refuse.
+    let (store, root) = makeLegacyStore()
+    let legacyEntry = legacyCatalog.entry(id: "migan")!
+    let (worker, workerPipe) = launchWorker(root, sleepAfterLoad: true)
+    check(waitForLine(workerPipe, containing: "migan"),
+          "the worker loads a legacy flat model")
+    expectCode(runBlocking { _ = try await store.migrateLegacy(legacyEntry) },
+               "E_MODEL_LEASED",
+               "adoption refuses while the worker holds the flat lease")
+    let flatFile = root.appendingPathComponent("migan/migan_pipeline_v2.onnx")
+    check(FileManager.default.fileExists(atPath: flatFile.path),
+          "a refused adoption leaves the flat file intact")
+    check(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("migan/1.0.0").path),
+          "a refused adoption publishes no version")
+
+    // Killing the worker releases the kernel lease; adoption then succeeds.
+    worker.terminate()
+    worker.waitUntilExit()
+    usleep(150_000)
+    switch runBlocking { _ = try await store.migrateLegacy(legacyEntry) } {
+    case .success: check(true, "adoption succeeds after the worker dies")
+    case .failure(let error):
+        check(false, "adoption succeeds after the worker dies", "\(error)")
+    }
+    check((try? store.activePointer("migan"))?.version == "1.0.0",
+          "the adopted flat install became active")
+    check(!FileManager.default.fileExists(atPath: flatFile.path),
+          "the adopted file left the flat layout")
+    check(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("migan/1.0.0/migan_pipeline_v2.onnx").path),
+          "the adopted file is in the version directory")
+
+    // Adoption holds the exclusive flat lease; the worker must refuse.
+    let (secondStore, secondRoot) = makeLegacyStore()
+    let secondEntry = legacyCatalog.entry(id: "migan")!
+    let exclusive = try! ModelLease.acquireLegacy(store: secondStore, model: "migan",
+                                                  exclusive: true)
+    let refused = workerRequire(secondRoot)
+    check(refused.0 != 0 && refused.1.contains("leased"),
+          "the worker refuses while adoption holds the flat lease", refused.1)
+    check(FileManager.default.fileExists(
+            atPath: secondRoot.appendingPathComponent("migan/migan_pipeline_v2.onnx").path),
+          "the refused worker left the flat file intact")
+    exclusive.release()
+    let allowed = workerRequire(secondRoot)
+    check(allowed.0 == 0, "the worker loads after adoption releases the flat lease",
+          allowed.1)
+    switch runBlocking { _ = try await secondStore.migrateLegacy(secondEntry) } {
+    case .success: check(true, "adoption succeeds after the worker exits")
+    case .failure(let error):
+        check(false, "adoption succeeds after the worker exits", "\(error)")
+    }
+} else {
+    check(false, "python3 is available for the legacy lease test")
 }
 
 print("\n\(failures.isEmpty ? "✓ all model-store checks passed" : "✗ \(failures.count) checks failed")")

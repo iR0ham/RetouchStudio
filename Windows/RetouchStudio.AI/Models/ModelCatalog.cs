@@ -149,15 +149,10 @@ public static class ModelCatalogRules
             !Uri.TryCreate(entry.SourceUrl, UriKind.Absolute, out var entryUri) ||
             string.IsNullOrEmpty(entryUri.Host))
             throw Unsafe($"{entry.Id} has a non-HTTPS source");
-        if (!entryUri.IsDefaultPort && !IsLoopback(entryUri))
-            throw Unsafe($"{entry.Id} uses a non-default source port");
         foreach (var file in entry.Files)
         {
             RequireFileComponent(file.Path, entry.Id);
-            if (!IsAllowedSource(file.SourceUrl, allowLocalHttp) ||
-                !Uri.TryCreate(file.SourceUrl, UriKind.Absolute, out var fileUri) ||
-                !string.Equals(fileUri.Host, entryUri.Host,
-                    StringComparison.OrdinalIgnoreCase))
+            if (!IsRecordedFileSource(file.SourceUrl, entry.SourceUrl, allowLocalHttp))
                 throw Unsafe($"{entry.Id}/{file.Path} does not come from the recorded source");
         }
         if (entry.UnverifiableReason is null && entry.SizeBytes is { } total && total > 0 &&
@@ -166,16 +161,45 @@ public static class ModelCatalogRules
             throw Unsafe($"{entry.Id} total size does not match its files");
     }
 
+    /// <summary>
+    /// Production accepts HTTPS on its default port only. A test may opt into
+    /// loopback HTTP; that exception also covers the ephemeral port a local
+    /// fixture server listens on. A non-default port is never accepted in
+    /// production, even on loopback.
+    /// </summary>
     public static bool IsAllowedSource(string url, bool allowLocalHttp)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length > 0 ||
             url.Contains('#'))
             return false;
-        if (uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)) return true;
-        return allowLocalHttp &&
-               uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) &&
-               IsLoopback(uri);
+        var https = uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+        var testHttp = allowLocalHttp &&
+                       uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) &&
+                       IsLoopback(uri);
+        if (!https && !testHttp) return false;
+        return IsAllowedPort(uri, allowLocalHttp);
+    }
+
+    public static bool IsAllowedPort(Uri uri, bool allowLocalHttp) =>
+        uri.IsDefaultPort || (allowLocalHttp && IsLoopback(uri));
+
+    /// <summary>
+    /// A file must come from the entry's recorded source: same scheme, same
+    /// host, and the same port rules.
+    /// </summary>
+    public static bool IsRecordedFileSource(string url, string entrySource,
+        bool allowLocalHttp)
+    {
+        if (!IsAllowedSource(url, allowLocalHttp) ||
+            !IsAllowedSource(entrySource, allowLocalHttp) ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var fileUri) ||
+            !Uri.TryCreate(entrySource, UriKind.Absolute, out var recordedUri))
+            return false;
+        return string.Equals(fileUri.Scheme, recordedUri.Scheme,
+                   StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(fileUri.Host, recordedUri.Host,
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsLoopback(Uri uri) =>

@@ -154,6 +154,24 @@ final class ModelLease {
         return ModelLease(file: file)
     }
 
+    /// The worker takes this shared while it reads a flat install; adoption
+    /// takes it exclusive before moving any file. Same file on every host.
+    static func acquireLegacy(store: ModelStore, model: String, exclusive: Bool,
+                              timeout: TimeInterval = 0) throws -> ModelLease {
+        try ModelCatalogEntry.requireComponent(model, field: "model id")
+        let file = try LockFile.open(store.layout.legacyLockURL(model))
+        do {
+            try file.acquire(exclusive: exclusive, timeout: timeout,
+                             busyMessage: "\(model)'s flat installation is leased")
+        } catch {
+            file.close()
+            throw ModelStoreError(
+                code: "E_MODEL_LEASED",
+                detail: "\(model)'s flat installation is in use by a running job")
+        }
+        return ModelLease(file: file)
+    }
+
     func release() { file.close() }
     deinit { release() }
 }
@@ -187,6 +205,12 @@ final class ModelStore: @unchecked Sendable {
         }
         func lockURL(model: String, version: String) -> URL {
             locks.appendingPathComponent("\(model)-\(version)")
+        }
+        /// A flat install has no version, so it gets a distinct identity. `@`
+        /// cannot appear in a model id or version, so this can never collide
+        /// with a versioned lock.
+        func legacyLockURL(_ id: String) -> URL {
+            locks.appendingPathComponent("\(id)@legacy")
         }
     }
 
@@ -553,6 +577,12 @@ final class ModelStore: @unchecked Sendable {
         try Task.checkCancellation()
         let gate = try ModelLease.acquireInstallGate(store: self)
         defer { gate.release() }
+        // The flat lease is what the worker holds while it reads this install.
+        // It is taken before hashing and released only after the files moved or
+        // were put back, so a reader never sees a half-moved tree.
+        let legacyLease = try ModelLease.acquireLegacy(store: self, model: entry.id,
+                                                       exclusive: true)
+        defer { legacyLease.release() }
         let lease = try ModelLease.acquire(store: self, model: entry.id,
                                            version: entry.version, exclusive: true)
         defer { lease.release() }
@@ -724,18 +754,8 @@ final class ModelStore: @unchecked Sendable {
 
     static func isAllowedSource(_ url: String, entry: ModelCatalogEntry,
                                 allowLocalHTTP: Bool) -> Bool {
-        guard let parsed = URL(string: url), let host = parsed.host,
-              let source = URL(string: entry.sourceUrl), let sourceHost = source.host,
-              host.caseInsensitiveCompare(sourceHost) == .orderedSame,
-              parsed.user == nil, parsed.password == nil, parsed.fragment == nil else {
-            return false
-        }
-        switch parsed.scheme?.lowercased() {
-        case "https": return true
-        case "http":
-            return allowLocalHTTP && (host == "127.0.0.1" || host == "localhost")
-        default: return false
-        }
+        ModelCatalogEntry.isRecordedFileSource(url, entrySource: entry.sourceUrl,
+                                               allowLocalHTTP: allowLocalHTTP)
     }
 
     private func download(_ url: String, to destination: URL,

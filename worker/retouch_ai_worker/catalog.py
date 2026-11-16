@@ -70,6 +70,12 @@ class ModelEntry:
 
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# The flat layout has no version, so its lease is a distinct identity. The
+# macOS and Windows stores use the same file name: `.locks/<id>@legacy`. A
+# model id or version can never contain `@`, so this cannot collide with a
+# versioned lock.
+LEGACY_LEASE = "@legacy"
+
 
 def _safe_component(value: object, field: str) -> str:
     if not isinstance(value, str) or not _SAFE_COMPONENT.fullmatch(value) or ".." in value:
@@ -188,12 +194,14 @@ class Catalog:
         # them if this process dies.
         self._leases: dict[tuple[str, str], int] = {}
 
-    def _lease(self, entry: ModelEntry, version: str) -> None:
-        if (entry.id, version) in self._leases:
+    def _lease(self, entry: ModelEntry, identity: str, filename: str,
+               label: str) -> None:
+        key = (entry.id, identity)
+        if key in self._leases:
             return
         locks = self.root / ".locks"
         locks.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path = locks / f"{entry.id}-{version}"
+        path = locks / filename
         fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         deadline = time.monotonic() + 5.0
         while True:
@@ -203,13 +211,16 @@ class Catalog:
             except BlockingIOError:
                 if time.monotonic() >= deadline:
                     os.close(fd)
+                    details = {"model": entry.id, "reason": "leased"}
+                    if identity != LEGACY_LEASE:
+                        details["version"] = identity
                     raise WorkerError(
                         MODEL_MISSING,
-                        f"{entry.id} {version} is leased by an install or delete",
-                        {"model": entry.id, "version": version, "reason": "leased"},
+                        f"{entry.id} {label} is leased by an install or delete",
+                        details,
                     )
                 time.sleep(0.05)
-        self._leases[(entry.id, version)] = fd
+        self._leases[key] = fd
 
     def close(self) -> None:
         for fd in self._leases.values():
@@ -245,9 +256,12 @@ class Catalog:
         version = model_root.name
         flat_root = self.root / entry.id
         if model_root == flat_root:
-            pass  # Legacy flat install: no versioned lease exists to take.
+            # Legacy flat installs share one lease with adoption, so migration
+            # cannot move files under a running job. The kernel releases it.
+            self._lease(entry, LEGACY_LEASE, f"{entry.id}{LEGACY_LEASE}",
+                        "flat installation")
         elif model_root.parent == flat_root:
-            self._lease(entry, version)
+            self._lease(entry, version, f"{entry.id}-{version}", version)
         else:
             raise WorkerError(MODEL_MISSING, f"{entry.id} resolved outside its folder",
                               {"model": entry.id})

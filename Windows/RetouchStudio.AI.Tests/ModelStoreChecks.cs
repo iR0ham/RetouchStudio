@@ -97,6 +97,37 @@ public static class ModelStoreChecks
                     }
                     return;
                 }
+                case "--hold-legacy-lock":
+                {
+                    // --hold-legacy-lock <root> <model> <sh|ex> <seconds>
+                    var store = LegacyLeaseStore(args[1]);
+                    using var lease = ModelLease.AcquireLegacy(store, args[2],
+                        args[3] == "ex", TimeSpan.FromSeconds(10));
+                    Console.WriteLine("locked");
+                    Console.Out.Flush();
+                    Thread.Sleep(TimeSpan.FromSeconds(double.Parse(args[4])));
+                    Environment.Exit(0);
+                    return;
+                }
+                case "--require-legacy":
+                {
+                    // --require-legacy <root> <model>
+                    var store = LegacyLeaseStore(args[1]);
+                    try
+                    {
+                        using var lease = ModelLease.AcquireLegacy(store, args[2], false,
+                            TimeSpan.Zero);
+                        var flat = Path.Combine(args[1], args[2], "payload.bin");
+                        Console.WriteLine(File.Exists(flat) ? "loaded" : "missing");
+                        Environment.Exit(File.Exists(flat) ? 0 : 4);
+                    }
+                    catch (ModelStoreError error) when (error.Code == "E_MODEL_LEASED")
+                    {
+                        Console.WriteLine("leased");
+                        Environment.Exit(3);
+                    }
+                    return;
+                }
             }
         }
         catch (Exception error)
@@ -137,6 +168,7 @@ public static class ModelStoreChecks
         RunCleanup();
         RunPointers();
         RunLegacy();
+        RunLegacyLeases();
         RunProductionCatalog();
         Console.WriteLine(_failures == 0
             ? "MODEL STORE CHECKS: PASS"
@@ -160,11 +192,24 @@ public static class ModelStoreChecks
           unverifiable.Sha256 is null, "null size/hash is unverifiable (DR-5)");
         var full = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(FixtureDirectory, "catalog-fixture.json")));
-        C(full.RootElement.GetProperty("entries").GetArrayLength() == 7,
+        C(full.RootElement.GetProperty("entries").GetArrayLength() == 11,
             "full fixture lists the rejected cases");
         C(!tryLoadFull(server.Base), "a catalog with an insecure entry is rejected as a whole");
-        foreach (var id in new[] { "fixture-http", "fixture-offhost", "fixture-traversal" })
+        foreach (var id in new[]
+                 {
+                     "fixture-http", "fixture-offhost", "fixture-traversal",
+                     "fixture-file-port", "fixture-file-scheme",
+                     "fixture-file-userinfo", "fixture-file-fragment",
+                 })
             C(!TryLoadSingle(id, server.Base), $"{id} is rejected at catalog load");
+        C(!TryLoadSingle("fixture-file-port", server.Base, allowLocalHttp: false),
+            "a non-default file port is refused in production");
+        C(!TryLoadSingle("fixture-good", server.Base, allowLocalHttp: false),
+            "production refuses the loopback HTTP test source");
+        C(TryLoadSingle("fixture-good", server.Base, allowLocalHttp: true),
+            "the explicit test opt-in accepts loopback HTTP");
+        C(TryLoadSingle("fixture-good", "https://example.com", allowLocalHttp: false),
+            "a default-port HTTPS source loads in production");
     }
 
     private static void RunNoNetwork()
@@ -691,6 +736,60 @@ public static class ModelStoreChecks
             "the mismatching file stayed where it was");
     }
 
+    private static void RunLegacyLeases()
+    {
+        Console.WriteLine("[M18] legacy flat lease: adoption vs a live reader");
+        using var server = new FixtureServer();
+        server.Serve("/good/payload.bin", "fixture-one\n");
+        var store = MakeStore(server);
+        var entry = store.Catalog.Entry("fixture-good")!;
+        var flat = store.Layout.ModelDirectory("fixture-good");
+        Directory.CreateDirectory(flat);
+        File.WriteAllText(Path.Combine(flat, "payload.bin"), "fixture-one\n");
+
+        var (holder, holderLine) = LaunchLegacyHolder(store.Layout.Root, "fixture-good",
+            false);
+        C(holderLine == "locked", "a child holds the shared flat lease");
+        ExpectCode(() => store.MigrateLegacyAsync(entry).GetAwaiter().GetResult(),
+            "E_MODEL_LEASED", "adoption refuses while a reader holds the flat lease", C);
+        C(File.Exists(Path.Combine(flat, "payload.bin")),
+            "a refused adoption leaves the flat file intact");
+        C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+            "a refused adoption publishes no version");
+        Stop(holder);
+        holder.WaitForExit();
+        Thread.Sleep(150);
+        store.MigrateLegacyAsync(entry).GetAwaiter().GetResult();
+        C(store.ActivePointer("fixture-good")?.Version == "1.0.0",
+            "adoption succeeds after the reader dies");
+        C(!File.Exists(Path.Combine(flat, "payload.bin")),
+            "the adopted file left the flat layout");
+
+        var second = MakeStore(server);
+        var secondEntry = second.Catalog.Entry("fixture-good")!;
+        var secondFlat = second.Layout.ModelDirectory("fixture-good");
+        Directory.CreateDirectory(secondFlat);
+        File.WriteAllText(Path.Combine(secondFlat, "payload.bin"), "fixture-one\n");
+        // Adoption holds the exclusive flat lease while the worker tries to load.
+        using (var exclusive = ModelLease.AcquireLegacy(second, "fixture-good", true))
+        {
+            var (refused, refusedLine) = LaunchRequireLegacy(second.Layout.Root,
+                "fixture-good");
+            refused.WaitForExit();
+            C(refusedLine == "leased",
+                "the worker refuses while adoption holds the flat lease", refusedLine);
+            C(File.Exists(Path.Combine(secondFlat, "payload.bin")),
+                "the refused worker left the flat file intact");
+        }
+        var (allowed, allowedLine) = LaunchRequireLegacy(second.Layout.Root, "fixture-good");
+        allowed.WaitForExit();
+        C(allowedLine == "loaded",
+            "the worker loads after adoption releases the flat lease", allowedLine);
+        second.MigrateLegacyAsync(secondEntry).GetAwaiter().GetResult();
+        C(second.ActivePointer("fixture-good")?.Version == "1.0.0",
+            "adoption succeeds after the worker exits");
+    }
+
     private static void RunProductionCatalog()
     {
         Console.WriteLine("[M17] shipped catalog: DR-5, capability and platform facts");
@@ -732,7 +831,7 @@ public static class ModelStoreChecks
         }
     }
 
-    private static bool TryLoadSingle(string id, string baseUrl)
+    private static bool TryLoadSingle(string id, string baseUrl, bool allowLocalHttp = true)
     {
         try
         {
@@ -742,7 +841,7 @@ public static class ModelStoreChecks
                 .Where(e => e.GetProperty("id").GetString() == id)
                 .Select(e => e.GetRawText());
             var json = $$"""{"schema":"retouchstudio.model-catalog/1","catalogVersion":"fixture-1","entries":[{{string.Join(",", entries)}}]}""";
-            _ = ModelCatalog.LoadJson(json.Replace("{base}", baseUrl), allowLocalHttp: true);
+            _ = ModelCatalog.LoadJson(json.Replace("{base}", baseUrl), allowLocalHttp);
             return true;
         }
         catch (ModelStoreError)
@@ -844,6 +943,48 @@ public static class ModelStoreChecks
         var line = process.StandardOutput.ReadLine();
         return (process, line);
     }
+
+    private static (Process Process, string? Line) LaunchLegacyHolder(string root,
+        string model, bool exclusive)
+    {
+        var start = new ProcessStartInfo(Environment.ProcessPath!)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add("--hold-legacy-lock");
+        start.ArgumentList.Add(root);
+        start.ArgumentList.Add(model);
+        start.ArgumentList.Add(exclusive ? "ex" : "sh");
+        start.ArgumentList.Add("60");
+        var process = Process.Start(start)!;
+        var line = process.StandardOutput.ReadLine();
+        return (process, line);
+    }
+
+    private static (Process Process, string? Line) LaunchRequireLegacy(string root,
+        string model)
+    {
+        var start = new ProcessStartInfo(Environment.ProcessPath!)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add("--require-legacy");
+        start.ArgumentList.Add(root);
+        start.ArgumentList.Add(model);
+        var process = Process.Start(start)!;
+        var line = process.StandardOutput.ReadLine();
+        return (process, line);
+    }
+
+    private static ModelStore LegacyLeaseStore(string root) =>
+        new(root, ModelCatalog.LoadJson(
+                """{"schema":"retouchstudio.model-catalog/1","catalogVersion":"test","entries":[]}""",
+                allowLocalHttp: true),
+            "windows-x64", allowLocalHttp: true);
 
     private static bool TryCreateJunction(string link, string target)
     {

@@ -3,7 +3,7 @@
 **Status:** implemented for W5-2 on both hosts (PR #68). It follows the frozen
 decisions in [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
 §3.7–3.10 and does not change them.
-**Date:** 2026-11-16.
+**Date:** 2026-11-17 (W5-2 review remediation).
 **Platforms:** macOS Swift host + Python worker; Windows C# host + C# worker.
 
 ## 1. Owned artefacts
@@ -13,7 +13,7 @@ decisions in [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_R
 | Bundled catalog | `Resources/model-catalog.json` (copied into the macOS bundle and the Windows app folder) |
 | Shared test catalog | `Tests/Fixtures/model-store/catalog-fixture.json` and `catalog-fixture-v2.json` |
 | Store roots | macOS: `~/Library/Application Support/RetouchStudio/AI/models`; Windows: `%LOCALAPPDATA%\Retouch Studio\AI\models` |
-| Worker access | The worker reads only the active version of each model. |
+| Worker access | The worker reads only the active version of each model; a legacy flat install is read under a shared lease on `.locks/<id>@legacy`. |
 
 The catalog is data, not a remote feed. No build fetches it and no launch
 refreshes it. A new catalog ships with the application build.
@@ -40,11 +40,13 @@ supported (DR-5). SAM 2.1 tiny is listed that way today: the repository has no
 recorded size or SHA-256 for its checkpoint, and the SAM runtime package is not
 installed in the bundled worker.
 
-Source rules: HTTPS only; the file URL must use the same host and scheme as the
-entry's recorded source; no credentials, fragments or non-default ports in
-production. Redirects are not followed: an HTTP 3xx is a non-200 failure, so a
-download cannot silently move to another host. Local HTTP is accepted only by
-tests through an injected flag.
+Source rules: HTTPS only; the file URL must use the same scheme and host as
+the entry's recorded source; no credentials or fragments; the default port
+only in production. A test may opt into loopback HTTP, and that exception also
+covers the ephemeral port of the local fixture server; a non-default port is
+never accepted in production, even on loopback. Redirects are not followed: an
+HTTP 3xx is a non-200 failure, so a download cannot silently move to another
+host. Local HTTP is accepted only by tests through an injected flag.
 Only URLs already recorded from the official source may appear; none is
 invented.
 
@@ -55,7 +57,8 @@ models/<model-id>/<version>/          verified payload + manifest.json
 models/<model-id>/active.json         atomic active-version pointer
 models/.staging/<uuid>/               download in progress
 models/.quarantine/<uuid>/            deletion in progress
-models/.locks/<model-id>-<version>    OS lock file
+models/.locks/<model-id>-<version>    OS lock file for a versioned model
+models/.locks/<model-id>@legacy       OS lock file for a flat install
 ```
 
 `manifest.json` records the schema, model id, version, catalog version, the
@@ -94,6 +97,15 @@ The OS is the authority; an in-memory registry is not.
   `FileShare.Read` (other readers allowed, delete denied); exclusive access
   uses `FileShare.None`. Delete/rename of the directory fails while a reader
   holds the handle, and the handle closes on process death.
+- Legacy flat installs have no version, so they use the distinct identity
+  `.locks/<id>@legacy` on every host. `@` is not a legal character in a model
+  id or version, so this cannot collide with a versioned lock. The Python
+  worker takes it shared while reading a flat model and holds it for the
+  process lifetime; otherwise it takes the versioned lock. Adoption takes the
+  same file exclusive before hashing or moving anything, so it fails with
+  `E_MODEL_LEASED` while a worker reads the flat install, and a worker that
+  starts during adoption waits, then refuses with the same error rather than
+  observing a half-moved tree. Killing either process releases the lease.
 
 Delete order: take exclusivity (refuse with `E_MODEL_LEASED` when any reader
 exists), replace/remove the active pointer atomically, rename the version into
@@ -123,13 +135,24 @@ the frozen codes. Insufficient disk space and unsafe sources are
 `Tests/Fixtures/model-store` is shared by both hosts. The fixture server serves
 deterministic bytes; the tests substitute `{base}` with a local listener. Both
 suites cover: consent refusal before bytes, SHA-256 mismatch, size mismatch,
-missing metadata, HTTP/off-host/traversal rejection, cancelled download,
-network interruption, insufficient space, corrupt manifest, missing/dangling
-active pointer, two concurrent installs, atomic pointer replacement, retry
-after failure, startup cleanup, and the OS lock races from decision-record
-§3.9 (delete during a lease, delete during a download, two processes
-installing, update/rollback with a live lease, stale/live locks). Locks and
-crash recovery are exercised with real child processes, not mocks.
+missing metadata, HTTP/off-host/traversal rejection, non-default file port,
+file scheme mismatch, file credentials, file fragments, production rejection
+of loopback HTTP and test-mode acceptance of it, cancelled download, network
+interruption, insufficient space, corrupt manifest, missing/dangling active
+pointer, two concurrent installs, atomic pointer replacement, retry after
+failure, startup cleanup, and the OS lock races from decision-record §3.9
+(delete during a lease, delete during a download, two processes installing,
+update/rollback with a live lease, stale/live locks). Every rejected URL case
+is a shared fixture loaded by both suites. Locks and crash recovery are
+exercised with real child processes, not mocks.
+
+Legacy flat leases are tested with a real process on each host: a shared
+holder blocks adoption with `E_MODEL_LEASED`; an exclusive adoption lease makes
+the reader refuse; killing the holder releases the kernel lease and adoption
+then succeeds; a refused adoption leaves the flat files untouched. On macOS
+the shared holder is the actual Python worker; on Windows it is a child process
+holding the same `ModelLease.AcquireLegacy` file, because the Windows worker
+does not load weights yet (W5-3).
 
 ## 9. Honesty gates
 
@@ -153,10 +176,12 @@ crash recovery are exercised with real child processes, not mocks.
 
 Both stores implement the same order: validate → prepare layout → install gate
 → version lease → disk check → download to `.staging` → per-file size and hash
-→ manifest → one directory move → one pointer move. `active.json` is written
-by a same-directory rename (`rename(2)` on macOS, `File.Move(..., true)` on
-NTFS). Leases are `flock` on macOS and share-mode handles on Windows; both are
-released by the kernel when the holder dies.
+→ manifest → one directory move → one pointer move. Adoption inserts the
+exclusive legacy lease between the install gate and the version lease, before
+hashing. `active.json` is written by a same-directory rename (`rename(2)` on
+macOS, `File.Move(..., true)` on NTFS). Leases are `flock` on macOS and
+share-mode handles on Windows; both are released by the kernel when the holder
+dies.
 
 Crash injection is compiled only into the macOS test binary
 (`-D RETOUCH_TESTING`) and, on Windows, requires the test process's
@@ -165,10 +190,11 @@ production app never sets either variable. Children die with a real `_exit` /
 `Environment.Exit(86)`; download kills use `SIGKILL` / `Process.Kill`.
 
 Legacy adoption reads the pre-versioning flat layout only after hashing every
-file against the catalog. Hashing is local; the files are moved, not copied,
-and a mismatch moves nothing. The Python worker keeps reading the flat layout
-until an `active.json` exists, so an already-installed model keeps working
-while the manager offers adoption.
+file against the catalog, while holding the exclusive `.locks/<id>@legacy`
+lease. Hashing is local; the files are moved, not copied, and a mismatch or a
+lease conflict moves nothing. The Python worker keeps reading the flat layout
+until an `active.json` exists, under the same shared lease, so an
+already-installed model keeps working while the manager offers adoption.
 
 Windows specifics:
 
@@ -180,8 +206,10 @@ Windows specifics:
 - A junction or symlink at `.staging`/`.quarantine`/`.locks` is refused before
   any write.
 - The Windows worker does not load model weights yet (W5-3 owns inference).
-  The shared-lease API and the host-side race tests are in place; worker-side
-  lease evidence on Windows is therefore **NOT VERIFIED** in W5-2.
+  The shared-lease API (`ModelLease.Acquire`, `ModelLease.AcquireLegacy`) and
+  the host-side race tests, including the legacy flat lease, are in place;
+  worker-side inference lease evidence on Windows is therefore **NOT VERIFIED**
+  in W5-2.
 
 ## 11. Test map
 
@@ -192,6 +220,7 @@ The following required cases are exercised by both suites unless noted:
 | Consent refusal before bytes / no network at startup | 2, 3 | M2, M3 |
 | SHA mismatch, size mismatch, missing metadata | 4 | M4 |
 | Unofficial HTTP source, off-host file, traversal | 1 | M1 |
+| File non-default port, scheme mismatch, credentials, fragment; production HTTP vs test loopback | 1 | M1 |
 | Atomic install and pointer; idempotent retry | 3 | M3 |
 | Cancelled download, network interruption, safe retry | 5, 6 | M5, M6 |
 | Insufficient disk | 7 | M7 |
@@ -204,24 +233,25 @@ The following required cases are exercised by both suites unless noted:
 | Cleanup grace, live lock, stale lock, unidentifiable tree | 14 | M14 |
 | Atomic pointer replacement; dangling pointer | 15 | M15 |
 | Legacy flat adoption without network | 16 | M16 |
+| Legacy flat lease: worker/adoption conflict, death release, files intact | 18 | M18 |
 | Shared catalog / DR-5 / platform facts | 1 | M17 |
-| Worker reads `active.json` and waits on the lease | 17 | W5-3 (not yet loading models) |
+| Worker reads `active.json`, flat installs and waits on either lease | 17, 18 | W5-3 (not yet loading models) |
 
 macOS local evidence: `RETOUCH_ARCH=arm64 ./Tests/run.sh` passes the model-store
-suite (129 checks) and the existing engine/model/runtime-process suites on this
-machine; the runtime-v2 suite needs `worker/.venv`, which CI creates. The
-model-store suite was re-run standalone after the last store change and passed.
+suite (148 checks, 18 sections) and the existing engine/model/runtime-process
+suites on this machine; the runtime-v2 suite needs `worker/.venv`, which CI
+creates. The model-store suite was re-run standalone after the last store change
+and passed, including the real-Python worker legacy lease races.
 `RETOUCH_SKIP_WORKER=1 ./build.sh release` validates the bundle and its catalog
 copy.
 
 Cross-check evidence for the C# implementation was also run on this macOS
-host with the .NET 10 SDK: `RetouchStudio.AI.Tests` (M1–M17) passed, and the WPF
-host compiled with `-p:EnableWindowsTargeting=true`. That exercises Unix paths
-and Unix file sharing, not Windows path syntax or Windows share modes; the
-hosted `windows-2025` job is the authoritative Windows evidence. On that job
-the model-store checks reported PASS before the unrelated UI smoke check caught
-the top-bar layout regression, which was fixed by moving the manager entry to
-the status bar.
+host with .NET SDK 10.0.404: `RetouchStudio.AI.Tests` reported
+`MODEL STORE CHECKS: PASS` for M1–M18 (the [C] worker-handshake check needs the
+Windows worker executable, which only the Windows job builds). The WPF host
+compiled with `-p:EnableWindowsTargeting=true`. That exercises Unix paths and
+Unix file sharing, not Windows path syntax or Windows share modes; the hosted
+`windows-2025` job is the authoritative Windows evidence.
 
 Windows evidence is hosted-runner CI; it is not native-hardware evidence and is
 labelled as such in the W5-2 report.
