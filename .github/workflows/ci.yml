@@ -2,7 +2,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, develop]
+    # Stacked milestone branches are listed beside the integration branches:
+    # a PR whose base is a feature branch must pass the same five contexts
+    # before it can be judged ready, not only PRs that end on `main` or
+    # `develop`.
+    branches: [main, develop, 'w5-**']
   push:
     # `main` is deliberately absent. With strict required checks the pull
     # request run checks out `refs/pull/N/merge`, whose tree is exactly the
