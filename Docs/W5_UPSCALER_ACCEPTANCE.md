@@ -146,3 +146,33 @@ edits, and the model bytes themselves are untouched.
 - No inference result: nothing in §1–§4 was produced by running the model.
 - The runtime's MPS probe is a probe, not a benchmark; per-job seconds on
   this hardware come from the harness run once it is approved.
+
+---
+
+## 6. Windows finding (2026-11-17, read-only research; Windows stays BLOCKED)
+
+Sources were reviewed for whether an existing ONNX path could serve a
+Windows upscaler. Findings, with nothing adopted and no catalog change:
+
+- Auto-converted community ONNX versions of the same upstream model exist:
+  [onnx-community/swin2SR-realworld-sr-x4-64-bsrgan-psnr-ONNX](https://huggingface.co/onnx-community/swin2SR-realworld-sr-x4-64-bsrgan-psnr-ONNX)
+  and its predecessor
+  [Xenova/swin2SR-realworld-sr-x4-64-bsrgan-psnr](https://huggingface.co/Xenova/swin2SR-realworld-sr-x4-64-bsrgan-psnr),
+  produced by automatic conversion for Transformers.js and published in
+  multiple quantizations (including `model_q4f16.onnx`).
+- Why none of them is adopted here: the frozen catalog carries the exact
+  source bytes and digests of the *original* three files; a converted
+  artifact is different bytes with provenance this repository cannot verify
+  (the conversion script, its date and its quality are community claims, NOT
+  VERIFIED), and decision 6 of the W5 record keeps Windows AI work out of
+  scope until it is explicitly reopened. Converting a model locally is the
+  same refusal for the same reason.
+- Performance on Windows CPUs is unmeasured: the general ONNX Runtime
+  documentation discusses tiled high-resolution inference and CPU tuning
+  ([performance troubleshooting](https://onnxruntime.ai/docs/performance/tune-performance/troubleshooting.html),
+  [device tensors](https://onnxruntime.ai/docs/performance/device-tensor.html))
+  but no published benchmark of *this* model on *this* use exists, so no
+  Windows CPU perf claim is made or repeatable.
+- Consequence: `upscale.4x` remains `blocked` on Windows in the capability
+  adapter; Windows keeps no upscaler path; nothing in this repository
+  downloads, converts or approves an ONNX artifact.
