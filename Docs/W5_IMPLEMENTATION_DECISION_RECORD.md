@@ -207,7 +207,9 @@ codes (`-32011`/`-32016` → `E_MODEL_MISSING`, `-32012` → `E_MODEL_LEASED`,
 `E_UNSUPPORTED`). `-32020` is additive in contract 1: the frozen registry never
 assigned a numeric code to "not provided by this adapter", and an older host
 that does not know it still fails the job rather than treating it as success.
-No other code or field changed.
+No other code or field changed. The worker's load path reuses `-32019` for a
+file whose size differs from the catalog record, so `E_MODEL_UNVERIFIED` means
+integrity in both the adoption and the job path.
 
 ### 3.5 Job request and result fields
 

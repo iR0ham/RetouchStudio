@@ -1,10 +1,12 @@
 # W5-3 platform adapters and capability reporting
 
 **Status:** implemented 2026-11-17 on top of the merged W5-1/W5-2 work; PR
-#69. Hosted CI run 44095581869 is green on head `cd872e0` (macOS Integration,
+#69. Hosted CI run 44110079042 is green on head `45e9e30` (macOS Integration,
 Windows App, Windows StudioCore, StudioCore Boundary, Platform-neutral
-Conformance). Anything that could only be built on a hosted Windows runner is
-identified below; nothing here claims physical Windows hardware validation.
+Conformance), after a review of the kind-only job path; run 44095581869 was
+green on `cd872e0` before it. Anything that could only be built on a hosted
+Windows runner is identified below; nothing here claims physical Windows
+hardware validation.
 
 **Scope:** make both platforms answer the frozen W5-0 capability vocabulary
 truthfully, and refuse what they cannot run. No new AI capability is added
