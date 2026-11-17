@@ -168,6 +168,14 @@ if (File.Exists(worker))
                 "an unknown capability is an invalid parameter",
                 unknownJob?.ToJsonString());
 
+            // The Windows adapter has no kind-only path at all: a submission
+            // without a capability id is refused, never run.
+            var kindOnlyJob = client.Call("job.submit",
+                parameters: new JsonObject { ["kind"] = "upscale" });
+            Check(kindOnlyJob?["error"]?["code"]?.GetValue<int>() == -32602,
+                "a kind-only job submission is refused",
+                kindOnlyJob?.ToJsonString());
+
             var rejected = client.Call("ping", contractVersion: "999");
             Check(rejected?["error"]?["code"]?.GetValue<int>() == -32600,
                 "a foreign contract version is refused", rejected?.ToJsonString());

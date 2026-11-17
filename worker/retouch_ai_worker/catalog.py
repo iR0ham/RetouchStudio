@@ -17,7 +17,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .protocol import BUSY, LICENSE_BLOCKED, MODEL_MISSING, UNKNOWN_MODEL, WorkerError
+from .protocol import (BUSY, CHECKSUM_MISMATCH, LICENSE_BLOCKED, MODEL_MISSING,
+                       UNKNOWN_MODEL, WorkerError)
 
 MODEL_ROOT = Path(os.environ.get(
     "RETOUCH_AI_MODELS",
@@ -298,12 +299,27 @@ class Catalog:
             # The versioned lease is held; the flat one describes a layout
             # that adoption has already removed.
             self._release(entry, LEGACY_LEASE)
+        identity = LEGACY_LEASE if model_root == flat_root else model_root.name
         for spec in entry.files:
             target = model_root / spec.path
-            if not target.exists():
+            try:
+                size = target.stat().st_size
+            except OSError:
+                self._release(entry, identity)
                 raise WorkerError(MODEL_MISSING, f"{entry.id} is not installed",
                                   {"model": entry.id, "missing": spec.path,
                                    "download": entry.source})
+            if spec.bytes is not None and size != spec.bytes:
+                # The same size check capability.list reports as blocked. A
+                # submission that names only a job kind must not load a file
+                # the record says is damaged. The lease is dropped so the
+                # model can still be deleted or reinstalled.
+                self._release(entry, identity)
+                raise WorkerError(CHECKSUM_MISMATCH,
+                                  f"{entry.id} failed its recorded size check",
+                                  {"model": entry.id, "file": spec.path,
+                                   "expected_bytes": spec.bytes,
+                                   "actual_bytes": size})
         return model_root
 
     def health(self) -> dict:

@@ -160,7 +160,7 @@ capabilities.
 **Status (2026-11-17):** implemented on both adapters; PR #69. Hosted CI run
 44095581869 is green on head `cd872e0` (macOS Integration, Windows App,
 Windows StudioCore, StudioCore Boundary, Platform-neutral Conformance;
-`Ran 85 tests`, `AI RUNTIME TESTS: PASS`, `WINDOWS APP BUILD: PASS`). Only
+`Ran 88 tests`, `AI RUNTIME TESTS: PASS`, `WINDOWS APP BUILD: PASS`). Only
 `upscale.4x` on macOS is `supported`, from the recorded 4× run; every other
 capability carries an explicit state and reason. The macOS job path still
 submits by kind, so capability refusal applies to callers that name a

@@ -52,6 +52,16 @@ table of its own.
   with the missing model for `requires_model`. The macOS host keeps submitting
   by job kind in W5-3, so existing jobs are unchanged; the refusal path is
   covered by worker tests.
+- **The kind-only path enforces the runnable checks itself.** Every job
+  resolves its weights through `Catalog.require`, so a kind-only submission
+  still fails before loading on a missing model (`-32011`), an uncleared
+  licence (`-32010`) or a file whose size differs from the catalog record
+  (`-32019`, `E_MODEL_UNVERIFIED`). The size check was added after review: the
+  report already called a truncated install `blocked`, but the load path only
+  checked existence, so the kind path could load it. A refused model releases
+  its lease. Qualification states — no recorded run, legacy flat layout, a
+  DR-5 entry without size or SHA-256 — stay runnable on purpose: they describe
+  what may be *claimed*, and running them is how evidence gets recorded.
 - **Cancel latency.** The worker records when a cancel was first requested and
   reports `cancelLatencyMs` in the job result. It does not claim instant
   cancellation; the value is what actually happened.
@@ -84,19 +94,22 @@ table of its own.
 
 ## Tests
 
-- Worker: 85 tests in `worker/tests` (`Tests/run-worker.sh`). 11 are new for
+- Worker: 88 tests in `worker/tests` (`Tests/run-worker.sh`). 14 are new for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
-  blocks, plus server-level refusals (`-32020`, `-32011`, mismatched kind) and
-  the numeric cancel latency. Locally three `test_engine` composites error
+  blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
+  kind-only job that must not load a size-mismatched model (`-32019`), and the
+  numeric cancel latency. Locally three `test_engine` composites error
   because this machine has no OpenCV; CI installs the hashed worker venv.
 - macOS: 11 new checks in `Tests/ModelTests.swift` decode and reject reports,
   keep `requires_model` spelling, and check the typed names. The full
   `MODEL TESTS` suite passes locally on arm64.
 - Windows: `RetouchStudio.AI.Tests/Program.cs` now checks
   `capability.list` over a real worker pipe (16 ids, no support, reasons),
-  the `-32020`/`-32602` refusals, the host adapter parse, and the stopped-pipe
-  `E_WORKER_MISSING` timing. Run 44095581869 on the hosted `windows-2025`
-  runner reports `AI RUNTIME TESTS: PASS` and `WINDOWS APP BUILD: PASS`.
+  the `-32020`/`-32602` refusals, that a kind-only `job.submit` is refused
+  (`-32602`, so the Windows adapter has no legacy path), the host adapter
+  parse, and the stopped-pipe `E_WORKER_MISSING` timing. Run 44095581869 on the
+  hosted `windows-2025` runner reports `AI RUNTIME TESTS: PASS` and
+  `WINDOWS APP BUILD: PASS`.
 
 ## Limitations, stated plainly
 
@@ -107,5 +120,10 @@ table of its own.
 - The macOS capability panel was type-checked and its decode logic tested, but
   not exercised in a live UI session in this worktree (the owner's running app
   is left untouched).
-- Capability-based job refusal is enforced when a caller sends `capabilityId`;
-  the macOS production job path still sends job kinds in W5-3.
+- Capability-based refusal is enforced when a caller sends `capabilityId`, and
+  the kind-only macOS path still enforces presence, licence and integrity in
+  the worker. It does not refuse the `blocked` claim states (no evidence,
+  legacy layout, DR-5 metadata): doing so would stop the existing mask, heal
+  and upscale jobs and the runs that produce evidence. The macOS provider
+  record is static (`available`); a missing MLX/torch runtime fails the job
+  with `E_INTERNAL` rather than being reported as an unavailable provider.

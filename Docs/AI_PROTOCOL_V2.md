@@ -108,6 +108,15 @@ silently dropped. The macOS host keeps submitting by job kind in W5-3, so
 existing jobs take the unchanged path; the refusal is the contract for hosts
 that name capabilities (the Windows adapter requires the id).
 
+A submission that names only `kind` is still checked by the worker's own catalog
+before any weights load: a missing model is `-32011`, an uncleared licence is
+`-32010`, and a file whose size differs from the catalog record is `-32019`
+(`E_MODEL_UNVERIFIED`), the same condition `capability.list` reports as
+`blocked`. The kind path deliberately does not refuse the `blocked` states that
+describe a *claim* (no recorded run, legacy flat layout, a catalog entry without
+size or SHA-256); those keep already-installed models usable, and running them
+is how the evidence for a support claim gets recorded.
+
 ## Errors
 
 Standard JSON-RPC codes: `-32700` parse, `-32600` invalid request

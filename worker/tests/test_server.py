@@ -9,8 +9,9 @@ from pathlib import Path
 
 from retouch_ai_worker.catalog import Catalog
 from retouch_ai_worker.capabilities import PROVIDER, VOCABULARY
-from retouch_ai_worker.protocol import (BUSY, MODEL_MISSING, PATH_DENIED,
-                                        UNSUPPORTED, WorkerError, decode, encode)
+from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, MODEL_MISSING,
+                                        PATH_DENIED, UNSUPPORTED, WorkerError,
+                                        decode, encode)
 from retouch_ai_worker.server import JobManager, WorkerServer
 from retouch_ai_worker.transport import read_image
 
@@ -30,6 +31,18 @@ class FakeEngine:
             return {"finished": True}
         if kind == "boom":
             raise WorkerError(-32602, "bad input", {"field": "prompt"})
+        raise WorkerError(-32601, f"no such kind {kind}")
+
+
+class ModelEngine:
+    """A job that resolves its weights through the catalog, like Engine does."""
+
+    def __init__(self, catalog):
+        self.catalog = catalog
+
+    def run(self, kind, params, ctx):
+        if kind == "upscale":
+            return {"root": str(self.catalog.require("swin2sr-x4"))}
         raise WorkerError(-32601, f"no such kind {kind}")
 
 
@@ -246,6 +259,52 @@ class ServerTests(unittest.TestCase):
         reply = self.session.call("job.submit", {
             "kind": "patch_edit", "capabilityId": "upscale.4x", "params": {}})
         self.assertEqual(reply["error"]["code"], UNSUPPORTED)
+
+    def test_kind_only_submission_cannot_load_a_damaged_model(self):
+        # The production macOS host sends no capabilityId. That path must
+        # still fail at load time when capability.list reports the install
+        # blocked for a size mismatch.
+        root = Path(self.tmp.name)
+        version = self.server.catalog.root / "swin2sr-x4" / "1.0.0"
+        version.mkdir(parents=True)
+        for name, size in (("config.json", 772), ("preprocessor_config.json", 152),
+                           ("pytorch_model.bin", 48)):
+            with (version / name).open("wb") as handle:
+                handle.truncate(size)
+        (self.server.catalog.root / "swin2sr-x4" / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": "swin2sr-x4", "version": "1.0.0",
+        }), encoding="utf-8")
+        reported = {item["capabilityId"]: item
+                    for item in self.session.call("capability.list")["result"]["capabilities"]}
+        self.assertEqual(reported["upscale.4x"]["state"], "blocked")
+        self.assertIn("size check", reported["upscale.4x"]["reason"])
+
+        manager = JobManager(ModelEngine(self.server.catalog), root / "jobs",
+                             (root / "inputs",))
+        server = WorkerServer(root / "model.sock", manager, self.server.catalog,
+                              (root / "inputs",))
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        session = Session(root / "model.sock")
+        try:
+            job_id = session.call("job.submit",
+                                  {"kind": "upscale", "params": {}})["result"]["job_id"]
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                status = session.call("job.status", {"job_id": job_id})["result"]
+                if status["status"] in ("succeeded", "failed", "cancelled"):
+                    break
+                time.sleep(0.02)
+            result = session.call("job.result", {"job_id": job_id})["result"]
+        finally:
+            session.close()
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(result["error"]["code"], CHECKSUM_MISMATCH)
+        self.assertEqual(result["error"]["data"]["model"], "swin2sr-x4")
 
     def test_failed_job_reports_safe_error(self):
         job_id = self.session.call("job.submit",
