@@ -96,9 +96,10 @@ table of its own.
 
 ## Tests
 
-- Worker: 116 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
-  of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15 and the
-  gate's admitting half adds 1 (see the
+- Worker: 120 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+  of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15, the
+  gate's admitting half adds 1 and the independent review's fixes add 4 (see
+  the
   addenda). 14 of the W5-3 tests are for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a

@@ -169,11 +169,18 @@ no patch files.
     spend seconds and hundreds of megabytes to answer with a claim.
 12. **An artifact is never alone.** `provenance.publish` lands the sidecar
     first and the artifact rename is the commit point, then re-reads the pair
-    and withdraws both if the digests disagree. No filesystem makes two
-    renames atomic, so the guarantee comes from the order: the state a crash
-    can leave is a sidecar with no artifact — inert, cleared by
-    `provenance.reconcile` when the worker starts and its job folders are
-    idle — never an artifact whose provenance failed to arrive.
+    and withdraws both if the digests disagree, and refuses outright to
+    publish over an artifact some other job already wrote. No filesystem makes
+    two renames atomic, so the guarantee comes from the order: the state a
+    crash can leave is a sidecar with no artifact — inert, cleared by
+    `provenance.reconcile` — never an artifact whose provenance failed to
+    arrive. The sweep is bounded by time as well: it takes a timestamp and
+    clears only sidecars and half-written sidecar temps older than it, so a
+    second worker sharing the jobs root cannot delete the evidence out from
+    under a commit that is about to verify it. A sidecar written in the
+    instant before that bound can still be cleared, and the commit that was
+    about to verify it then withdraws its artifact — a lost job, never an
+    unprovenanced one.
 
 ## Environment
 
@@ -191,7 +198,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-116 tests, no GPU and no model download: framing, contract versioning, request
+120 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing

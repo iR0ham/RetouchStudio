@@ -187,10 +187,17 @@ def publish(staged: Path, target: Path, record: dict) -> Path:
     """Commit a rendered artifact: the sidecar lands, then the artifact does.
 
     The caller has already written `staged`; nothing at `target` is visible
-    until the last rename. A failed artifact rename takes the sidecar back
-    with it, and a pair that disagrees after landing is removed whole, so the
-    only way this returns is with a complete, self-consistent artifact.
+    until the last rename. A failed artifact rename takes the sidecar back with
+    it, and a pair that disagrees after landing is removed whole, so the only way
+    this returns is with a complete, self-consistent artifact.
+
+    It refuses first when something is already at `target`. Each job publishes
+    into a folder of its own, so a file there was put there by someone else, and
+    renaming over it would strip the provenance from an artifact this call never
+    rendered. Refusing leaves that older pair exactly as it was.
     """
+    if target.exists():
+        raise ProvenanceError(f"an artifact is already published as {target.name}")
     sidecar = write(target, record)
     try:
         os.replace(staged, target)
@@ -206,19 +213,46 @@ def publish(staged: Path, target: Path, record: dict) -> Path:
     return sidecar
 
 
-def reconcile(folder: Path) -> list[Path]:
-    """Remove sidecars in a job folder that have no artifact beside them.
+def reconcile(folder: Path, not_newer_than: float | None = None) -> list[Path]:
+    """Clear what a crashed publication can leave in a job folder.
 
-    This is the crash recovery for the window between the two renames. It
-    touches files ending in `.provenance.json` directly inside `folder` and
-    only those whose artifact is absent, so a completed pair, the artifacts
-    themselves and any other file are left exactly as they were.
+    Two things qualify. A sidecar whose artifact never arrived is inert: nothing
+    adopts a record with nothing to describe, and startup removes it. A hidden
+    sidecar temp is that record's bytes before its rename, so it is swept by the
+    same name pattern — otherwise a kill between `O_CREAT` and `os.replace`
+    leaves provenance-looking payload in the folder forever.
+
+    `not_newer_than` bounds the sweep to what an earlier process can have
+    written. A worker sharing a jobs root with a live one must not delete a
+    sidecar from under the publication that is about to verify it, so anything
+    modified at or after that instant stays. The artifact itself, the render
+    scratch beside it, every other file and every other directory are left
+    exactly as they were, and a completed pair is never touched.
     """
-    orphans = []
-    for entry in sorted(folder.glob("*" + SIDECAR_SUFFIX)):
-        name = entry.name[: -len(SIDECAR_SUFFIX)]
-        if not name or (folder / name).exists():
+    removed: list[Path] = []
+    try:
+        entries = sorted(folder.iterdir())
+    except OSError:
+        return removed
+    for entry in entries:
+        name = entry.name
+        if name.endswith(SIDECAR_SUFFIX):
+            base = name[: -len(SIDECAR_SUFFIX)]
+            if not base:
+                continue
+            if (folder / base).exists():
+                continue
+        elif (name.startswith(".") and name.endswith(".tmp")
+                and SIDECAR_SUFFIX + "." in name):
+            pass
+        else:
+            continue
+        try:
+            if (not_newer_than is not None
+                    and entry.stat().st_mtime >= not_newer_than):
+                continue
+        except OSError:
             continue
         entry.unlink(missing_ok=True)
-        orphans.append(entry)
-    return orphans
+        removed.append(entry)
+    return removed

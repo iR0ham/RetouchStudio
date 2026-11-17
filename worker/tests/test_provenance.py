@@ -13,7 +13,9 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -194,8 +196,9 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(unrelated.read_text(encoding="utf-8"), "leave me")
 
     def test_startup_sweep_removes_an_orphan_left_by_a_crashed_job(self):
-        # The worker sweeps its own job folders before any job is in flight,
-        # which is the only moment that cannot race a live publication.
+        # The worker sweeps its job folders when it starts. It bounds the sweep
+        # by time rather than by knowledge, because a second worker can share
+        # this jobs root: what this process did not write stays.
         from retouch_ai_worker.server import JobManager
 
         jobs_root = self.tmp / "jobs"
@@ -215,6 +218,77 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in crashed.iterdir()), [])
         self.assertEqual(sorted(p.name for p in done.iterdir()),
                          ["upscaled.png", "upscaled.png.provenance.json"])
+
+    def test_startup_sweep_keeps_a_sidecar_the_bound_excludes(self):
+        # The same sweep, against the sidecar of a publication it must not
+        # touch. A second worker cannot observe another process's wall clock,
+        # so the rule it can enforce is the timestamp one; the mtime here stands
+        # for a sidecar a live publication wrote after this sweep's bound.
+        from retouch_ai_worker.server import JobManager
+
+        jobs_root = self.tmp / "jobs"
+        live = jobs_root / "job-live"
+        live.mkdir(parents=True)
+        sidecar = live / "upscaled.png.provenance.json"
+        sidecar.write_text("{}", encoding="utf-8")
+        later = time.time() + 60.0
+        os.utime(sidecar, (later, later))
+
+        JobManager(engine=mock.Mock(), jobs_root=jobs_root, allow_roots=())
+
+        self.assertTrue(sidecar.is_file())
+
+    def test_reconcile_bounds_the_sweep_to_what_an_earlier_process_wrote(self):
+        # The bound is taken before the sweep looks, so anything written after
+        # it is someone else's in-flight work; anything older is a crashed
+        # run's leftover and still goes.
+        bound = time.time()
+        orphan = self.tmp / ("vanished.png" + SIDECAR_SUFFIX)
+        orphan.write_text("{}", encoding="utf-8")
+        self.assertEqual(provenance.reconcile(self.tmp, not_newer_than=bound), [])
+        self.assertTrue(orphan.is_file(), "a sidecar this new is not ours to clear")
+
+        stale = bound - 3600.0
+        os.utime(orphan, (stale, stale))
+        self.assertEqual(provenance.reconcile(self.tmp, not_newer_than=bound),
+                         [orphan], "a crashed run's orphan still goes")
+
+    def test_reconcile_clears_a_half_written_sidecar_and_no_other_temp(self):
+        # `write` creates a hidden temp and renames it. Killed in between, the
+        # payload sits there looking like provenance and not matching the glob
+        # an orphan sidecar does, so recovery names it too.
+        temp = self.tmp / (".upscaled.png" + SIDECAR_SUFFIX + f".{uuid.uuid4()}.tmp")
+        temp.write_text('{"schema": "retouchstudio.ai.provenance/1", ',
+                        encoding="utf-8")
+        scratch = self.tmp / "upscaled.png.tmp"
+        scratch.write_bytes(b"not even a png")
+        notes = self.tmp / "notes.txt"
+        notes.write_text("leave me", encoding="utf-8")
+
+        removed = provenance.reconcile(self.tmp)
+
+        self.assertEqual(removed, [temp])
+        self.assertFalse(temp.exists())
+        self.assertTrue(scratch.is_file(), "the render scratch is not provenance")
+        self.assertEqual(notes.read_text(encoding="utf-8"), "leave me")
+
+    def test_a_publication_refuses_to_overwrite_another_artifact(self):
+        # One job, one folder, so a file already at the target belongs to a
+        # different job. Renaming over it would leave those bytes described by
+        # a sidecar this call wrote for other ones.
+        older, older_record = self._prepared()
+        provenance.publish(older, self.target, older_record)
+        before = self.target.read_bytes()
+
+        staged = self._staged(self.tmp / "again.png")
+        with self.assertRaises(ProvenanceError):
+            provenance.publish(staged, self.target,
+                               _record(output=provenance.artifact(staged)))
+
+        self.assertEqual(self.target.read_bytes(), before)
+        provenance.verify(self.target)
+        self.assertFalse((self.tmp / ("again.png" + SIDECAR_SUFFIX)).exists())
+        self.assertTrue(staged.is_file(), "the caller keeps its own scratch")
 
     def test_verify_refuses_a_missing_unparsable_foreign_or_stale_sidecar(self):
         Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(self.target)

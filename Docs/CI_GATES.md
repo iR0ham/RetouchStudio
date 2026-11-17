@@ -221,6 +221,15 @@ build plus an upscale **refusal**; it establishes no Windows inference. The
 publication work later the same day pins `Ran 115 tests`, and that pin is
 unverified until CI executes it.
 
+**2026-11-17, later.** The macOS Integration job of head `9b2b807`
+(`134322437405`) executed that pin: `found: Ran 115 tests`, `ENGINE TESTS:
+PASS`, `MODEL TESTS: PASS`, `StudioCore: 288 checks passed` and `ABI TESTS:
+PASS (104 checks)` — so the fifteen publication tests pass in the pinned
+source-built 3.13 environment, not only in the developer venv. Windows App and
+StudioCore Boundary were also green on that head. The independent review then
+moved the pin to `Ran 120 tests`, which stays unverified until the next macOS
+run prints it.
+
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
 one operating system, one renderer, no pixel-parity claim: the macOS Core Image

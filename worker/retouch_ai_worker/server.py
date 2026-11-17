@@ -41,11 +41,18 @@ class JobManager:
                  keep_jobs: int = 20) -> None:
         self.engine = engine
         self.jobs_root = Path(jobs_root)
-        # A worker is constructed before any job is in flight, which is the one
-        # moment a crashed run's leftovers can be cleared without a race: a
-        # sidecar whose artifact never landed is inert, and only that goes.
+        # Nothing of *this* worker's is in flight yet, but another process can
+        # share the jobs root — a developer-launched worker defaults to the same
+        # directory the app passes as `--jobs`. So the sweep takes its timestamp
+        # before it looks and skips anything written at or after it: a crashed
+        # run's orphan sidecars and half-written temps go, a live publication's
+        # evidence stays. A sidecar that lands in the instant before the
+        # timestamp can still be cleared, and the commit that was about to
+        # verify it then fails and withdraws its artifact — a lost job, never an
+        # unprovenanced one.
+        swept_at = time.time()
         for folder in self.jobs_root.glob("*/"):
-            provenance.reconcile(folder)
+            provenance.reconcile(folder, not_newer_than=swept_at)
         self.allow_roots = allow_roots
         self.keep_jobs = keep_jobs
         self.buffers = BufferRegistry()

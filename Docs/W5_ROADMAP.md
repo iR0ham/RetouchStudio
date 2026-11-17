@@ -193,7 +193,10 @@ not true of the current tree and must not be read as present-tense claims.
    **Same-day addendum, 2026-11-17:** the §3.6 publication work then added 15
    more tests and the gate pins `Ran 115 tests`; the 100-test figure above is
    the Slice 1 count and stays as recorded. Run `44145839011` on head `fec5930`
-   is the evidence for the 100-test pin.
+   is the evidence for the 100-test pin, and macOS Integration job
+   `134322437405` on head `9b2b807` executed the 115 pin
+   (`found: Ran 115 tests`). The review fixes then moved it to 120; that
+   figure is unverified until a macOS run prints it.
 
 ### W5-4 — First cross-platform capability: Upscaler 4x
 
