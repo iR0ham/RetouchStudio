@@ -1197,6 +1197,9 @@ final class PersianL10n: L10n {
     override var aiModelMissing: String {
         "مدل‌های محلی هوش مصنوعی نصب نیستند. از تنظیمات → مدیریت مدل‌ها… دانلودشان کن."
     }
+    override var aiModelBusy: String {
+        "مدل محلی هوش مصنوعی در حال استفاده توسط کار دیگری است. صبر کن تا تمام شود و دوباره تلاش کن."
+    }
     override var aiLicenseBlocked: String {
         "این مدل هوش مصنوعی برای استفاده روی این مک مجاز اعلام نشده."
     }

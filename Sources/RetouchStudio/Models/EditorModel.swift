@@ -1743,6 +1743,7 @@ final class EditorModel: ObservableObject {
     private func localizedAIFailure(_ error: Error) -> String {
         switch (error as? AIWorkerFailure)?.code {
         case -32011: return L10n.current.aiModelMissing
+        case -32012: return L10n.current.aiModelBusy
         case -32010: return L10n.current.aiLicenseBlocked
         case -32602: return L10n.current.aiMaskTooLarge
         default: return error.localizedDescription

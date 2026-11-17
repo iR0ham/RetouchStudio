@@ -1236,6 +1236,9 @@ class L10n {
     var aiModelMissing: String {
         "The local AI models are not installed. Open Settings → Manage Models… to download them."
     }
+    var aiModelBusy: String {
+        "The local AI model is in use by another job. Wait for it to finish, then try again."
+    }
     var aiLicenseBlocked: String {
         "This AI model is not cleared for use on this Mac."
     }

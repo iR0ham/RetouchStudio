@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .protocol import LICENSE_BLOCKED, MODEL_MISSING, UNKNOWN_MODEL, WorkerError
+from .protocol import BUSY, LICENSE_BLOCKED, MODEL_MISSING, UNKNOWN_MODEL, WorkerError
 
 MODEL_ROOT = Path(os.environ.get(
     "RETOUCH_AI_MODELS",
@@ -214,13 +214,23 @@ class Catalog:
                     details = {"model": entry.id, "reason": "leased"}
                     if identity != LEGACY_LEASE:
                         details["version"] = identity
+                    # The model is installed; another operation holds it. A
+                    # busy resource the caller can retry, not a missing one.
                     raise WorkerError(
-                        MODEL_MISSING,
+                        BUSY,
                         f"{entry.id} {label} is leased by an install or delete",
                         details,
                     )
                 time.sleep(0.05)
         self._leases[key] = fd
+
+    def _release(self, entry: ModelEntry, identity: str) -> None:
+        fd = self._leases.pop((entry.id, identity), None)
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def close(self) -> None:
         for fd in self._leases.values():
@@ -248,23 +258,46 @@ class Catalog:
                 f"{entry.id} is not cleared for commercial use ({entry.license_id})",
                 {"model": entry.id, "license": entry.license_id},
             )
-        try:
-            model_root = resolve_model_root(self.root, entry.id)
-        except (OSError, ValueError) as error:
-            raise WorkerError(MODEL_MISSING, f"{entry.id} has no usable active version",
-                              {"model": entry.id, "reason": str(error)})
-        version = model_root.name
         flat_root = self.root / entry.id
-        if model_root == flat_root:
-            # Legacy flat installs share one lease with adoption, so migration
-            # cannot move files under a running job. The kernel releases it.
-            self._lease(entry, LEGACY_LEASE, f"{entry.id}{LEGACY_LEASE}",
-                        "flat installation")
-        elif model_root.parent == flat_root:
-            self._lease(entry, version, f"{entry.id}-{version}", version)
+        for _ in range(2):
+            try:
+                model_root = resolve_model_root(self.root, entry.id)
+            except (OSError, ValueError) as error:
+                raise WorkerError(MODEL_MISSING,
+                                  f"{entry.id} has no usable active version",
+                                  {"model": entry.id, "reason": str(error)})
+            if model_root == flat_root:
+                # Legacy flat installs share one lease with adoption, so
+                # migration cannot move files under a running job. The kernel
+                # releases it.
+                self._lease(entry, LEGACY_LEASE, f"{entry.id}{LEGACY_LEASE}",
+                            "flat installation")
+            elif model_root.parent == flat_root:
+                version = model_root.name
+                self._lease(entry, version, f"{entry.id}-{version}", version)
+            else:
+                raise WorkerError(MODEL_MISSING,
+                                  f"{entry.id} resolved outside its folder",
+                                  {"model": entry.id})
+            # Adoption holds this lease while it moves the flat files and
+            # publishes the pointer, so waiting here can land on a layout the
+            # lease no longer describes. Resolve again under the lease.
+            try:
+                fresh = resolve_model_root(self.root, entry.id)
+            except (OSError, ValueError) as error:
+                raise WorkerError(MODEL_MISSING,
+                                  f"{entry.id} has no usable active version",
+                                  {"model": entry.id, "reason": str(error)})
+            if fresh == model_root:
+                break
+            model_root = fresh
         else:
-            raise WorkerError(MODEL_MISSING, f"{entry.id} resolved outside its folder",
-                              {"model": entry.id})
+            raise WorkerError(BUSY, f"{entry.id} kept changing layout while leasing it",
+                              {"model": entry.id, "reason": "layout"})
+        if model_root != flat_root:
+            # The versioned lease is held; the flat one describes a layout
+            # that adoption has already removed.
+            self._release(entry, LEGACY_LEASE)
         for spec in entry.files:
             target = model_root / spec.path
             if not target.exists():

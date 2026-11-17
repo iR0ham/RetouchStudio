@@ -231,6 +231,22 @@ func waitForLocked(_ pipe: Pipe) -> Bool {
     waitForLine(pipe, containing: "locked")
 }
 
+/// Reads one newline-terminated line, byte by byte, so a test can follow a
+/// worker through several steps without losing the buffered remainder.
+func readLine(_ pipe: Pipe) -> String? {
+    var bytes: [UInt8] = []
+    while true {
+        let chunk = pipe.fileHandleForReading.readData(ofLength: 1)
+        if chunk.isEmpty {
+            return bytes.isEmpty ? nil : String(bytes: bytes, encoding: .utf8)
+        }
+        if chunk[0] == 0x0A {
+            return String(bytes: bytes, encoding: .utf8)
+        }
+        bytes.append(contentsOf: chunk)
+    }
+}
+
 func launchInstall(catalog: String, root: URL, id: String, base: String,
                    crash: String? = nil) -> Process {
     let process = Process()
@@ -1230,6 +1246,63 @@ if let python = workerPython() {
         return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
+    // Resolves the layout first and prints it, so the test can prove the
+    // worker saw the flat path and still ended up on the active version.
+    func launchRaceWorker(_ root: URL) -> (Process, Pipe) {
+        let script = """
+        import sys, json
+        sys.path.insert(0, sys.argv[1])
+        from pathlib import Path
+        from retouch_ai_worker.catalog import Catalog, resolve_model_root
+        from retouch_ai_worker.protocol import WorkerError
+        root = Path(sys.argv[2])
+        print("resolved:" + str(resolve_model_root(root, "migan")), flush=True)
+        print("waiting", flush=True)
+        try:
+            print("loaded:" + str(Catalog(root).require("migan")), flush=True)
+        except WorkerError as error:
+            print("error:" + json.dumps({"code": error.code, "data": error.data}),
+                  flush=True)
+            raise SystemExit(3)
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = ["-c", script, workerPath, root.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try! process.run()
+        return (process, pipe)
+    }
+
+    // Runs require and prints its typed error instead of a traceback, so the
+    // test asserts the JSON-RPC code the host would actually receive.
+    func workerErrorCode(_ root: URL) -> (Int32, String) {
+        let script = """
+        import sys, json
+        sys.path.insert(0, sys.argv[1])
+        from pathlib import Path
+        from retouch_ai_worker.catalog import Catalog
+        from retouch_ai_worker.protocol import WorkerError
+        try:
+            Catalog(Path(sys.argv[2])).require("migan")
+        except WorkerError as error:
+            print("error:" + json.dumps({"code": error.code, "data": error.data}),
+                  flush=True)
+            raise SystemExit(3)
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = ["-c", script, workerPath, root.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try! process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+    }
+
     // A running worker holds the shared flat lease; adoption must refuse.
     let (store, root) = makeLegacyStore()
     let legacyEntry = legacyCatalog.entry(id: "migan")!
@@ -1263,14 +1336,70 @@ if let python = workerPython() {
             atPath: root.appendingPathComponent("migan/1.0.0/migan_pipeline_v2.onnx").path),
           "the adopted file is in the version directory")
 
-    // Adoption holds the exclusive flat lease; the worker must refuse.
+    // Adoption holds the exclusive flat lease while hashing. A worker that
+    // already resolved the flat layout waits on the lease; when adoption
+    // finishes, the worker must follow the new pointer, not its stale path.
+    let (raceStore, raceRoot) = makeLegacyStore()
+    let raceEntry = legacyCatalog.entry(id: "migan")!
+    let hashing = DispatchSemaphore(value: 0)
+    let allowMove = DispatchSemaphore(value: 0)
+    let adoptionDone = DispatchSemaphore(value: 0)
+    var raceResult: Result<ModelVersionState, Error>?
+    DispatchQueue.global().async {
+        raceResult = runBlocking {
+            try await raceStore.migrateLegacy(raceEntry) { progress in
+                if progress.fileIndex == 1 {
+                    hashing.signal()
+                    _ = allowMove.wait(timeout: .now() + 10)
+                }
+            }
+        }
+        adoptionDone.signal()
+    }
+    check(hashing.wait(timeout: .now() + 10) == .success,
+          "adoption holds the exclusive flat lease before moving files")
+    let (raceWorker, racePipe) = launchRaceWorker(raceRoot)
+    let resolvedLine = readLine(racePipe) ?? ""
+    let waitingLine = readLine(racePipe) ?? ""
+    check(resolvedLine.hasSuffix("/migan"),
+          "the worker resolved the flat layout before adoption moved it", resolvedLine)
+    check(waitingLine == "waiting", "the worker is waiting for the flat lease",
+          waitingLine)
+    allowMove.signal()
+    check(adoptionDone.wait(timeout: .now() + 10) == .success,
+          "adoption finished while the worker waited")
+    let raceTail = String(data: racePipe.fileHandleForReading.readDataToEndOfFile(),
+                          encoding: .utf8) ?? ""
+    raceWorker.waitUntilExit()
+    switch raceResult {
+    case .success: check(true, "the race adoption completed")
+    case .failure(let error): check(false, "the race adoption completed", "\(error)")
+    case nil: check(false, "the race adoption completed", "no result")
+    }
+    check(raceWorker.terminationStatus == 0 && raceTail.contains("/migan/1.0.0"),
+          "the worker used the active version, not its stale flat path", raceTail)
+    check(!raceTail.contains("error:"),
+          "the worker did not report a missing model", raceTail)
+    check((try? raceStore.activePointer("migan"))?.version == "1.0.0",
+          "the race adoption became active")
+
+    // Adoption holds the exclusive flat lease; the worker must refuse with a
+    // typed retryable error rather than "model missing".
     let (secondStore, secondRoot) = makeLegacyStore()
     let secondEntry = legacyCatalog.entry(id: "migan")!
     let exclusive = try! ModelLease.acquireLegacy(store: secondStore, model: "migan",
                                                   exclusive: true)
-    let refused = workerRequire(secondRoot)
-    check(refused.0 != 0 && refused.1.contains("leased"),
-          "the worker refuses while adoption holds the flat lease", refused.1)
+    let refused = workerErrorCode(secondRoot)
+    var refusedCode: Int?
+    var refusedReason: String?
+    if let line = refused.1.split(separator: "\n").first(where: { $0.hasPrefix("error:") }),
+       let data = String(line.dropFirst("error:".count)).data(using: .utf8),
+       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        refusedCode = object["code"] as? Int
+        refusedReason = (object["data"] as? [String: Any])?["reason"] as? String
+    }
+    check(refused.0 == 3 && refusedCode == -32012 && refusedReason == "leased",
+          "the worker reports retryable busy, not a missing model", refused.1)
     check(FileManager.default.fileExists(
             atPath: secondRoot.appendingPathComponent("migan/migan_pipeline_v2.onnx").path),
           "the refused worker left the flat file intact")

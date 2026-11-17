@@ -103,9 +103,21 @@ The OS is the authority; an in-memory registry is not.
   worker takes it shared while reading a flat model and holds it for the
   process lifetime; otherwise it takes the versioned lock. Adoption takes the
   same file exclusive before hashing or moving anything, so it fails with
-  `E_MODEL_LEASED` while a worker reads the flat install, and a worker that
-  starts during adoption waits, then refuses with the same error rather than
-  observing a half-moved tree. Killing either process releases the lease.
+  `E_MODEL_LEASED` while a worker reads the flat install. Killing either
+  process releases the lease.
+
+A worker resolves the layout, takes the lease for that layout, and resolves
+again under the lease. Adoption can finish while the worker waits on the flat
+lease, so the lease then describes a flat directory that no longer exists; the
+worker follows the new `active.json` to the versioned directory, takes that
+version's lease and releases the flat one. It never keeps using a stale flat
+path, and it never reports a missing model for one that adoption just
+installed. If the lease still cannot be taken after 5 s of waiting, the worker
+returns the JSON-RPC `BUSY` code (-32012) with
+`{"model": <id>, "reason": "leased"}` — a retryable busy condition, not
+`MODEL_MISSING`; the macOS host shows its "in use" sentence for it. The 5 s
+wait is a bound on how long a job may block on a competing install or delete,
+not a cancellation of the job.
 
 Delete order: take exclusivity (refuse with `E_MODEL_LEASED` when any reader
 exists), replace/remove the active pointer atomically, rename the version into
@@ -129,6 +141,15 @@ reason, never with file contents.
 the frozen codes. Insufficient disk space and unsafe sources are
 `E_INVALID_INPUT` with a human-readable reason; a failed hash or size check is
 `E_MODEL_UNVERIFIED`.
+
+The worker speaks JSON-RPC, not the store codes. Its wire mapping is: a lease
+it cannot take within 5 s is `BUSY` (-32012) with data
+`{"model", "reason": "leased"}` (plus `"version"` for a versioned lease); a
+file that is absent or a pointer that resolves nowhere is `MODEL_MISSING`
+(-32011); a licence refusal is `LICENSE_BLOCKED` (-32010). The host maps
+-32012 to a "model in use, try again" sentence and -32011 to "not installed".
+The string `E_MODEL_LEASED` is the store's code and is never sent over the
+worker wire.
 
 ## 8. Tests
 
@@ -154,6 +175,16 @@ the shared holder is the actual Python worker; on Windows it is a child process
 holding the same `ModelLease.AcquireLegacy` file, because the Windows worker
 does not load weights yet (W5-3).
 
+The complete path-resolution race is deterministic on macOS. The real
+`migrateLegacy` is paused after hashing while it holds the exclusive flat
+lease; a real Python worker is started, prints the flat path it resolved, and
+blocks on the lease; adoption is then allowed to move the files and publish
+the pointer. The worker must return the versioned directory, not the removed
+flat one. The refusal path asserts the wire code: `BUSY` (-32012) with
+`{"model", "reason": "leased"}`. The worker unit suite
+(`worker/tests/test_catalog.py`) covers the same two transitions in-process
+with a real `flock` holder, without spawning a process.
+
 ## 9. Honesty gates
 
 - macOS evidence runs on this machine; Windows evidence is hosted-runner CI
@@ -171,7 +202,7 @@ does not load weights yet (W5-3).
 | App-facing manager | `Sources/RetouchStudio/Models/ModelManager.swift` | `Windows/RetouchStudio.App/ModelManagerWindow.xaml(.cs)` |
 | UI | `Sources/RetouchStudio/Views/ModelManagerView.swift` | the same window |
 | Startup cleanup | `AppDelegate.attach` (`App.swift`) | `App.OnStartup` |
-| Worker | `worker/retouch_ai_worker/catalog.py` resolves `active.json` and holds a shared `flock` | worker model loading arrives with W5-3; the shared lease API is `ModelLease` |
+| Worker | `worker/retouch_ai_worker/catalog.py` resolves `active.json`, re-resolves under the lease, and holds a shared `flock` | worker model loading arrives with W5-3; the shared lease API is `ModelLease` |
 | Tests | `Tests/ModelStoreTests.swift` | `Windows/RetouchStudio.AI.Tests/ModelStoreChecks.cs` |
 
 Both stores implement the same order: validate → prepare layout → install gate
@@ -234,16 +265,19 @@ The following required cases are exercised by both suites unless noted:
 | Atomic pointer replacement; dangling pointer | 15 | M15 |
 | Legacy flat adoption without network | 16 | M16 |
 | Legacy flat lease: worker/adoption conflict, death release, files intact | 18 | M18 |
+| Adoption finishing during the worker's lease wait: re-resolve, no stale path | 18 | host-side lease only (worker loads no weights until W5-3) |
+| Worker lease timeout is `BUSY` -32012 with typed data, not `MODEL_MISSING` | 18 | n/a (no Windows worker model loading yet) |
 | Shared catalog / DR-5 / platform facts | 1 | M17 |
 | Worker reads `active.json`, flat installs and waits on either lease | 17, 18 | W5-3 (not yet loading models) |
 
 macOS local evidence: `RETOUCH_ARCH=arm64 ./Tests/run.sh` passes the model-store
-suite (148 checks, 18 sections) and the existing engine/model/runtime-process
+suite (157 checks, 18 sections) and the existing engine/model/runtime-process
 suites on this machine; the runtime-v2 suite needs `worker/.venv`, which CI
-creates. The model-store suite was re-run standalone after the last store change
-and passed, including the real-Python worker legacy lease races.
-`RETOUCH_SKIP_WORKER=1 ./build.sh release` validates the bundle and its catalog
-copy.
+creates. The model-store suite includes the real-Python worker legacy lease
+races and the deterministic adoption-during-wait re-resolution. The worker's
+own suite (`python -m unittest discover -s tests`, 69 tests) passes with the
+new lease-code and re-resolution tests. `RETOUCH_SKIP_WORKER=1 ./build.sh
+release` validates the bundle and its catalog copy.
 
 Cross-check evidence for the C# implementation was also run on this macOS
 host with .NET SDK 10.0.404: `RetouchStudio.AI.Tests` reported
