@@ -626,3 +626,37 @@ refuses to allow, so it is corrected here instead of left standing.
 yet been asked by this host to name a capability and return a pair the host then
 adopted, because no inference ran. The nine host-side checks are proven against
 files the test writes, not against files the worker writes.
+
+Addendum (2026-11-18, second independent review of the complete PR #70 diff at
+`c879761`; verdict: ready for Product Owner authorization, with the items
+below recorded):
+
+- **Finding 1 (should-fix, recorded as an open decision — no code change
+  here).** The kind-only submission path (no `capabilityId` in the envelope)
+  bypasses `_require_capability` by the retained pre-W5-3 contract, and
+  `_job_upscale` then writes `capabilityId: "upscale.4x"` into the sidecar
+  even though no verdict admitted it. The capability *name* is factual (the
+  kind maps to it in the frozen vocabulary); the *admission* is not recorded
+  anywhere machine-readable. The schema is frozen, so no field may be added
+  to carry the admission path; the two candidate resolutions both need a
+  product decision: gate kind-only upscale like the named path (closes the
+  blocked-install hole but removes the documented escape hatch that ran this
+  very install on 2026-11-07), or record `capabilityId: null` on un-named
+  submissions (honest, but makes the sidecar less informative about what the
+  artifact is). Recommended: the first, at the next milestone when the owner
+  has adopted the model, so nothing the owner can do today breaks.
+- **Finding 3 (nit, recorded).** After `AIProvenance.verifiedArtifact`
+  succeeds, `ExportService.upscale` decodes the artifact in a separate open.
+  The worker's job-folder retention (`keep_jobs`) could in principle remove
+  the pair between the two opens; the failure surface is a decode error,
+  never a partial or unprovenanced adoption. Recorded here as accepted
+  rather than fixed.
+- **Finding 2 (nit, fixed):** the export comment claimed the refusal's
+  technical reason "stays in the thrown detail"; `AIWorkerFailure` carries no
+  detail field, so the comment now states what actually happens — the
+  localized failed-pass message stands in and the reason is recoverable from
+  the worker log.
+- **Finding 4 (nit, noted):** §10 S1-5's "88 → 100" wording is a dated
+  Slice-1 record and stands under the append-only rule; the current pins are
+  narrated by `Docs/CI_GATES.md` and `Docs/W5_ROADMAP.md` (100 → 115 → 120,
+  with the next job to confirm).

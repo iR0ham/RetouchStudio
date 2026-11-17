@@ -245,7 +245,9 @@ enum ExportService {
         // means the pair arrived inconsistent rather than merely early, and
         // decoding anyway would show the user an edit whose origin cannot be
         // accounted for. The message is the one the user already sees for a
-        // failed pass; the technical reason stays in the thrown detail.
+        // failed pass; the refusal's technical reason is not carried further
+        // by this type — it is recoverable from the worker log, and the
+        // provenance contract, not the wording, is what refused the artifact.
         let artifact: URL
         do {
             artifact = try AIProvenance.verifiedArtifact(
