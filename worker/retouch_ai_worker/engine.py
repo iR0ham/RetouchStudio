@@ -21,8 +21,11 @@ from typing import Callable
 import numpy as np
 from PIL import Image
 
+from . import __version__, provenance
+from .capabilities import current_platform, job_capability
 from .catalog import Catalog
-from .protocol import BUDGET_EXCEEDED, INVALID_PARAMS, WorkerError
+from .protocol import (BUDGET_EXCEEDED, CONTRACT_VERSION, INTERNAL_ERROR,
+                       INVALID_PARAMS, WorkerError)
 from .transport import BufferRegistry, read_image
 
 MULTIPLE = 16
@@ -55,6 +58,8 @@ class Context:
     buffers: BufferRegistry | None = None
     out_shm: str | None = None
     metrics: dict = field(default_factory=dict)
+    # The capability the host named in the envelope; §3.6 records it in provenance.
+    capability_id: str | None = None
 
     def emit(self, stage: str, **fields) -> None:
         self.progress({"stage": stage, **fields})
@@ -208,10 +213,27 @@ class Engine:
         self._sam_source = None
         self._migan = None
         self._swin = None
+        self._providers: list[str] = []
         self._active: Context | None = None
         self._work: queue.Queue = queue.Queue()
         self._runner = threading.Thread(target=self._loop, name="engine", daemon=True)
         self._runner.start()
+
+    def _note_provider(self, provider: str) -> None:
+        if provider not in self._providers:
+            self._providers.append(provider)
+
+    def execution_providers(self) -> tuple[list[str], str | None]:
+        """The providers this process has really run a model on, or the reason.
+
+        Probing torch to answer `provider.list` earlier would put an import of
+        seconds and hundreds of megabytes into every launch, on a machine that
+        may never run a job. The protocol rule is that a provider is reported only
+        after it initialised, so an unstarted worker reports none.
+        """
+        if self._providers:
+            return list(self._providers), None
+        return [], "no model has been loaded, so no execution provider has initialised"
 
     def run(self, kind: str, params: dict, ctx: Context) -> dict:
         handler = getattr(self, f"_job_{kind}", None)
@@ -529,7 +551,12 @@ class Engine:
                 {"pixels": height * width * scale * scale,
                  "limit": UPSCALE_MAX_OUTPUT})
 
-        model, device = self._ensure_swin()
+        # The weights are read before the first tile, so a cancel that arrives
+        # during the load is seen as soon as it returns; the reader itself cannot
+        # be interrupted.
+        ctx.check_cancel()
+        model, device, identity = self._ensure_swin()
+        ctx.check_cancel()
 
         rows = _axis_plan(height, tile, overlap)
         cols = _axis_plan(width, tile, overlap)
@@ -559,27 +586,80 @@ class Engine:
 
         weights[weights == 0] = 1.0
         output = np.clip(acc / weights[..., None], 0, 1)
+        pixels = (output * 255).round().astype(np.uint8)
         result = ctx.workdir / "upscaled.png"
-        Image.fromarray((output * 255).round().astype(np.uint8)).save(result)
+        # The bytes land in a sibling temp and are published by one rename, so a
+        # cancel during the write leaves neither an artifact nor a temp (§4.3).
+        ctx.check_cancel()
+        staging = ctx.workdir / (result.name + ".tmp")
+        try:
+            Image.fromarray(pixels).save(staging, format="PNG")
+            ctx.check_cancel()
+            os.replace(staging, result)
+        except BaseException:
+            staging.unlink(missing_ok=True)
+            raise
+        seconds = round(time.perf_counter() - started, 2)
+        capability = ctx.capability_id or job_capability("upscale")[0].id
+        sidecar = provenance.write(result, provenance.document(
+            capability_id=capability, job_id=ctx.job_id,
+            contract_version=CONTRACT_VERSION, model=identity,
+            adapter={"platform": current_platform(), "version": __version__},
+            parameters={"scale": scale, "tile": tile, "overlap": overlap},
+            seed=params.get("seed"), input=provenance.pixels(source),
+            output=provenance.artifact(result),
+            authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+            outside_pixels_identical=None, elapsed_seconds=seconds,
+            state="succeeded"))
         return {"output": str(result), "scale": scale, "device": device,
+                "provider": device, "model": identity,
+                "provenance": str(sidecar),
                 "tile": tile, "overlap": overlap, "tiles": total,
                 "image_size": [width, height],
                 "output_size": [width * scale, height * scale],
-                "seconds": round(time.perf_counter() - started, 2),
-                **ctx.publish((output * 255).round().astype(np.uint8))}
+                "seconds": seconds,
+                **ctx.publish(pixels)}
 
     # ------------------------------------------------------------------
     def _ensure_swin(self):
+        """The Swin2SR weights and the identity the sidecar records for them.
+
+        The load path is where the catalog's SHA-256 is enforced: it runs once
+        per process, is 0.036 s for this checkpoint's 48 MB weights on the
+        reference Mac, and means the bytes a job trusts are the bytes the
+        catalog describes. `require` keeps its size-only check so launch and
+        capability reporting stay cheap.
+        """
         if self._swin is not None:
             return self._swin
-        import torch
-        from transformers import Swin2SRForImageSuperResolution
+        entry = self.catalog.get("swin2sr-x4")
+        root = self.catalog.require_verified("swin2sr-x4")
+        try:
+            import torch
+            from transformers import Swin2SRForImageSuperResolution
+        except ImportError as exc:
+            self.catalog.release("swin2sr-x4", root)
+            raise WorkerError(INTERNAL_ERROR,
+                              f"the upscaler runtime is unavailable: {exc}",
+                              {"model": entry.id}) from exc
 
-        root = self.catalog.require("swin2sr-x4")
         device = "mps" if torch.backends.mps.is_available() else "cpu"
-        model = Swin2SRForImageSuperResolution.from_pretrained(
-            str(root), local_files_only=True).to(device).eval()
-        self._swin = (model, device)
+        try:
+            model = Swin2SRForImageSuperResolution.from_pretrained(
+                str(root), local_files_only=True).to(device).eval()
+        except BaseException:
+            # A failed load is not a reason to keep the model leased: the owner
+            # must be able to reinstall or delete it.
+            self.catalog.release("swin2sr-x4", root)
+            raise
+        self._note_provider(device)
+        flat = self.catalog.root / entry.id
+        identity = {"id": entry.id,
+                    "version": None if root == flat else root.name,
+                    "format": "pytorch", "provider": device,
+                    "files": [{"path": spec.path, "sha256": spec.sha256}
+                              for spec in entry.files if spec.sha256]}
+        self._swin = (model, device, identity)
         return self._swin
 
     # ------------------------------------------------------------------
@@ -594,6 +674,7 @@ class Engine:
         sam2 = build_sam2("configs/sam2.1/sam2.1_hiera_t.yaml", checkpoint, device="mps")
         self._sam = SAM2ImagePredictor(sam2)
         self._sam_source = None
+        self._note_provider("mps")
 
     def _ensure_migan(self):
         if self._migan is not None:
@@ -606,6 +687,7 @@ class Engine:
         self._migan = ort.InferenceSession(
             str(root / "migan_pipeline_v2.onnx"),
             sess_options=options, providers=["CPUExecutionProvider"])
+        self._note_provider("cpu")
         return self._migan
 
     def _ensure_flux(self, ctx: Context):

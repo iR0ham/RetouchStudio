@@ -33,17 +33,28 @@ class FakeEngine:
             raise WorkerError(-32602, "bad input", {"field": "prompt"})
         raise WorkerError(-32601, f"no such kind {kind}")
 
+    def execution_providers(self):
+        # No loader has run here, which is exactly what the real engine says
+        # before the first job.
+        return [], "no model has been loaded, so no execution provider has initialised"
+
 
 class ModelEngine:
     """A job that resolves its weights through the catalog, like Engine does."""
 
     def __init__(self, catalog):
         self.catalog = catalog
+        self.providers = []
 
     def run(self, kind, params, ctx):
         if kind == "upscale":
             return {"root": str(self.catalog.require("swin2sr-x4"))}
         raise WorkerError(-32601, f"no such kind {kind}")
+
+    def execution_providers(self):
+        if self.providers:
+            return list(self.providers), None
+        return [], "no model has been loaded, so no execution provider has initialised"
 
 
 class Session:
@@ -129,13 +140,25 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(reply["models"])
         self.assertFalse(any(model["installed"] for model in reply["models"]))
 
-    def test_provider_list_reports_a_cpu_worker(self):
+    def test_provider_list_reports_nothing_before_a_model_runs(self):
         reply = self.session.call("provider.list")["result"]
         self.assertEqual(reply["contractVersion"], "1")
         provider = reply["providers"][0]
         self.assertEqual(provider["id"], "macos-python")
+        self.assertEqual(provider["state"], "unavailable")
+        self.assertEqual(provider["execution_providers"], [])
+        self.assertTrue(provider["reason"])
+
+    def test_provider_list_reports_the_device_a_model_ran_on(self):
+        # CPU was the wrong answer on this hardware: the provider the worker
+        # names is the one a loader actually used.
+        engine = ModelEngine(self.server.catalog)
+        engine.providers = ["mps"]
+        self.manager.engine = engine
+        provider = self.session.call("provider.list")["result"]["providers"][0]
         self.assertEqual(provider["state"], "available")
-        self.assertEqual(provider["execution_providers"], ["CPU"])
+        self.assertEqual(provider["execution_providers"], ["mps"])
+        self.assertNotIn("reason", provider)
 
     def test_health_flags_a_truncated_installed_file(self):
         # A small, known model stands in for a damaged download: the size check

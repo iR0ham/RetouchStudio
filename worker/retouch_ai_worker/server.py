@@ -73,7 +73,8 @@ class JobManager:
                 pass
 
     # --- lifecycle ----------------------------------------------------
-    def submit(self, kind: str, params: dict, out_shm: str | None = None) -> dict:
+    def submit(self, kind: str, params: dict, out_shm: str | None = None,
+               capability_id: str | None = None) -> dict:
         with self._lock:
             if self._current is not None:
                 raise WorkerError(BUSY, "another job is running",
@@ -83,6 +84,7 @@ class JobManager:
             job = {
                 "id": job_id,
                 "kind": kind,
+                "capability": capability_id,
                 "status": "queued",
                 "created": time.time(),
                 "started": None,
@@ -110,7 +112,8 @@ class JobManager:
                       cancel=job["cancel"].is_set,
                       progress=lambda fields: self._progress(job, fields),
                       allow_roots=self.allow_roots,
-                      buffers=self.buffers, out_shm=out_shm)
+                      buffers=self.buffers, out_shm=out_shm,
+                      capability_id=job["capability"])
         job["status"] = "running"
         job["started"] = time.time()
         self._emit("job.started", {"job_id": job["id"], "kind": job["kind"]})
@@ -241,13 +244,19 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
         # it in /tmp, where the directory mode cannot be changed).
         os.chmod(self.socket_path, 0o600)
 
-    @staticmethod
-    def providers() -> list[dict]:
-        return [{
-            "id": PROVIDER,
-            "state": "available",
-            "execution_providers": ["CPU"],
-        }]
+    def providers(self) -> list[dict]:
+        """The execution providers this worker has really initialised.
+
+        A fixed `CPU` was a claim the machine never made: the upscale path runs on
+        MPS, and before any job no provider has been initialised at all.
+        """
+        devices, reason = self.manager.engine.execution_providers()
+        provider = {"id": PROVIDER,
+                    "state": "available" if devices else "unavailable",
+                    "execution_providers": devices}
+        if reason is not None:
+            provider["reason"] = reason
+        return [provider]
 
     def _require_capability(self, capability_id: str, kind: str) -> None:
         """Refuse a job the adapter does not truthfully provide.
@@ -317,7 +326,9 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
             capability_id = params.get("capabilityId")
             if capability_id is not None:
                 self._require_capability(str(capability_id), kind)
-            return self.manager.submit(kind, job_params, params.get("out_shm"))
+            return self.manager.submit(
+                kind, job_params, params.get("out_shm"),
+                str(capability_id) if capability_id else None)
         if method == "job.status":
             return self.manager.status(str(params.get("job_id", "")))
         if method == "job.result":
