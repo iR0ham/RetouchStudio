@@ -69,7 +69,7 @@ cross-platform contract; `Tests/Contract/protocol2.json` is the shared fixture.
 |---|---|
 | `hello` | protocol/contract version, generation, nonce, pid, job snapshot, allowed roots |
 | `health` | readiness plus catalog health |
-| `provider.list` | execution providers available to this worker (`CPU` on macOS) |
+| `provider.list` | execution providers this worker has actually initialised (`mps`/`cpu` once a model has loaded, `[]` plus a `reason` before any model has run) |
 | `ping` | liveness |
 | `models.list` / `models.verify` / `models.plan` | catalog, checksums, download manifest |
 | `job.submit` | `{kind, params, out_shm?}` → `{job_id}`; one at a time (`BUSY`) |
@@ -91,7 +91,11 @@ An image parameter is one of:
 - `{"path": "/abs/path"}` — only inside an allowed root.
 
 Results are written as PNG inside the job directory; `out_shm` additionally
-copies the result into an app-allocated segment.
+copies the result into an app-allocated segment. A successful `upscale` also
+writes the `retouchstudio.ai.provenance/1` sidecar named
+`<artifact>.provenance.json` beside its output and returns the path as
+`provenance`; the record's values are measured from the published bytes, not
+copied from the plan (`provenance.py`).
 
 A `patch_edit` reply that stays local carries one rectangle for both output
 files:
@@ -135,13 +139,30 @@ no patch files.
    rendering, up to 45 % to a whole-frame render, and refuses anything larger.
 7. **Cancel.** `job.cancel` is acknowledged immediately; the job stops at the
    next denoising step, which is the only point MLX can be interrupted from
-   inside a single `generate_image` call.
+   inside a single `generate_image` call. The `upscale` job is not MLX, so it
+   defines its own safe points: before it loads the model, between tiles, and
+   again after the encoder has written the staged PNG but before it is renamed
+   into place — a cancel at the write leaves neither artifact nor temp file, and
+   no provenance sidecar.
 8. **One engine thread.** MLX streams and torch device state are thread-local,
    and mflux's VAE attention builds an MLX array as its attention scale, so a
    model loaded on one thread cannot be used from another. Every job therefore
    runs on the engine's own thread, no matter which connection submitted it.
 9. **Memory budget.** A render is refused with `BUDGET_EXCEEDED` when its
    estimated peak exceeds `RETOUCH_AI_MEMORY_BUDGET_GB` (default 7.5).
+10. **Digests are checked where a model is loaded.** `Catalog.require_verified`
+    runs `require` and then hashes every file the catalog gives a SHA-256 for,
+    before the loader receives a path; a mismatch releases the lease so the
+    install stays repairable and fails with `-32019`. Only `upscale` uses it:
+    hashing that checkpoint costs 0.036 s for its 48,460,141-byte
+    `pytorch_model.bin` (measured on this M3/16 GB Mac on 2026-11-17), once per
+    process, while hashing 4.6 GB of FLUX weights before every render is not a
+    startup cost the 16 GB budget can pay. Those entries keep the size gate in
+    `require` and the on-demand `models verify`.
+11. **A provider is named only after it initialised.** `Engine.execution_providers`
+    reports the device a loader actually used (`mps` or `cpu`), and nothing plus
+    a reason before the first model. Probing torch during the handshake would
+    spend seconds and hundreds of megabytes to answer with a claim.
 
 ## Environment
 
@@ -159,11 +180,15 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-88 tests, no GPU: framing, contract versioning, request validation, generation
-and nonce pairing, the readiness registry, catalog licensing, download resume
-and checksums against a local HTTP server, job lifecycle, BUSY, cancel,
-notifications, path denial, mask policy, compositing byte-identity, alpha
-bounds, the frozen capability vocabulary and its evidence rules.
+100 tests, no GPU and no model download: framing, contract versioning, request
+validation, generation and nonce pairing, the readiness registry, catalog
+licensing, download resume and checksums against a local HTTP server, job
+lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing
+byte-identity, alpha bounds, the frozen capability vocabulary and its evidence
+rules. The upscale tests run a fake torch and a fake model against a real
+numpy array, so they cover the provenance sidecar, the load-time digest, the
+load/write cancel points and the reported provider without any inference
+runtime.
 
 ## Acceptance
 

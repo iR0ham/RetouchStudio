@@ -169,6 +169,28 @@ submits by kind; a review found that a size-mismatched install reported
 layout, DR-5 metadata) stay runnable on purpose. Windows W5-4 stays blocked;
 the live capability panel has not been exercised in a UI session.
 
+**Dated corrections to the two paragraphs above (2026-11-17, W5-4 Slice 1).**
+The text is kept as the evidence those runs produced; three statements in it are
+not true of the current tree and must not be read as present-tense claims.
+
+1. "Only `upscale.4x` on macOS is `supported`, from the recorded 4× run" is
+   wrong as a live statement. A read-only `capability.list` against this Mac's
+   store (`~/Library/Application Support/RetouchStudio/AI/models`) reports
+   `upscale.4x` as `blocked`: "swin2sr-x4 is installed without a version; adopt
+   it in the model manager before a capability can bind it". The ledger entry
+   records that a run happened; it binds a model *version*, and a legacy flat
+   install has none, so the capability is claimable only after that install is
+   adopted. See [W5_ADAPTERS.md](W5_ADAPTERS.md) §Limitations.
+2. "`provider.list` CPU" in the W5-1 implementation evidence was the static
+   macOS record this slice removed. `Docs/AI_PROTOCOL_V2.md` already required a
+   provider to be reported only after it initialised; the macOS worker now
+   complies (empty plus `state: "unavailable"` and a reason before the first
+   model, `mps`/`cpu` after a loader used one). Windows still answers `CPU`,
+   because `Providers.Ensure()` really initialises it. W5-1's exit — a real
+   worker completing the protocol-2 handshake — is unaffected.
+3. `Ran 88 tests` was that run's worker count. The suite is 100 tests since
+   Slice 1, and the macOS CI gate now pins `Ran 100 tests`.
+
 ### W5-4 — First cross-platform capability: Upscaler 4x
 
 **Depends on:** W5-3. **Windows W5-4 is BLOCKED** until the owner reviews and
@@ -187,6 +209,27 @@ after its evidence is approved. A successful job alone is not the exit.
 **Does not:** adopt an unverified ONNX conversion, claim macOS/Windows
 performance parity, claim 16-bit unless measured, or turn upscaling into a
 canvas mutation (AI-01 ADR-3).
+
+**Status (2026-11-17): Slice 1 is in review on `w5-4/upscaler`; W5-4 is NOT
+complete.** Slice 1 changes the macOS worker's contract conformance without
+downloading, installing or running a model: it writes the
+`retouchstudio.ai.provenance/1` sidecar (decision-record §3.6) beside a
+published 4× artifact and returns its path, checks for cancellation at model
+load and at output publication instead of only between tiles, verifies the
+catalog's SHA-256 digests on the upscaler load path (`-32019`, lease released on
+failure), reports the execution provider a loader actually used, and adds 12
+deterministic fake-engine tests for all four (no Torch, no weights, no
+inference). Nothing here is a `supported` claim: with no re-recorded 4× run and
+the live store still a legacy flat install, `capability.list` reports
+`upscale.4x` as `blocked` on this Mac.
+**Open for W5-4:** a recorded macOS 4× run with the provenance sidecar, the
+quality tolerance fixed before the run on a corpus, measured bit depth, memory
+and wall time, cancel-at-load/tile/write proven through a real job
+(decision-record §4.3), and the host-side consumption of the sidecar. **Windows
+W5-4 remains BLOCKED** exactly as stated above: no conversion procedure,
+checkpoint, opset, artifact, size, SHA-256, licence evidence or quality
+validation has been submitted or approved, and the Windows worker still loads no
+model weights. Slice 1 does not change any Windows capability state.
 
 ### W5-5 — CI and acceptance
 

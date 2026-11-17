@@ -508,3 +508,77 @@ runtime package, MSI payload, GPU claim, release or tag is added by this
 record. The ONNX Runtime dependency is approved for W5-1, not added here. No
 capability is declared supported. No approved capability is removed; all
 follow-on milestones are retained in [W5_ROADMAP.md](W5_ROADMAP.md) §4.
+
+## 10. Addendum (2026-11-17) — W5-4 Slice 1 implementation decisions
+
+Sections 1–9 above are unchanged and remain the frozen contracts. This addendum
+records how Slice 1 implemented them on the macOS worker, and what it did not
+decide. Slice 1 changes no contract text, catalog entry, conformance fixture,
+schema key or C ABI export; downloads, installs and runs no model; performs no
+inference; and claims no capability. Windows is untouched: every Windows state
+and reason stays exactly as §4.2 and §4.3 record them, and Windows W5-4 remains
+BLOCKED on decision 6's artifact evidence.
+
+- **S1-1 — the §3.6 sidecar is written by the worker beside the artifact.**
+  `worker/retouch_ai_worker/provenance.py` emits
+  `retouchstudio.ai.provenance/1` as `<artifact>.provenance.json`, created with
+  `O_CREAT | O_EXCL | O_NOFOLLOW` mode 0600, fsynced, then renamed into place,
+  and only after the output itself has been adopted — a job that does not
+  publish writes no provenance. Every field is measured from bytes that exist:
+  file digests are streamed SHA-256 of the published artifact, geometry and bit
+  depth come from reopening it, the input side comes from the decoded array.
+  For `upscale`, `authorizedRect` is the full frame and
+  `outsidePixelsIdentical` is `null`, because §5.3 exempts upscale by
+  definition rather than pretending a patch rule applies. A legacy flat install
+  has no version directory, so `model.version` is `null` there instead of an
+  invented `"1.0.0"`. Where §3.5 needs model identity and the catalog carries no
+  version field, the loader derives it from the resolved install; no catalog
+  entry was edited to make the sidecar easier.
+- **S1-2 — a provider is reported only after it initialised.**
+  `Engine.execution_providers` returns the device a loader actually used, and
+  before the first model returns none with `state: "unavailable"` and a reason.
+  Probing torch during the handshake was rejected: it would import a heavy
+  runtime to answer a claim, costing seconds and hundreds of megabytes on the
+  16 GB machine for no evidence. `Docs/AI_PROTOCOL_V2.md` already required this
+  (§Conformance 4); the macOS worker now complies, and
+  `Tests/RuntimeV2Tests.swift` asserts the pre-load shape. Windows keeps
+  reporting `CPU` because `Providers.Ensure()` genuinely initialises that
+  execution provider at worker start, which is the §4.2 W5-1 deliverable.
+- **S1-3 — the catalog digest is enforced on the load path, not in
+  `Catalog.require`.** `require_verified` runs `require` (licence, presence,
+  size) and then hashes each file with a recorded SHA-256 before the loader gets
+  a path, failing with `-32019` and releasing the lease so a refused install
+  stays repairable and deletable. Deliberate trade-off: it is used by the
+  upscaler only. Measured cost is 0.036 s for the 48,460,141-byte
+  `pytorch_model.bin` on this M3/16 GB Mac (2026-11-17), once per process;
+  hashing 4.6 GB of FLUX weights before every render is not a price the budget
+  can pay, so those entries keep the size gate plus the on-demand `models
+  verify`. The same measurement hashed the owner's live install and every
+  catalog digest matched, so the gate does not refuse a healthy store.
+  Enforcement at every `require` call remains a later decision, not made here.
+- **S1-4 — cancellation has load and write safe points.** The upscale job
+  checks before it loads the model, between tiles, and after the staged PNG is
+  complete but before it is renamed into place, so a cancel at the write leaves
+  neither artifact, staging file nor sidecar. `Docs/AI_PROTOCOL_V2.md` §Shutdown
+  records this. The MLX patch path keeps its single in-call safe point; nothing
+  about it changed.
+- **S1-5 — CI asserts the verdicts instead of the exit code.** The
+  `windows-app` job now fails unless the log reports `WINDOWS APP BUILD: PASS`,
+  `AI RUNTIME TESTS: PASS`, `ONNX Runtime 1.32.0 matches the recorded size and
+  SHA-256`, `AI worker, protocol library and ORT CPU payload present` and
+  `upscale stays blocked without an approved artifact`, and uploads that log as
+  a failure artifact. The pinned worker count in the macOS gate moves 88 → 100.
+  A generic green job is still not Windows AI support: these strings are the
+  evidence of what ran, including the refusal.
+
+**NOT VERIFIED after Slice 1 (add to §8's list, which stays as written):**
+no host or exporter consumes the provenance sidecar yet, and it is written
+beside the artifact inside the job workdir — §3.6 places adopted artifacts and
+their sidecars beside the edit id in the edit store, which needs the host-side
+adoption Slice 1 does not do; no real inference run
+has produced a sidecar, so its values are proven against a fake model and a real
+numpy array only; the load-time digest cost is measured on one file on one
+machine; the cancel-at-load and cancel-at-write paths are proven by deterministic
+tests, not by a timed real job; bit depth, peak memory and wall time for the 4×
+path are unmeasured since Slice 1 ran no inference; and none of this re-records
+the §4.3 acceptance gates.

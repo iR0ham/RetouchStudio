@@ -192,6 +192,21 @@ product, so a Windows regression must be able to block `main`. The job had
 already run green on every PR between 2026-11-13 and the switch, including the
 runs recorded below.
 
+**Addendum (2026-11-17, W5-4 Slice 1).** `build-windows.ps1` output now tees to
+`$RUNNER_TEMP/windows-app.log`, and a following step fails the job unless that
+log reports `WINDOWS APP BUILD: PASS`, `AI RUNTIME TESTS: PASS`, `ONNX Runtime
+1.32.0 matches the recorded size and SHA-256`, `AI worker, protocol library and
+ORT CPU payload present` and `upscale stays blocked without an approved
+artifact`. Those five lines are what the run proved about Windows AI, including
+the refusal; a script that threw partway never prints the later ones, so the
+assertion — not the step's own exit status — is what closes the gap between a
+green job and a green claim. The log travels with the failure artifact. No
+required check, runner, timeout or job was added or removed, and no assertion
+was relaxed. In the `macOS Integration` verdict list the worker pin moved from
+`Ran 88 tests` to `Ran 100 tests` with the twelve new worker tests. No run on
+this head exists yet, so the widened gate itself is unverified until CI executes
+it.
+
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
 one operating system, one renderer, no pixel-parity claim: the macOS Core Image
