@@ -628,3 +628,10 @@ shape `{id, state, execution_providers}` with the `reason` explanation when
 unavailable. The Windows runner can only observe the available shape live;
 the unavailable branch is exercised by the macOS helper test, and that
 asymmetry is stated in the Windows test's comment.
+
+Follow-up (2026-11-18, `0688fa9`): opening PR #71 (base `w5-4/upscaler`) with
+no checks reported exposed the same unguarded-PR class as finding 1 — the
+filter matched only the two integration branches, so a stacked milestone PR
+ran nothing. `pull_request.branches` now also carries `w5-**`, so every PR in
+the W5 stack passes the same five contexts regardless of where its base
+lands. The audit's finding 1 therefore closes in its general form.
