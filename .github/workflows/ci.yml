@@ -156,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           for verdict in \
-            'Ran 88 tests' \
+            'Ran 100 tests' \
             'StudioCore: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
             'MODEL TESTS: PASS' \
@@ -268,7 +268,27 @@ jobs:
 
       - name: Build, test and smoke-run the Windows host
         shell: pwsh
-        run: ./Tools/build-windows.ps1 -RequireMsi
+        run: ./Tools/build-windows.ps1 -RequireMsi *>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'windows-app.log')
+
+      # A green job alone only means the script stopped. These lines are what the
+      # run proved about Windows AI, and the missing-argument refusal among them:
+      # a script that threw partway simply never prints the later verdicts, so
+      # this step is what fails the job and the log is kept as the evidence.
+      - name: Assert every Windows verdict was reported
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'windows-app.log'
+          foreach ($verdict in @(
+            'WINDOWS APP BUILD: PASS',
+            'AI RUNTIME TESTS: PASS',
+            'ONNX Runtime 1.32.0 matches the recorded size and SHA-256',
+            'AI worker, protocol library and ORT CPU payload present',
+            'upscale stays blocked without an approved artifact')) {
+            if (-not (Select-String -Path $log -Pattern $verdict -SimpleMatch -Quiet)) {
+              throw "the Windows log never reported: $verdict"
+            }
+            Write-Host "found: $verdict"
+          }
 
       - name: Upload the packaged zip and MSI
         uses: actions/upload-artifact@v7
@@ -282,5 +302,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-app-publish
-          path: build/windows/app/**
+          path: |
+            build/windows/app/**
+            ${{ runner.temp }}/windows-app.log
           if-no-files-found: ignore
