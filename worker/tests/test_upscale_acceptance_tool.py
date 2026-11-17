@@ -39,7 +39,6 @@ from retouch_ai_worker.server import JobManager, WorkerServer
 from retouch_ai_worker import provenance
 
 HARNESS = Path(__file__).resolve().parents[1] / "tools" / "upscale_acceptance.py"
-ROOT = Path(__file__).resolve().parents[2]
 
 
 class FakeUpscale:

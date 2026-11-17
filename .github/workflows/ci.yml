@@ -217,9 +217,10 @@ jobs:
           PYTHON: python
         run: ./Tests/Conformance/run-conformance.sh
 
-      # A green job alone only means the script stopped. A script that threw
-      # partway simply never prints its final verdict, so this step is what
-      # fails the job; the same pattern the Windows App job applies.
+      # A green tee step only means the pipeline ended, not that the script
+      # completed its checks. A script that threw partway simply never prints
+      # its final verdict, so this step is what fails the job; the same
+      # pattern the Windows App job applies.
       - name: Assert the Windows portability verdict
         shell: pwsh
         run: |
