@@ -835,6 +835,22 @@ func testRealHelperHandshake() {
               "M: provider.list carries the shared contract version")
         check((providers?["providers"] as? [[String: Any]])?.isEmpty == false,
               "M: provider.list returns a provider record")
+        // The shared fixture types a provider record; both platforms must
+        // emit that shape, and both carry the unavailable explanation as
+        // `reason` (the Windows adapter was aligned to this in W5-5).
+        if let data = try? Data(contentsOf: root.appendingPathComponent(
+                "Tests/Contract/protocol2.json")),
+            let contract = try? JSONSerialization.jsonObject(
+                with: data) as? [String: Any],
+            let providerType = contract["provider"] as? [String: Any],
+            providerType["state"] != nil {
+            let record = (providers?["providers"] as? [[String: Any]])?.first
+            check(record?["id"] is String
+                    && ["available", "unavailable"]
+                        .contains(record?["state"] as? String ?? "")
+                    && record?["execution_providers"] != nil,
+                  "M: the provider record matches the shared fixture type")
+        }
         let pong = (try? client.call("ping")) as? [String: Any]
         check(pong?["pong"] as? Bool == true,
               "M: ping answers pong")

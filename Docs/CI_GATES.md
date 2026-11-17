@@ -572,3 +572,59 @@ build and no CI job here validates one.
 
 The GitHub-hosted `macos-14` runner image was retired on 2026-11-02. This
 workflow therefore uses `macos-15` (arm64) instead.
+
+## W5-5 gate audit (2026-11-18)
+
+An audit of the five `CI` jobs against the W5-5 brief ("missing gates,
+duplicated or misleading checks") produced four findings; three are
+implemented here, one is recorded for the owner. Evidence standard: the
+findings below were read from `ci.yml` at `67486d0` plus the scripts the
+jobs invoke, not from memory.
+
+1. **Missing gate — a pull request targeting `develop` ran no CI.**
+   `on.pull_request.branches` listed only `main`, so any stacked or staged PR
+   against the integration branch was unguarded. `develop` is now listed next
+   to `main`. Pushes stay deliberately unlisted for both branches (the merge
+   tree has already been proven by the pull-request run; the comment at the
+   top of `ci.yml` records that reasoning).
+2. **Missing gate — `Windows StudioCore` had no verdict assertion.** Every
+   other job asserts its recorded verdict from the log (macOS asserts the
+   suite lines, Windows App asserts five verdicts), but `windows-core` relied
+   on the script's exit code through a bare invocation. The run step now tees
+   to a log and a new assert step requires `StudioCore Windows portability
+   check: PASS`; the script prints that line only after `if ($failed) { exit
+   1 }` passes, so a partially-run script fails the assert exactly the way
+   the Windows App job's comment describes. The log is added to the failure
+   upload.
+3. **Misleading gap — the acceptance harness was untested.** The W5-4 harness
+   (`worker/tools/upscale_acceptance.py`) existed as a tool with no
+   regression coverage, so a protocol change could silently break the very
+   gate the owner will later trust. `worker/tests/test_upscale_acceptance_tool.py`
+   now drives the harness as a subprocess against a deterministic fake engine
+   over a real socket and judges both outcomes the real approval will
+   produce: exit 2 with the recorded refusal when the capability is not
+   `supported`, and the five-gate pass (dimensions, provenance, cleanup,
+   provider, cancelCleanup) with the cancelled job leaving nothing. The
+   worker suite count moves `120 → 122` and every pin (`Tests/run-worker.sh`,
+   `ci.yml`, `Docs/W5_ADAPTERS.md`, `Docs/worker-regressions/README.md`)
+   moves with it; the new pin is unverified until the next macOS job executes
+   the suite.
+4. **Deliberate duplication, now recorded rather than removed.**
+   `StudioCore Boundary` (macOS, fast PR signal) and the StudioCore step
+   inside `macos-integration` run the same script, and the platform-neutral
+   conformance gate runs on both `ubuntu-24.04` and the Windows image. Both
+   are intentional: the boundary exists for early signal, the integration
+   copy pins the verdict into the full-suite log, and the double-platform
+   conformance is what makes "platform-neutral" a tested claim rather than a
+   name. Removing either would save a minute and lose a proof, so they stay
+   and are recorded here as deliberate.
+
+Also in this branch, from the independent review of PR #70: the Windows
+provider record for an unavailable runtime carried its explanation under
+`error` while macOS and the shared fixture's unavailable-shape convention use
+`reason` (the macOS suite asserts the field). The Windows adapter now emits
+`reason`, and both platforms' contract tests assert the fixture provider
+shape `{id, state, execution_providers}` with the `reason` explanation when
+unavailable. The Windows runner can only observe the available shape live;
+the unavailable branch is exercised by the macOS helper test, and that
+asymmetry is stated in the Windows test's comment.

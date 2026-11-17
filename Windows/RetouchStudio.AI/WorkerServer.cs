@@ -221,7 +221,7 @@ public sealed class WorkerServer
                 ? new JsonArray("CPU")
                 : new JsonArray(),
         };
-        if (!result.Available) record["error"] = result.Error;
+        if (!result.Available) record["reason"] = result.Error;
         return record;
     }
 

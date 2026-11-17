@@ -125,6 +125,21 @@ if (File.Exists(worker))
                 "provider.list echoes contractVersion and a provider",
                 listed?.ToJsonString());
 
+            // The shared fixture types a provider as {id, state,
+            // execution_providers}; the explanation for an unavailable state is
+            // `reason` on both platforms (the macOS suite asserts the same
+            // field). This runner can only observe the available shape, so the
+            // unavailable branch of this check is enforced by construction
+            // here and exercised live by the macOS helper test.
+            var record = listedResult?["providers"]?[0];
+            var recordState = record?["state"]?.GetValue<string>();
+            Check(record?["execution_providers"] is JsonArray &&
+                  (recordState == "available" || recordState == "unavailable") &&
+                  (recordState != "unavailable" ||
+                   !string.IsNullOrWhiteSpace(record?["reason"]?.GetValue<string>())),
+                "provider.list matches the shared fixture shape",
+                listed?.ToJsonString());
+
             var ping = client.Call("ping");
             Check(ping?["result"]?["pong"]?.GetValue<bool>() == true,
                 "ping answers pong", ping?.ToJsonString());
