@@ -96,8 +96,9 @@ table of its own.
 
 ## Tests
 
-- Worker: 100 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
-  of them; W5-4 Slice 1 adds 12 (see the addendum). 14 of the W5-3 tests are for
+- Worker: 115 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+  of them; W5-4 Slice 1 adds 12 and the §3.6 publication work adds 15 (see the
+  addendum). 14 of the W5-3 tests are for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
   kind-only job that must not load a size-mismatched model (`-32019`), and the
@@ -153,10 +154,22 @@ of them makes a new capability claim.
   (`<name>.png.provenance.json`, `worker/retouch_ai_worker/provenance.py`) and
   returns the path as `provenance`. The record binds the job id, capability id,
   model id/version/format, the file digests, the provider, the parameters, and
-  input/output geometry measured from the published bytes. `state` and the
-  sidecar are written once, after the rename adopts the artifact, so a job that
-  does not publish writes no provenance. Decision record §3.6 is the contract;
-  nothing in it was invented here.
+  input/output geometry measured from the bytes the publishing rename moves.
+  Decision record §3.6 is the contract; nothing in it was invented here.
+- **Publication is ordered, not atomic.** The first draft of this work
+  published the artifact and then wrote its sidecar, which left a real failure
+  window: a record that could not be serialised, or a folder that could not be
+  written, produced an artifact with no provenance for a host to adopt. No two
+  renames can be made atomic on these filesystems, so `provenance.publish`
+  lands the sidecar first and treats the artifact rename as the commit point,
+  withdraws the sidecar if that rename fails, and re-reads the pair afterwards
+  to remove it whole if the digests disagree. The state a crash between the two
+  renames can leave is therefore a sidecar with no artifact — inert, because
+  there is nothing to adopt — which `provenance.reconcile` clears when the
+  worker starts and no job is in flight. An artifact without provenance is the
+  state this path cannot produce. A host that adopts must still verify the pair
+  itself; `provenance.verify` is the same check, and a reader that skips it is
+  trusting a claim it can measure.
 - **Load-time integrity.** `upscale` now resolves its weights through
   `Catalog.require_verified`, which hashes each file the catalog gives a SHA-256
   for and fails with `-32019` while releasing the lease. The check runs once per
@@ -167,8 +180,11 @@ of them makes a new capability claim.
   matching their catalog digests, so the gate does not refuse the owner's
   existing install.
 - **Cancel points.** The upscale job checks for a cancel before it loads,
-  between tiles, and after the staged PNG is written but before it is renamed
-  into place, so a cancelled write leaves neither artifact nor temp file.
+  between tiles, and after the staged PNG is written but before publication
+  begins, so a cancelled write leaves neither artifact, nor temp file, nor
+  sidecar. Inside publication nothing is checked: a cancel that arrives there
+  completes the pair rather than tearing it, which is the whole point of the
+  ordering above.
 - **Truthful provider.** `Engine.execution_providers` reports the device a
   loader actually used; before the first model, `provider.list` and `health`
   report no execution provider with `state: "unavailable"` and a reason.
@@ -181,3 +197,56 @@ there with the artifact-approval reason, and the Windows worker loads no model
 weights), the Windows CI job is host-runner evidence, and no macOS 4× run has
 been re-recorded since Slice 1 — the acceptance gates in decision record §4.3
 that need a real inference run are open, so W5-4 is not complete.
+
+## Evidence scopes (2026-11-17)
+
+Four kinds of "verified" get mixed together in this program. This is what each
+statement about the upscaler is actually backed by, in descending strength.
+Nothing here has been established by real inference on either platform in this
+workstream.
+
+**Physically measured on the reference Mac (the strongest evidence here).** The
+`swin2sr-x4` checkpoint digest and size, the 0.036 s cost of hashing its
+48,460,141-byte `pytorch_model.bin`, the legacy flat layout of the installed
+store, and the `blocked` verdict `capability.list` returns for `upscale.4x` on
+this machine. These were read from the live store and the live worker with
+read-only commands on 2026-11-17. The older 4× inference measurements this
+document quotes are recorded elsewhere, not re-run here:
+`worker/retouch_ai_worker/capability-evidence.json` binds `upscale.4x` on
+`macos-arm64` to a real 4× job that produced a 256×256 artifact from a 64×64
+input on the M3 using `mps` in 5–7 s for the whole job (its cited source is
+`Docs/PHASE5_ACCEPTANCE.md` §4), and `Resources/model-catalog.json` carries the
+6.2 s per 256² tile figure in the `swin2sr-x4` notes. Both predate Slice 1 and
+neither has been re-measured since.
+
+**CI-proven on macOS** (run `44145839011`, `macOS Integration`, 17m1s): the
+worker suites pass on the pinned source-built 3.13 runtime created by
+`Tools/setup-worker-venv.sh`, StudioCore passes 288 checks, the C ABI passes
+104, and the Swift runtime suite asserts the provider shape a fresh worker
+reports before any model loads. This proves the protocol and the adapters'
+code paths that the tests exercise — not that a 4× job ran.
+
+**CI-proven on Windows** (same run, `Windows App`, 14m16s, and `Windows
+StudioCore`, 3m33s): the .NET host builds against the Swift C ABI, the AI
+worker and ONNX Runtime payload match their recorded size and SHA-256, the
+host's own AI tests pass, and `upscale.4x` is refused with the
+artifact-approval reason. That refusal is the Windows upscaling verdict:
+**a green Windows App check establishes that the generic host works and that
+inference is not offered, nothing more.** These are GitHub-hosted runners —
+no physical Windows device, no GPU, and no DirectML claim is in evidence.
+
+**Unit-tested only, with a fake engine.** The provenance sidecar fields, the
+ordered publication and every failure window inside it (serialisation, create,
+write, both renames, verification), the load-time digest gate and its
+`-32019`, the cancel points and the startup orphan sweep. They run against a
+numpy stand-in for torch and a fake model, on purpose: they prove the
+worker's own bookkeeping, and they are not evidence that the real network
+produces a good image. No test in this repository uses fake inference to claim
+real inference works, and none may start.
+
+**Not verified at all.** Anything about output quality, bit depth, ICC
+behaviour, alpha behaviour, orientation, peak memory, wall-clock time, tile
+counts or cancellation latency under a real 4× job; the ONNX artifact questions
+on Windows; and the host side's adoption of the sidecar. Those are the open
+W5-4 gates, and the acceptance harness in Phase 4 exists to make them
+measurable once the owner authorises a real run.

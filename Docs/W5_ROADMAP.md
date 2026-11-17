@@ -190,6 +190,10 @@ not true of the current tree and must not be read as present-tense claims.
    worker completing the protocol-2 handshake — is unaffected.
 3. `Ran 88 tests` was that run's worker count. The suite is 100 tests since
    Slice 1, and the macOS CI gate now pins `Ran 100 tests`.
+   **Same-day addendum, 2026-11-17:** the §3.6 publication work then added 15
+   more tests and the gate pins `Ran 115 tests`; the 100-test figure above is
+   the Slice 1 count and stays as recorded. Run `44145839011` on head `fec5930`
+   is the evidence for the 100-test pin.
 
 ### W5-4 — First cross-platform capability: Upscaler 4x
 

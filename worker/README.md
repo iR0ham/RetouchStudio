@@ -94,8 +94,9 @@ Results are written as PNG inside the job directory; `out_shm` additionally
 copies the result into an app-allocated segment. A successful `upscale` also
 writes the `retouchstudio.ai.provenance/1` sidecar named
 `<artifact>.provenance.json` beside its output and returns the path as
-`provenance`; the record's values are measured from the published bytes, not
-copied from the plan (`provenance.py`).
+`provenance`; the record's values are measured from the bytes the job wrote,
+which the publishing rename moves unchanged, and `provenance.verify` re-reads
+both after the commit (`provenance.py`).
 
 A `patch_edit` reply that stays local carries one rectangle for both output
 files:
@@ -141,9 +142,12 @@ no patch files.
    next denoising step, which is the only point MLX can be interrupted from
    inside a single `generate_image` call. The `upscale` job is not MLX, so it
    defines its own safe points: before it loads the model, between tiles, and
-   again after the encoder has written the staged PNG but before it is renamed
-   into place — a cancel at the write leaves neither artifact nor temp file, and
-   no provenance sidecar.
+   again after the encoder has written the staged PNG but before publication
+   begins — a cancel at the write leaves neither artifact nor temp file and no
+   provenance sidecar. Cancellation is deliberately **not** re-checked inside
+   the publication itself: a request that arrives there lands on a commit that
+   is already under way, and the pair finishes. Tearing it apart would trade a
+   late cancel for an artifact without provenance.
 8. **One engine thread.** MLX streams and torch device state are thread-local,
    and mflux's VAE attention builds an MLX array as its attention scale, so a
    model loaded on one thread cannot be used from another. Every job therefore
@@ -163,6 +167,13 @@ no patch files.
     reports the device a loader actually used (`mps` or `cpu`), and nothing plus
     a reason before the first model. Probing torch during the handshake would
     spend seconds and hundreds of megabytes to answer with a claim.
+12. **An artifact is never alone.** `provenance.publish` lands the sidecar
+    first and the artifact rename is the commit point, then re-reads the pair
+    and withdraws both if the digests disagree. No filesystem makes two
+    renames atomic, so the guarantee comes from the order: the state a crash
+    can leave is a sidecar with no artifact — inert, cleared by
+    `provenance.reconcile` when the worker starts and its job folders are
+    idle — never an artifact whose provenance failed to arrive.
 
 ## Environment
 
@@ -180,7 +191,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-100 tests, no GPU and no model download: framing, contract versioning, request
+115 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing
@@ -188,7 +199,11 @@ byte-identity, alpha bounds, the frozen capability vocabulary and its evidence
 rules. The upscale tests run a fake torch and a fake model against a real
 numpy array, so they cover the provenance sidecar, the load-time digest, the
 load/write cancel points and the reported provider without any inference
-runtime.
+runtime. `test_provenance.py` patches the three syscalls the writer uses and
+fails each one in turn — serialise, create, write, rename the sidecar, rename
+the artifact, verify — to prove that every failure leaves either a complete,
+self-consistent pair or nothing at all, and that startup recovery clears an
+orphan sidecar without touching a completed pair or any other file.
 
 ## Acceptance
 

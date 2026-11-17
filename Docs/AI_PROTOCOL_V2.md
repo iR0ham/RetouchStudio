@@ -142,8 +142,15 @@ worker's inherited stderr; the host does not parse them for protocol state.
 - `job.cancel` is acknowledged immediately and takes effect at the worker's
   next safe point. The response never claims instant cancellation. Safe points
   are not only the gaps between inference tiles: the macOS upscale job also
-  checks before it loads the model and again before it publishes the output, so
-  a cancel at the write leaves neither an artifact nor a staging file.
+  checks before it loads the model and again after it has encoded the staged
+  output but before publication, so a cancel at the write leaves neither an
+  artifact, nor a staging file, nor a provenance sidecar. Publication itself is
+  deliberately uninterrupted: the sidecar lands first and the artifact rename
+  is the commit point, so a request that arrives there finishes a complete,
+  self-consistent pair rather than tearing an artifact away from its
+  provenance. Two renames are not one atomic act — see
+  [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
+  §3.6 for what a host must therefore refuse.
 - On Windows the worker is in a Job Object with kill-on-close. On macOS the
   host tracks process identity, not just pid. A worker crash is a failed
   runtime, never a silent fallback to another protocol.

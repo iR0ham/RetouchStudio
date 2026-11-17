@@ -207,6 +207,20 @@ was relaxed. In the `macOS Integration` verdict list the worker pin moved from
 this head exists yet, so the widened gate itself is unverified until CI executes
 it.
 
+**2026-11-17, executed.** Run `44145839011` on head `fec5930` ran that widened
+gate: `Windows App` passed in 14m16s with its step
+"Assert every Windows verdict was reported" succeeding, and the job log carries
+`found: WINDOWS APP BUILD: PASS`, `found: AI RUNTIME TESTS: PASS`,
+`found: ONNX Runtime 1.32.0 matches the recorded size and SHA-256`,
+`found: AI worker, protocol library and ORT CPU payload present` and
+`found: upscale stays blocked without an approved artifact`. `macOS Integration`
+passed in 17m1s with `Ran 100 tests in 2.880s / OK`, `StudioCore: 288 checks
+passed` and `ABI TESTS: PASS (104 checks)`. The assertion step is therefore
+proven to fire on real output. What it proves about Windows is the generic host
+build plus an upscale **refusal**; it establishes no Windows inference. The
+publication work later the same day pins `Ran 115 tests`, and that pin is
+unverified until CI executes it.
+
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
 one operating system, one renderer, no pixel-parity claim: the macOS Core Image

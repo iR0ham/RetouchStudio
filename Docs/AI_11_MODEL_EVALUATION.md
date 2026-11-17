@@ -285,8 +285,18 @@ buffer is ≈320 MB, several live at once, plus ≈1 GB of runtime.
 
 | Role | Best quality | Best lightweight | Best on M3 16 GB | Best cross-platform |
 |---|---|---|---|---|
-| 2× | HAT-S (if weights are obtainable) | Swin2SR lightweight x2 | Real-ESRGAN x2plus via MLX | Swin2SR x2 (ONNX available) |
-| 4× | HAT / SwinIR-L (compromises) | realesr-general-x4v3 | Swin2SR x4 (already measured) | Swin2SR x4 (ONNX available) |
+| 2× | HAT-S (if weights are obtainable) | Swin2SR lightweight x2 | Real-ESRGAN x2plus via MLX | Swin2SR x2 (unapproved community ONNX conversions exist) |
+| 4× | HAT / SwinIR-L (compromises) | realesr-general-x4v3 | Swin2SR x4 (already measured) | Swin2SR x4 (no approved ONNX artifact — W5-4 BLOCKED) |
+
+**Corrected 2026-11-17.** The last column of both rows read "(ONNX
+available)". Available is not approved: what exists are third-party
+conversions whose conversion procedure, tool versions, opset, producer, size,
+SHA-256 and licence terms this project does not hold — see
+[W5_ROADMAP.md](W5_ROADMAP.md) §W5-4 and decision 6 of
+[W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md).
+A filename that says Swin2SR is not evidence that it is Swin2SR. The finding
+that Swin2SR is the cross-platform pick stands; the gate it must pass first is
+unchanged and still open.
 
 **Face-aware upscaling.** No shippable face-restoration stage is recommended
 inside upscaling: a restorer on clean faces plasticizes identity, and the
