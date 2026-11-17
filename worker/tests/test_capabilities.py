@@ -1,0 +1,132 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from retouch_ai_worker.capabilities import (CAPABILITIES, PROVIDER, SUPPORTED,
+                                            VOCABULARY, load_evidence, record,
+                                            report)
+from retouch_ai_worker.catalog import Catalog
+
+PLATFORM = "macos-arm64"
+MIGAN = "migan"
+SWIN = "swin2sr-x4"
+
+
+def _sparse(path: Path, size: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as handle:
+        handle.truncate(size)
+
+
+def _versioned(root: Path, model: str, version: str, files: dict[str, int]) -> None:
+    target = root / model / version
+    for name, size in files.items():
+        _sparse(target / name, size)
+    (root / model / "active.json").write_text(json.dumps({
+        "schema": "retouchstudio.model-active/1",
+        "modelId": model,
+        "version": version,
+    }), encoding="utf-8")
+
+
+class CapabilityReportTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "models"
+        self.catalog = Catalog(self.root, allow_uncleared=False)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def by_id(self, evidence=()):
+        return {item["capabilityId"]: item
+                for item in report(self.catalog, evidence=evidence,
+                                   platform_name=PLATFORM)["capabilities"]}
+
+    def test_every_frozen_capability_is_reported_once_with_a_reason(self):
+        records = self.by_id()
+        self.assertEqual(list(records), [spec.id for spec in CAPABILITIES])
+        self.assertEqual(len(records), len(CAPABILITIES))
+        for item in records.values():
+            if item["state"] != SUPPORTED:
+                self.assertTrue(item["reason"], item)
+            else:
+                self.assertTrue(item["evidence"], item)
+        self.assertEqual(report(self.catalog, evidence=())["vocabulary"], VOCABULARY)
+
+    def test_a_missing_model_is_requires_model(self):
+        upscale = self.by_id()["upscale.4x"]
+        self.assertEqual(upscale["state"], "requires_model")
+        self.assertEqual(upscale["modelId"], SWIN)
+        self.assertIn("not installed", upscale["reason"])
+
+    def test_installed_without_evidence_is_blocked(self):
+        _versioned(self.root, MIGAN, "1.0.0",
+                   {"migan_pipeline_v2.onnx": 28_079_181})
+        spot = self.by_id()["inpaint.spot"]
+        self.assertEqual(spot["state"], "blocked")
+        self.assertEqual(spot["modelVersion"], "1.0.0")
+        self.assertIn("no recorded run", spot["reason"])
+
+    def test_matching_evidence_makes_it_supported(self):
+        _versioned(self.root, MIGAN, "1.0.0",
+                   {"migan_pipeline_v2.onnx": 28_079_181})
+        evidence = ({"capabilityId": "inpaint.spot", "platform": PLATFORM,
+                     "provider": PROVIDER, "modelId": MIGAN,
+                     "modelVersion": "1.0.0", "evidence": "fixture run"},)
+        spot = self.by_id(evidence)["inpaint.spot"]
+        self.assertEqual(spot["state"], "supported")
+        self.assertEqual(spot["evidence"], "fixture run")
+
+    def test_evidence_for_another_platform_does_not_count(self):
+        _versioned(self.root, MIGAN, "1.0.0",
+                   {"migan_pipeline_v2.onnx": 28_079_181})
+        evidence = ({"capabilityId": "inpaint.spot", "platform": "macos-x64",
+                     "provider": PROVIDER, "modelId": MIGAN,
+                     "modelVersion": "1.0.0", "evidence": "fixture run"},)
+        self.assertEqual(self.by_id(evidence)["inpaint.spot"]["state"], "blocked")
+
+    def test_legacy_flat_install_is_blocked_until_adopted(self):
+        _sparse(self.root / MIGAN / "migan_pipeline_v2.onnx", 28_079_181)
+        spot = self.by_id()["inpaint.spot"]
+        self.assertEqual(spot["state"], "blocked")
+        self.assertIn("adopt", spot["reason"])
+
+    def test_truncated_file_is_blocked_not_supported(self):
+        _versioned(self.root, MIGAN, "1.0.0", {"migan_pipeline_v2.onnx": 3})
+        evidence = ({"capabilityId": "inpaint.spot", "platform": PLATFORM,
+                     "provider": PROVIDER, "modelId": MIGAN,
+                     "modelVersion": "1.0.0", "evidence": "fixture run"},)
+        spot = self.by_id(evidence)["inpaint.spot"]
+        self.assertEqual(spot["state"], "blocked")
+        self.assertIn("size check", spot["reason"])
+
+    def test_unverifiable_catalog_entry_is_blocked_by_dr5(self):
+        _sparse(self.root / "sam2.1-hiera-tiny" / "sam2.1_hiera_tiny.pt", 16)
+        click = self.by_id()["mask.click"]
+        self.assertEqual(click["state"], "blocked")
+        self.assertIn("DR-5", click["reason"])
+
+    def test_shipped_ledger_supports_only_the_recorded_upscale_run(self):
+        entries = load_evidence()
+        self.assertEqual([entry["capabilityId"] for entry in entries],
+                         ["upscale.4x"])
+        self.assertEqual(entries[0]["modelVersion"], "1.0.0")
+
+    def test_missing_ledger_supports_nothing(self):
+        _versioned(self.root, SWIN, "1.0.0", {
+            "config.json": 772,
+            "preprocessor_config.json": 152,
+            "pytorch_model.bin": 48_460_141,
+        })
+        records = report(self.catalog, evidence=(), platform_name=PLATFORM)
+        self.assertFalse(any(item["state"] == SUPPORTED
+                             for item in records["capabilities"]))
+
+    def test_record_returns_none_for_an_unknown_capability(self):
+        self.assertIsNone(record("nope", self.catalog, evidence=()))
+
+
+if __name__ == "__main__":
+    unittest.main()

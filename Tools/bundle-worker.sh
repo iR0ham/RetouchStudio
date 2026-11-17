@@ -72,7 +72,9 @@ fi
   exit 1
 }
 STAMP_CONTENT="$("$VENV/bin/python3" -c 'import sys; print(sys.version.split()[0])')"
-SOURCE_HASH="$(cd "$WORKER_ROOT" && { find retouch_ai_worker -name '*.py' -type f -print0 | xargs -0 shasum -a 256; shasum -a 256 requirements.lock; } | shasum -a 256 | awk '{print $1}')"
+# The capability ledger ships inside the package and decides which features the
+# app may claim as supported, so it belongs to the source identity too.
+SOURCE_HASH="$(cd "$WORKER_ROOT" && { find retouch_ai_worker -type f \( -name '*.py' -o -name 'capability-evidence.json' \) -print0 | xargs -0 shasum -a 256; shasum -a 256 requirements.lock; } | shasum -a 256 | awk '{print $1}')"
 PACKAGES_HASH="$("$VENV/bin/python3" -m pip freeze 2>/dev/null | shasum -a 256 | awk '{print $1}')"
 STAMP_CONTENT="$(printf '%s\n%s\n%s\n' "$STAMP_CONTENT" "$SOURCE_HASH" "$PACKAGES_HASH" \
     | shasum -a 256 | awk '{print $1}')"

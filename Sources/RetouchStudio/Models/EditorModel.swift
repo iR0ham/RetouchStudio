@@ -192,6 +192,9 @@ final class EditorModel: ObservableObject {
     private var maskTask: Task<Void, Never>?
     @Published private(set) var quickEditStage: QuickEditStage = .idle
     @Published private(set) var isRunningQuickEdit = false
+    /// Opened when a job is refused because its model is missing, so the fix
+    /// is one click away instead of a trip through Settings.
+    @Published var showModelManager = false
     private var aiTask: Task<Void, Never>?
     private var aiJobID: String?
     private var quickEditCancelRequested = false
@@ -1620,7 +1623,7 @@ final class EditorModel: ObservableObject {
                 self.aiMaskRefined = mask
                 self.refreshAIMaskPreview()
             case .failure(let error):
-                self.aiMaskMessage = self.localizedAIFailure(error)
+                self.aiMaskMessage = self.reportAIFailure(error)
             }
             self.end(token)
         }
@@ -1739,12 +1742,20 @@ final class EditorModel: ObservableObject {
     }
 
     /// Worker errors that mean "the machine is not set up" get a sentence the
-    /// owner can act on instead of the helper's internal wording.
+    /// owner can act on instead of the helper's internal wording. A missing
+    /// model also opens the model manager, where the install lives.
+    private func reportAIFailure(_ error: Error) -> String {
+        let failure = error as? AIWorkerFailure
+        if failure?.code == -32011 { showModelManager = true }
+        return localizedAIFailure(error)
+    }
+
     private func localizedAIFailure(_ error: Error) -> String {
         switch (error as? AIWorkerFailure)?.code {
         case -32011: return L10n.current.aiModelMissing
         case -32012: return L10n.current.aiModelBusy
         case -32010: return L10n.current.aiLicenseBlocked
+        case -32020: return L10n.current.aiCapabilityUnsupported
         case -32602: return L10n.current.aiMaskTooLarge
         default: return error.localizedDescription
         }
@@ -1843,7 +1854,7 @@ final class EditorModel: ObservableObject {
                 if cancelled || (error as? AIWorkerFailure)?.code == -32014 {
                     self.quickEditStage = .idle
                 } else {
-                    self.quickEditStage = .failed(self.localizedAIFailure(error))
+                    self.quickEditStage = .failed(self.reportAIFailure(error))
                 }
             }
             self.end(token)

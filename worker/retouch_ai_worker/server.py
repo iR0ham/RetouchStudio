@@ -24,11 +24,13 @@ from pathlib import Path
 from . import PROTOCOL_VERSION_STRING, __version__
 from .protocol import CONTRACT_VERSION, PROTOCOL_VERSION
 from .catalog import Catalog
+from .capabilities import PROVIDER, job_capability, record, report
 from .engine import Cancelled, Context, Engine
 from .plan import manifest
 from .protocol import (BUSY, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
-                       WorkerError, decode, encode, error_response, notification,
-                       parse_request, result_response)
+                       MODEL_MISSING, UNSUPPORTED, WorkerError, decode, encode,
+                       error_response, notification, parse_request,
+                       result_response)
 from .transport import BufferRegistry
 
 LOG = logging.getLogger("retouch_ai_worker")
@@ -89,6 +91,8 @@ class JobManager:
                 "result": None,
                 "error": None,
                 "cancel": threading.Event(),
+                "cancel_requested_at": None,
+                "cancel_latency_ms": None,
             }
             self._jobs[job_id] = job
             self._order.append(job_id)
@@ -133,6 +137,11 @@ class JobManager:
         finally:
             with self._lock:
                 self._current = None
+            if job["cancel_requested_at"] is not None:
+                # How long the adapter needed to reach a safe point after the
+                # request; the acknowledgement itself is immediate.
+                job["cancel_latency_ms"] = max(0, round(
+                    (time.monotonic() - job["cancel_requested_at"]) * 1000, 1))
             self._emit("job.finished", self._public(job))
 
     def _progress(self, job: dict, fields: dict) -> None:
@@ -144,6 +153,8 @@ class JobManager:
         if job["status"] in ("succeeded", "failed", "cancelled"):
             return {"job_id": job_id, "status": job["status"], "cancel_requested": False}
         job["cancel"].set()
+        if job["cancel_requested_at"] is None:
+            job["cancel_requested_at"] = time.monotonic()
         if job["status"] == "running":
             job["status"] = "cancelling"
         self._emit("job.cancelling", {"job_id": job_id})
@@ -157,10 +168,13 @@ class JobManager:
         if job["status"] not in ("succeeded", "failed", "cancelled"):
             raise WorkerError(INVALID_PARAMS, "job has not finished",
                               {"job_id": job_id, "status": job["status"]})
-        return {"job_id": job_id, "status": job["status"],
-                "result": job["result"], "error": job["error"],
-                "seconds": round((job["finished"] or time.time())
-                                 - (job["started"] or job["created"]), 2)}
+        result = {"job_id": job_id, "status": job["status"],
+                  "result": job["result"], "error": job["error"],
+                  "seconds": round((job["finished"] or time.time())
+                                   - (job["started"] or job["created"]), 2)}
+        if job["cancel_latency_ms"] is not None:
+            result["cancelLatencyMs"] = job["cancel_latency_ms"]
+        return result
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -230,10 +244,34 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
     @staticmethod
     def providers() -> list[dict]:
         return [{
-            "id": "macos-python",
+            "id": PROVIDER,
             "state": "available",
             "execution_providers": ["CPU"],
         }]
+
+    def _require_capability(self, capability_id: str, kind: str) -> None:
+        """Refuse a job the adapter does not truthfully provide.
+
+        The host may name a capability; a missing model is E_MODEL_MISSING (the
+        app opens the model manager), anything else is E_UNSUPPORTED. A request
+        without a capability id keeps the pre-W5-3 job path unchanged.
+        """
+        spec = next((item for item in job_capability(kind)
+                     if item.id == capability_id), None)
+        if spec is None:
+            raise WorkerError(UNSUPPORTED,
+                              f"{capability_id} is not a {kind} capability",
+                              {"capabilityId": capability_id, "kind": kind})
+        item = record(capability_id, self.catalog)
+        if item is None or item["state"] not in ("supported", "requires_model"):
+            reason = (item or {}).get("reason") or "the adapter does not provide it"
+            raise WorkerError(UNSUPPORTED, reason,
+                              {"capabilityId": capability_id,
+                               "state": (item or {}).get("state", "unsupported")})
+        if item["state"] == "requires_model":
+            raise WorkerError(MODEL_MISSING, item["reason"],
+                              {"capabilityId": capability_id,
+                               "model": item.get("modelId")})
 
     # --- dispatch -----------------------------------------------------
     def dispatch(self, method: str, params: dict, connection) -> dict:
@@ -265,6 +303,8 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
         if method == "provider.list":
             return {"contractVersion": CONTRACT_VERSION,
                     "providers": self.providers()}
+        if method == "capability.list":
+            return report(self.catalog)
         if method == "models.verify":
             return self.catalog.verify(str(params.get("model", "")))
         if method == "models.plan":
@@ -274,6 +314,9 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
             job_params = params.get("params") or {}
             if not isinstance(kind, str) or not isinstance(job_params, dict):
                 raise WorkerError(INVALID_PARAMS, "kind and params are required")
+            capability_id = params.get("capabilityId")
+            if capability_id is not None:
+                self._require_capability(str(capability_id), kind)
             return self.manager.submit(kind, job_params, params.get("out_shm"))
         if method == "job.status":
             return self.manager.status(str(params.get("job_id", "")))

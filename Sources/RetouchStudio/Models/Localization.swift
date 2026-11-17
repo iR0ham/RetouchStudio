@@ -635,6 +635,17 @@ class L10n {
     var modelsOfflineNote: String {
         "Models run on this Mac. Nothing is uploaded, and no model is downloaded without your approval."
     }
+    var capabilitiesTitle: String { "AI CAPABILITIES" }
+    var capabilityReady: String { "Ready" }
+    var capabilityNeedsModel: String { "Needs a model" }
+    var capabilityBlocked: String { "Blocked" }
+    var capabilityUnavailable: String { "Not available" }
+    var capabilityHelperStopped: String {
+        "The local AI helper is not running, so the capability list cannot be read."
+    }
+    func capabilityProvider(_ platform: String, _ provider: String) -> String {
+        "\(platform) · \(provider)"
+    }
     var modelsInstalled: String { "Installed" }
     var modelsMissing: String { "Not installed" }
     var modelsDownload: String { "Download…" }
@@ -1241,6 +1252,9 @@ class L10n {
     }
     var aiLicenseBlocked: String {
         "This AI model is not cleared for use on this Mac."
+    }
+    var aiCapabilityUnsupported: String {
+        "This AI tool is not available for this Mac build yet. Manage Models… shows what this adapter can run."
     }
     var aiRunEdit: String { "Run edit" }
     var aiCancelEdit: String { "Cancel" }

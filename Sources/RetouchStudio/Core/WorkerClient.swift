@@ -6,6 +6,22 @@ struct AIWorkerFailure: LocalizedError {
     let code: Int
     let message: String
     var errorDescription: String? { message }
+
+    /// The W5-0 typed name for the numeric code, matching the Windows host.
+    var typedCode: String {
+        switch code {
+        case -32000: return "E_WORKER_MISSING"
+        case -32010: return "E_LICENCE_REFUSED"
+        case -32011, -32016: return "E_MODEL_MISSING"
+        case -32012: return "E_MODEL_LEASED"
+        case -32013: return "E_TIMEOUT"
+        case -32014: return "E_CANCELLED"
+        case -32015, -32602: return "E_INVALID_INPUT"
+        case -32019: return "E_MODEL_UNVERIFIED"
+        case -32020: return "E_UNSUPPORTED"
+        default: return "E_INTERNAL"
+        }
+    }
 }
 
 /// Client for the local AI helper: JSON-RPC 2.0 over a Unix socket, one request

@@ -44,6 +44,9 @@ struct EditorView: View {
             SmartAnalyzeSheet(model: model)
                 .environment(\.layoutDirection, model.language.layoutDirection)
         }
+        .sheet(isPresented: $model.showModelManager) {
+            ModelManagerView(editor: model)
+        }
         .onChange(of: model.adjustments) { _, _ in
             model.schedulePreview()
         }

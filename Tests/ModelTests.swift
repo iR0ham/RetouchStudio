@@ -6778,6 +6778,94 @@ func testFaceSelectionFollowsIdentity() {
     check(selection.index(in: restored) == 0, "resetting the crop restores the chosen face")
 }
 
+// MARK: - W5-3 capability reporting
+
+/// The worker's answer is validated, never trusted. These payloads mirror the
+/// shapes `worker/tests/test_capabilities.py` asserts on the adapter side.
+@MainActor
+func testAICapabilityReport() {
+    print("\n[W5-3] the host validates the worker's capability report")
+
+    func record(_ id: String, _ state: String, reason: String? = nil,
+                evidence: String? = nil) -> [String: Any] {
+        var entry: [String: Any] = ["capabilityId": id, "state": state,
+                                    "provider": "macos-python"]
+        if let reason { entry["reason"] = reason }
+        if let evidence { entry["evidence"] = evidence }
+        return entry
+    }
+    func payload(_ records: [[String: Any]]) -> [String: Any] {
+        ["vocabulary": "capabilities/1", "platform": "macos-arm64",
+         "provider": "macos-python", "capabilities": records]
+    }
+
+    let records = AICapabilityReport.vocabularyIds.enumerated().map { index, id in
+        index == 0 ? record(id, "supported", evidence: "a recorded run")
+                   : record(id, "blocked", reason: "not this milestone")
+    }
+    let report = AICapabilityReport(payload: payload(records))
+    check(report?.capabilities.count == AICapabilityReport.vocabularyIds.count,
+          "every frozen id is accepted")
+    check(report?.find("face.analysis")?.state == .supported,
+          "a backed claim keeps its state")
+    check(report?.find("face.analysis")?.evidence == "a recorded run",
+          "the evidence travels with the record")
+
+    var requires = payload(records)
+    requires["capabilities"] = records.map { entry -> [String: Any] in
+        var copy = entry
+        if copy["capabilityId"] as? String == "upscale.4x" {
+            copy["state"] = "requires_model"
+            copy["reason"] = "swin2sr-x4 is not installed"
+        }
+        return copy
+    }
+    check(AICapabilityReport(payload: requires)?.find("upscale.4x")?.state
+            == .requiresModel,
+          "requires_model decodes to the frozen spelling")
+
+    var missingReason = payload(records)
+    missingReason["capabilities"] = records.map { entry -> [String: Any] in
+        var copy = entry
+        if copy["state"] as? String == "blocked" { copy["reason"] = nil }
+        return copy
+    }
+    check(AICapabilityReport(payload: missingReason) == nil,
+          "a non-supported record without a reason is rejected")
+
+    var evidenceFree = payload(records)
+    evidenceFree["capabilities"] = records.map { entry -> [String: Any] in
+        var copy = entry
+        if copy["state"] as? String == "supported" { copy["evidence"] = nil }
+        return copy
+    }
+    check(AICapabilityReport(payload: evidenceFree) == nil,
+          "support without evidence is rejected")
+
+    var omitted = payload(records)
+    omitted["capabilities"] = Array(records.dropLast())
+    check(AICapabilityReport(payload: omitted) == nil,
+          "a report that omits an id is rejected")
+
+    var duplicate = payload(records + [records[1]])
+    check(AICapabilityReport(payload: duplicate) == nil,
+          "a duplicated id is rejected")
+
+    var unknown = payload(records + [record("face.unknown", "blocked", reason: "x")])
+    check(AICapabilityReport(payload: unknown) == nil,
+          "an id outside the vocabulary is rejected")
+
+    var foreign = payload(records)
+    foreign["vocabulary"] = "capabilities/2"
+    check(AICapabilityReport(payload: foreign) == nil,
+          "a foreign vocabulary is rejected")
+
+    check(AIWorkerFailure(code: -32011, message: "").typedCode == "E_MODEL_MISSING"
+          && AIWorkerFailure(code: -32020, message: "").typedCode == "E_UNSUPPORTED"
+          && AIWorkerFailure(code: -32000, message: "").typedCode == "E_WORKER_MISSING",
+          "the host keeps the W5-0 typed names")
+}
+
 // MARK: - runner
 
 @MainActor
@@ -6889,6 +6977,7 @@ func runAll() async {
     testMaskStoreKeepsTheRasterHonest()
     testDocumentRestorationCarriesMasks()
     testRecoverySnapshotCarriesMasks()
+    testAICapabilityReport()
     await testModelStoresMaskBesideEdit()
 
     // Invalidate any debounced write left by the last scenario: the scratch

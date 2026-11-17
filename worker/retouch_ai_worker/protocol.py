@@ -31,6 +31,10 @@ UNKNOWN_MODEL = -32016
 CONSENT_REQUIRED = -32017
 DOWNLOAD_FAILED = -32018
 CHECKSUM_MISMATCH = -32019
+# Additive in contract 1: a capability this adapter or platform does not
+# provide. The frozen W5-0 vocabulary has no numeric code of its own; the host
+# maps this code to E_UNSUPPORTED.
+UNSUPPORTED = -32020
 
 
 class WorkerError(Exception):
