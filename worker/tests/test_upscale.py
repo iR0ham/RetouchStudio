@@ -17,6 +17,7 @@ from retouch_ai_worker.catalog import ModelEntry, ModelFile
 from retouch_ai_worker.engine import (Cancelled, Context, Engine, _axis_plan,
                                       _axis_tiles, _pad_to_window, SWIN_WINDOW,
                                       UPSCALE_MAX_OUTPUT)
+from retouch_ai_worker.protocol import INTERNAL_ERROR, WorkerError
 
 
 class UpscaleTilingTests(unittest.TestCase):
@@ -334,6 +335,33 @@ class UpscaleJobTests(unittest.TestCase):
         self.assertIsNone(error)
         doc = json.loads(self._sidecar().read_text(encoding="utf-8"))
         self.assertEqual(doc["capabilityId"], "upscale.4x")
+
+    def test_the_job_result_is_a_pair_a_reader_can_verify(self):
+        # What the host adopts is the pair, so the paths it is handed have to
+        # describe each other: the sidecar beside the artifact, naming it.
+        _, _, _, result, error = self._run()
+        self.assertIsNone(error)
+        artifact = Path(result["output"])
+        self.assertEqual(Path(result["provenance"]),
+                         provenance.sidecar_path(artifact))
+        doc = provenance.verify(artifact)
+        self.assertEqual(doc["jobId"], "job-1")
+        self.assertEqual(doc["capabilityId"], "upscale.4x")
+        self.assertEqual(doc["output"]["sha256"],
+                         provenance.digest_file(artifact))
+
+    def test_a_publication_failure_reports_internal_error_and_publishes_nothing(
+            self):
+        # The job that cannot prove what it wrote must not report success, and
+        # must leave nothing for a host to pick up: not the artifact, not the
+        # sidecar, not a temp.
+        with mock.patch("retouch_ai_worker.engine.provenance.publish",
+                        side_effect=provenance.ProvenanceError(
+                            "the pair disagrees")):
+            with self.assertRaises(WorkerError) as caught:
+                self._run()
+        self.assertEqual(caught.exception.code, INTERNAL_ERROR)
+        self.assertEqual(list(self.workdir.iterdir()), [])
 
 
 if __name__ == "__main__":

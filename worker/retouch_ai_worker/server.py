@@ -21,7 +21,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import PROTOCOL_VERSION_STRING, __version__
+from . import PROTOCOL_VERSION_STRING, __version__, provenance
 from .protocol import CONTRACT_VERSION, PROTOCOL_VERSION
 from .catalog import Catalog
 from .capabilities import PROVIDER, job_capability, record, report
@@ -41,6 +41,11 @@ class JobManager:
                  keep_jobs: int = 20) -> None:
         self.engine = engine
         self.jobs_root = Path(jobs_root)
+        # A worker is constructed before any job is in flight, which is the one
+        # moment a crashed run's leftovers can be cleared without a race: a
+        # sidecar whose artifact never landed is inert, and only that goes.
+        for folder in self.jobs_root.glob("*/"):
+            provenance.reconcile(folder)
         self.allow_roots = allow_roots
         self.keep_jobs = keep_jobs
         self.buffers = BufferRegistry()

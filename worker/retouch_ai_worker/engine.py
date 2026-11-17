@@ -588,29 +588,46 @@ class Engine:
         output = np.clip(acc / weights[..., None], 0, 1)
         pixels = (output * 255).round().astype(np.uint8)
         result = ctx.workdir / "upscaled.png"
-        # The bytes land in a sibling temp and are published by one rename, so a
-        # cancel during the write leaves neither an artifact nor a temp (§4.3).
+        # Nothing is visible at `result` until the last rename. The rendered
+        # bytes land in a sibling temp, the sidecar is built from those bytes,
+        # and `publish` lands the sidecar first and the artifact second: no
+        # filesystem makes two renames atomic, so the invariant is carried by
+        # the order. An artifact the host can adopt therefore always has its
+        # provenance; the state between the two renames is a sidecar with no
+        # artifact, which nothing adopts and startup `reconcile` clears.
         ctx.check_cancel()
         staging = ctx.workdir / (result.name + ".tmp")
+        capability = ctx.capability_id or job_capability("upscale")[0].id
+        seconds = round(time.perf_counter() - started, 2)
         try:
             Image.fromarray(pixels).save(staging, format="PNG")
+            # A cancel that lands while the bytes are being written stops the
+            # job here, with nothing published. Nothing is checked once the
+            # publication starts: that is the boundary the pair cannot be torn
+            # at, so the two renames run uninterrupted.
             ctx.check_cancel()
-            os.replace(staging, result)
+            record = provenance.document(
+                capability_id=capability, job_id=ctx.job_id,
+                contract_version=CONTRACT_VERSION, model=identity,
+                adapter={"platform": current_platform(),
+                         "version": __version__},
+                parameters={"scale": scale, "tile": tile, "overlap": overlap},
+                seed=params.get("seed"), input=provenance.pixels(source),
+                output=provenance.artifact(staging),
+                authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0,
+                                 "height": 1.0},
+                outside_pixels_identical=None, elapsed_seconds=seconds,
+                state="succeeded")
+            sidecar = provenance.publish(staging, result, record)
+        except provenance.ProvenanceError as exc:
+            staging.unlink(missing_ok=True)
+            raise WorkerError(INTERNAL_ERROR,
+                              "the upscaled artifact could not be published "
+                              f"with provenance: {exc}",
+                              {"job": ctx.job_id}) from exc
         except BaseException:
             staging.unlink(missing_ok=True)
             raise
-        seconds = round(time.perf_counter() - started, 2)
-        capability = ctx.capability_id or job_capability("upscale")[0].id
-        sidecar = provenance.write(result, provenance.document(
-            capability_id=capability, job_id=ctx.job_id,
-            contract_version=CONTRACT_VERSION, model=identity,
-            adapter={"platform": current_platform(), "version": __version__},
-            parameters={"scale": scale, "tile": tile, "overlap": overlap},
-            seed=params.get("seed"), input=provenance.pixels(source),
-            output=provenance.artifact(result),
-            authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
-            outside_pixels_identical=None, elapsed_seconds=seconds,
-            state="succeeded"))
         return {"output": str(result), "scale": scale, "device": device,
                 "provider": device, "model": identity,
                 "provenance": str(sidecar),
