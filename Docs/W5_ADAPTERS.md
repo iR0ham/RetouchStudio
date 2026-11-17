@@ -1,9 +1,10 @@
 # W5-3 platform adapters and capability reporting
 
-**Status:** implemented 2026-11-17 on top of the merged W5-1/W5-2 work, on
-branch `w5-3/adapters`. Hosted CI evidence for the final head is recorded in
-the pull request; anything that could only be built on a hosted Windows runner
-is marked NOT VERIFIED locally.
+**Status:** implemented 2026-11-17 on top of the merged W5-1/W5-2 work; PR
+#69. Hosted CI run 44095581869 is green on head `cd872e0` (macOS Integration,
+Windows App, Windows StudioCore, StudioCore Boundary, Platform-neutral
+Conformance). Anything that could only be built on a hosted Windows runner is
+identified below; nothing here claims physical Windows hardware validation.
 
 **Scope:** make both platforms answer the frozen W5-0 capability vocabulary
 truthfully, and refuse what they cannot run. No new AI capability is added
@@ -94,8 +95,8 @@ table of its own.
 - Windows: `RetouchStudio.AI.Tests/Program.cs` now checks
   `capability.list` over a real worker pipe (16 ids, no support, reasons),
   the `-32020`/`-32602` refusals, the host adapter parse, and the stopped-pipe
-  `E_WORKER_MISSING` timing. These are built and run only on the hosted
-  `windows-2025` runner.
+  `E_WORKER_MISSING` timing. Run 44095581869 on the hosted `windows-2025`
+  runner reports `AI RUNTIME TESTS: PASS` and `WINDOWS APP BUILD: PASS`.
 
 ## Limitations, stated plainly
 
