@@ -3,7 +3,8 @@
 **Status:** implemented for W5-2 on both hosts (PR #68). It follows the frozen
 decisions in [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
 §3.7–3.10 and does not change them.
-**Date:** 2026-11-17 (W5-2 review remediation).
+**Date:** 2026-11-17 (W5-2 review remediation, including the final
+concurrency and error-contract review).
 **Platforms:** macOS Swift host + Python worker; Windows C# host + C# worker.
 
 ## 1. Owned artefacts
@@ -290,14 +291,21 @@ Unix file sharing, not Windows path syntax or Windows share modes; the hosted
 Windows evidence is hosted-runner CI; it is not native-hardware evidence and is
 labelled as such in the W5-2 report.
 
-Hosted CI run 43977895702 on head `83f116a` was green for all five jobs. The
-macOS Integration job (133686500403) logged `ABI TESTS: PASS (104 checks)`,
-`ENGINE TESTS: PASS`, `MODEL TESTS: PASS`, `MODEL STORE TESTS: PASS` (the
-148-check suite, including the `[18]` Python-worker legacy lease races) and
-`RUNTIME V2 TESTS: PASS`. The Windows App job (133686500287) logged
-`[M18]` with its ten legacy-lease checks, `MODEL STORE CHECKS: PASS` and
-`AI RUNTIME TESTS: PASS`, then built the MSI and smoke-loaded the upgraded app
-(`WINDOWS APP BUILD: PASS`). These are hosted macOS/Windows runners, not the
-owner's hardware.
+Hosted CI run 43989762475 on head `2c19fff` was green for all five jobs. The
+macOS Integration job (133727043623) logged `Ran 69 tests` for the worker,
+`ABI TESTS: PASS (104 checks)`, `ENGINE TESTS: PASS`, `MODEL TESTS: PASS`,
+`MODEL STORE TESTS: PASS` (the 157-check suite, including `[18]` with
+`the worker used the active version, not its stale flat path` and
+`the worker reports retryable busy, not a missing model — {"code": -32012,
+"data": {"model": "migan", "reason": "leased"}}`) and
+`RUNTIME V2 TESTS: PASS`. The Windows App job (133727043560) logged `[M18]`
+with its legacy-lease checks, `MODEL STORE CHECKS: PASS`,
+`AI RUNTIME TESTS: PASS`, and `WINDOWS APP BUILD: PASS` after building,
+upgrading and smoke-loading the MSI. These are hosted macOS/Windows runners,
+not the owner's hardware.
+
+An earlier run on code head `0e718dc` (43986718664) passed every suite but
+failed the macOS verdict gate because the workflow still expected
+`Ran 67 tests`; commit `2c19fff` updates that count to 69.
 
 
