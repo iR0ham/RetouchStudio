@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.5) {
             AIWorker.selfTestAtLaunch()
         }
+        // Removes only stale, unlocked staging/quarantine trees; it never
+        // downloads and never touches an installed version.
+        ModelManager.cleanupAtStartup()
         // Finder can deliver the open event before the window appears, so an
         // early URL waits here until the model exists.
         if let pendingURL {

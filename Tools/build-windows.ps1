@@ -283,8 +283,9 @@ if (-not $SkipTests) {
 
     # A real worker process, a real named pipe and a real Job Object: this is
     # the evidence that the C# runtime speaks protocol 2, not just that it
-    # compiles.
-    Step 'running the AI runtime tests'
+    # compiles. The same executable then runs the W5-2 model-store matrix
+    # (loopback server, real child locks and crash boundaries).
+    Step 'running the AI runtime and model-store tests'
     $env:RETOUCH_TESTS_ROOT = $root
     & dotnet run --project (Join-Path $root 'Windows/RetouchStudio.AI.Tests/RetouchStudio.AI.Tests.csproj') `
         -c $Configuration

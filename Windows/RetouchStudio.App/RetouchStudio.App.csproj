@@ -25,4 +25,11 @@
          published into AI/ by Tools/build-windows.ps1. -->
     <ProjectReference Include="..\RetouchStudio.AI\RetouchStudio.AI.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The model catalog is data, not code. The same file ships with macOS. -->
+    <None Include="..\..\Resources\model-catalog.json" Link="model-catalog.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

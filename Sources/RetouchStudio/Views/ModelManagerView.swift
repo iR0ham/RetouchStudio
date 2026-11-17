@@ -1,33 +1,30 @@
 import SwiftUI
 
-/// Settings sheet for the local models: what is installed, its licence and
-/// size, a checksum check, and a download that starts only after the owner sees
-/// the exact file list.
+/// Settings sheet for the local models: catalog entries, installed versions,
+/// the active version, verification, update/rollback, disk use, and a download
+/// that starts only after the owner sees the version, size, licences, source
+/// and checksum.
 struct ModelManagerView: View {
     @ObservedObject var editor: EditorModel
     @Environment(\.dismiss) private var dismiss
     @StateObject private var manager = ModelManager()
     @ObservedObject private var activity = ModelActivity.shared
     @ObservedObject private var runtime = AIRuntimeInstaller.shared
-    @State private var planningID: String?
     @State private var prompt: Prompt?
 
-    private struct PendingDownload: Identifiable {
-        let id = UUID()
-        let row: AIModelRow
-        let plan: AIModelPlan
-        let again: Bool
-    }
-
     private enum Prompt: Identifiable {
-        case download(PendingDownload)
-        case remove(AIModelRow)
+        case install(ModelCatalogEntry)
+        case remove(ModelRecord, String)
+        case removeAll(ModelRecord)
+        case migrate(ModelRecord)
         case runtime(AIRuntime.Package)
 
         var id: String {
             switch self {
-            case .download(let item): return "download-\(item.row.id)"
-            case .remove(let row): return "remove-\(row.id)"
+            case .install(let entry): return "install-\(entry.id)-\(entry.version)"
+            case .remove(let record, let version): return "remove-\(record.id)-\(version)"
+            case .removeAll(let record): return "remove-all-\(record.id)"
+            case .migrate(let record): return "migrate-\(record.id)"
             case .runtime(let package): return "runtime-\(package.version)"
             }
         }
@@ -36,11 +33,10 @@ struct ModelManagerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            if showsRuntimeCard {
-                runtimeCard
-            }
+            if showsRuntimeCard { runtimeCard }
+            diskLine
 
-            if manager.loading && manager.rows.isEmpty {
+            if manager.loading && manager.records.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text(editor.s.modelsChecking)
@@ -49,7 +45,7 @@ struct ModelManagerView: View {
                 }
                 .padding(.vertical, 20)
                 Spacer(minLength: 0)
-            } else if let error = manager.helperError, !runtimeNeedsSetup {
+            } else if let error = manager.storeError, !runtimeNeedsSetup {
                 Text(error)
                     .font(Theme.Font.caption)
                     .foregroundStyle(Theme.warning)
@@ -58,15 +54,15 @@ struct ModelManagerView: View {
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 8) {
-                        ForEach(manager.rows) { row in
-                            rowView(row)
+                        ForEach(manager.records) { record in
+                            rowView(record)
                         }
                     }
                     .padding(.vertical, 2)
                 }
             }
 
-            if manager.isDownloading { downloadBar }
+            if manager.isDownloading { installBar }
             if let notice = manager.notice {
                 Text(notice)
                     .font(Theme.Font.caption)
@@ -76,7 +72,7 @@ struct ModelManagerView: View {
             }
         }
         .padding(22)
-        .frame(width: 600, height: 600)
+        .frame(width: 620, height: 620)
         .background(Theme.background)
         .preferredColorScheme(.dark)
         .environment(\.layoutDirection, editor.language.layoutDirection)
@@ -86,33 +82,43 @@ struct ModelManagerView: View {
         }
         .alert(item: $prompt) { item in
             switch item {
-            case .download(let pending):
+            case .install(let entry):
                 return Alert(
-                    title: Text(editor.s.modelsDownloadTitle(pending.row.name)),
-                    message: Text(editor.s.modelsDownloadBody(
-                        files: pending.plan.files.count,
-                        size: sizeText(pending.plan.totalBytes),
-                        license: pending.row.license)),
+                    title: Text(editor.s.modelsConsentTitle(entry.name, entry.version)),
+                    message: Text(editor.s.modelsConsentBody(
+                        files: entry.files.count,
+                        size: sizeText(entry.sizeBytes),
+                        codeLicense: entry.codeLicense,
+                        weightsLicense: entry.weightsLicense,
+                        host: sourceHost(entry) ?? "—",
+                        sha: String((entry.sha256 ?? "").prefix(16)))),
                     primaryButton: .default(Text(editor.s.modelsDownloadAction)) {
-                        if pending.again {
-                            Task {
-                                await manager.remove(pending.row.id)
-                                manager.startDownload(pending.plan, name: pending.row.name)
-                            }
-                        } else {
-                            manager.startDownload(pending.plan, name: pending.row.name)
-                        }
+                        manager.install(entry)
                     },
                     secondaryButton: .cancel(Text(editor.s.modelsCancel)))
-            case .remove(let row):
+            case .remove(let record, let version):
                 return Alert(
-                    title: Text(editor.s.modelsRemoveTitle(row.name)),
+                    title: Text(editor.s.modelsRemoveTitle(record.entry.name)),
+                    message: Text("\(editor.s.modelsVersionLabel(version))\n" + editor.s.modelsRemoveBody),
+                    primaryButton: .destructive(Text(editor.s.modelsRemoveAction)) {
+                        Task { await manager.remove(record, version: version) }
+                    },
+                    secondaryButton: .cancel(Text(editor.s.modelsCancel)))
+            case .removeAll(let record):
+                return Alert(
+                    title: Text(editor.s.modelsRemoveTitle(record.entry.name)),
                     message: Text(editor.s.modelsRemoveBody),
                     primaryButton: .destructive(Text(editor.s.modelsRemoveAction)) {
-                        Task {
-                            await manager.remove(row.id)
-                            manager.notice = editor.s.modelsRemoved(row.name)
-                        }
+                        Task { await manager.removeAll(record) }
+                    },
+                    secondaryButton: .cancel(Text(editor.s.modelsCancel)))
+            case .migrate(let record):
+                return Alert(
+                    title: Text(editor.s.modelsAdoptTitle(record.entry.name)),
+                    message: Text(editor.s.modelsAdoptBody(
+                        sizeText(manager.legacyBytes[record.id]))),
+                    primaryButton: .default(Text(editor.s.modelsAdopt)) {
+                        manager.migrateLegacy(record)
                     },
                     secondaryButton: .cancel(Text(editor.s.modelsCancel)))
             case .runtime(let package):
@@ -138,6 +144,10 @@ struct ModelManagerView: View {
         showsRuntimeCard && runtime.phase != .installed
     }
 
+    private var busy: Bool {
+        manager.isDownloading || runtime.isBusy || manager.verifyingKey != nil
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
@@ -154,6 +164,20 @@ struct ModelManagerView: View {
                 .font(Theme.Font.caption)
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var diskLine: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "internaldrive")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.faint)
+            Text(editor.s.modelsDiskUsage(
+                used: sizeText(manager.diskUsage),
+                free: manager.availableDisk.map { sizeText($0) } ?? editor.s.modelsSizeUnknown))
+                .font(Theme.Font.face(size: 10.5))
+                .foregroundStyle(Theme.faint)
+            Spacer(minLength: 0)
         }
     }
 
@@ -177,7 +201,7 @@ struct ModelManagerView: View {
                 if !runtime.isBusy && runtime.phase != .installed,
                    let package = runtime.package {
                     chipButton(editor.s.aiRuntimeInstall) { prompt = .runtime(package) }
-                        .disabled(manager.isDownloading || runtime.isBusy)
+                        .disabled(busy)
                 }
             }
             if runtime.phase == .installed {
@@ -240,70 +264,52 @@ struct ModelManagerView: View {
         }
     }
 
-    private func rowView(_ row: AIModelRow) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(row.name)
-                        .font(Theme.Font.face(size: 12.5, weight: .semibold))
-                        .foregroundStyle(Theme.text)
-                    statusChip(row)
-                }
-                Text("\(editor.s.modelsTaskName(row.task)) · \(row.license) · \(sizeText(row.bytes))")
-                    .font(Theme.Font.face(size: 10.5))
-                    .foregroundStyle(Theme.faint)
-                HStack(spacing: 8) {
-                    Text(editor.s.modelsUsedFor(actionName(for: row)))
-                        .font(Theme.Font.face(size: 10.5))
-                        .foregroundStyle(Theme.muted)
-                    if activity.isRunning(row.id) { inUseChip }
-                }
-                lastUseLine(row)
-                if manager.checkingID == row.id {
-                    Text(editor.s.modelsChecking)
-                        .font(Theme.Font.face(size: 10.5))
-                        .foregroundStyle(Theme.muted)
-                } else if let verdict = manager.verdicts[row.id] {
-                    switch verdict {
-                    case .ok:
-                        Text(editor.s.modelsVerified)
-                            .font(Theme.Font.face(size: 10.5))
-                            .foregroundStyle(Theme.positive)
-                    case .failed(let file):
-                        Text(editor.s.modelsVerifyFailed(file))
-                            .font(Theme.Font.face(size: 10.5))
-                            .foregroundStyle(Theme.warning)
-                    }
-                }
-            }
-            Spacer(minLength: 8)
+    // MARK: - Rows
+
+    private func rowView(_ record: ModelRecord) -> some View {
+        let entry = record.entry
+        return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
-                if manager.checkingID == row.id {
-                    ProgressView().controlSize(.small)
-                } else {
-                    chipButton(editor.s.modelsVerify) {
-                        Task { await manager.verify(row.id) }
-                    }
-                    .disabled(manager.isDownloading || runtime.isBusy)
-                }
-                if row.installed {
-                    chipButton(editor.s.modelsDownloadAgain) {
-                        beginDownload(row, again: true)
-                    }
-                    .disabled(manager.isDownloading || runtime.isBusy || planningID != nil || activity.isRunning(row.id))
-                    chipButton(editor.s.modelsRemove) {
-                        prompt = .remove(row)
-                    }
-                    .disabled(manager.isDownloading || runtime.isBusy || activity.isRunning(row.id))
-                } else {
-                    if planningID == row.id {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        chipButton(editor.s.modelsDownload) {
-                            beginDownload(row, again: false)
-                        }
-                        .disabled(manager.isDownloading || runtime.isBusy || planningID != nil)
-                    }
+                Text(entry.name)
+                    .font(Theme.Font.face(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                statusChip(record)
+                if activity.isRunning(record.id) { inUseChip }
+                Spacer(minLength: 8)
+                actionButton(record)
+            }
+            Text("\(capabilityLabel(entry)) · \(editor.s.modelsVersionLabel(entry.version)) · "
+                 + "\(sizeText(entry.sizeBytes)) · \(entry.weightsLicense)")
+                .font(Theme.Font.face(size: 10.5))
+                .foregroundStyle(Theme.faint)
+            Text(sourceLine(entry))
+                .font(Theme.Font.face(size: 10))
+                .foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if case .unverifiable(let reason) = record.availability {
+                Text(editor.s.modelsUnverifiable(reason))
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if record.availability == .unsupportedPlatform {
+                Text(editor.s.modelsUnavailablePlatform)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.warning)
+            }
+
+            ForEach(record.versions) { version in
+                versionRow(record, version: version)
+            }
+            if let legacy = manager.legacyBytes[record.id] {
+                HStack(spacing: 8) {
+                    Text(editor.s.modelsLegacyFound(sizeText(legacy)))
+                        .font(Theme.Font.face(size: 10.5))
+                        .foregroundStyle(Theme.muted)
+                    Spacer(minLength: 8)
+                    chipButton(editor.s.modelsAdopt) { prompt = .migrate(record) }
+                        .disabled(busy || !record.isVerifiable
+                                  || !entry.supports(platform: ModelPlatform.current))
                 }
             }
         }
@@ -312,19 +318,122 @@ struct ModelManagerView: View {
             RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                 .fill(Theme.panel)
         )
-        .help(row.notes)
+        .help(entry.notes)
     }
 
-    private func statusChip(_ row: AIModelRow) -> some View {
-        Text(row.installed ? editor.s.modelsInstalled : editor.s.modelsMissing)
+    private func versionRow(_ record: ModelRecord, version: ModelVersionState) -> some View {
+        let key = manager.key(record.id, version.version)
+        let installed = record.catalogVersionInstalled
+        let entry = record.entry
+        return HStack(spacing: 8) {
+            Text(editor.s.modelsVersionLabel(version.version))
+                .font(Theme.Font.face(size: 10.5, weight: .medium))
+                .foregroundStyle(version.active ? Theme.text : Theme.muted)
+            if version.active {
+                Text(editor.s.modelsActiveChip)
+                    .font(Theme.Font.face(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.accentInk)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Theme.accent))
+            }
+            if !version.manifestOK {
+                Text(editor.s.modelsUnverified("manifest"))
+                    .font(Theme.Font.face(size: 9.5))
+                    .foregroundStyle(Theme.warning)
+            }
+            if let verdict = manager.verdicts[key] {
+                switch verdict {
+                case .ok:
+                    Text(editor.s.modelsVerified)
+                        .font(Theme.Font.face(size: 9.5))
+                        .foregroundStyle(Theme.positive)
+                case .failed(let detail):
+                    Text(detail)
+                        .font(Theme.Font.face(size: 9.5))
+                        .foregroundStyle(Theme.warning)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
+            if manager.verifyingKey == key {
+                ProgressView().controlSize(.small)
+            } else {
+                chipButton(editor.s.modelsVerify) {
+                    Task { await manager.verify(record, version: version.version) }
+                }
+                .disabled(busy || manager.install != nil)
+            }
+            if !version.active {
+                chipButton(editor.s.modelsUseVersion) {
+                    Task { await manager.activate(record, version: version.version) }
+                }
+                .disabled(busy || !record.isVerifiable)
+                .help(editor.s.modelsUseVersion)
+            }
+            chipButton(editor.s.modelsRemove) {
+                prompt = record.versions.count > 1
+                    ? .remove(record, version.version)
+                    : .removeAll(record)
+            }
+            .disabled(busy || activity.isRunning(record.id))
+        }
+        .padding(.leading, 2)
+    }
+
+    private func actionButton(_ record: ModelRecord) -> some View {
+        let entry = record.entry
+        return Group {
+            switch record.availability {
+            case .ready:
+                if !record.catalogVersionInstalled {
+                    chipButton(record.versions.isEmpty
+                               ? editor.s.modelsInstallVersion
+                               : editor.s.modelsUpdate) {
+                        prompt = .install(entry)
+                    }
+                    .disabled(busy || activity.isRunning(record.id))
+                } else if record.activeVersion == nil {
+                    chipButton(editor.s.modelsUseVersion) {
+                        Task { await manager.activate(record, version: entry.version) }
+                    }
+                    .disabled(busy)
+                }
+            case .unverifiable, .unsupportedPlatform, .notInstalled:
+                EmptyView()
+            }
+        }
+    }
+
+    private func statusChip(_ record: ModelRecord) -> some View {
+        let text: String
+        var fill = Theme.inset
+        var ink = Theme.muted
+        switch record.availability {
+        case .unverifiable:
+            text = editor.s.modelsMissing
+            fill = Theme.inset
+            ink = Theme.warning
+        case .unsupportedPlatform:
+            text = editor.s.modelsUnavailablePlatform
+            ink = Theme.warning
+        case .ready, .notInstalled:
+            if record.activeVersion != nil {
+                text = editor.s.modelsInstalled
+                fill = Theme.accent
+                ink = Theme.accentInk
+            } else if !record.versions.isEmpty {
+                text = editor.s.modelsInstalled
+            } else {
+                text = editor.s.modelsMissing
+            }
+        }
+        return Text(text)
             .font(Theme.Font.face(size: 9.5, weight: .medium))
-            .foregroundStyle(row.installed ? Theme.accentInk : Theme.muted)
+            .foregroundStyle(ink)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(row.installed ? Theme.accent : Theme.inset)
-            )
+            .background(Capsule(style: .continuous).fill(fill))
     }
 
     private var inUseChip: some View {
@@ -338,74 +447,32 @@ struct ModelManagerView: View {
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 2)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Theme.sky)
-        )
+        .background(Capsule(style: .continuous).fill(Theme.sky))
     }
 
-    @ViewBuilder
-    private func lastUseLine(_ row: AIModelRow) -> some View {
-        if row.installed {
-            if let date = activity.lastUse(of: row.id) {
-                Text(editor.s.modelsLastUsed(ago(date)))
-                    .font(Theme.Font.face(size: 10.5))
-                    .foregroundStyle(Theme.faint)
-            } else {
-                Text(editor.s.modelsNeverUsed)
-                    .font(Theme.Font.face(size: 10.5))
-                    .foregroundStyle(Theme.faint)
-            }
-        }
-    }
-
-    /// The action that actually loads this model, in the name the editor uses.
-    private func actionName(for row: AIModelRow) -> String {
-        switch AIModelID(rawValue: row.id) {
-        case .flux: return editor.s.aiRemoveObject
-        case .migan: return editor.s.aiHealArea
-        case .sam: return editor.s.aiMaskSnap
-        case .swin: return editor.s.exportUpscale
-        case nil: return editor.s.modelsTaskName(row.task)
-        }
-    }
-
-    private func ago(_ date: Date) -> String {
-        let seconds = max(0, Int(Date().timeIntervalSince(date)))
-        if seconds < 60 { return editor.s.modelsJustNow }
-        let minutes = seconds / 60
-        if minutes < 60 { return editor.s.modelsMinutesAgo(minutes) }
-        let hours = minutes / 60
-        if hours < 24 { return editor.s.modelsHoursAgo(hours) }
-        return editor.s.modelsDaysAgo(hours / 24)
-    }
-
-    private var downloadBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private var installBar: some View {
+        let state = manager.install
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text(manager.progressIsIndeterminate
-                     ? editor.s.modelsDownloadingUnknown
-                     : editor.s.modelsDownloading(manager.percent))
+                Text(state.map { "\($0.name) · \(editor.s.modelsVersionLabel($0.version))" }
+                     ?? editor.s.modelsDownloadingUnknown)
                     .font(Theme.Font.label)
                     .foregroundStyle(Theme.text)
                 Spacer(minLength: 8)
-                if manager.progressIsIndeterminate {
-                    Text(sizeText(manager.receivedBytes))
-                        .font(Theme.Font.value)
-                        .foregroundStyle(Theme.muted)
-                } else {
-                    Text("\(sizeText(manager.receivedBytes)) / \(sizeText(manager.totalBytes))")
+                if let state {
+                    Text(state.indeterminate
+                         ? sizeText(state.receivedBytes)
+                         : "\(sizeText(state.receivedBytes)) / \(sizeText(state.totalBytes))")
                         .font(Theme.Font.value)
                         .foregroundStyle(Theme.muted)
                 }
-                chipButton(editor.s.modelsCancel) { manager.cancelDownload() }
+                chipButton(editor.s.modelsCancel) { manager.cancelInstall() }
             }
-            if manager.progressIsIndeterminate {
-                ProgressView()
+            if let state, !state.indeterminate {
+                ProgressView(value: Double(state.percent), total: 100)
                     .tint(Theme.accent)
             } else {
-                ProgressView(value: Double(manager.percent), total: 100)
-                    .tint(Theme.accent)
+                ProgressView().tint(Theme.accent)
             }
         }
         .padding(12)
@@ -415,22 +482,39 @@ struct ModelManagerView: View {
         )
     }
 
-    private func beginDownload(_ row: AIModelRow, again: Bool) {
-        planningID = row.id
-        Task {
-            defer { planningID = nil }
-            do {
-                let plan = try await manager.plan(for: row.id)
-                prompt = .download(PendingDownload(row: row, plan: plan, again: again))
-            } catch {
-                manager.notice = error.localizedDescription
+    // MARK: - Labels
+
+    private func capabilityLabel(_ entry: ModelCatalogEntry) -> String {
+        let names = entry.capabilities.map { capability -> String in
+            switch capability {
+            case "segmentation", "mask.click": return editor.s.modelsTaskName("segmentation")
+            case "upscaling", "upscale.4x": return editor.s.modelsTaskName("upscaling")
+            case "inpainting", "inpaint.spot", "inpaint.object": return editor.s.modelsTaskName("inpainting")
+            case "generative.edit", "generative.reimagine": return editor.s.modelsTaskName("generative-edit")
+            default: return capability
             }
         }
+        return names.joined(separator: " · ")
+    }
+
+    private func sourceLine(_ entry: ModelCatalogEntry) -> String {
+        let host = sourceHost(entry) ?? "—"
+        let sha = String((entry.sha256 ?? "").prefix(16))
+        return "\(host) · \(entry.codeLicense) / \(entry.weightsLicense) · SHA-256 \(sha)…"
+    }
+
+    private func sourceHost(_ entry: ModelCatalogEntry) -> String? {
+        URL(string: entry.sourceUrl)?.host
     }
 
     private func sizeText(_ bytes: Int?) -> String {
         guard let bytes, bytes > 0 else { return editor.s.modelsSizeUnknown }
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    private func sizeText(_ bytes: Int64?) -> String {
+        guard let bytes, bytes > 0 else { return editor.s.modelsSizeUnknown }
+        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     private func chipButton(_ title: String, action: @escaping () -> Void) -> some View {

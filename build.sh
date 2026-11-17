@@ -136,6 +136,15 @@ else
   echo "  ! warning: Resources/Fonts missing; Persian text will fall back to the system font."
 fi
 
+# The model catalog is data shipped with the app. Both platforms read the same
+# file; nothing is fetched at runtime.
+if [ -f Resources/model-catalog.json ]; then
+  cp Resources/model-catalog.json "$APP_BUNDLE/Contents/Resources/model-catalog.json"
+else
+  echo "✗ Resources/model-catalog.json is missing; the model manager cannot start." >&2
+  exit 1
+fi
+
 # Python interpreter, wheels and the worker package, so the app does not depend
 # on this checkout or on Homebrew. Model weights stay out: they are downloaded
 # by explicit consent. The worker source and its hashed lockfile live in this

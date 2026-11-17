@@ -156,10 +156,11 @@ jobs:
         run: |
           set -euo pipefail
           for verdict in \
-            'Ran 67 tests' \
+            'Ran 69 tests' \
             'StudioCore: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
             'MODEL TESTS: PASS' \
+            'MODEL STORE TESTS: PASS' \
             'RUNTIME PROCESS TESTS: PASS' \
             'RUNTIME V2 TESTS: PASS'; do
             grep -qE "$verdict" "$RUNNER_TEMP/macos-integration.log"

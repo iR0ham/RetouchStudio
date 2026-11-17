@@ -1,11 +1,18 @@
+import fcntl
+import json
+import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
 from unittest.mock import patch
 
-from retouch_ai_worker.catalog import CATALOG, Catalog, ModelEntry, ModelFile
-from retouch_ai_worker.protocol import (LICENSE_BLOCKED, MODEL_MISSING,
+from retouch_ai_worker import catalog as catalog_module
+from retouch_ai_worker.catalog import (CATALOG, LEGACY_LEASE, Catalog, ModelEntry,
+                                       ModelFile)
+from retouch_ai_worker.protocol import (BUSY, LICENSE_BLOCKED, MODEL_MISSING,
                                         UNKNOWN_MODEL, WorkerError)
 
 # The catalog only ships models whose weights are cleared. The gate still has
@@ -13,6 +20,24 @@ from retouch_ai_worker.protocol import (LICENSE_BLOCKED, MODEL_MISSING,
 UNCLEARED = ModelEntry(id="eval-only", name="Eval only", task="inpainting",
                        license_id="NOASSERTION", commercial_ok=False,
                        source="local", files=(ModelFile("weights.bin"),))
+
+# A flat install that a test can adopt while a reader waits on the legacy lease.
+LEGACY = ModelEntry(id="legacy-race", name="Legacy race", task="inpainting",
+                    license_id="MIT", commercial_ok=True, source="local",
+                    files=(ModelFile("weights.bin"),))
+
+
+class _FakeClock:
+    """Advances only when the lease loop sleeps, so the 5 s wait is instant."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
 
 
 class CatalogTests(unittest.TestCase):
@@ -71,6 +96,79 @@ class CatalogTests(unittest.TestCase):
         report = catalog.verify("flux2-klein-4b-q4")
         self.assertFalse(report["ok"])
         self.assertTrue(any(item["reason"] == "checksum" for item in report["failed"]))
+
+    def test_legacy_lease_timeout_is_busy_not_missing(self):
+        flat = self.root / LEGACY.id
+        flat.mkdir()
+        (flat / "weights.bin").write_bytes(b"w")
+        lock = self.root / ".locks" / f"{LEGACY.id}{LEGACY_LEASE}"
+        lock.parent.mkdir(parents=True)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        try:
+            with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (LEGACY,)), \
+                 patch("retouch_ai_worker.catalog.time", _FakeClock()):
+                with self.assertRaises(WorkerError) as caught:
+                    catalog.require(LEGACY.id)
+        finally:
+            os.close(fd)
+        # A lease holder is a busy resource: the model is installed, and the
+        # caller can retry once the adoption or delete finishes.
+        self.assertEqual(caught.exception.code, BUSY)
+        self.assertEqual(caught.exception.data,
+                         {"model": LEGACY.id, "reason": "leased"})
+
+    def test_adoption_during_the_lease_wait_re_resolves(self):
+        flat = self.root / LEGACY.id
+        flat.mkdir()
+        (flat / "weights.bin").write_bytes(b"w")
+        version = flat / "1.0.0"
+        lock = self.root / ".locks" / f"{LEGACY.id}{LEGACY_LEASE}"
+        lock.parent.mkdir(parents=True)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        started = threading.Event()
+
+        def adopt():
+            started.wait(5)
+            # The reader has resolved the flat layout and is waiting on the
+            # lease; now finish the adoption it is waiting for.
+            time.sleep(0.2)
+            version.mkdir()
+            os.replace(flat / "weights.bin", version / "weights.bin")
+            (flat / "active.json").write_text(json.dumps({
+                "schema": "retouchstudio.model-active/1",
+                "modelId": LEGACY.id,
+                "version": "1.0.0",
+            }), encoding="utf-8")
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+        thread = threading.Thread(target=adopt)
+        thread.start()
+        seen = []
+        real_resolve = catalog_module.resolve_model_root
+
+        def record(root, model_id):
+            result = real_resolve(root, model_id)
+            seen.append(result)
+            return result
+
+        catalog = Catalog(self.root, allow_uncleared=False)
+        try:
+            with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (LEGACY,)), \
+                 patch("retouch_ai_worker.catalog.resolve_model_root", record):
+                started.set()
+                root = catalog.require(LEGACY.id)
+        finally:
+            thread.join(5)
+            catalog.close()
+        self.assertEqual(seen[0], flat, "the first resolution saw the flat layout")
+        self.assertEqual(root, version,
+                         "the worker used the version the pointer names, not the stale path")
+        self.assertNotIn((LEGACY.id, LEGACY_LEASE), catalog._leases,
+                         "the stale flat lease is released")
 
     def test_every_entry_has_a_license_id(self):
         for entry in CATALOG:

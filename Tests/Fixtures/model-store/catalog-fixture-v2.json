@@ -1,0 +1,41 @@
+{
+  "schema": "retouchstudio.model-catalog/1",
+  "catalogVersion": "fixture-2",
+  "entries": [
+    {
+      "id": "fixture-good",
+      "name": "fixture-good",
+      "capabilities": [
+        "upscale.4x"
+      ],
+      "version": "2.0.0",
+      "format": "fixture",
+      "files": [
+        {
+          "path": "payload.bin",
+          "sizeBytes": 12,
+          "sha256": "3386395a6d8e015d58b75e8f1593836b05cfd6923ce7e1d7f9e55d7eee5bb6dc",
+          "sourceUrl": "{base}/v2/payload.bin"
+        }
+      ],
+      "sizeBytes": 12,
+      "sha256": "a26f35767503daefcb86fcde6af5facbade6144ce4a369acb07852f4b9503a3b",
+      "sourceUrl": "{base}/v2",
+      "codeLicense": "MIT",
+      "weightsLicense": "MIT",
+      "licenseEvidenceUrl": "{base}/v2",
+      "platforms": [
+        "macos-arm64",
+        "windows-x64"
+      ],
+      "requiredProvider": "cpu",
+      "minimumContractVersion": "1",
+      "preprocess": {
+        "id": "fixture-rgb8",
+        "version": "1"
+      },
+      "deterministic": true,
+      "notes": "Deterministic test fixture; never a product model."
+    }
+  ]
+}

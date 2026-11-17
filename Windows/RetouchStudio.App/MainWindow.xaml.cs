@@ -561,6 +561,11 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OpenModels_Click(object sender, RoutedEventArgs e)
+    {
+        new ModelManagerWindow { Owner = this }.ShowDialog();
+    }
+
     private async void OpenPhoto_Click(object sender, RoutedEventArgs e)    {
         if (!_vm.CanClose())
         {

@@ -3,6 +3,9 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json.Nodes;
 using RetouchStudio.AI;
+using RetouchStudio.AI.Tests;
+
+RetouchStudio.AI.Tests.ModelStoreChecks.RunChildIfRequested(args);
 
 var failures = new List<string>();
 void Check(bool condition, string label, string? detail = null)
@@ -190,6 +193,8 @@ if (File.Exists(worker))
     Check(process.ExitCode == 64, "the worker rejects protocol 1",
         process.StandardError.ReadToEnd());
 }
+
+ModelStoreChecks.Run((condition, label, detail) => Check(condition, label, detail));
 
 Console.WriteLine();
 if (failures.Count == 0)
