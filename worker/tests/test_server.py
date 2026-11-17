@@ -6,9 +6,11 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from retouch_ai_worker.catalog import Catalog
-from retouch_ai_worker.capabilities import PROVIDER, VOCABULARY
+from retouch_ai_worker.capabilities import (PROVIDER, SUPPORTED, VOCABULARY,
+                                            current_platform)
 from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, MODEL_MISSING,
                                         PATH_DENIED, UNSUPPORTED, WorkerError,
                                         decode, encode)
@@ -283,10 +285,49 @@ class ServerTests(unittest.TestCase):
             "kind": "patch_edit", "capabilityId": "upscale.4x", "params": {}})
         self.assertEqual(reply["error"]["code"], UNSUPPORTED)
 
+    def test_job_submit_admits_a_capability_this_adapter_proves(self):
+        # The refusals above only mean something if the gate still admits what
+        # it legitimately reports. The macOS host now names `upscale.4x` on
+        # every upscale pass (W5-4), so a gate that refused a supported install
+        # would make the feature unreachable, and no refusal test would notice.
+        # The evidence ledger here is a fixture naming whatever platform this
+        # process reports, so the answer does not depend on the runner's arch.
+        catalog = self.server.catalog
+        entry = catalog.get("swin2sr-x4")
+        version = catalog.root / entry.id / "1.0.0"
+        version.mkdir(parents=True)
+        for spec in entry.files:
+            target = version / spec.path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("wb") as handle:
+                handle.truncate(spec.bytes)
+        (catalog.root / entry.id / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": entry.id, "version": "1.0.0",
+        }), encoding="utf-8")
+        ledger = Path(self.tmp.name) / "evidence.json"
+        ledger.write_text(json.dumps({
+            "schema": "retouchstudio.capability-evidence/1",
+            "entries": [{"capabilityId": "upscale.4x",
+                         "platform": current_platform(), "provider": PROVIDER,
+                         "modelId": entry.id, "modelVersion": "1.0.0",
+                         "evidence": "a recorded run, named by this fixture"}],
+        }), encoding="utf-8")
+
+        with mock.patch.dict(os.environ,
+                             {"RETOUCH_AI_CAPABILITY_EVIDENCE": str(ledger)}):
+            reported = {item["capabilityId"]: item for item in
+                        self.session.call("capability.list")["result"]["capabilities"]}
+            self.assertEqual(reported["upscale.4x"]["state"], SUPPORTED,
+                             reported["upscale.4x"].get("reason"))
+            self.server._require_capability("upscale.4x", "upscale")
+
     def test_kind_only_submission_cannot_load_a_damaged_model(self):
-        # The production macOS host sends no capabilityId. That path must
-        # still fail at load time when capability.list reports the install
-        # blocked for a size mismatch.
+        # A submit that names no capability still fails at load time when
+        # capability.list reports the install blocked for a size mismatch;
+        # naming the capability refuses earlier, with E_UNSUPPORTED. The macOS
+        # host names it for `upscale`, but the kind path stays open because it
+        # is how an installed model without a recorded support claim runs.
         root = Path(self.tmp.name)
         version = self.server.catalog.root / "swin2sr-x4" / "1.0.0"
         version.mkdir(parents=True)

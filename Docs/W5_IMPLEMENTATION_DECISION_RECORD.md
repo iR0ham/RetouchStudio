@@ -524,7 +524,9 @@ BLOCKED on decision 6's artifact evidence.
   `retouchstudio.ai.provenance/1` as `<artifact>.provenance.json`, created with
   `O_CREAT | O_EXCL | O_NOFOLLOW` mode 0600, fsynced, then renamed into place,
   and only after the output itself has been adopted — a job that does not
-  publish writes no provenance. Every field is measured from bytes that exist:
+  publish writes no provenance. *(Superseded the same day: §11 records that
+  this order published the artifact first, and the sidecar now lands before it.
+  The sentence stays as the record of what Slice 1 shipped.)* Every field is measured from bytes that exist:
   file digests are streamed SHA-256 of the published artifact, geometry and bit
   depth come from reopening it, the input side comes from the decoded array.
   For `upscale`, `authorizedRect` is the full frame and
@@ -575,10 +577,52 @@ BLOCKED on decision 6's artifact evidence.
 no host or exporter consumes the provenance sidecar yet, and it is written
 beside the artifact inside the job workdir — §3.6 places adopted artifacts and
 their sidecars beside the edit id in the edit store, which needs the host-side
-adoption Slice 1 does not do; no real inference run
+adoption Slice 1 does not do (§11 closes the *consume* half — the host now
+verifies the pair before it decodes a pixel — while where a stored edit keeps
+its sidecar stays open); no real inference run
 has produced a sidecar, so its values are proven against a fake model and a real
 numpy array only; the load-time digest cost is measured on one file on one
 machine; the cancel-at-load and cancel-at-write paths are proven by deterministic
 tests, not by a timed real job; bit depth, peak memory and wall time for the 4×
 path are unmeasured since Slice 1 ran no inference; and none of this re-records
 the §4.3 acceptance gates.
+
+## 11. Addendum (2026-11-17) — the publication order is corrected, and the host consumes the pair
+
+Sections 1–10 stay as written. This records what the follow-up slices on the same
+branch changed, starting with the thing they proved about this record: §10 S1-1
+described the sidecar landing after the output had been adopted. That order can
+publish an artifact whose provenance then fails, which is precisely the state §3.6
+refuses to allow, so it is corrected here instead of left standing.
+
+- **S2-1 — the sidecar lands first.** `provenance.publish` writes
+  `<artifact>.provenance.json`, renames the staged artifact into place as the
+  commit point, then re-reads the pair and withdraws both if the recorded digest
+  does not match the bytes. No filesystem makes two renames atomic, so the
+  guarantee is carried by the order: the reachable bad state is a sidecar with no
+  artifact — inert, cleared by `provenance.reconcile` when a worker starts against
+  idle job folders — never an artifact with no provenance. Cancellation is checked
+  up to the moment publication begins and deliberately not inside it.
+- **S2-2 — the host will not decode what it cannot account for.**
+  `ExportService.upscale` names `capabilityId: "upscale.4x"`, so the worker
+  applies its own verdict before it loads weights, and
+  `AIProvenance.verifiedArtifact` matches the sidecar beside the returned file —
+  its path, its schema, and the recorded `output.sha256` against the digest of the
+  bytes — before a pixel is decoded. A refusal deletes nothing: the artifact
+  belongs to the worker's job folder and its recovery rules.
+- **Not decided here.** A 4× pass is an export-time render, so there is no edit
+  store entry for a sidecar to sit beside. Keeping provenance with an adopted
+  artifact past the job workdir — copied beside the edit id, or written into the
+  exported photo as metadata — is a product decision with a privacy side, and
+  neither slice implements §3.6's "beside the edit id" wording.
+- **Consequence on this Mac.** The live `swin2sr-x4` install is the legacy flat
+  layout, which `capability.list` reports as `blocked`. Because S2-2 names the
+  capability, a 4× export now stops with `E_UNSUPPORTED` until the owner adopts
+  that install in the model manager. That is the contract's answer, and it is the
+  first time the macOS path can reach it: the kind path ran this same install on
+  2026-11-07.
+
+**NOT VERIFIED after Slice 2:** §10's list stands, plus this — no real worker has
+yet been asked by this host to name a capability and return a pair the host then
+adopted, because no inference ran. The nine host-side checks are proven against
+files the test writes, not against files the worker writes.

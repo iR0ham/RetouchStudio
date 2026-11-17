@@ -6866,6 +6866,73 @@ func testAICapabilityReport() {
           "the host keeps the W5-0 typed names")
 }
 
+// MARK: - W5-4 artifact provenance
+
+/// §3.6 leaves the host one way to tell an artifact it may adopt from a file
+/// that merely happens to be lying around: the sidecar beside it names its
+/// bytes. These tests write real files and hash them, because that comparison
+/// is the whole promise — stubbing the digest would exercise the plumbing and
+/// prove nothing about the guarantee.
+@MainActor
+func testAIProvenanceAdoption() {
+    print("\n[W5-4] an artifact is adopted only with the provenance that names it")
+
+    let folder = workDir.appendingPathComponent("provenance-\(UUID().uuidString)",
+                                                isDirectory: true)
+    let elsewhere = folder.appendingPathComponent("elsewhere", isDirectory: true)
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+    let artifact = folder.appendingPathComponent("upscaled.png")
+    let bytes = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    try? bytes.write(to: artifact)
+
+    func digest(_ url: URL) -> String { (try? AIRuntime.sha256(of: url)) ?? "" }
+    func sidecar(_ url: URL, schema: String = AIProvenance.schema,
+                 sha: String) throws {
+        let document: [String: Any] = ["schema": schema, "output": ["sha256": sha]]
+        try JSONSerialization.data(withJSONObject: document).write(to: url)
+    }
+    func accepts(path: String?, sidecarPath: String?) -> Bool {
+        (try? AIProvenance.verifiedArtifact(path: path,
+                                            sidecarPath: sidecarPath)) != nil
+    }
+
+    let beside = folder.appendingPathComponent(
+        artifact.lastPathComponent + AIProvenance.sidecarSuffix)
+    try? sidecar(beside, sha: digest(artifact))
+    check(digest(artifact).count == 64, "the host hashes the bytes it was given")
+    check(accepts(path: artifact.path, sidecarPath: beside.path),
+          "a pair that agrees is adopted")
+
+    try? sidecar(beside, sha: String(repeating: "0", count: 64))
+    check(!accepts(path: artifact.path, sidecarPath: beside.path),
+          "a provenance naming other bytes is refused")
+
+    try? sidecar(beside, schema: "retouchstudio.ai.provenance/2", sha: digest(artifact))
+    check(!accepts(path: artifact.path, sidecarPath: beside.path),
+          "a provenance of another schema is refused")
+
+    try? "not a provenance".data(using: .utf8)?.write(to: beside)
+    check(!accepts(path: artifact.path, sidecarPath: beside.path),
+          "an unreadable provenance is refused")
+
+    let foreign = elsewhere.appendingPathComponent(
+        artifact.lastPathComponent + AIProvenance.sidecarSuffix)
+    try? sidecar(foreign, sha: digest(artifact))
+    check(!accepts(path: artifact.path, sidecarPath: foreign.path),
+          "a provenance that is not beside the artifact is refused")
+    check(!accepts(path: artifact.path, sidecarPath: nil),
+          "an artifact with no provenance is refused")
+    check(!accepts(path: nil, sidecarPath: beside.path),
+          "a provenance with no artifact is refused")
+
+    // Refusing is a decision about adoption, never a licence to delete: the
+    // artifact belongs to the helper's job folder and its own recovery rules.
+    check(FileManager.default.fileExists(atPath: artifact.path),
+          "a refusal leaves the artifact where it is")
+    try? FileManager.default.removeItem(at: folder)
+}
+
 // MARK: - runner
 
 @MainActor
@@ -6978,6 +7045,7 @@ func runAll() async {
     testDocumentRestorationCarriesMasks()
     testRecoverySnapshotCarriesMasks()
     testAICapabilityReport()
+    testAIProvenanceAdoption()
     await testModelStoresMaskBesideEdit()
 
     // Invalidate any debounced write left by the last scenario: the scratch

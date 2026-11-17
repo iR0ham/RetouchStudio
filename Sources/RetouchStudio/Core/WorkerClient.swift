@@ -124,9 +124,17 @@ final class WorkerClient {
 
     // MARK: - Jobs
 
-    func submit(_ kind: String, _ params: [String: Any]) throws -> String {
-        let result = try call("job.submit", ["kind": kind, "params": params],
-                              timeout: 20) as? [String: Any]
+    /// Submits a job. `capability` is the frozen W5-0 id the caller means to
+    /// run, and naming it is what lets the helper apply its own verdict before
+    /// it loads weights or allocates a tile: a capability this machine cannot
+    /// run is refused with `E_UNSUPPORTED` or `E_MODEL_MISSING` instead of
+    /// being attempted through the job kind, which only checks the catalog.
+    /// A caller that names nothing keeps the unchanged kind-only path.
+    func submit(_ kind: String, _ params: [String: Any],
+                capability: String? = nil) throws -> String {
+        var envelope: [String: Any] = ["kind": kind, "params": params]
+        if let capability { envelope["capabilityId"] = capability }
+        let result = try call("job.submit", envelope, timeout: 20) as? [String: Any]
         guard let id = result?["job_id"] as? String else {
             throw AIWorkerFailure(code: -32603, message: "the helper did not return a job id")
         }

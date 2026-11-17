@@ -72,7 +72,7 @@ cross-platform contract; `Tests/Contract/protocol2.json` is the shared fixture.
 | `provider.list` | execution providers this worker has actually initialised (`mps`/`cpu` once a model has loaded, `[]` plus a `reason` before any model has run) |
 | `ping` | liveness |
 | `models.list` / `models.verify` / `models.plan` | catalog, checksums, download manifest |
-| `job.submit` | `{kind, params, out_shm?}` → `{job_id}`; one at a time (`BUSY`) |
+| `job.submit` | `{kind, capabilityId?, params, out_shm?}` → `{job_id}`; one at a time (`BUSY`) |
 | `job.status` / `job.result` / `job.cancel` | lifecycle |
 | `jobs.list` | current job and the last ten |
 | `buffer.release` | detach a shared-memory output |
@@ -191,7 +191,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-115 tests, no GPU and no model download: framing, contract versioning, request
+116 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing

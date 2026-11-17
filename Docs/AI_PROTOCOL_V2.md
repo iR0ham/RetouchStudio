@@ -108,9 +108,10 @@ verified is not installable or supportable (DR-5). See
 for a capability that the adapter cannot run is refused before any work starts:
 `-32020` with `{capabilityId, state, reason}` data, or `-32011` with the missing
 model when the capability is only `requires_model`. It is never accepted and
-silently dropped. The macOS host keeps submitting by job kind in W5-3, so
-existing jobs take the unchanged path; the refusal is the contract for hosts
-that name capabilities (the Windows adapter requires the id).
+silently dropped. The macOS host names the capability for `upscale` (W5-4) and
+still submits the older job types by kind alone, so those take the unchanged
+path; the refusal is the contract for hosts that name capabilities (the Windows
+adapter requires the id).
 
 A submission that names only `kind` is still checked by the worker's own catalog
 before any weights load: a missing model is `-32011`, an uncleared licence is
