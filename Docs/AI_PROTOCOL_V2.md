@@ -74,6 +74,7 @@ Every response echoes `contractVersion: "1"`.
 | `hello` | `contractVersion`, `protocol` (`"2"`), `protocol_version` (2), `worker`, `pid`, `helper_generation`, `launch_nonce`, `providers` |
 | `health` | `contractVersion`, `protocol`, `protocol_version`, `pid`, `helper_generation`, `launch_nonce`, `providers` |
 | `provider.list` | `contractVersion`, `providers`: array of `{id, state, execution_providers}` |
+| `capability.list` | `contractVersion`, `vocabulary` (`"capabilities/1"`), `platform`, `provider`, `capabilities` |
 | `ping` | `pong: true` |
 | `shutdown` | `stopping: true` |
 
@@ -84,12 +85,48 @@ outside the host (developer shell), but the host never accepts that process.
 the execution provider actually initialised, not because its library is
 present. DirectML is optional on Windows and is never required for startup.
 
+## Capability reporting
+
+`capability.list` answers with the frozen W5-0 vocabulary `capabilities/1`: one
+record per id, each carrying `capabilityId`, `state`
+(`supported` | `requires_model` | `blocked` | `unsupported`), `provider`, and
+either `evidence` (required for `supported`) or `reason` (required for every
+other state). `modelId` and `modelVersion` accompany model-backed records.
+
+The answer is built from what the adapter can actually run — installed and
+verified models, an initialised provider, and recorded run evidence — never
+from an interface or a catalog entry existing. `supported` is bounded by a
+recorded run (decision record DR-4); an entry whose size or checksum cannot be
+verified is not installable or supportable (DR-5). See
+`Docs/W5_ADAPTERS.md` for the per-platform answer and its evidence.
+
+`job.submit` accepts an optional `capabilityId`. When a caller names one, a job
+for a capability that the adapter cannot run is refused before any work starts:
+`-32020` with `{capabilityId, state, reason}` data, or `-32011` with the missing
+model when the capability is only `requires_model`. It is never accepted and
+silently dropped. The macOS host keeps submitting by job kind in W5-3, so
+existing jobs take the unchanged path; the refusal is the contract for hosts
+that name capabilities (the Windows adapter requires the id).
+
+A submission that names only `kind` is still checked by the worker's own catalog
+before any weights load: a missing model is `-32011`, an uncleared licence is
+`-32010`, and a file whose size differs from the catalog record is `-32019`
+(`E_MODEL_UNVERIFIED`), the same condition `capability.list` reports as
+`blocked`. The kind path deliberately does not refuse the `blocked` states that
+describe a *claim* (no recorded run, legacy flat layout, a catalog entry without
+size or SHA-256); those keep already-installed models usable, and running them
+is how the evidence for a support claim gets recorded.
+
 ## Errors
 
 Standard JSON-RPC codes: `-32700` parse, `-32600` invalid request
 (including contract/version mismatch), `-32601` method not found, `-32602`
 invalid params, `-32603` internal. Worker-specific codes keep their existing
 meanings (`BUSY`, `PATH_DENIED`, `LICENSE_BLOCKED`, `BUDGET_EXCEEDED`, ...).
+`-32020` `UNSUPPORTED` is additive in contract 1: the frozen vocabulary has no
+numeric code for "this adapter or platform does not provide it", and both hosts
+map `-32020` to `E_UNSUPPORTED`. A host that only knows the older codes sees a
+worker-range error and treats the job as failed, which is safe.
 
 Errors never include absolute user paths or model weights. Logs stay on the
 worker's inherited stderr; the host does not parse them for protocol state.
@@ -116,3 +153,5 @@ Both platforms must prove, from a fresh checkout:
 4. `provider.list` reports `CPU` only after that provider initialised.
 5. `shutdown` exits the process and leaves no live socket/pipe.
 6. The shared fixture's required methods all answer.
+7. `capability.list` answers every frozen id with a state and an
+   evidence/reason; no `supported` record lacks a recorded run.

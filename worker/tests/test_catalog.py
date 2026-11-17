@@ -12,8 +12,8 @@ from unittest.mock import patch
 from retouch_ai_worker import catalog as catalog_module
 from retouch_ai_worker.catalog import (CATALOG, LEGACY_LEASE, Catalog, ModelEntry,
                                        ModelFile)
-from retouch_ai_worker.protocol import (BUSY, LICENSE_BLOCKED, MODEL_MISSING,
-                                        UNKNOWN_MODEL, WorkerError)
+from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, LICENSE_BLOCKED,
+                                        MODEL_MISSING, UNKNOWN_MODEL, WorkerError)
 
 # The catalog only ships models whose weights are cleared. The gate still has
 # to refuse an uncleared entry if one is ever added, so the test supplies one.
@@ -82,6 +82,41 @@ class CatalogTests(unittest.TestCase):
         catalog = Catalog(self.root, allow_uncleared=False)
         self.assertEqual(catalog.require("sam2.1-hiera-tiny"), target.parent)
         self.assertTrue(catalog.list()[1]["installed"])
+
+    def test_truncated_install_is_refused_not_loaded(self):
+        # capability.list already reports this install blocked; a submission
+        # that names only the job kind must not load it anyway.
+        version = self.root / "migan" / "1.0.0"
+        version.mkdir(parents=True)
+        (version / "migan_pipeline_v2.onnx").write_bytes(b"short")
+        (self.root / "migan" / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": "migan",
+            "version": "1.0.0",
+        }), encoding="utf-8")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with self.assertRaises(WorkerError) as caught:
+            catalog.require("migan")
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(caught.exception.data["model"], "migan")
+        self.assertEqual(caught.exception.data["file"], "migan_pipeline_v2.onnx")
+        self.assertEqual(caught.exception.data["expected_bytes"], 28_079_181)
+        self.assertEqual(caught.exception.data["actual_bytes"], 5)
+        # A refused model stays deletable: nothing may hold its lease.
+        self.assertEqual(catalog._leases, {})
+
+    def test_correct_size_install_still_resolves(self):
+        version = self.root / "migan" / "1.0.0"
+        version.mkdir(parents=True)
+        with (version / "migan_pipeline_v2.onnx").open("wb") as handle:
+            handle.truncate(28_079_181)
+        (self.root / "migan" / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": "migan",
+            "version": "1.0.0",
+        }), encoding="utf-8")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        self.assertEqual(catalog.require("migan"), version)
 
     def test_unknown_model(self):
         with self.assertRaises(WorkerError) as caught:

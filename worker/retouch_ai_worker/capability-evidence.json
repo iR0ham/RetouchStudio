@@ -1,0 +1,13 @@
+{
+  "schema": "retouchstudio.capability-evidence/1",
+  "entries": [
+    {
+      "capabilityId": "upscale.4x",
+      "platform": "macos-arm64",
+      "provider": "macos-python",
+      "modelId": "swin2sr-x4",
+      "modelVersion": "1.0.0",
+      "evidence": "Docs/PHASE5_ACCEPTANCE.md §4 and Docs/PRIVACY_AUDIT.md §4: a real 4× upscale through the packaged runtime produced a 256×256 artifact from a 64×64 input on the M3 (mps), 5–7 s whole job"
+    }
+  ]
+}

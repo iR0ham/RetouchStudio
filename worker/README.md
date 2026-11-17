@@ -159,10 +159,11 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-69 tests, no GPU: framing, contract versioning, request validation, generation
+88 tests, no GPU: framing, contract versioning, request validation, generation
 and nonce pairing, the readiness registry, catalog licensing, download resume
 and checksums against a local HTTP server, job lifecycle, BUSY, cancel,
-notifications, path denial, mask policy, compositing byte-identity, alpha bounds.
+notifications, path denial, mask policy, compositing byte-identity, alpha
+bounds, the frozen capability vocabulary and its evidence rules.
 
 ## Acceptance
 

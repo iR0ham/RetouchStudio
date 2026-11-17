@@ -133,6 +133,49 @@ if (File.Exists(worker))
             Check(hello?["result"]?["pid"]?.GetValue<int>() == child.Pid,
                 "hello names the worker pid");
 
+            var capabilityReply = client.Call("capability.list");
+            var capabilityResult = capabilityReply?["result"];
+            Check(capabilityResult?["vocabulary"]?.GetValue<string>() ==
+                  Capabilities.Vocabulary,
+                "capability.list reports the frozen vocabulary",
+                capabilityReply?.ToJsonString());
+            Check(capabilityResult?["platform"]?.GetValue<string>() ==
+                  RetouchStudio.AI.Models.ModelCatalog.Platform,
+                "capability.list names the Windows platform");
+            Check(capabilityResult?["provider"]?.GetValue<string>() == Providers.Id,
+                "capability.list names the Windows provider");
+            var capabilityRecords = capabilityResult?["capabilities"]?.AsArray();
+            Check(capabilityRecords?.Count == Capabilities.VocabularyIds.Count,
+                "capability.list covers every frozen id");
+            Check(capabilityRecords is not null && capabilityRecords.All(record =>
+                    record?["state"]?.GetValue<string>() != Capabilities.Supported),
+                "the adapter claims no support");
+            Check(capabilityRecords is not null && capabilityRecords.All(record =>
+                    record?["state"]?.GetValue<string>() == Capabilities.Supported ||
+                    !string.IsNullOrWhiteSpace(record?["reason"]?.GetValue<string>())),
+                "every non-supported capability carries a reason");
+            var unsupportedJob = client.Call("job.submit",
+                parameters: new JsonObject { ["capabilityId"] = "upscale.4x" });
+            Check(unsupportedJob?["error"]?["code"]?.GetValue<int>() == -32020,
+                "job.submit refuses an unsupported capability",
+                unsupportedJob?.ToJsonString());
+            Check(unsupportedJob?["error"]?["data"]?["state"]?.GetValue<string>() is
+                    Capabilities.Blocked or Capabilities.Unsupported,
+                "the refusal carries the recorded state");
+            var unknownJob = client.Call("job.submit",
+                parameters: new JsonObject { ["capabilityId"] = "not.a.capability" });
+            Check(unknownJob?["error"]?["code"]?.GetValue<int>() == -32602,
+                "an unknown capability is an invalid parameter",
+                unknownJob?.ToJsonString());
+
+            // The Windows adapter has no kind-only path at all: a submission
+            // without a capability id is refused, never run.
+            var kindOnlyJob = client.Call("job.submit",
+                parameters: new JsonObject { ["kind"] = "upscale" });
+            Check(kindOnlyJob?["error"]?["code"]?.GetValue<int>() == -32602,
+                "a kind-only job submission is refused",
+                kindOnlyJob?.ToJsonString());
+
             var rejected = client.Call("ping", contractVersion: "999");
             Check(rejected?["error"]?["code"]?.GetValue<int>() == -32600,
                 "a foreign contract version is refused", rejected?.ToJsonString());
@@ -192,6 +235,75 @@ if (File.Exists(worker))
     Check(process.WaitForExit(10000), "the worker exits promptly");
     Check(process.ExitCode == 64, "the worker rejects protocol 1",
         process.StandardError.ReadToEnd());
+}
+
+Console.WriteLine("[F] the host capability adapter");
+if (File.Exists(worker))
+{
+    var directory = Path.Combine(Path.GetTempPath(), $"rsai-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(directory);
+    var pipe = $"retouch-ai-{Guid.NewGuid():N}";
+    using var contained = ContainedWorker.Start(worker, new[]
+    {
+        "--pipe", pipe,
+        "--protocol-version", "2",
+        "--registry", Path.Combine(directory, WorkerRegistry.FileName),
+    }, directory);
+    try
+    {
+        var report = await CapabilityAdapter.FetchAsync(pipe, TimeSpan.FromSeconds(20));
+        Check(report.Vocabulary == Capabilities.Vocabulary,
+            "the adapter validates the vocabulary");
+        Check(report.Provider == Providers.Id,
+            "the adapter reads the Windows provider");
+        Check(report.Records.Count == Capabilities.VocabularyIds.Count,
+            "the parsed report keeps every capability");
+        Check(report.Records.All(record =>
+                record.State == Capabilities.Supported ||
+                !string.IsNullOrWhiteSpace(record.Reason)),
+            "the adapter rejects unsupported records without a reason");
+        Check(report.Find("upscale.4x")?.State == Capabilities.Blocked,
+            "the 4× upscale stays blocked without an approved artifact");
+    }
+    catch (AIWorkerException error)
+    {
+        Check(false, "the adapter fetched capability.list",
+            $"{error.TypedCode}: {error.Message}");
+    }
+
+    try
+    {
+        await new WorkerClient(pipe).CallAsync("job.submit",
+            new JsonObject { ["capabilityId"] = "upscale.4x" });
+        Check(false, "the adapter surfaces an unsupported job");
+    }
+    catch (AIWorkerException error)
+    {
+        Check(error.TypedCode == "E_UNSUPPORTED" && error.Code == -32020,
+            "an unsupported job maps to E_UNSUPPORTED",
+            $"{error.TypedCode} / {error.Code}");
+        Check(error.Data?["reason"] is JsonValue,
+            "the typed error keeps the worker's reason");
+    }
+}
+
+Console.WriteLine("[G] a stopped worker fails fast");
+{
+    var watch = Stopwatch.StartNew();
+    try
+    {
+        await CapabilityAdapter.FetchAsync($"retouch-ai-{Guid.NewGuid():N}",
+            TimeSpan.FromSeconds(2));
+        Check(false, "a missing worker is reported as unreachable");
+    }
+    catch (AIWorkerException error)
+    {
+        Check(error.TypedCode == "E_WORKER_MISSING",
+            "a missing worker is E_WORKER_MISSING", error.TypedCode);
+        Check(watch.Elapsed < TimeSpan.FromSeconds(8),
+            "the missing worker fails inside its probe timeout",
+            watch.Elapsed.ToString());
+    }
 }
 
 ModelStoreChecks.Run((condition, label, detail) => Check(condition, label, detail));
@@ -283,14 +395,15 @@ sealed class PipeClient : IDisposable
         _writer.AutoFlush = true;
     }
 
-    public JsonObject? Call(string method, string? contractVersion = null)
+    public JsonObject? Call(string method, string? contractVersion = null,
+        JsonObject? parameters = null)
     {
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["id"] = _next++,
             ["method"] = method,
-            ["params"] = new JsonObject(),
+            ["params"] = parameters ?? new JsonObject(),
         };
         if (contractVersion is not null) request["contractVersion"] = contractVersion;
         _writer.WriteLine(request.ToJsonString());

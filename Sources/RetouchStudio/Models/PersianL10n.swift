@@ -648,6 +648,17 @@ final class PersianL10n: L10n {
     override var modelsOfflineNote: String {
         "مدل‌ها روی همین مک اجرا می‌شوند. چیزی آپلود نمی‌شود و هیچ مدلی بدون تأیید شما دانلود نمی‌شود."
     }
+    override var capabilitiesTitle: String { "توانایی‌های هوش مصنوعی" }
+    override var capabilityReady: String { "آماده" }
+    override var capabilityNeedsModel: String { "نیازمند مدل" }
+    override var capabilityBlocked: String { "مسدود" }
+    override var capabilityUnavailable: String { "در دسترس نیست" }
+    override var capabilityHelperStopped: String {
+        "کمک‌یار محلی هوش مصنوعی در حال اجرا نیست، بنابراین فهرست توانایی‌ها خوانده نمی‌شود."
+    }
+    override func capabilityProvider(_ platform: String, _ provider: String) -> String {
+        "\(platform) · \(provider)"
+    }
     override var modelsInstalled: String { "نصب‌شده" }
     override var modelsMissing: String { "نصب نشده" }
     override var modelsDownload: String { "دانلود…" }
@@ -1202,6 +1213,9 @@ final class PersianL10n: L10n {
     }
     override var aiLicenseBlocked: String {
         "این مدل هوش مصنوعی برای استفاده روی این مک مجاز اعلام نشده."
+    }
+    override var aiCapabilityUnsupported: String {
+        "این ابزار هوش مصنوعی هنوز برای این نسخهٔ مک در دسترس نیست. «مدیریت مدل‌ها…» نشان می‌دهد این آداپتور چه چیزی را اجرا می‌کند."
     }
     override var aiRunEdit: String { "اجرای ویرایش" }
     override var aiCancelEdit: String { "لغو" }

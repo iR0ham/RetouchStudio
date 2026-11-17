@@ -200,6 +200,17 @@ Typed errors (stable codes; UI copy may differ):
 | `E_WORKER_CRASH` | Worker exited mid-job |
 | `E_INTERNAL` | Anything else; never a silent success |
 
+Wire mapping (W5-3): the hosts derive these names from the worker's numeric
+codes (`-32011`/`-32016` → `E_MODEL_MISSING`, `-32012` → `E_MODEL_LEASED`,
+`-32013` → `E_TIMEOUT`, `-32014` → `E_CANCELLED`, `-32019` →
+`E_MODEL_UNVERIFIED`, `-32000` → `E_WORKER_MISSING`, `-32020` →
+`E_UNSUPPORTED`). `-32020` is additive in contract 1: the frozen registry never
+assigned a numeric code to "not provided by this adapter", and an older host
+that does not know it still fails the job rather than treating it as success.
+No other code or field changed. The worker's load path reuses `-32019` for a
+file whose size differs from the catalog record, so `E_MODEL_UNVERIFIED` means
+integrity in both the adoption and the job path.
+
 ### 3.5 Job request and result fields
 
 Request: `contractVersion`, `jobId`, `capabilityId`, `kind`, inputs (image

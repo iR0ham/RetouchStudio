@@ -11,6 +11,8 @@ struct ModelManagerView: View {
     @ObservedObject private var activity = ModelActivity.shared
     @ObservedObject private var runtime = AIRuntimeInstaller.shared
     @State private var prompt: Prompt?
+    @State private var capabilities: AICapabilityReport?
+    @State private var capabilityNote: String?
 
     private enum Prompt: Identifiable {
         case install(ModelCatalogEntry)
@@ -34,6 +36,7 @@ struct ModelManagerView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if showsRuntimeCard { runtimeCard }
+            capabilitySection
             diskLine
 
             if manager.loading && manager.records.isEmpty {
@@ -76,9 +79,17 @@ struct ModelManagerView: View {
         .background(Theme.background)
         .preferredColorScheme(.dark)
         .environment(\.layoutDirection, editor.language.layoutDirection)
-        .task { await manager.refresh() }
+        .task {
+            await manager.refresh()
+            await loadCapabilities()
+        }
         .onChange(of: runtime.phase) { _, phase in
-            if phase == .installed { Task { await manager.refresh() } }
+            if phase == .installed {
+                Task {
+                    await manager.refresh()
+                    await loadCapabilities()
+                }
+            }
         }
         .alert(item: $prompt) { item in
             switch item {
@@ -178,6 +189,102 @@ struct ModelManagerView: View {
                 .font(Theme.Font.face(size: 10.5))
                 .foregroundStyle(Theme.faint)
             Spacer(minLength: 0)
+        }
+    }
+
+    /// The worker's own answer, not a UI table. Each state carries the reason
+    /// the worker recorded, shown in the tooltip; nothing here guesses support.
+    private var capabilitySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(editor.s.capabilitiesTitle)
+                    .font(Theme.Font.section)
+                    .tracking(0.6)
+                    .foregroundStyle(Theme.faint)
+                Spacer(minLength: 8)
+                if let capabilities {
+                    Text(editor.s.capabilityProvider(capabilities.platform,
+                                                     capabilities.provider))
+                        .font(Theme.Font.face(size: 10))
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            if let capabilities {
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
+                                        GridItem(.flexible(), spacing: 8)],
+                              spacing: 4) {
+                        ForEach(capabilities.capabilities) { capability in
+                            capabilityRow(capability)
+                        }
+                    }
+                }
+                .frame(maxHeight: 130)
+            } else {
+                Text(capabilityNote ?? editor.s.modelsChecking)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.muted)
+            }
+        }
+    }
+
+    private func capabilityRow(_ capability: AICapability) -> some View {
+        let title: String
+        var fill = Theme.inset
+        var ink = Theme.muted
+        switch capability.state {
+        case .supported:
+            title = editor.s.capabilityReady
+            fill = Theme.accent
+            ink = Theme.accentInk
+        case .requiresModel:
+            title = editor.s.capabilityNeedsModel
+            fill = Theme.sky
+            ink = Theme.skyInk
+        case .blocked:
+            title = editor.s.capabilityBlocked
+            ink = Theme.warning
+        case .unsupported:
+            title = editor.s.capabilityUnavailable
+        }
+        return HStack(spacing: 6) {
+            Text(capabilityTitle(capability))
+                .font(Theme.Font.face(size: 10.5))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 4)
+            Text(title)
+                .font(Theme.Font.face(size: 9, weight: .medium))
+                .foregroundStyle(ink)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule(style: .continuous).fill(fill))
+        }
+        .help(capability.reason ?? capability.evidence ?? capability.id)
+    }
+
+    private func capabilityTitle(_ capability: AICapability) -> String {
+        capability.id.split(separator: ".").map { part in
+            part.prefix(1).uppercased() + part.dropFirst()
+        }.joined(separator: " · ")
+    }
+
+    @MainActor
+    private func loadCapabilities() async {
+        let stopped = editor.s.capabilityHelperStopped
+        let outcome = await Task.detached(priority: .utility) {
+            Result { try AICapabilityClient.fetch() }
+        }.value
+        switch outcome {
+        case .success(let report):
+            capabilities = report
+            capabilityNote = nil
+        case .failure:
+            capabilities = nil
+            capabilityNote = stopped
         }
     }
 

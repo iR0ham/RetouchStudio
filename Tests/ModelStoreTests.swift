@@ -165,6 +165,15 @@ func entry(_ paths: StorePaths, _ id: String) -> ModelCatalogEntry {
     paths.catalog.entry(id: id)!
 }
 
+// The worker's load path checks unsigned file sizes, so a fixture that stands
+// in for a real model must have the recorded size. Sparse, so it costs no disk.
+func writeSizedFixture(at url: URL, bytes: Int) {
+    FileManager.default.createFile(atPath: url.path, contents: nil)
+    let handle = try! FileHandle(forWritingTo: url)
+    try! handle.truncate(atOffset: UInt64(bytes))
+    try! handle.close()
+}
+
 func expectCode(_ result: Result<Void, Error>, _ code: String, _ label: String) {
     switch result {
     case .success:
@@ -1130,7 +1139,8 @@ do {
         let miganRoot = scratchRoot.appendingPathComponent(UUID().uuidString)
         let versionDir = miganRoot.appendingPathComponent("migan/9.9.9")
         try! FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
-        try! Data([0]).write(to: versionDir.appendingPathComponent("migan_pipeline_v2.onnx"))
+        writeSizedFixture(at: versionDir.appendingPathComponent("migan_pipeline_v2.onnx"),
+                          bytes: 28_079_181)
         let pointer = ModelActivePointer(schema: ModelActivePointer.schemaName,
                                          modelId: "migan", version: "9.9.9",
                                          manifestSha256: "0", activatedAt: 0)
@@ -1164,7 +1174,8 @@ do {
         let legacyRoot = scratchRoot.appendingPathComponent(UUID().uuidString)
         let legacyDir = legacyRoot.appendingPathComponent("migan")
         try! FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
-        try! Data([0]).write(to: legacyDir.appendingPathComponent("migan_pipeline_v2.onnx"))
+        writeSizedFixture(at: legacyDir.appendingPathComponent("migan_pipeline_v2.onnx"),
+                         bytes: 28_079_181)
         let legacy = workerRequire(legacyRoot)
         check(legacy.0 == 0, "worker still reads a legacy flat install", legacy.1)
 
@@ -1188,15 +1199,15 @@ do {
 
 print("\n[18] legacy flat installs share one lease with adoption")
 if let python = workerPython() {
-    let zeroSha = "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+    let zeroSha = "6accd17d25cf8d01b9f12d06a0c9d40e1f7ef75bf42d49b31690c91f3355a046"
     let manifestSha = String(repeating: "0", count: 64)
     let json = """
     {"schema":"retouchstudio.model-catalog/1","catalogVersion":"fixture-legacy",
      "entries":[{"id":"migan","name":"migan legacy fixture",
      "capabilities":["inpaint"],"version":"1.0.0","format":"fixture",
-     "files":[{"path":"migan_pipeline_v2.onnx","sizeBytes":1,"sha256":"\(zeroSha)",
+     "files":[{"path":"migan_pipeline_v2.onnx","sizeBytes":28079181,"sha256":"\(zeroSha)",
      "sourceUrl":"https://example.com/migan_pipeline_v2.onnx"}],
-     "sizeBytes":1,"sha256":"\(manifestSha)","sourceUrl":"https://example.com/migan",
+     "sizeBytes":28079181,"sha256":"\(manifestSha)","sourceUrl":"https://example.com/migan",
      "codeLicense":"MIT","weightsLicense":"MIT",
      "licenseEvidenceUrl":"https://example.com/migan",
      "platforms":["macos-arm64"],"requiredProvider":"cpu",
@@ -1210,7 +1221,8 @@ if let python = workerPython() {
         let root = scratchRoot.appendingPathComponent(UUID().uuidString)
         let flat = root.appendingPathComponent("migan")
         try! FileManager.default.createDirectory(at: flat, withIntermediateDirectories: true)
-        try! Data([0]).write(to: flat.appendingPathComponent("migan_pipeline_v2.onnx"))
+        writeSizedFixture(at: flat.appendingPathComponent("migan_pipeline_v2.onnx"),
+                          bytes: 28_079_181)
         return (ModelStore(root: root, catalog: legacyCatalog, platform: "macos-arm64"), root)
     }
 

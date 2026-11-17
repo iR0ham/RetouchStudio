@@ -157,6 +157,18 @@ opens the model manager.
 **Does not:** add face, landmark, mask, heal, generative or enhancement
 capabilities.
 
+**Status (2026-11-17):** implemented on both adapters; PR #69. Hosted CI run
+44110079042 is green on head `45e9e30` (macOS Integration, Windows App,
+Windows StudioCore, StudioCore Boundary, Platform-neutral Conformance;
+`Ran 88 tests`, `AI RUNTIME TESTS: PASS`, `WINDOWS APP BUILD: PASS`). Only
+`upscale.4x` on macOS is `supported`, from the recorded 4× run; every other
+capability carries an explicit state and reason. The macOS job path still
+submits by kind; a review found that a size-mismatched install reported
+`blocked` was still loaded by that path, and the load path now refuses it with
+`-32019` (`E_MODEL_UNVERIFIED`). Qualification states (no recorded run, legacy
+layout, DR-5 metadata) stay runnable on purpose. Windows W5-4 stays blocked;
+the live capability panel has not been exercised in a UI session.
+
 ### W5-4 — First cross-platform capability: Upscaler 4x
 
 **Depends on:** W5-3. **Windows W5-4 is BLOCKED** until the owner reviews and

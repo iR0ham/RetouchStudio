@@ -14,6 +14,9 @@ public static class Protocol
     public const int MethodNotFound = -32601;
     public const int InvalidParams = -32602;
     public const int InternalError = -32603;
+    // Additive in contract 1: a capability this adapter or platform does not
+    // provide. Maps to E_UNSUPPORTED on the host.
+    public const int Unsupported = -32020;
 
     public static JsonObject Success(JsonNode? id, JsonObject result) => new()
     {

@@ -124,7 +124,7 @@ public sealed class WorkerServer
         }
 
         var dispatched = response is null;
-        response ??= Dispatch(method!, id);
+        response ??= Dispatch(method!, id, request["params"] as JsonObject);
         if (!isNotification && response is not null)
         {
             await Respond(pipe, response, cancellationToken);
@@ -132,7 +132,7 @@ public sealed class WorkerServer
         return dispatched && method == "shutdown";
     }
 
-    private JsonObject? Dispatch(string method, JsonNode? id)
+    private JsonObject? Dispatch(string method, JsonNode? id, JsonObject? parameters)
     {
         var provider = ProviderRecord();
         switch (method)
@@ -166,6 +166,10 @@ public sealed class WorkerServer
                     ["contractVersion"] = Protocol.ContractVersion,
                     ["providers"] = new JsonArray(provider.DeepClone()),
                 });
+            case "capability.list":
+                return Protocol.Success(id, Capabilities.Result());
+            case "job.submit":
+                return RefuseJob(id, parameters);
             case "ping":
                 return Protocol.Success(id, new JsonObject { ["pong"] = true });
             case "shutdown":
@@ -174,6 +178,36 @@ public sealed class WorkerServer
                 return Protocol.Failure(id, Protocol.MethodNotFound,
                     $"unknown method: {method}");
         }
+    }
+
+    /// <summary>
+    /// No job kind runs on the Windows adapter in W5-3. A submission is
+    /// refused with the frozen typed code and the exact recorded state, so the
+    /// host can surface the real reason instead of a generic failure.
+    /// </summary>
+    private static JsonObject RefuseJob(JsonNode? id, JsonObject? parameters)
+    {
+        var capabilityId = String(parameters?["capabilityId"]);
+        if (capabilityId is null)
+        {
+            return Protocol.Failure(id, Protocol.InvalidParams,
+                "job.submit requires a capabilityId");
+        }
+        var record = Capabilities.Find(capabilityId);
+        if (record is null)
+        {
+            return Protocol.Failure(id, Protocol.InvalidParams,
+                $"unknown capability {capabilityId}",
+                new JsonObject { ["capabilityId"] = capabilityId });
+        }
+        return Protocol.Failure(id, Protocol.Unsupported,
+            $"the Windows adapter does not run {capabilityId}",
+            new JsonObject
+            {
+                ["capabilityId"] = record.CapabilityId,
+                ["state"] = record.State,
+                ["reason"] = record.Reason,
+            });
     }
 
     private static JsonObject ProviderRecord()
