@@ -217,7 +217,8 @@ enum ExportService {
         ModelActivity.shared.begin(.swin)
         defer { ModelActivity.shared.finish(.swin, used: used) }
         let id = try WorkerClient.shared.submit(
-            "upscale", ["image": ["path": copy.path]], capability: "upscale.4x")
+            "upscale", ["image": ["path": copy.path]],
+            capability: AICapabilityReport.upscale4x)
         let reply: [String: Any]
         do {
             reply = try WorkerClient.shared.wait(

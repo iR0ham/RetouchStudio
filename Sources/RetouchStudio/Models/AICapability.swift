@@ -23,6 +23,10 @@ struct AICapability: Equatable, Identifiable {
 
 struct AICapabilityReport: Equatable {
     static let vocabulary = "capabilities/1"
+    /// The one id the host names on its own export job and asks about before it
+    /// renders. Spelled once: the export service and the pre-flight must not
+    /// drift from each other or from the catalog.
+    static let upscale4x = "upscale.4x"
     /// The frozen W5-0 ids. A report that omits one is not the whole answer.
     static let vocabularyIds = [
         "face.analysis", "face.parsing", "mask.subject", "mask.click",

@@ -1759,16 +1759,30 @@ final class EditorModel: ObservableObject {
         case -32012: return L10n.current.aiModelBusy
         case -32010: return L10n.current.aiLicenseBlocked
         case -32020:
-            // A blocked capability is not an unsupported one: the adapter
-            // offers it and the weights are here, so the build sentence is
-            // false and the task name is the useful half of the answer.
-            if let capability = failure.blockedCapabilityId {
-                return L10n.current.aiCapabilityBlocked(forCapability: capability)
-            }
-            return L10n.current.aiCapabilityUnsupported
+            return L10n.current.statusText(Self.unsupportedStatus(failure))
         case -32602: return L10n.current.aiMaskTooLarge
         default: return failure.localizedDescription
         }
+    }
+
+    /// What a `-32020` refusal should say.
+    ///
+    /// Three classes share the code. A runtime package the helper cannot
+    /// import is reported `blocked` like an install waiting to be adopted, but
+    /// it needs its own sentence: no download settles it. A blocked capability
+    /// is not an unsupported one — the adapter offers it and the weights are
+    /// here, so the build sentence is false and the task name is the useful
+    /// half of the answer. Anything else (including a refusal the worker sends
+    /// without data, which is what the mask job produced before the engine
+    /// learned to name its state) keeps the build sentence.
+    nonisolated static func unsupportedStatus(_ failure: AIWorkerFailure) -> StatusToken {
+        if let capability = failure.runtimeRefusedCapabilityId {
+            return .aiCapabilityRuntimeMissing(capability)
+        }
+        if let capability = failure.blockedCapabilityId {
+            return .aiCapabilityBlocked(capability)
+        }
+        return .aiCapabilityUnsupported
     }
 
     /// Runs the selected preset against the working photo. The helper gets a
@@ -3280,9 +3294,14 @@ final class EditorModel: ObservableObject {
         }
         let job = Task.detached(priority: .userInitiated) { () -> ExportOutcome in
             // The upscale verdict is asked before the render, not after it
-            // fails: see `exportUpscaleRefusal()`.
-            if needsUpscale, let refusal = Self.exportUpscaleRefusal() {
-                return .refused(refusal)
+            // fails: see `exportPreflight(cancellationRequested:verdict:)`.
+            if needsUpscale {
+                switch Self.exportPreflight(cancellationRequested: { Task.isCancelled },
+                                            verdict: Self.exportUpscaleRefusal) {
+                case .cancelled: return .render(.cancelled)
+                case .refused(let refusal): return .refused(refusal)
+                case .proceed: break
+                }
             }
             let renderer = MacDocumentRenderer()
             let report: (RenderProgress) -> Void = { event in
@@ -3346,7 +3365,8 @@ final class EditorModel: ObservableObject {
     /// helper has already decided it cannot upscale. A report that cannot be
     /// fetched answers nil, and the render proceeds on its own terms.
     nonisolated private static func exportUpscaleRefusal() -> StatusToken? {
-        guard let capability = try? AICapabilityClient.fetch().find("upscale.4x")
+        guard let capability = try? AICapabilityClient.fetch()
+            .find(AICapabilityReport.upscale4x)
         else { return nil }
         return exportUpscaleRefusal(state: capability.state)
     }
@@ -3357,10 +3377,34 @@ final class EditorModel: ObservableObject {
     /// report that could not be read says nothing.
     nonisolated static func exportUpscaleRefusal(state: AICapability.State?) -> StatusToken? {
         switch state {
-        case .blocked: return .aiCapabilityBlocked("upscale.4x")
+        case .blocked: return .aiCapabilityBlocked(AICapabilityReport.upscale4x)
         case .requiresModel: return .aiModelMissing
         case .supported, .unsupported, .none: return nil
         }
+    }
+
+    /// One export's pre-flight answer, and the only place the ordering lives.
+    enum ExportPreflight: Equatable {
+        case proceed
+        case refused(StatusToken)
+        case cancelled
+    }
+
+    /// Asks the helper for its upscale verdict, but a cancellation wins — both
+    /// before the ask and while it is in flight.
+    ///
+    /// The ask is a blocking socket call with an 8 s timeout, so the second
+    /// check is the one that matters: without it, cancelling during the ask
+    /// printed "Upscaling is installed on this Mac but not ready to run yet"
+    /// instead of "Export cancelled". The first check also keeps a cancelled
+    /// export from waking the helper at all.
+    nonisolated static func exportPreflight(cancellationRequested: () -> Bool,
+                                            verdict: () -> StatusToken?) -> ExportPreflight {
+        if cancellationRequested() { return .cancelled }
+        let refusal = verdict()
+        if cancellationRequested() { return .cancelled }
+        guard let refusal else { return .proceed }
+        return .refused(refusal)
     }
 
     /// Stops the one-photo export. The render job checks cancellation before it

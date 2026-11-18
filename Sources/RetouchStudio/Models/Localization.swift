@@ -935,6 +935,10 @@ class L10n {
         case .aiModelMissing: return aiModelMissing
         case .aiCapabilityBlocked(let capability):
             return aiCapabilityBlocked(forCapability: capability)
+        case .aiCapabilityRuntimeMissing(let capability):
+            return aiCapabilityRuntimeMissing(forCapability: capability)
+        case .aiCapabilityUnsupported:
+            return aiCapabilityUnsupported
         case .settingsReset: return settingsResetStatus
         case .backdropFailed: return backdropFailed
         case .recentMissing(let name): return recentMissing(name)
@@ -1298,6 +1302,18 @@ class L10n {
     /// language switch.
     func aiCapabilityBlocked(forCapability capability: String) -> String {
         aiCapabilityBlocked(modelsTaskName(Self.capabilityTaskKey(for: capability)))
+    }
+    /// A capability whose adapter needs a Python runtime package this build
+    /// does not ship. The weights can be on disk and still have nothing that
+    /// reads them, so the blocked sentence above is false here ("installed on
+    /// this Mac"), and the model manager can only explain it. Saying so keeps
+    /// the owner from downloading a model that cannot change the answer.
+    func aiCapabilityRuntimeMissing(_ task: String) -> String {
+        "\(task) needs a runtime package this build does not include, so it cannot run yet. Downloading the model again will not change that."
+    }
+    /// The same sentence from the capability id a refusal names, as above.
+    func aiCapabilityRuntimeMissing(forCapability capability: String) -> String {
+        aiCapabilityRuntimeMissing(modelsTaskName(Self.capabilityTaskKey(for: capability)))
     }
     var aiRunEdit: String { "Run edit" }
     var aiCancelEdit: String { "Cancel" }

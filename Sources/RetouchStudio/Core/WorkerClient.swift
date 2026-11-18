@@ -12,12 +12,17 @@ struct AIWorkerFailure: LocalizedError, Equatable {
     let message: String
     let capabilityId: String?
     let capabilityState: String?
+    /// The Python package a refusal names when the helper cannot import the
+    /// runtime an adapter needs. The state is still `blocked` (the weights may
+    /// be installed), but no download or Adopt tap can settle this class.
+    let missingPackage: String?
 
     init(code: Int, message: String, data: [String: Any]? = nil) {
         self.code = code
         self.message = message
         capabilityId = data?["capabilityId"] as? String
         capabilityState = data?["state"] as? String
+        missingPackage = data?["package"] as? String
     }
 
     var errorDescription: String? { message }
@@ -44,11 +49,12 @@ struct AIWorkerFailure: LocalizedError, Equatable {
     /// frozen vocabulary separates, and only `blocked` means the adapter offers
     /// the capability and something on this machine has to be settled — in part
     /// by the Adopt chip the manager renders. `unsupported` is a product answer,
-    /// not a queue, so it opens nothing.
+    /// not a queue, so it opens nothing. A refusal that names a runtime package
+    /// stays shut too: the manager can only explain it, never settle it.
     var opensModelManager: Bool {
         switch code {
         case -32011: return true
-        case -32020: return capabilityState == "blocked"
+        case -32020: return capabilityState == "blocked" && missingPackage == nil
         default: return false
         }
     }
@@ -60,7 +66,17 @@ struct AIWorkerFailure: LocalizedError, Equatable {
     /// id-less `-32020` — the worker refusing a name that is not this kind's
     /// capability — keeps the generic wording.
     var blockedCapabilityId: String? {
-        guard code == -32020, capabilityState == "blocked", let capabilityId else { return nil }
+        guard code == -32020, capabilityState == "blocked", missingPackage == nil,
+              let capabilityId else { return nil }
+        return capabilityId
+    }
+
+    /// The capability id of a refusal whose cause is a runtime package this
+    /// build does not ship. It is reported `blocked` like an install waiting to
+    /// be adopted, and it needs its own sentence: "installed on this Mac" is
+    /// false here, and downloading the model changes nothing.
+    var runtimeRefusedCapabilityId: String? {
+        guard code == -32020, missingPackage != nil, let capabilityId else { return nil }
         return capabilityId
     }
 }

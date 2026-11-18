@@ -6945,6 +6945,70 @@ func testAIRefusalRouting() {
           && PersianL10n.table.statusText(.aiModelMissing)
              == PersianL10n.table.aiModelMissing,
           "the status line reuses the inline model-missing sentence in both languages")
+
+    // A mask job names no capability, so the only refusal the mask path sees is
+    // the engine's own: it carries `package` and, since this change, the
+    // documented `state`. That refusal is `blocked` but no download can settle
+    // it, so it must not get the adoption sentence.
+    let runtime = AIWorkerFailure(
+        code: -32020,
+        message: "this worker cannot import sam2, so SAM 2.1 tiny has nothing to run on",
+        data: ["capabilityId": "mask.click", "state": "blocked", "package": "sam2",
+               "reason": "this worker cannot import sam2, so sam2.1-hiera-tiny has nothing to run on"])
+    check(runtime.runtimeRefusedCapabilityId == "mask.click",
+          "a runtime-package refusal keeps the capability it blocks")
+    check(runtime.blockedCapabilityId == nil && !runtime.opensModelManager,
+          "a missing runtime is not the manager's queue: no download installs it")
+    check(EditorModel.unsupportedStatus(runtime) == .aiCapabilityRuntimeMissing("mask.click"),
+          "the mask refusal routes to its own class instead of the build sentence")
+    check(EditorModel.unsupportedStatus(blocked) == .aiCapabilityBlocked("upscale.4x"),
+          "a model waiting for adoption keeps the adoption class")
+    check(EditorModel.unsupportedStatus(unoffered) == .aiCapabilityUnsupported,
+          "a product answer keeps the build sentence")
+
+    let runtimeEnglish = L10n.shared.statusText(.aiCapabilityRuntimeMissing("mask.click"))
+    check(runtimeEnglish == "Selection needs a runtime package this build does not include, "
+          + "so it cannot run yet. Downloading the model again will not change that.",
+          "the runtime sentence names the task and rules out the download advice")
+    check(!runtimeEnglish.contains("installed on this Mac"),
+          "the runtime sentence does not claim a model that cannot run is installed")
+    check(runtimeEnglish == L10n.shared.aiCapabilityRuntimeMissing(forCapability: "mask.click"),
+          "the runtime token and the direct call agree")
+
+    let runtimePersian = PersianL10n.table.statusText(.aiCapabilityRuntimeMissing("mask.click"))
+    check(runtimePersian.contains("انتخاب"), "the Persian runtime line names the same task")
+    check(runtimePersian.contains("زمان‌اجرا"),
+          "the Persian runtime line names the missing package class")
+    check(!runtimePersian.contains("نصب است"),
+          "the Persian runtime line does not claim the model is installed")
+    check(runtimePersian == PersianL10n.table.aiCapabilityRuntimeMissing(forCapability: "mask.click"),
+          "the Persian runtime token and the direct call agree")
+
+    // A cancel that lands while the pre-flight holds the blocking capability
+    // call must print "cancelled", not the verdict it was waiting for.
+    var askedDuringCancel = false
+    var cancelled = false
+    let race = EditorModel.exportPreflight(
+        cancellationRequested: { cancelled },
+        verdict: {
+            cancelled = true
+            askedDuringCancel = true
+            return .aiCapabilityBlocked("upscale.4x")
+        })
+    check(race == .cancelled && askedDuringCancel,
+          "a cancel during the pre-flight wins over the verdict it was waiting for")
+    var askedAfterCancel = false
+    let early = EditorModel.exportPreflight(
+        cancellationRequested: { true },
+        verdict: { askedAfterCancel = true; return nil })
+    check(early == .cancelled && !askedAfterCancel,
+          "a cancelled export does not wake the helper at all")
+    check(EditorModel.exportPreflight(cancellationRequested: { false },
+                                      verdict: { .aiModelMissing }) == .refused(.aiModelMissing),
+          "without a cancel the helper's verdict is reported")
+    check(EditorModel.exportPreflight(cancellationRequested: { false },
+                                      verdict: { nil }) == .proceed,
+          "a nil verdict lets the render proceed")
 }
 
 // MARK: - W5-4 artifact provenance

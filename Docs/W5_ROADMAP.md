@@ -290,6 +290,34 @@ done: `Windows/RetouchStudio.AI/WorkerClient.cs` keeps the typed-code table
 only, and Windows loads no weights, so no legacy install can reach
 `-32020`/`blocked` there today.
 
+**Addendum (2026-11-18, same branch, review follow-up).** The addendum above
+said both wire shapes carry `capabilityId` and `state`. That was true for
+refusals the capability queue emits, and not yet for the engine-originated one
+the mask path sees: `_ensure_sam` sent `capabilityId` and `package` with no
+`state`, so the host had nothing to route on and printed the build sentence for
+a task the adapter offers. `engine.py` now sends the documented
+`{capabilityId, state, reason}` beside `package`, so the sentence above holds
+for every `-32020` the worker emits, whatever raises it.
+
+- A missing runtime package is `blocked` and is still not the model manager's
+  queue: the host gives it its own English and Persian sentence ("… needs a
+  runtime package this build does not include … Downloading the model again
+  will not change that"), and a refusal that names `package` opens no sheet.
+  The adoption sentence stays for weights waiting for a tap, where it is true.
+- `ModelManager` owns the capability report and re-reads it at the end of
+  `refresh()`, so an adoption, an install, an activation or a removal updates
+  the chips together with the model list instead of leaving them stale against
+  the export pre-flight, which always asks fresh.
+- The export pre-flight checks cancellation before and after its blocking
+  `capability.list` call, so a cancel inside that window reports "Export
+  cancelled" rather than the refusal it was waiting for.
+- `upscale.4x` is spelled once (`AICapabilityReport.upscale4x`) for both the
+  export job and the pre-flight.
+
+Known debt left in this branch and recorded in the pull request only: the
+worker's refusal `message`/`reason` text is not localized, and a latent
+`.unsupported` renderer case still collapses to "Export failed".
+
 ### W5-5 — CI and acceptance
 
 **Depends on:** W5-1..W5-4 as each lands.
