@@ -124,6 +124,19 @@ class JudgeTests(unittest.TestCase):
         mixed = [self.row("D", 20.0, 20.0), job_failed]
         self.assertEqual(corpus.judge(mixed, 24.0, None)[:2], ("missed", 1))
 
+    def test_the_bar_compares_the_unrounded_measurement(self):
+        # 23.996 used to be recorded as 24.0 and counted as met.
+        self.assertEqual(corpus.judge([self.row("A", 23.996, 20.0)],
+                                      24.0, None)[:2], ("missed", 1))
+        self.assertEqual(corpus.judge([self.row("B", 24.004, 20.0)],
+                                      24.0, None)[:2], ("met", 0))
+
+    def test_an_exact_match_meets_the_bar(self):
+        # psnr() returns inf when the output equals the reference; that is a
+        # measured pass, not an unmeasured row.
+        self.assertEqual(corpus.judge([self.row("A", float("inf"), 20.0)],
+                                      24.0, None)[:2], ("met", 0))
+
 
 class LrDegradationTests(unittest.TestCase):
     @classmethod
@@ -279,6 +292,88 @@ class ExitCodeTests(unittest.TestCase):
                                     "--sample", f"A={image}",
                                     "--out", str(Path(tmp) / "o.json")])
         self.assertEqual(code, 3)
+
+
+class ControlNoteTests(unittest.TestCase):
+    def test_the_note_carries_this_runs_numbers(self):
+        note = corpus.control_note(
+            "bicubic", {"minimum": 20.0, "mean": 25.0, "median": 24.0},
+            {"win": ["A"], "tie": [], "lose": ["B"]})
+        self.assertIn("On the 2026-11-18 corpus", note)
+        self.assertIn("This run: control minimum 20.00 dB, mean 25.00 dB",
+                      note)
+        self.assertIn("win 1, tie 0, lose 1", note)
+
+    def test_a_run_with_nothing_measured_claims_no_numbers(self):
+        note = corpus.control_note(
+            "lr", {"minimum": None, "mean": None, "median": None},
+            {"win": [], "tie": [], "lose": []})
+        self.assertIn("measured no image", note)
+        self.assertNotIn("This run: control minimum", note)
+
+
+class RecordSafetyTests(unittest.TestCase):
+    def test_non_finite_values_are_written_as_null(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "record.json"
+            corpus.write_record(out, {"psnr": float("inf"),
+                                      "nested": [float("nan"), 1.5]})
+            text = out.read_text()
+        self.assertNotIn("Infinity", text)
+        self.assertNotIn("NaN", text)
+        self.assertEqual(json.loads(text),
+                         {"psnr": None, "nested": [None, 1.5]})
+
+
+class _StubClient:
+    def __init__(self, path, timeout=0.0):
+        pass
+
+    def call(self, method, params=None):
+        if method == "capability.list":
+            return {"result": {"capabilities": [
+                {"capabilityId": "upscale.4x", "state": "supported"}]}}
+        return {"result": {"ok": True}}
+
+    def close(self):
+        pass
+
+
+class FailedSampleTests(unittest.TestCase):
+    def _measure(self, tmp, sample):
+        out = Path(tmp) / "record.json"
+        parser = corpus.build_parser()
+        args = parser.parse_args(["--socket", "stub", "--out", str(out),
+                                  "--sample", f"A={sample}",
+                                  "--temp-dir", str(Path(tmp) / "temp")])
+        samples = corpus.parse_samples(parser, args.sample)
+        with mock.patch.object(corpus, "Client", _StubClient):
+            code = corpus.measure(args, samples)
+        return code, json.loads(out.read_text())
+
+    def test_a_provenance_failure_is_unmeasured_and_exits_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "ok.png"
+            Image.new("RGB", (8, 8)).save(image)
+            with mock.patch.object(
+                    corpus, "run_sample",
+                    side_effect=corpus.provenance.ProvenanceError(
+                        "sidecar digest mismatch")):
+                code, record = self._measure(tmp, image)
+        self.assertEqual(code, 2)
+        self.assertEqual(record["a1Bar"], "not-measured")
+        self.assertEqual(record["exitCode"], 2)
+        self.assertEqual(record["bar"]["notMeasuredImages"], ["A"])
+        self.assertIn("sidecar digest mismatch", record["images"][0]["error"])
+
+    def test_an_unreadable_fixture_is_recorded_not_a_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = Path(tmp) / "broken.png"
+            broken.write_text("not an image", encoding="utf-8")
+            code, record = self._measure(tmp, broken)
+        self.assertEqual(code, 2)
+        self.assertEqual(record["a1Bar"], "not-measured")
+        self.assertIn("cannot read", record["images"][0]["error"])
 
 
 if __name__ == "__main__":

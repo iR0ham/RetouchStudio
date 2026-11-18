@@ -160,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           for verdict in \
-            'Ran 154 tests' \
+            'Ran 161 tests' \
             'StudioCore: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
             'MODEL TESTS: PASS' \

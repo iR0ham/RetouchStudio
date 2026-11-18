@@ -486,10 +486,10 @@ restatement of the review's finding.
   decided.
 - **Exit codes are distinguished.** 0 measured and bar met; 1 bar missed;
   2 nothing measurable (capability not `supported`, model not verified,
-  worker unreachable, unreadable fixture, or a job that produced no
-  exact-size output from the approved model version); 3 the harness itself
-  raised. Previously every exception and every incomplete measurement
-  collapsed into the same "bar missed" exit.
+  worker unreachable, unreadable fixture, an artifact whose provenance does
+  not verify, or a job that produced no exact-size output from the approved
+  model version); 3 the harness itself raised. Previously every exception and
+  every incomplete measurement collapsed into the same "bar missed" exit.
 - **`--degradation lr`** applies the §8.1 parameters in the order that keeps
   them: Gaussian blur radius 1.2 at the reference resolution, bicubic ×4
   downscale, then JPEG q=70 (4:2:0) and Gaussian noise σ = 5/255 at the
@@ -584,3 +584,58 @@ store access, no adoption. The harness's new mode and boundary rule carry
 synthetic-logic evidence (the 14 tests above); whether the model clears
 24.0 dB on `lr` is **NOT MEASURED** and is the next round's question. The
 production store and `upscale.4x` remain exactly as §8.4 left them.
+
+---
+
+## 10. Harness minors closed (2026-11-19): exit classification, record honesty, JSON safety
+
+Status of this section: append-only; nothing above is rewritten except the
+exit-2 parenthetical in §9.1, which this section dates. No inference was run
+and no number below is a new measurement; the single arithmetic correction is
+derived from §7.5's own table.
+
+- **A provenance failure is "nothing measurable", not a harness bug.**
+  `worker/tools/upscale_corpus.py` let `provenance.ProvenanceError` (a
+  `RuntimeError`, raised in
+  `worker/retouch_ai_worker/provenance.py:174/177/191/210`) escape the
+  per-sample loop, where `main`'s blanket handler reported it as exit 3. It is
+  now caught beside `BadInput`: the image is recorded as unmeasured, the
+  remaining samples still run, and the run exits 2. §9.1's exit-2 list now
+  names it.
+- **An unreadable fixture no longer crashes the summary.** The per-image
+  progress line read `row['controlBicubicPsnr']` unconditionally, so the first
+  `BadInput` row — a file Pillow cannot open, a corrupt ICC profile — raised
+  `KeyError` inside the loop and turned a clean "bad input" run into exit 3
+  with no record. Every field on that line is now read defensively; a worker
+  `OSError` still aborts the run as before.
+- **The control note describes its own run.** `CONTROL_NOTE` asserted the
+  2026-11-18 eight-pair statistics in every record, so a `bicubic` run on any
+  other pair set wrote numbers beside a note that contradicted them. It is now
+  `control_note(mode, control_stats, outcomes)`: the 2026-11-18 sentence is
+  labelled "On the 2026-11-18 corpus" and the note appends this run's own
+  control minimum/mean/median and win/tie/lose counts, or states that no image
+  was measured.
+- **The bar compares the unrounded measurement.** Each image's PSNR is stored
+  and compared at full precision; rounding is display-only (`aggregate`,
+  `controlDeltaDb`, the printed line). A 23.996 dB image is `missed` instead
+  of being displayed as 24.0 and counted as met.
+- **Records are standard JSON.** `psnr`/`seamPsnr` can be `inf` on an exact
+  match, which `json.dumps` writes as bare `Infinity` — rejected by Swift's
+  `JSONDecoder` and by `jq`. Non-finite numbers are written as `null` and the
+  writer uses `allow_nan=False`, so a future non-finite field fails loudly
+  instead of producing an unreadable record.
+- **§7.5's "at roughly 4–11 s per tile" (`:284`) is arithmetic its own table
+  does not support.** §7.5's `job s` divided by `tiles` gives 8.9–11.1 s per
+  tile (C2: 133.12 / 15 = 8.9; C7: 266.85 / 24 = 11.1); no fixture is near
+  4 s. The line is left as written under the append-only rule and superseded
+  by this paragraph. It is a timing observation, not a quality number; no PSNR
+  value depends on it.
+- **Tests and pins.** `worker/tests/test_upscale_quality_corpus.py` gained 7
+  tests (provenance failure → exit 2, unreadable fixture → exit 2, the
+  unrounded bar at 23.996/24.004, `inf` meets the bar, `inf`/`NaN` written as
+  `null`, and the note built from this run). The corpus module now has 21. The
+  five pinned places moved to the new total together (`Tests/run-worker.sh`,
+  `.github/workflows/ci.yml`, `worker/README.md`, `Docs/W5_ADAPTERS.md`,
+  `Docs/worker-regressions/README.md`).
+- **Evidence tier:** synthetic logic only — no worker, no model, no fixture,
+  no inference. Nothing in this section measures upscaler quality.

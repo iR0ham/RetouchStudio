@@ -50,6 +50,9 @@ Measurement contract (restated here so a reader never has to guess):
      values, RGB, RMS over all channels (the same metric as `psnr()` in
      `worker/tools/upscale_acceptance.py`);
   6. repeat 5 on a bicubic-x4 upscale of `D` and record it as a diagnostic.
+  7. the recorded PSNR is the unrounded value and the bar compares that value;
+     rounding is display only, and a non-finite value (an exact match) is
+     written as `null` because bare `Infinity` is not JSON.
 
 `D` is written to a temporary directory and deleted again: derived pixels are
 private, and nothing of the owner's photo leaves memory. Only metadata and
@@ -81,9 +84,10 @@ Exit codes: 0 every sample was measured and the bar was met on every image;
 1 the bar was missed on at least one measured image (the control outcome is
 reported but never changes this code); 2 nothing measurable -- the capability
 is not `supported`, the model failed verification, the worker is unreachable,
-a fixture is unreadable, or a job produced no exact-size output from the
-approved model version; 3 the harness itself raised. Only 0 and 1 are
-verdicts about image quality; 2 and 3 claim nothing.
+a fixture is unreadable, a job produced no exact-size output from the approved
+model version, or an artifact's provenance does not verify; 3 the harness
+itself raised. Only 0 and 1 are verdicts about image quality; 2 and 3 claim
+nothing.
 """
 from __future__ import annotations
 
@@ -347,7 +351,7 @@ def run_sample(client: Client, label: str, path: Path, jobs_root: Path,
                     "seamBoundaries": {
                         "x": seam_boundaries(reference.width // SCALE),
                         "y": seam_boundaries(reference.height // SCALE)},
-                    "controlBicubicPsnr": round(control_psnr, 2),
+                    "controlBicubicPsnr": control_psnr,
                     "wallSeconds": wall, "jobId": job_id}
     if finished.get("status") != "succeeded":
         record["error"] = f"job ended as {finished.get('status')}"
@@ -363,9 +367,8 @@ def run_sample(client: Client, label: str, path: Path, jobs_root: Path,
         record["output"] = {"width": output.width, "height": output.height}
         record["dimensionsExact"] = exact
         if exact:
-            record["psnr"] = round(psnr(reference, output), 2)
-            band = seam_psnr(reference, output)
-            record["seamPsnr"] = None if band is None else round(band, 2)
+            record["psnr"] = psnr(reference, output)
+            record["seamPsnr"] = seam_psnr(reference, output)
     record["modelVersion"] = (sidecar.get("model") or {}).get("version")
     record["tiles"] = payload.get("tiles")
     record["tile"] = payload.get("tile")
@@ -397,7 +400,7 @@ def summarize(values: list[float]) -> dict:
     middle values instead of taking the upper one."""
     if not values:
         return {"minimum": None, "mean": None, "median": None}
-    return {"minimum": min(values),
+    return {"minimum": round(min(values), 2),
             "mean": round(sum(values) / len(values), 2),
             "median": round(statistics.median(values), 2)}
 
@@ -441,17 +444,45 @@ def judge(records: list[dict], min_psnr: float,
     return bar, code, detail
 
 
-CONTROL_NOTE = {
-    "bicubic": "the control cleared the 24.0 dB bar on all eight recorded "
-               "pairs (minimum 32.23 dB, mean 34.15 dB), so this bar does not "
-               "discriminate a learned upscaler on a bicubic-degraded corpus; "
-               "quality value-add over the control is NOT PROVEN",
-    "realistic": "the §8 +0.5 dB condition is recorded here as a diagnostic "
-                 "only from 2026-11-18 and no longer gates; value-add over "
-                 "the control is not claimed",
+CONTROL_ROLE = {
+    "bicubic": "On the 2026-11-18 corpus the control cleared 24.0 dB on all "
+               "eight pairs (minimum 32.23 dB, mean 34.15 dB), so on a "
+               "bicubic-degraded corpus this bar does not discriminate a "
+               "learned upscaler; quality value-add over the control is NOT "
+               "PROVEN",
+    "realistic": "the §8 +0.5 dB condition is recorded as a diagnostic only "
+                 "from 2026-11-18 and no longer gates; value-add over the "
+                 "control is not claimed",
     "lr": "the intended adversarial degradation; the bar is the only gate "
           "and value-add over the control is not claimed",
 }
+
+
+def control_note(mode: str, control: dict,
+                 outcomes: dict[str, list[str]]) -> str:
+    """The control's role, then this run's own numbers.
+
+    The 2026-11-18 statistics belong to that corpus and are labelled as such;
+    they are never restated as if they described the run writing this record.
+    """
+    counts = {key: len(outcomes.get(key, []))
+              for key in ("win", "tie", "lose")}
+    measured = sum(counts.values())
+    if not measured or control.get("minimum") is None:
+        return (f"{CONTROL_ROLE[mode]}. This run measured no image, so it has "
+                f"no control numbers")
+    return (f"{CONTROL_ROLE[mode]}. This run: control minimum "
+            f"{control['minimum']:.2f} dB, mean {control['mean']:.2f} dB, "
+            f"median {control['median']:.2f} dB; outcomes win "
+            f"{counts['win']}, tie {counts['tie']}, lose {counts['lose']}")
+
+
+def _display(value) -> str:
+    """A compact rendering for the progress line; never raises on a row that
+    carries only an error."""
+    if not isinstance(value, (int, float)):
+        return "n/a"
+    return f"{value:.2f}" if math.isfinite(value) else str(value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -513,9 +544,21 @@ def parse_samples(parser: argparse.ArgumentParser,
     return samples
 
 
+def _json_safe(value):
+    """A record must be standard JSON: `Infinity` and `NaN` are not JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def write_record(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(_json_safe(record), indent=2,
+                               allow_nan=False), encoding="utf-8")
 
 
 def measure(args, samples: list[tuple[str, Path]]) -> int:
@@ -576,6 +619,14 @@ def measure(args, samples: list[tuple[str, Path]]) -> int:
                 except BadInput as exc:
                     row = {"label": label, "error": str(exc)}
                     print(f"{label}: {exc}", file=sys.stderr, flush=True)
+                except provenance.ProvenanceError as exc:
+                    # An artifact the worker published but whose sidecar does
+                    # not verify is an external failure, not a harness bug:
+                    # record the image as unmeasured and keep going.
+                    row = {"label": label,
+                           "error": f"artifact provenance failed: {exc}"}
+                    print(f"{label}: {row['error']}", file=sys.stderr,
+                          flush=True)
                 except OSError as exc:
                     row = {"label": label,
                            "error": f"worker call failed: {exc}"}
@@ -589,9 +640,10 @@ def measure(args, samples: list[tuple[str, Path]]) -> int:
                     row["path"] = str(path)
                 records.append(row)
                 print(f"{label}: {row.get('reference')} -> "
-                      f"{row.get('output')} psnr={row.get('psnr')} "
-                      f"seam={row.get('seamPsnr')} "
-                      f"control={row['controlBicubicPsnr']}", flush=True)
+                      f"{row.get('output')} psnr={_display(row.get('psnr'))} "
+                      f"seam={_display(row.get('seamPsnr'))} "
+                      f"control={_display(row.get('controlBicubicPsnr'))}",
+                      flush=True)
 
         bar, code, detail = judge(records, args.min_psnr, args.control_margin)
         measured = [row for row in records
@@ -647,7 +699,8 @@ def measure(args, samples: list[tuple[str, Path]]) -> int:
                 "marginDb": args.control_margin,
                 "marginRole": ("none recorded" if args.control_margin is None
                                else "reporting only; never an exit code"),
-                "note": CONTROL_NOTE[args.degradation],
+                "note": control_note(args.degradation, control_stats,
+                                     detail["outcomes"]),
             },
             "images": records,
             "aggregate": {
@@ -663,8 +716,8 @@ def measure(args, samples: list[tuple[str, Path]]) -> int:
             },
         }
         write_record(args.out, summary)
-        print(json.dumps({**summary["aggregate"], "a1Bar": bar,
-                          "exitCode": code}, indent=2))
+        print(json.dumps(_json_safe({**summary["aggregate"], "a1Bar": bar,
+                                     "exitCode": code}), indent=2))
         print(f"a1Bar: {bar} (exit {code}; record: {args.out})")
         return code
     finally:
