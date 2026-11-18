@@ -443,6 +443,11 @@ never GPU quality or speed.
 
 - Every worker-internal detail: checkpoint choice, preprocessing, tiling,
   dtype, job routing. The worker source is outside this repository.
+  *(Corrected 2026-11-18: the source is tracked under `worker/` and its 124 tests
+  run in CI, so these are verifiable as implemented behavior. What stays open is
+  the separate claim — that a real weight file reproduces that behavior — which
+  no amount of reading answers, and `sam2.1-hiera-tiny` has no size or hash to
+  check at all. See `AI_11_ARCHITECTURE.md` §17.)*
 - MediaPipe model-card terms, bundle size and Windows behavior.
 - BiSeNet and SegFormer-parser weight licences; U-2 Net weight terms;
   CelebAMask-HQ dataset terms.
