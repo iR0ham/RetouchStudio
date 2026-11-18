@@ -73,13 +73,13 @@
       "files": [
         {
           "path": "sam2.1_hiera_tiny.pt",
-          "sizeBytes": null,
-          "sha256": null,
+          "sizeBytes": 156008466,
+          "sha256": "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69",
           "sourceUrl": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
         }
       ],
-      "sizeBytes": null,
-      "sha256": null,
+      "sizeBytes": 156008466,
+      "sha256": "03ffd2aed7c93b638244c14096d91c1e51342c97879762dacbe33542e9e3ff83",
       "sourceUrl": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt",
       "codeLicense": "Apache-2.0",
       "weightsLicense": "Apache-2.0",
@@ -94,8 +94,8 @@
         "version": "1"
       },
       "deterministic": true,
-      "notes": "Point/box prompts; 21 ms warm at 1024\u00b2. The sam2 runtime package is not installed in the bundled worker.",
-      "unverifiableReason": "No recorded SHA-256 or size; DR-5 forbids downloading or installing it until both are recorded."
+      "notes": "Point/box prompts; 21 ms warm at 1024\u00b2. Checkpoint size and SHA-256 measured from the installed file on 2026-11-18.",
+      "unverifiableReason": "Downloading is refused: the sam2 runtime package is not installed in the bundled worker, so these weights would have nothing to run on. The checkpoint's size and SHA-256 are recorded, so an install that is already on disk can be verified and adopted into a version."
     },
     {
       "id": "swin2sr-x4",

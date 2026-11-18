@@ -83,9 +83,12 @@ Gaps that remain, stated plainly:
 
 ## Local AI runtime
 
-- Model and runtime archives are verified by SHA-256 before installation (the
-  SAM 2.1 tiny catalogue entry has no published hash; the UI labels its progress
-  as indeterminate rather than inventing one).
+- Model and runtime archives are verified by SHA-256 before installation (as
+  reviewed, the SAM 2.1 tiny catalogue entry had no published hash and the UI
+  labelled its progress as indeterminate rather than inventing one. Closed
+  2026-11-18: its checkpoint now carries a measured size and SHA-256, and that
+  entry's download is refused for a different reason — the `sam2` package is not
+  in the worker. See [W5_MODEL_MANAGER.md](W5_MODEL_MANAGER.md) §2).
 - The runtime installer is disabled in 1.0.0: no package is configured, so no
   runtime download can start.
 - Runtime and model trees are path-validated; a symlink or an unexpected path
@@ -117,5 +120,5 @@ Gaps that remain, stated plainly:
 | Corrupted zip that passes hash (impossible without key compromise) | bundle identity/version still checked |
 | Update installed on a read-only or secondary volume | refused with a specific message; staging moved beside the app |
 | Privacy stripping regressions | corpus checks; baseline locked |
-| AI model with missing checksum | only SAM 2.1 tiny; labelled indeterminate |
+| AI model with missing checksum | none since 2026-11-18; SAM 2.1 tiny's entry is complete, and its download is refused for the absent `sam2` package instead |
 | Unnotarized first launch | documented Gatekeeper steps |

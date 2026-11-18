@@ -1,8 +1,11 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
+from retouch_ai_worker import catalog as catalog_module
 from retouch_ai_worker.capabilities import (CAPABILITIES, PROVIDER, SUPPORTED,
                                             VOCABULARY, load_evidence, record,
                                             report)
@@ -102,9 +105,27 @@ class CapabilityReportTests(unittest.TestCase):
         self.assertEqual(spot["state"], "blocked")
         self.assertIn("size check", spot["reason"])
 
-    def test_unverifiable_catalog_entry_is_blocked_by_dr5(self):
+    def test_a_sam_install_is_now_the_adoption_case_not_the_dr5_one(self):
+        # SAM 2.1 tiny's file gained a recorded size and digest on 2026-11-18,
+        # so the reporter can see what these bytes are and says what would make
+        # them bindable. Before that it had nothing to say beyond DR-5.
         _sparse(self.root / "sam2.1-hiera-tiny" / "sam2.1_hiera_tiny.pt", 16)
         click = self.by_id()["mask.click"]
+        self.assertEqual(click["state"], "blocked")
+        self.assertIn("adopt", click["reason"])
+
+    def test_an_unrecorded_entry_is_still_blocked_by_dr5(self):
+        # No shipped entry is unrecorded any more, so DR-5's branch is shown
+        # with the digests taken back out of one entry. The wrong-length stub
+        # proves the rule fires before any byte is compared.
+        unrecorded = tuple(
+            replace(entry, files=tuple(replace(spec, sha256=None, bytes=None)
+                                        for spec in entry.files))
+            if entry.id == "sam2.1-hiera-tiny" else entry
+            for entry in catalog_module.CATALOG)
+        _sparse(self.root / "sam2.1-hiera-tiny" / "sam2.1_hiera_tiny.pt", 16)
+        with patch("retouch_ai_worker.catalog.CATALOG", unrecorded):
+            click = self.by_id()["mask.click"]
         self.assertEqual(click["state"], "blocked")
         self.assertIn("DR-5", click["reason"])
 
