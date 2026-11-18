@@ -18,7 +18,10 @@ import Foundation
 //
 // M starts the real in-repository worker from a fresh support tree and makes
 // the host verify its protocol-2 readiness and identity handshake. A stub
-// would not prove that the worker source and the host agree.
+// would not prove that the worker source and the host agree. Its
+// `capability.list` answer is parsed by the host's own validator too, so the
+// frozen vocabulary is proven against what the adapter really writes rather
+// than against a payload this file writes.
 //
 // N asks that same shipped worker to publish a provenance pair and hands it to
 // the host's adoption gate. §3.6 is an agreement in two languages, and a
@@ -858,6 +861,36 @@ func testRealHelperHandshake() {
         let pong = (try? client.call("ping")) as? [String: Any]
         check(pong?["pong"] as? Bool == true,
               "M: ping answers pong")
+
+        // What the adapter actually answers, run through the host's own
+        // validator. W5-3 proves the validator against payloads written here;
+        // only a live worker can prove the two sides still spell the frozen
+        // vocabulary the same way. Nothing is loaded to answer it, so this
+        // stays cheap and cannot disturb a job.
+        let capabilityReply = try? client.call("capability.list", timeout: 15)
+        if let payload = capabilityReply as? [String: Any],
+           let report = AICapabilityReport(payload: payload) {
+            check(true, "M: the live worker's capability report decodes in the host")
+            check(report.capabilities.count == AICapabilityReport.vocabularyIds.count
+                    && Set(report.capabilities.map(\.id))
+                        == Set(AICapabilityReport.vocabularyIds),
+                  "M: the adapter answers every frozen id exactly once")
+            check(["macos-arm64", "macos-x64"].contains(report.platform),
+                  "M: the report names a platform the host recognises", report.platform)
+            check(report.provider == "macos-python",
+                  "M: the report names the adapter", report.provider)
+            // The rule that keeps a report honest, checked against real output
+            // rather than a fixture: a claim of support carries the run that
+            // justifies it, and any other state says why.
+            check(report.capabilities.allSatisfy { capability in
+                capability.state == .supported
+                    ? (capability.evidence?.isEmpty == false)
+                    : (capability.reason?.isEmpty == false)
+            }, "M: every live record backs its state with evidence or a reason")
+        } else {
+            check(false, "M: the live worker's capability report decodes in the host",
+                  String(describing: capabilityReply).prefix(200).description)
+        }
 
         _ = try? client.call("shutdown", timeout: 5)
         check(child.wait(timeout: 10), "M: the helper exits after shutdown")

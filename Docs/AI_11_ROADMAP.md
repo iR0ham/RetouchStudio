@@ -336,7 +336,7 @@ second platform; M9 is optimization. V4 still decides which stage is active.
 
 | Risk / decision | Needed by | Owner input |
 |---|---|---|
-| Worker source outside the repository | M0 | Decide: move source in, or pin a fetchable dependency |
+| ~~Worker source outside the repository~~ — **closed 2026-11-18: moved in** (`worker/`, hashed locks; `AI_11_ARCHITECTURE.md` §17) | M0 | No input needed on the source; weights still need their own decision |
 | Windows landmark model and its weights licence | M3 | Choose a distributable model or accept no Windows face/mask |
 | Fine-matte weights licence (BiRefNet-class) | M6 | Authorize contacting the maintainer or pick a MIT/Apache alternative |
 | LaMa weights licence | M5 | Same: written grant or exclude |
