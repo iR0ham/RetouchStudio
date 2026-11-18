@@ -80,6 +80,31 @@ Paths depend on which helper is running.
 | `~/Library/Application Support/RetouchStudio/AI/helper-owner.json` | Which app instance owns the running helper |
 | `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
 
+Both rows above say "Helper working copies and job outputs (cleaned up over
+time)". Measured against the code on 2026-11-18, that describes two different
+places as if they were one, and overstates the cleanup:
+
+- **Job outputs** do live here — one folder per job id, written by the helper.
+- **Working copies** — the resized `photo.png`/`source.png` the host hands the
+  helper — live in `$TMPDIR/RetouchStudioAI/<job-uuid>/` instead
+  (`AIWorker.workingDirectory`), which is passed to the helper only as an
+  allowed read root. The host deletes a job's folder when the job returns, and
+  `AIWorker.ensureRunning()` sweeps copies older than 24 h from that root after
+  either launch path starts a helper (`AI_11_ARCHITECTURE.md` §16).
+- "cleaned up over time" is true of the *current session only* for these two
+  `jobs/` folders. The helper prunes them with an in-process ledger that keeps
+  the last `keep_jobs` (20) entries and forgets the rest at exit
+  (`worker/retouch_ai_worker/server.py:41, 213-219`), so folders from earlier
+  sessions stay until the owner sets a disk retention rule — recorded as an open
+  decision, not implemented, because a completed result the user never adopted
+  is user-visible work. What startup does clear is provenance debris: it walks
+  every job folder and removes a `*.provenance.json` whose artifact never
+  arrived plus any half-written sidecar temp, skipping anything written at or
+  after the sweep's own timestamp so a worker sharing the jobs root cannot take
+  a live publication's evidence (`server.py:53-55`, `provenance.py:216-265`).
+  Those are the only names it can match, and today only the upscale path writes
+  them.
+
 **Protocol-v2 runtime (when a package is configured):**
 
 | Path | Contents |
@@ -195,3 +220,10 @@ Overrides used by the bundler:
 `Tools/bundle-worker.sh` keeps a stamp of the Python version, the worker source hash and the wheel list in `Worker/.stamp`; an unchanged runtime is reused across builds. It refuses to finish if any Mach-O still refers to `/opt/homebrew`, if a symlink in the runtime is broken, or if a required signature step fails.
 
 > **The worker source is a separate checkout.** It is not part of this repository. Point `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` at it to bundle the helper. Without them the app still builds and runs; the AI tools simply report that the helper is not installed. Moving `worker/` and `requirements.lock` into this repository would make the build self-contained; it is listed as a follow-up.
+
+> **Superseded 2026-11-18.** `worker/` *is* in this repository: 31 tracked paths
+> including the hashed `worker/requirements.lock`, and
+> `Tools/bundle-worker.sh:16` already defaults `WORKER_ROOT` to `$REPO_ROOT/worker`
+> — `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` are now overrides for a custom
+> interpreter, not requirements. A plain clone bundles with no environment set, and
+> CI does exactly that. See `AI_11_ARCHITECTURE.md` §17.
