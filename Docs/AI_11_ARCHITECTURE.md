@@ -584,3 +584,36 @@ the worker. They are quoted rather than rewritten; this is the correction.
   observation at the time it was taken and is left as it was written;
   `Docs/W5_ROADMAP.md:103` already records the move, which is why this addendum
   points rather than re-narrates.
+
+## 18. Addendum (2026-11-18): §16's Windows clause is measured, and the answer is that there is nothing to sweep
+
+§16 closed with "the Windows host's equivalent remains unmeasured". It is
+measured now, read on `main`, and the answer is that that host has no
+working-copy cleanup because it has no working copies — not that a sweep exists
+and passes there.
+
+- Why there is nothing to sweep. The Windows adapter never runs a job.
+  `Windows/RetouchStudio.AI/WorkerServer.cs:171` routes `job.submit` to
+  `RefuseJob` (:188), which answers `Protocol.InvalidParams` for an envelope
+  that names no `capabilityId` (:194) and `Protocol.Unsupported`, with the
+  recorded state beside it, for one that does (:203). No submission reaches a
+  handler, so no copy of the source is written for a job and no per-job folder
+  is created for anything to revisit.
+- What the similarly named paths there actually belong to. `working.retouch`
+  (`Windows/RetouchStudio.Core/Project/Recovery.cs:186`) is the recovery
+  autosave slot and `TemporaryFiles.SiblingTempPath` is the atomic-publish
+  sibling; both serve the document, not AI. Searching the `Windows/` tree for
+  the job handoff the macOS sweep depends on (`--allow-root`, `--jobs`, a job
+  workdir) returns only `Windows/RetouchStudio.AI/WorkerRegistry.cs:39`, which
+  creates the registry folder, and the only `Path.GetTempPath()` callers are in
+  the test projects.
+- What this does not claim. It is not a port of `cleanStaleWorkingCopies()` and
+  no Windows test exercises any cleanup. The refusals stay asserted by that
+  host's own suite (`Windows/RetouchStudio.AI.Tests/Program.cs:172-184`, which
+  pins -32020 for an unsupported capability and -32602 for an unknown one), so
+  the premise is checked where it lives: a later slice that lets the Windows
+  adapter actually run a job reopens §16's question instead of answering it
+  here.
+- Unchanged. The helper's job *output* folders and the cross-restart retention
+  bound §16 recorded as an owner decision stay open; this closes only the
+  sweep clause.
