@@ -324,3 +324,139 @@ changed.
   never sees owner pixels.
 - 2× upscaling and any Windows ONNX artifact remain out of A1 scope and are
   untouched; nothing was downloaded, installed or converted.
+
+---
+
+## 8. Phase 2 (2026-11-18): replacement adversarial gate measured — FAIL; production adoption withheld
+
+Status of this section: every number below was measured on this Mac on
+2026-11-18. The replacement gate was fixed by the project manager; this
+section records that decision, the measurement and the consequences. Nothing
+here rewrites §7; §7.5 stands as measured, and its 24.0 dB bar stands as
+accepted.
+
+### 8.1 The project manager's decisions (recorded, dated 2026-11-18)
+
+- **24.0 dB per-image minimum: ACCEPTED as PASS** for the §7.5 corpus
+  (minimum 32.42 dB, mean 34.13 dB, all 8 images clear the bar by at least
+  8.4 dB).
+- **Bicubic-control condition: WITHDRAWN as a gate, kept as a non-gating
+  diagnostic.** On a corpus degraded by a bicubic downscale,
+  `bicubic x4(bicubic /4(R))` is close to the inverse of the degradation, so
+  the control is near-optimal by construction and does not discriminate a
+  model. The project manager states the condition was their addition, not the
+  owner's bar.
+- **Replacement adversarial gate (fixed by the project manager,
+  2026-11-18):** three fixtures — two at 2268×4032 and one at 3213×5712
+  cropped to 3212×5712 — with the same sRGB-first, crop-to-multiple-of-4
+  discipline; degrade at the reference resolution with JPEG quality 70
+  (4:2:0), Gaussian noise sigma = 5 code values out of 255 and a Gaussian
+  blur of radius 1.2, then downscale by 4 with bicubic; measure
+  `PSNR(model output, true reference R)` on 8-bit gamma-encoded sRGB code
+  values. Gate: **every image >= 24.0 dB AND the model beats the bicubic-x4
+  control by at least +0.5 dB on that same image.** Deterministic seeds; the
+  bar is not to be moved if it fails.
+
+### 8.2 Harness change
+
+`worker/tools/upscale_corpus.py` now accepts `--degradation realistic` (the
+§8.1 protocol: JPEG, then noise, then blur at the reference resolution, then
+the bicubic ×4 downscale), a base `--seed` (default 20261118; one
+deterministic seed is derived per sample position) and `--control-margin`
+(default 0.5 for `realistic`; the original strict "must beat" for
+`bicubic`). R1, R2 and R3 are the same fixtures as C1, C2 and C7 in §7.5.
+The tool stays outside `worker/tests`, so the discovered worker suite is
+still 140 tests (`Ran 140 tests ... OK` after the change, before the commit).
+It still records metadata and numbers only; the degraded input is written to
+a temporary directory and deleted after each sample.
+
+### 8.3 Measured replacement corpus (2026-11-18T19:47:41Z–19:53:23Z)
+
+| image | reference px | tiles | job s* | PSNR dB | seam band dB | bicubic control dB | delta vs control | margin gate |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| R1 | 2268×4032 | 15 | 64.43 | 33.44 | 32.06 | 33.31 | +0.13 | **fail** |
+| R2 | 2268×4032 | 15 | 96.73 | 34.67 | 33.77 | 34.00 | +0.67 | pass |
+| R3 | 3212×5712 | 24 | 169.63 | 34.85 | 33.19 | 32.38 | +2.47 | pass |
+
+`*` Job seconds are machine-load dependent: the run overlapped a parallel
+Swift build (load average 5.6–7.9). PSNR is not timing-sensitive. Job ids:
+R1 `96846e6a5a00`, R2 `7a49b11b00e7`, R3 `be7bdcf403d2`.
+
+Aggregate: minimum **33.44 dB**, mean 34.32 dB, median 34.67 dB. Every output
+was exactly the reference size; every sidecar named model version 1.0.0;
+every tile ran on `mps` (15 tiles for the 2268×4032 frames, 24 for the
+3212×5712 frame); every succeeded job folder held only its published pair
+plus the claim file.
+
+### 8.4 Verdict against the replacement gate
+
+- **Per-image >= 24.0 dB — PASS.** The lowest image is 33.44 dB; all three
+  are more than 9 dB above the bar.
+- **Beat the bicubic-x4 control by >= +0.5 dB — FAIL on R1** (+0.13 dB).
+  R2 clears it (+0.67 dB) and R3 clears it (+2.47 dB). The gate is applied
+  per image, so one miss fails it: the harness verdict is `fail` (exit 1).
+- **Reproducibility:** a confirmation rerun of R1 with the same seed, as a
+  separate job (`f99b3beb577e`, 63.39 s), produced identical numbers —
+  33.44 dB for the model, 33.31 dB for the control.
+- **Consequence, as the project manager fixed it:** on this gate the quality
+  claim is unproven. **Production adoption (step 7) was therefore not
+  performed**: no adoption through Model Manager, no capability flip, no
+  product-path export, no UI export-cancel and no adoption network check
+  were attempted. The production store is exactly as it was — flat
+  `swin2sr-x4/{config.json, preprocessor_config.json, pytorch_model.bin}`
+  (772 / 152 / 48,460,141 bytes) hashing to `1e986fb6…`, `cbc3626…` and
+  `4a5f52a2…`, with no `1.0.0` directory, no `active.json` and no `.locks`;
+  `upscale.4x` remains `blocked` for it.
+
+### 8.5 Why the margin is small on one frame (diagnostic, not a gate)
+
+Measured on the same three frames and seeds, without inference:
+
+| image | RMS(D_realistic − D_bicubic), code values | control PSNR, bicubic → realistic |
+|---|---:|---|
+| R1 | 1.973 | 34.58 → 33.31 (−1.27 dB) |
+| R2 | 1.829 | 35.18 → 34.00 (−1.19 dB) |
+| R3 | 1.951 | 33.36 → 32.38 (−0.98 dB) |
+
+The injected noise and blur are applied at the reference resolution and are
+then averaged by the ×4 downscale: the degraded input differs from the plain
+bicubic one by RMS 1.83–1.97 code values (about 0.7 % of full scale). The
+control loses about 1 dB but stays close to the inverse of the degradation,
+so it remains a strong competitor; R3, where the control is weakest
+(32.38 dB), is the frame where the model gains most (+2.47 dB). The plain
+bicubic controls in this table reproduce §7.5 exactly (34.58 / 35.18 /
+33.36), which is a cross-check that the sRGB, crop and control path did not
+change. This is recorded as a property of the fixed protocol, not as a
+proposal to change the bar: whether the degradation belongs after the
+downscale, whether the control condition should be dropped, or whether a
+different corpus should decide is an owner/project-manager decision and is
+**not** made here.
+
+### 8.6 Evidence tier and what this round did not do
+
+- Evidence tier: **real inference on this hardware through the worker socket**
+  on the approved `swin2sr-x4 1.0.0`. It is not production-path evidence and
+  not production ready.
+- **NOT VERIFIED:** production adoption through Model Manager; the
+  post-adoption `capability.list` for the production store; the
+  product-path `ExportService` export (including whether
+  `adoptRunningHelper`/`waitForHelper` accept a hand-started helper through
+  `RETOUCH_AI_SOCKET`); a 4× export through the export sheet at exactly 4×
+  with provenance 1.0.0; a UI export-cancel; shipped-build evidence — the
+  bundle used for these runs carries no `Contents/Resources/Worker` and
+  `AIRuntime.package == nil`, so any export evidence would have been
+  developer-machine evidence.
+- **Not run by design:** any download, install, new model, conversion, 2×
+  upscaling, Windows ONNX path, or production adoption. No fixture or derived
+  pixel is in the repository; derived job folders under `/tmp/rs-a1/jobs`
+  were deleted after measurement, and the export source prepared for the
+  unexecuted product-path step was a temporary `/tmp` file, deleted with it.
+- **Production side effects this round: none.** No app was launched against
+  the production store, no production job was submitted, and the production
+  `AI/jobs` root stayed empty. The restore point
+  `/tmp/rs-a1-restore/swin2sr-x4-flat` is intact and still hashes to
+  `1e986fb6…`, `cbc3626…`, `4a5f52a2…`; because the store never changed, no
+  rollback was needed.
+- `upscale.4x` is **not usable by a real user of the installed app today**:
+  the production store is still the un-versioned legacy layout. Nothing in
+  this round adopted it.
