@@ -195,6 +195,15 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(kept_sidecar.is_file())
         self.assertEqual(unrelated.read_text(encoding="utf-8"), "leave me")
 
+    def test_reconcile_leaves_a_workdir_lock_alone(self):
+        # `.lock` is the dotfile a running job claims its workdir with, and the
+        # only thing the app's launch sweep reads. A hidden file is not by itself
+        # a provenance temp: taking the lock would strip a live job's claim.
+        lock = self.tmp / ".lock"
+        lock.write_text("", encoding="utf-8")
+        self.assertEqual(provenance.reconcile(self.tmp), [])
+        self.assertTrue(lock.is_file())
+
     def test_startup_sweep_removes_an_orphan_left_by_a_crashed_job(self):
         # The worker sweeps its job folders when it starts. It bounds the sweep
         # by time rather than by knowledge, because a second worker can share

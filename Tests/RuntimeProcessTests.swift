@@ -18,6 +18,9 @@ import Foundation
 //    the runtime installer replaces, while models stay in AI/models;
 // J. the working-copy sweep takes folders older than its bound and leaves a
 //    copy that is still inside it, so a live job is never cleaned under.
+// K. the jobs-root sweep clears what earlier helpers left, while walking past
+//    a folder a live job in another process holds, a name that is not a job id
+//    and a date it cannot read.
 //
 // Every child below is a genuine separate process (this same test binary started
 // with a `--child-` argument), and every runtime is a temporary fixture.
@@ -194,6 +197,23 @@ func runChild(_ arguments: [String]) -> Int32 {
     }
 
     switch mode {
+    case "--child-joblock":
+        // A helper's claim on one job workdir, held by a process the sweep has no
+        // relationship with: the same exclusive `flock` `JobManager._run` takes on
+        // `<workdir>/.lock` for the length of a render. `support` is the workdir.
+        let path = support.appendingPathComponent(AIWorker.jobLockName).path
+        let descriptor = Darwin.open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return 72 }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            return 73
+        }
+        try? Data("\(getpid())".utf8).write(
+            to: support.appendingPathComponent("child-joblock-held"))
+        Thread.sleep(forTimeInterval: seconds(2, 6))
+        close(descriptor)
+        return 0
+
     case "--child-lease":
         do {
             let lease = try RuntimeUsageLease.acquireShared(support: support)
@@ -963,6 +983,113 @@ func testStaleWorkingCopiesAreSweptAndLiveOnesAreNot() {
           "J: the sweep takes entries, never the working root itself")
 }
 
+// MARK: - K. The jobs-root sweep
+
+func testStaleJobFoldersAreSweptAndLiveOnesAreNot() {
+    let manager = FileManager.default
+    let root = rootDirectory.appendingPathComponent("jobs", isDirectory: true)
+    try? manager.removeItem(at: root)
+    try! manager.createDirectory(at: root, withIntermediateDirectories: true)
+
+    func aged(_ folder: URL, _ age: TimeInterval) {
+        try! manager.setAttributes([.modificationDate: Date(timeIntervalSinceNow: age)],
+                                   ofItemAtPath: folder.path)
+    }
+
+    // Workdirs are named by the helper's twelve-hex-digit job id, which is how
+    // the sweep tells its own residue from anything else sharing the root.
+    func planted(_ name: String, age: TimeInterval, file: String = "out.png") -> URL {
+        let folder = root.appendingPathComponent(name, isDirectory: true)
+        try! manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        try! Data([0x89, 0x50]).write(to: folder.appendingPathComponent(file))
+        if age != 0 { aged(folder, age) }
+        return folder
+    }
+
+    let stale = planted("a1b2c3d4e5f6", age: -90_000)
+    let justInside = planted("b2c3d4e5f6a1", age: -86_000)
+    let young = planted("c3d4e5f6a1b2", age: 0)
+    let running = planted("d4e5f6a1b2c3", age: -90_000)
+    let notAJob = planted("notes-for-me", age: -90_000)
+    // The spelling is the point, so the sample cannot share a name with a real
+    // id on a case-insensitive volume: this one is never planted in lowercase.
+    let upperCase = planted("A9B8C7D6E5F4", age: -90_000)
+    // A dangling entry sharing a job id's shape: its date cannot be read, so the
+    // sweep keeps it. A workdir this machine cannot date is not evidence that
+    // nobody is using it.
+    let undateable = root.appendingPathComponent("e5f6a1b2c3d4", isDirectory: true)
+    try! manager.createSymbolicLink(atPath: undateable.path,
+                                    withDestinationPath: root.path + "/nowhere")
+    var when = [timeval(tv_sec: Int(time(nil)) - 90_000, tv_usec: 0),
+                timeval(tv_sec: Int(time(nil)) - 90_000, tv_usec: 0)]
+    lutimes(undateable.path, &when)
+
+    // The claim is held by a second process, because that is the arrangement that
+    // matters: the helper renders, the app sweeps, and the two have no shared
+    // state beyond the flock on `<workdir>/.lock`.
+    let holder = try! spawnSelf(["--child-joblock", running.path, "20"])
+    let marker = running.appendingPathComponent("child-joblock-held")
+    var waited = 0.0
+    while !manager.fileExists(atPath: marker.path) && holder.isRunning && waited < 5 {
+        Thread.sleep(forTimeInterval: 0.05)
+        waited += 0.05
+    }
+    check(manager.fileExists(atPath: marker.path) && holder.isRunning,
+          "K: another process holds this workdir's claim")
+    // The claim's own files are the newest bytes in the folder, so it is aged
+    // again: the keep below has to be about the lock, not the calendar.
+    aged(running, -90_000)
+
+    // A root that was never created is not a decision, and not an error.
+    let absent = AIWorker.cleanStaleJobFolders(
+        in: root.appendingPathComponent("absent", isDirectory: true))
+    check(absent.isEmpty, "K: sweeping a root that was never created decides nothing")
+
+    let decisions = AIWorker.cleanStaleJobFolders(in: root)
+    let left = (try? manager.contentsOfDirectory(atPath: root.path)) ?? []
+    func action(_ folder: URL) -> String {
+        decisions.first { $0.folder == folder.lastPathComponent }?.action ?? "missing"
+    }
+    func reason(_ folder: URL) -> String {
+        decisions.first { $0.folder == folder.lastPathComponent }?.reason ?? ""
+    }
+
+    check(!left.contains(stale.lastPathComponent),
+          "K: residue older than the bound is swept with its bytes")
+    check(action(stale) == "removed", "K: the sweep reports the folder it took")
+    check(left.contains(justInside.lastPathComponent),
+          "K: a job just inside the bound survives")
+    check(left.contains(young.lastPathComponent),
+          "K: a job this session started keeps its bytes")
+    check(reason(justInside).contains("grace"),
+          "K: a surviving job is kept for its age, not its lock")
+    check(left.contains(running.lastPathComponent),
+          "K: a folder a running job locks is never swept, however old it is")
+    check(reason(running).contains("running job"),
+          "K: the lock is the stated reason, not the calendar")
+    check(left.contains(notAJob.lastPathComponent),
+          "K: a directory that is not a job workdir is left alone")
+    check(left.contains(upperCase.lastPathComponent),
+          "K: a name outside the helper's job id spelling is not a workdir")
+    check(left.contains(undateable.lastPathComponent),
+          "K: a folder whose date cannot be read is kept")
+    check(manager.fileExists(atPath: root.path),
+          "K: the sweep takes entries, never the jobs root itself")
+
+    // Releasing the claim is what ends a job, and the next pass sees ordinary
+    // residue. A kill is the honest version of that release: the kernel drops a
+    // flock the holder never closed, which is why a crashed helper needs no
+    // repair and why a guard can never outlive the job it protected.
+    holder.terminate()
+    check(waitUntilStopped(holder, timeout: 5), "K: the process holding the claim is gone")
+    let after = AIWorker.cleanStaleJobFolders(in: root)
+    check(after.contains { $0.folder == running.lastPathComponent && $0.action == "removed" },
+          "K: once the job lets go, its folder is the same residue as any other")
+    let still = (try? manager.contentsOfDirectory(atPath: root.path)) ?? []
+    check(still.contains(justInside.lastPathComponent) && still.contains(young.lastPathComponent),
+          "K: the second pass keeps what the first pass kept")
+}
+
 // MARK: - Run
 
 testCLILaunchCannotRaceSwap()
@@ -975,6 +1102,7 @@ testModelCLILeaseIsChildOwned()
 testCancellationKeepsLeaseUntilExit()
 testProductionDefaultUsesInstallerSupport()
 testStaleWorkingCopiesAreSweptAndLiveOnesAreNot()
+testStaleJobFoldersAreSweptAndLiveOnesAreNot()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 

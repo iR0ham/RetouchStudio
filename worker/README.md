@@ -181,6 +181,15 @@ no patch files.
     instant before that bound can still be cleared, and the commit that was
     about to verify it then withdraws its artifact — a lost job, never an
     unprovenanced one.
+13. **A running job owns its workdir.** Before a job's context exists it takes an
+    exclusive `flock` on `<workdir>/.lock` and closes it only after
+    `job.finished` has been emitted, because the host reads the artifacts the
+    moment it sees that event. The claim is what lets the app clear a jobs root
+    it did not fill: `AIWorker.cleanStaleJobFolders` removes a folder only when
+    it is 24 h old *and* nobody can be writing into it, so a render that overruns
+    the age bound cannot be swept under itself. The kernel drops the lock when
+    the holder dies, which is why no cleanup has to reason about a crashed
+    worker, and why a crash cannot leave a guard outliving the job it protected.
 
 ## Environment
 
@@ -198,7 +207,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-133 tests, no GPU and no model download: framing, contract versioning, request
+135 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing

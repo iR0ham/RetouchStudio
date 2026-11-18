@@ -617,3 +617,67 @@ and passes there.
 - Unchanged. The helper's job *output* folders and the cross-restart retention
   bound §16 recorded as an owner decision stay open; this closes only the
   sweep clause.
+
+
+## 19. Addendum (2026-11-18): the jobs-root retention bound is a sweep, and the premise that blocked it was false
+
+§16 closed the working-copy half of the cleanup question and left this sentence
+behind, quoted rather than rewritten:
+
+> A disk-level retention bound is an owner decision, not a sweep: a completed but
+> not yet adopted result is user-visible work, and deleting it at launch would
+> destroy the edit the user asked for.
+
+§18 repeated it ("the cross-restart retention bound §16 recorded as an owner
+decision stay open"). The reasoning was wrong about this codebase, and the
+consequence was measurable: a read-only inspection of
+`~/Library/Application Support/RetouchStudio/AI/jobs` on 2026-11-18 found 35
+job-shaped folders holding 71.0 MB of derived pixels, the newest of them dated
+2026-11-08. The protocol-v2 jobs root and the legacy `Retouch Studio` root do not
+exist on this machine.
+
+- Why the premise does not hold. Nothing any document persists points into
+  `AI/jobs`. Adoption is a synchronous *copy*: `AIEditStore.adopt` runs inside
+  the adopting action (`QuickEdit.swift:189` for a masked patch, `:234` for a
+  whole-frame edit) and the layer's bytes then live under `AI/edits` with their
+  own sidecar. `EditorModel.aiJobID` (`EditorModel.swift:199`) exists only so the
+  status bar can cancel the job in flight; it is cleared when the job returns and
+  is never serialized. The export-time upscale artifact is verified and decoded
+  inside the export that produced it. So "the edit the user asked for" is not
+  sitting in a job folder waiting to be destroyed at launch — by the time a
+  folder is 24 h old, whatever the owner kept has already been copied out of it.
+- What runs now. The worker claims each workdir with an exclusive `flock` on
+  `<workdir>/.lock` for the whole render and releases it after `job.finished` is
+  out (`worker/retouch_ai_worker/server.py`, `JOB_LOCK_NAME`,
+  `acquire_folder_lock`, `_run`). The host sweeps both jobs roots at launch on a
+  utility queue, helper or no helper (`AIWorker.cleanupJobsAtStartup`, called
+  from `AppDelegate.attach` next to `ModelManager.cleanupAtStartup`). A folder
+  goes only when its name is the helper's twelve-lowercase-hex job id, its date
+  is at least the 24 h grace old and this process can take its lock; an
+  unreadable date, an unfamiliar name, a live claim and a failed removal are each
+  kept and logged with the reason they were kept. The rule is the model store's
+  cleanup rule, deliberately stricter than the working-copy sweep: a copy it
+  cannot date is treated as young here, because these bytes exist in one place
+  only.
+- Proof. `Tests/RuntimeProcessTests.swift` section K drives the real sweep over
+  real files: stale residue goes with its bytes, a folder just inside the bound
+  and one started now survive, a folder whose lock a separate open file
+  description holds is walked past however old it is and is taken once that claim
+  closes, `notes-for-me` and `A1B2C3D4E5F6` are not job ids, a dangling entry
+  sharing a job id's shape is kept, and the jobs root itself is never a
+  candidate. `worker/tests/test_server.py` proves the other side from inside the
+  worker: a running job's `.lock` is refused both to a second descriptor in the
+  same process and to a genuine child process that never spoke to this worker —
+  the app is that stranger — and the finished job's folder is ordinary residue
+  again. `worker/tests/test_provenance.py` pins that the startup provenance sweep
+  leaves the lock alone, and `tools/upscale_acceptance.py`'s two cleanup gates
+  now discount exactly that one name and no other, so a stray tile or temp still
+  fails the acceptance run.
+- What is still not claimed. `_trim`'s in-session window (`keep_jobs` = 20) is
+  unchanged, so a running helper still trims by ledger and not by age; the sweep
+  is launch-only, so a session that stays open for days accumulates as before;
+  the export-time provenance record dies with its folder, which is honest only
+  because the export verified it during the same pass; and the owner's 35 folders
+  are not deleted by anything in this addendum's evidence — the sweep has never
+  been run against his store, because his app is open. It clears them on a normal
+  launch, which is the point of the change.

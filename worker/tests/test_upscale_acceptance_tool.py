@@ -35,7 +35,8 @@ from PIL import Image
 from retouch_ai_worker.catalog import Catalog
 from retouch_ai_worker.capabilities import PROVIDER, current_platform
 from retouch_ai_worker.engine import WorkerError
-from retouch_ai_worker.server import JobManager, WorkerServer
+from retouch_ai_worker.server import (JOB_LOCK_NAME, JobManager,
+                                      WorkerServer)
 from retouch_ai_worker import provenance
 
 HARNESS = Path(__file__).resolve().parents[1] / "tools" / "upscale_acceptance.py"
@@ -169,14 +170,18 @@ class HarnessToolTests(unittest.TestCase):
         cancelled = record["measurements"]["cancel"]
         self.assertEqual(cancelled["finishedStatus"], "cancelled")
         self.assertEqual(cancelled["errorCode"], -32014)
-        # The success job's folder holds the published pair; the cancelled
-        # job's folder holds nothing at all.
+        # The success job's folder holds the published pair; the cancelled job's
+        # folder holds no render of its own. Each also holds the `.lock` its job
+        # claimed the workdir with, which is the folder's business and outlives
+        # the job that wrote it; the harness's cleanup gates discount exactly that
+        # name and no other.
         success = Path(record["measurements"]["jobFolder"])
         self.assertEqual(sorted(entry.name for entry in success.iterdir()),
-                         ["upscaled.png", "upscaled.png.provenance.json"])
+                         sorted([JOB_LOCK_NAME, "upscaled.png",
+                                 "upscaled.png.provenance.json"]))
         cancel_dir = self.jobs_root / cancelled["jobId"]
         self.assertEqual(sorted(entry.name for entry in cancel_dir.iterdir()),
-                         [])
+                         [JOB_LOCK_NAME])
 
 
 if __name__ == "__main__":

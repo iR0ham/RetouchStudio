@@ -111,6 +111,50 @@ places as if they were one, and overstates the cleanup:
   per-job clutter the retention decision above already covers, not new evidence
   with nothing to clear it.
 
+**Addendum, 2026-11-18: the jobs-root retention rule is implemented.** The
+paragraph above is kept as the measurement it was written from; what follows is
+what runs now, and it is the answer to the decision that paragraph left open.
+
+- **The job says what it owns.** `JobManager._run` takes an exclusive `flock` on
+  `<workdir>/.lock` before it builds the job's context and closes it after
+  `job.finished` has been emitted (`server.py`, `JOB_LOCK_NAME`,
+  `acquire_folder_lock`). The kernel drops it if the helper dies, so a crash
+  cannot leave a guard outliving the render it protected. The claim is what lets
+  a job run longer than the age bound below without being cleaned under itself —
+  the case an age-only sweep gets wrong.
+- **The host clears what an earlier helper left.** `AppDelegate.attach` calls
+  `AIWorker.cleanupJobsAtStartup()`, which sweeps *both* jobs roots —
+  `AI/jobs/` and `AI/runtimes/protocol-v2/jobs/` — on a utility queue at launch,
+  whether or not a helper ever starts (`AIWorker.cleanStaleJobFolders`). A folder
+  is removed only when all three hold: its name is the helper's job-id spelling
+  (twelve lowercase hex characters), its date is at least 24 h old, and this
+  process can take its `.lock`. Anything else is kept and logged with the reason:
+  an unreadable date, a name that is not a job id, a folder a live job holds, a
+  removal that failed. The jobs root itself is never a candidate.
+- **Why an unreadable date keeps a folder here.** The working-copy sweep in
+  `AIWorker.ensureRunning()` treats a copy it cannot date as ancient, which is
+  safe because those copies are duplicated in the project. These folders are not
+  duplicated anywhere, so this sweep takes the other branch: no date, no
+  deletion.
+- **Nothing persisted points into these folders, so nothing breaks when they
+  go.** An adopted Quick Edit or removal is a copy under `AI/edits` with its own
+  sidecar, taken synchronously during adoption (`QuickEdit.swift`), and the
+  export-time upscale artifact is verified and decoded inside the export that
+  produced it. `EditorModel.aiJobID` is cancel-only and is never serialized; the
+  recovery records store no path into `AI/jobs/`. That is the fact that makes a
+  launch sweep safe, and it is why the "user-visible work" worry in the
+  paragraph above does not apply to a folder that is already 24 h old at launch:
+  the document that referenced it is closed, and a reopened document loads from
+  `AI/edits` or the exported file.
+- **What is still not claimed.** `_trim`'s in-session window (`keep_jobs` = 20)
+  is unchanged, so the current session still trims by ledger rather than by
+  age; the sweep runs at launch only, not on a timer, so a session that stays
+  open for days accumulates as before; and the export-time provenance record
+  dies with its folder 24 h after it was written, which is fine for a host that
+  verified it during the export and has no reason to read it again — a future
+  feature that wants long-lived upscale provenance must publish it somewhere
+  durable first.
+
 **Protocol-v2 runtime (when a package is configured):**
 
 | Path | Contents |
