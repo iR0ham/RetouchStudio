@@ -8,6 +8,13 @@ setvbuf(stdout, nil, _IOLBF, 0)
 // held by real child processes (this same binary re-executed); crashes are real
 // `_exit`/SIGKILL events, never a mocked flag.
 
+/// Every fixture catalog lists `macos-arm64`, so parent and child must resolve
+/// the same platform even when the suite is compiled for the other arch: a child
+/// that inferred it from `#if arch` would refuse its own install before
+/// downloading. Declared first because the child branch below runs before any
+/// later top-level statement is initialized.
+let fixturePlatform = "macos-arm64"
+
 var failures: [String] = []
 
 func check(_ condition: Bool, _ label: String, _ detail: String = "") {
@@ -69,7 +76,8 @@ if arguments.count > 1 {
             let catalog = try loadFixtureCatalog(path: arguments[2], base: arguments[5])
             guard let entry = catalog.entry(id: arguments[4]) else { childExit(66) }
             let store = ModelStore(root: URL(fileURLWithPath: arguments[3]),
-                                   catalog: catalog, allowLocalHTTP: true)
+                                   catalog: catalog, platform: fixturePlatform,
+                                   allowLocalHTTP: true)
             switch runBlocking({ _ = try await store.install(entry) }) {
             case .success: print("installed"); childExit(0)
             case .failure(let error):
@@ -91,7 +99,8 @@ if arguments.count > 1 {
             let catalog = try loadFixtureCatalog(path: arguments[2], base: arguments[6])
             guard let entry = catalog.entry(id: arguments[4]) else { childExit(66) }
             let store = ModelStore(root: URL(fileURLWithPath: arguments[3]),
-                                   catalog: catalog, allowLocalHTTP: true)
+                                   catalog: catalog, platform: fixturePlatform,
+                                   allowLocalHTTP: true)
             try store.delete(entry, version: arguments[5])
             print("deleted")
             childExit(0)
@@ -156,7 +165,7 @@ func makeStore(_ server: FixtureServer, _ name: String = "fixture-good",
     let catalog = try! loadFixtureCatalog(path: fixturePath(fixture), base: server.base)
     let root = scratchRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let store = ModelStore(root: root, catalog: catalog, platform: "macos-arm64",
+    let store = ModelStore(root: root, catalog: catalog, platform: fixturePlatform,
                            allowLocalHTTP: allowLocalHTTP)
     return StorePaths(root: root, store: store, catalog: catalog)
 }
@@ -1223,7 +1232,7 @@ if let python = workerPython() {
         try! FileManager.default.createDirectory(at: flat, withIntermediateDirectories: true)
         writeSizedFixture(at: flat.appendingPathComponent("migan_pipeline_v2.onnx"),
                           bytes: 28_079_181)
-        return (ModelStore(root: root, catalog: legacyCatalog, platform: "macos-arm64"), root)
+        return (ModelStore(root: root, catalog: legacyCatalog, platform: fixturePlatform), root)
     }
 
     func launchWorker(_ root: URL, sleepAfterLoad: Bool) -> (Process, Pipe) {
