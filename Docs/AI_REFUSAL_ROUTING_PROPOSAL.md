@@ -76,6 +76,20 @@ that today share one sentence:
 One sentence now covers all three, and it is accurate for the first two and
 wrong for the third.
 
+Corrected 2026-11-18, with the table above kept as the measurement it was: the
+`mask.click` parenthetical no longer describes the shipped catalog. PR #83
+recorded SAM 2.1 tiny's size (156,008,466 bytes) and SHA-256 (`7402e0d8…be69`)
+from the installed file, so DR-5's "no recorded size or SHA-256" branch cannot
+be what blocks that capability any more. Its row does not change, but the reason
+under it does: `sam2` is in neither `worker/requirements.lock` (68 pinned names,
+counted the same day) nor the `models` extra, so a lock-reproducible worker has
+nothing that can read those weights, and the only `sam2` on this machine sits in
+the stale 2026-11-08 `build/Worker.cache`. Saying so in the report — a
+capability whose loading package this interpreter cannot import is `blocked`, not
+offered — is a separate slice and is not part of this document; until that
+lands, `mask.click` answers with whatever its install layout says, which is why
+it is listed by reason rather than by code.
+
 ## 4. Options
 
 **A. Do nothing.** The status quo is documented, so this stays honest. Cost:
