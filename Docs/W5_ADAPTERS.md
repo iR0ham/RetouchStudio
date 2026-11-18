@@ -43,7 +43,19 @@ table of its own.
   exists, `blocked` when a file's size does not match the catalog, and
   `blocked` when its catalog entry lacks a size or SHA-256 (DR-5). An installed
   model is only `supported` when the evidence ledger has an entry for that
-  exact capability, platform, provider, model id and version.
+  exact capability, platform, provider, model id and version. Asked before all
+  of that, a capability whose loading package this interpreter cannot import is
+  `blocked` with that package named: `mask.click` declares `sam2`, which is in
+  neither `requirements.lock` nor the `models` extra, so the weights being
+  installed is not enough to make segmentation runnable. `find_spec` answers
+  without executing the package, so the query stays cheap and loads no device
+  context. The host already made the same distinction its own way: the runtime
+  validator probes `sam2` as an optional backend
+  (`Sources/RetouchStudio/Core/AIRuntimeValidation.swift:68`) and a recorded
+  check asserts a missing optional backend does not invalidate the runtime
+  (`Tests/ModelTests.swift:6025`). The worker's `blocked` record and the host's
+  `segmentation: false` are the same fact at two boundaries, which is why no
+  host change was needed here.
 - **Evidence ledger** `worker/retouch_ai_worker/capability-evidence.json`
   contains one recorded run: `upscale.4x` on `macos-arm64` with
   `swin2sr-x4 1.0.0`, citing `Docs/PHASE5_ACCEPTANCE.md` §4 and
@@ -63,7 +75,11 @@ table of its own.
   checked existence, so the kind path could load it. A refused model releases
   its lease. Qualification states — no recorded run, legacy flat layout, a
   DR-5 entry without size or SHA-256 — stay runnable on purpose: they describe
-  what may be *claimed*, and running them is how evidence gets recorded.
+  what may be *claimed*, and running them is how evidence gets recorded. The
+  missing package is not one of those states: `_ensure_sam` refuses with
+  `-32020` and `{capabilityId, package}` before `Catalog.require` takes a lease,
+  which is also why a `mask.click` evidence run cannot be recorded from a
+  lock-reproducible runtime — nothing there can import `sam2`.
 - **Cancel latency.** The worker records when a cancel was first requested and
   reports `cancelLatencyMs` in the job result. It does not claim instant
   cancellation; the value is what actually happened.
@@ -96,18 +112,20 @@ table of its own.
 
 ## Tests
 
-- Worker: 137 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+- Worker: 140 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
   of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15, the
   gate's admitting half adds 1, the independent review's fixes add 4, the
   submission-boundary pins add 2, W5-5 adds 2 (the acceptance harness
   itself, driven end to end against a deterministic fake engine — see the
   addenda), the A1 edit-provenance work adds 9 (seven at the publication
-  boundary in `test_engine`, two at the envelope in `test_server`) and the
+  boundary in `test_engine`, two at the envelope in `test_server`), the
   jobs-root claim adds 2 (a running job's `<workdir>/.lock` refused to a second
   descriptor and to a real child process, and `provenance.reconcile` leaving
-  that file alone) and the SAM 2.1 tiny catalog pin adds 2 (its measured size
+  that file alone), the SAM 2.1 tiny catalog pin adds 2 (its measured size
   and digest, and DR-5's branch kept alive with the digests taken back out of
-  an entry). 14 of the W5-3 tests are for
+  an entry) and the runtime-package condition adds 3 (the gate refuses a bound
+  model, the ungated report tracks this interpreter, and a mask job with no
+  `sam2` refuses by name before any lease). 14 of the W5-3 tests are for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
   kind-only job that must not load a size-mismatched model (`-32019`), and the

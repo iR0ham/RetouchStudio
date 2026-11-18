@@ -207,12 +207,13 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-137 tests, no GPU and no model download: framing, contract versioning, request
+140 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing
-byte-identity, alpha bounds, the frozen capability vocabulary and its evidence
-rules. The upscale tests run a fake torch and a fake model against a real
+byte-identity, alpha bounds, the frozen capability vocabulary, its evidence
+rules and the runtime-package condition that is asked before either. The upscale
+tests run a fake torch and a fake model against a real
 numpy array, so they cover the provenance sidecar, the load-time digest, the
 load/write cancel points and the reported provider without any inference
 runtime. `test_provenance.py` patches the three syscalls the writer uses and

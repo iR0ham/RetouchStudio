@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -14,6 +15,8 @@ from retouch_ai_worker.catalog import Catalog
 PLATFORM = "macos-arm64"
 MIGAN = "migan"
 SWIN = "swin2sr-x4"
+SAM = "sam2.1-hiera-tiny"
+SAM_BYTES = 156_008_466
 
 
 def _sparse(path: Path, size: int) -> None:
@@ -42,10 +45,14 @@ class CapabilityReportTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def by_id(self, evidence=()):
+    def by_id(self, evidence=(), importable=lambda name: True):
+        # `importable` defaults to "everything is importable" so a test about
+        # the model branch is not decided by this machine's site-packages. A
+        # test that wants the runtime-package gate passes its own predicate.
         return {item["capabilityId"]: item
                 for item in report(self.catalog, evidence=evidence,
-                                   platform_name=PLATFORM)["capabilities"]}
+                                   platform_name=PLATFORM,
+                                   importable=importable)["capabilities"]}
 
     def test_every_frozen_capability_is_reported_once_with_a_reason(self):
         records = self.by_id()
@@ -113,6 +120,33 @@ class CapabilityReportTests(unittest.TestCase):
         click = self.by_id()["mask.click"]
         self.assertEqual(click["state"], "blocked")
         self.assertIn("adopt", click["reason"])
+
+    def test_weights_with_no_importable_runtime_are_blocked_before_the_model(self):
+        # The checkpoint is installed at a recorded version and a recorded run
+        # binds it: every condition DR-4 asks of the model is met. What is
+        # missing is the package that reads it, and that is asked first because
+        # no download the model manager offers can answer it.
+        _versioned(self.root, SAM, "1.0.0", {"sam2.1_hiera_tiny.pt": SAM_BYTES})
+        evidence = ({"capabilityId": "mask.click", "platform": PLATFORM,
+                     "provider": PROVIDER, "modelId": SAM,
+                     "modelVersion": "1.0.0", "evidence": "fixture run"},)
+        self.assertEqual(self.by_id(evidence)["mask.click"]["state"], SUPPORTED)
+        click = self.by_id(
+            evidence, importable=lambda name: name != "sam2")["mask.click"]
+        self.assertEqual(click["state"], "blocked")
+        self.assertIn("cannot import sam2", click["reason"])
+        self.assertEqual(click["modelId"], SAM)
+
+    def test_the_ungated_report_answers_for_this_interpreter(self):
+        # Nothing injected, so this is what a running worker really says. The
+        # answer has to track the interpreter: a runtime that gains sam2 gains
+        # the model branch back without anyone editing a test.
+        present = importlib.util.find_spec("sam2") is not None
+        click = self.by_id(importable=None)["mask.click"]
+        self.assertEqual("cannot import sam2" in click.get("reason", ""),
+                         not present)
+        if not present:
+            self.assertEqual(click["state"], "blocked")
 
     def test_an_unrecorded_entry_is_still_blocked_by_dr5(self):
         # No shipped entry is unrecorded any more, so DR-5's branch is shown
