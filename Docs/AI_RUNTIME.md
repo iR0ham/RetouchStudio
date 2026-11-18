@@ -195,3 +195,10 @@ Overrides used by the bundler:
 `Tools/bundle-worker.sh` keeps a stamp of the Python version, the worker source hash and the wheel list in `Worker/.stamp`; an unchanged runtime is reused across builds. It refuses to finish if any Mach-O still refers to `/opt/homebrew`, if a symlink in the runtime is broken, or if a required signature step fails.
 
 > **The worker source is a separate checkout.** It is not part of this repository. Point `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` at it to bundle the helper. Without them the app still builds and runs; the AI tools simply report that the helper is not installed. Moving `worker/` and `requirements.lock` into this repository would make the build self-contained; it is listed as a follow-up.
+
+> **Superseded 2026-11-18.** `worker/` *is* in this repository: 31 tracked paths
+> including the hashed `worker/requirements.lock`, and
+> `Tools/bundle-worker.sh:16` already defaults `WORKER_ROOT` to `$REPO_ROOT/worker`
+> — `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` are now overrides for a custom
+> interpreter, not requirements. A plain clone bundles with no environment set, and
+> CI does exactly that. See `AI_11_ARCHITECTURE.md` §17.

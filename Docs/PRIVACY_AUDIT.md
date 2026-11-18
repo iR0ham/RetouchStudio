@@ -21,8 +21,15 @@ The result is a measured claim, not an assertion about intent: every scenario be
 | Layer | Source | Runs as |
 |---|---|---|
 | App | `Sources/RetouchStudio/` (SwiftUI) | `Retouch Studio.app/Contents/MacOS/RetouchStudio` |
-| Helper | `worker/retouch_ai_worker/` (the separate checkout the bundler copies from) | `Contents/Resources/Worker/.../Python -m retouch_ai_worker serve` |
+| Helper | `worker/retouch_ai_worker/` (tracked in this repository; see the note under this table) | `Contents/Resources/Worker/.../Python -m retouch_ai_worker serve` |
 | Downloader | `retouch_ai_worker/downloads.py` | Same interpreter, started by the app only after consent |
+
+This row read "(the separate checkout the bundler copies from)" until
+2026-11-18; that was wrong, not stale-by-degree — the package is tracked in this
+repository at `worker/retouch_ai_worker/` and `Tools/bundle-worker.sh:16` copies
+from `$REPO_ROOT/worker` unless told otherwise. Nothing about the privacy
+conclusion changes: the same helper, the same boundary, one fewer source a
+reviewer would have to trust by name. See `AI_11_ARCHITECTURE.md` §17.
 
 Image editing, masking, upscaling and export all happen in the app or in the helper. No other process is launched by the app. The helper is a child of the app and is recorded in `~/Library/Application Support/RetouchStudio/AI/helper-owner.json`.
 

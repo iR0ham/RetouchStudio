@@ -494,3 +494,53 @@ This architecture covers every capability in AI-01 §3 (A–H), states what
 exists and what is proposed, separates languages from runtimes, keeps W5 as an
 implementation milestone, preserves schema v5 and the existing worker, and
 names the unverified items that must be closed before implementation.
+
+## 17. Addendum (2026-11-18): the worker source is in this repository — narrowing four blanket stamps
+
+Four sentences in this document, one in `AI_11_MODEL_EVALUATION.md` §15, one in
+`AI_RUNTIME.md`, one row in `PRIVACY_AUDIT.md` and one owner-decision row in
+`AI_11_ROADMAP.md` §8 all rest on a fact that stopped being true when W5 landed
+the worker. They are quoted rather than rewritten; this is the correction.
+
+- Four sentences in this file carry the stale fact: §2 line 60 "the worker
+  source is a separate checkout and is **NOT VERIFIED** here"; §2.2 line 77
+  "Outside this repository, not under version control here"; §10 line 387 "The
+  worker source must become reproducible (W5 requirement). Until then, every
+  worker-internal claim stays **NOT VERIFIED**"; §13 line 447 "Worker source not
+  in the repository … **NOT VERIFIED** today".
+- What is true now. `git ls-files worker` lists 31 tracked paths: the package
+  (`worker/retouch_ai_worker/`: 12 Python modules plus its
+  `capability-evidence.json`), its tests (`worker/tests/`, 10 files),
+  `worker/tools/` (2), `worker/requirements.lock` (284 lines, every pin carrying
+  `--hash=sha256:`), `worker/requirements-test.lock`, `worker/LICENSE` and
+  `worker/THIRD_PARTY_NOTICES.md`. `Tools/bundle-worker.sh:16` defaults to
+  `WORKER_ROOT="${RETOUCH_WORKER_ROOT:-$REPO_ROOT/worker}"`, so the env var is an
+  override and a plain clone bundles without it — which is what
+  `.github/workflows/ci.yml:139-145` does on every run: it builds the CPython
+  runtime with `Tools/build-python-runtime.sh`, hands that interpreter to
+  `Tools/setup-worker-venv.sh` (default profile: `worker/.venv` from the
+  hash-locked `worker/requirements-test.lock`; `--full` uses
+  `worker/requirements.lock`), and runs `./Tests/run-worker.sh` inside the macOS
+  Integration context. Measured here with
+  `RETOUCH_WORKER_PYTHON=<torch-free 3.13 venv> ./Tests/run-worker.sh`
+  (`Tests/run-worker.sh:6` otherwise defaults to `worker/.venv/bin/python3`, the
+  one CI builds): `Ran 124 tests in 4.430s … OK`.
+- What the stamps may now cover, and what they may not. "Checkpoint choice,
+  preprocessing, tiling, dtype, job routing" (`AI_11_MODEL_EVALUATION.md` §15)
+  are readable in tracked source and asserted by tracked tests, so they are no
+  longer unverifiable *as implemented behavior*; stamping them **NOT VERIFIED**
+  sent later readers to re-derive answers the repository already holds. What
+  stays **NOT VERIFIED** is what no amount of reading the source can prove:
+  that a real weight file produces the output the adapter claims (`sam2.1-hiera-tiny`
+  still has `sizeBytes: null` and no `sha256` in `Resources/model-catalog.json`,
+  so it cannot be verified at all today), and that any inference has been
+  reproduced from a fresh clone. `AI_11_ROADMAP.md` R0's deliverables — "worker
+  source in the repository … `requirements.lock` reproducible" and the licence
+  inventory — are met by the tracked files above; its M0 exit line ("that
+  inference is reproducible in general") is **not**, and the §8 row asking the
+  owner to decide whether to move the source in can be closed as decided.
+- History stays history. `Docs/PHASE0_CROSSPLATFORM_AUDIT.md:201` ("Worker
+  source | Not in this repository | no `worker/` directory") was a correct
+  observation at the time it was taken and is left as it was written;
+  `Docs/W5_ROADMAP.md:103` already records the move, which is why this addendum
+  points rather than re-narrates.
