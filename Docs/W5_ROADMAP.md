@@ -238,6 +238,26 @@ checkpoint, opset, artifact, size, SHA-256, licence evidence or quality
 validation has been submitted or approved, and the Windows worker still loads no
 model weights. Slice 1 does not change any Windows capability state.
 
+**Addendum (2026-11-18, same branch, through `0d8ee20`; W5-4 is still NOT
+complete).** Slice 2 landed the host-side consumption the paragraph above
+listed as open: `ExportService.upscale` now names `capabilityId: "upscale.4x"`
+so the worker's verdict gates every 4× pass, and
+`AIProvenance.verifiedArtifact` refuses to decode a returned artifact whose
+sidecar does not verify against its own bytes. Consequence on this Mac: the
+legacy flat install is reported `blocked`, so a 4× export stops with
+`E_UNSUPPORTED` until the owner adopts the model — designed behaviour,
+recorded in the adapters doc and decision ledger. The acceptance harness
+(`worker/tools/upscale_acceptance.py`) implements the §4.3 measurements with
+judgments only where the record freezes a criterion, and
+`Docs/W5_UPSCALER_ACCEPTANCE.md` holds the measured readiness facts and the
+runtime approval request; the run itself has NOT executed — no download,
+adoption or inference happened. Two independent review rounds are recorded in
+the decision ledger; the second returned ready-for-authorization. Remaining
+for W5-4 exit: the recorded macOS 4× run on the approved setup, the owner's
+quality corpus + tolerance decision, and the measured bit depth/memory/wall
+time on real jobs. **Windows W5-4 remains BLOCKED**; the recorded finding
+(same date) documents why the community ONNX conversions were not adopted.
+
 ### W5-5 — CI and acceptance
 
 **Depends on:** W5-1..W5-4 as each lands.
@@ -267,6 +287,18 @@ NOT VERIFIED: the Windows-side changes compile and pass only on the GitHub
 Windows runners (no local Windows); the moved 122-test pin executes on the
 next macOS job; no new required check context was added, per the constraint
 above.
+
+Addendum (2026-11-18, after PR #70 merged as `480fe88`): the stack was
+synchronised the ordinary way — `origin/main` merged into this branch, no
+rebase, no force-push, no rewritten commit — and PR #71's base is now `main`,
+so its diff carries W5-5 only. The two addenda above are historical: the
+merged worker suite is 124 tests (W5-4's two submission-boundary tests plus
+W5-5's two acceptance-harness tests), the pins move to `Ran 124 tests`, and
+they stay unverified until a macOS job prints them. The gate audit gained a
+fifth finding in `Docs/CI_GATES.md`: no required context builds or runs the
+x86_64 slice, and that slice's `MODEL STORE TESTS` child-process cases already
+fail identically at `40b157f`, which is a property of `main` on this machine
+rather than of W5-5.
 
 ## 4. Retained follow-on milestones
 

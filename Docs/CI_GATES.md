@@ -230,6 +230,21 @@ StudioCore Boundary were also green on that head. The independent review then
 moved the pin to `Ran 120 tests`, which stays unverified until the next macOS
 run prints it.
 
+**2026-11-18.** That sentence is now historical: run `44174322949`, macOS
+Integration job `134361670612`, printed `found: Ran 120 tests` on head
+`54e3e60`. The submission-boundary work of the same day adds two worker tests —
+the named-versus-kind-only pair and the frozen-field tripwire — so the pin moves
+to `Ran 122 tests` for the next run to execute.
+
+**2026-11-18, later.** Also historical: run `44211766326`, macOS Integration
+job `134491776648`, printed `found: Ran 122 tests` on head `6c28281`, and PR
+#70 merged as `480fe88`. This branch now carries both halves of that day's
+work — the two submission-boundary tests and the two acceptance-harness tests —
+so the merged suite is 124 tests and every pin (`ci.yml`,
+`Tests/run-worker.sh`, `Docs/W5_ADAPTERS.md`,
+`Docs/worker-regressions/README.md`, `worker/README.md`) moves to
+`Ran 124 tests` for the next run to execute.
+
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
 one operating system, one renderer, no pixel-parity claim: the macOS Core Image
@@ -635,3 +650,27 @@ filter matched only the two integration branches, so a stacked milestone PR
 ran nothing. `pull_request.branches` now also carries `w5-**`, so every PR in
 the W5 stack passes the same five contexts regardless of where its base
 lands. The audit's finding 1 therefore closes in its general form.
+
+Follow-up (2026-11-18, after `480fe88`): **finding 5 — the Intel slice is not
+a gate, and its local run already fails at the base.** The macOS Integration
+job pins `RETOUCH_ARCH: arm64`, so none of the five required contexts compiles
+or runs an x86_64 test binary; `Docs/CROSS_PLATFORM_COMPATIBILITY.md` has
+always labelled the x86_64 result as Rosetta evidence rather than native Intel
+validation. Measuring it on this head for the W5-4 verification round gave
+`StudioCore: 288 checks passed`, `ABI TESTS: PASS (104 checks)` and
+`ENGINE / MODEL / RUNTIME PROCESS / RUNTIME V2 TESTS: PASS`, but
+`MODEL STORE TESTS: FAIL (11)` — the cases whose *child process* performs the
+install ([10] lease-during-delete, [12] two processes one winner, [13] crash
+injection; in-process fixture installs all pass under the same translation).
+The identical 11 checks fail when the same suite is built and run at the base
+commit `40b157f`, which carries none of W5-4's changes and touches none of
+`ModelStore`, `ModelManager`, `LockFile`, `ModelCatalog` or
+`ModelStoreTests`, so the failure is a property of `main` on this machine that
+this round discovered rather than a finding against either PR. The mechanism
+is **not root-caused here and no claim about it is made.** Options for the
+owner, in order of cost: run the x86_64 suites as a sixth, non-required CI
+context on the `macos-15` runner (`arch -x86_64`, which would have caught this
+before it reached a milestone branch); root-cause the child-process install
+failure in its own slice; or record the arm64-only scope in
+`Docs/CROSS_PLATFORM_COMPATIBILITY.md` and accept it as Rosetta evidence with
+a known gap. Nothing in W5-4 or W5-5 changes this behaviour.

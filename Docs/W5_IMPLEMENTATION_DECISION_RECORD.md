@@ -626,3 +626,151 @@ refuses to allow, so it is corrected here instead of left standing.
 yet been asked by this host to name a capability and return a pair the host then
 adopted, because no inference ran. The nine host-side checks are proven against
 files the test writes, not against files the worker writes.
+
+Addendum (2026-11-18, second independent review of the complete PR #70 diff at
+`c879761`; verdict: ready for Product Owner authorization, with the items
+below recorded):
+
+- **Finding 1 (should-fix, recorded as an open decision — no code change
+  here).** The kind-only submission path (no `capabilityId` in the envelope)
+  bypasses `_require_capability` by the retained pre-W5-3 contract, and
+  `_job_upscale` then writes `capabilityId: "upscale.4x"` into the sidecar
+  even though no verdict admitted it. The capability *name* is factual (the
+  kind maps to it in the frozen vocabulary); the *admission* is not recorded
+  anywhere machine-readable. The schema is frozen, so no field may be added
+  to carry the admission path; the two candidate resolutions both need a
+  product decision: gate kind-only upscale like the named path (closes the
+  blocked-install hole but removes the documented escape hatch that ran this
+  very install on 2026-11-07), or record `capabilityId: null` on un-named
+  submissions (honest, but makes the sidecar less informative about what the
+  artifact is). Recommended: the first, at the next milestone when the owner
+  has adopted the model, so nothing the owner can do today breaks.
+- **Finding 3 (nit, recorded).** After `AIProvenance.verifiedArtifact`
+  succeeds, `ExportService.upscale` decodes the artifact in a separate open.
+  The worker's job-folder retention (`keep_jobs`) could in principle remove
+  the pair between the two opens; the failure surface is a decode error,
+  never a partial or unprovenanced adoption. Recorded here as accepted
+  rather than fixed.
+- **Finding 2 (nit, fixed):** the export comment claimed the refusal's
+  technical reason "stays in the thrown detail"; `AIWorkerFailure` carries no
+  detail field, so the comment now states what actually happens — the
+  localized failed-pass message stands in and the reason is recoverable from
+  the worker log.
+- **Finding 4 (nit, noted):** §10 S1-5's "88 → 100" wording is a dated
+  Slice-1 record and stands under the append-only rule; the current pins are
+  narrated by `Docs/CI_GATES.md` and `Docs/W5_ROADMAP.md` (100 → 115 → 120,
+  with the next job to confirm).
+
+Addendum (2026-11-18, Product Owner verification round) — Finding 1 is resolved
+against the contract: the kind-only path stays open, and the boundary is pinned.
+
+Sections 1–11 and the dated review block above stay as written, including its
+recommendation, which this addendum supersedes rather than follows. The question
+the review left open — may an upscale job run, and write a provenance record,
+without a capability verdict admitting it? — is answered by contract text that
+already stands on `main`, so it needed a reading and a test, not a decision:
+
+- **The contract permits it, in those words.** `Docs/AI_PROTOCOL_V2.md`
+  §Capability reporting states that "`job.submit` accepts an optional
+  `capabilityId`" (line 107, from `cd872e0` in W5-3) and that a submission naming
+  only `kind` keeps its catalog checks while "deliberately [not refusing] the
+  `blocked` states that describe a *claim* (no recorded run, legacy flat layout,
+  a catalog entry without size or SHA-256); those keep already-installed models
+  usable, and running them is how the evidence for a support claim gets recorded"
+  (lines 116-123, from `55ff254`). Both commits are ancestors of `main`
+  `40b157f`, so the rule predates this branch. W5-0 §3.5 lists `capabilityId`
+  among the job request fields without making it mandatory (§5 rule 2 freezes
+  §3.2–§3.4, which map a job kind to its capability ids), which is why
+  `engine.py:600` naming `upscale.4x` on an un-named submission states the frozen
+  mapping rather than inventing a claim. `server.py:339-340` applies
+  `_require_capability` only to a named submission, unchanged since W5-3.
+- **Closing the bypass would be a contract change, so it is not done here.** It
+  would also break the path that ran the owner's own install on 2026-11-07 and
+  still runs every legacy flat install, which `capabilities.py:135-138` reports as
+  `blocked` for want of a version to bind evidence to. The review's recommendation
+  is therefore marked superseded by the text it was written against, not
+  implemented.
+- **Every submission path, enumerated.** macOS names the capability
+  (`ExportService.swift:220` → `WorkerClient.swift:136`, which puts the field on
+  the wire only when a caller names one). Windows cannot use the bypass: its
+  adapter refuses a submission with no id outright (`WorkerServer.cs:190-194`),
+  pinned by `Windows/RetouchStudio.AI.Tests/Program.cs:172-177`. The acceptance
+  harness names it (`worker/tools/upscale_acceptance.py:284-286`). Nothing in this
+  repository submits an upscale by kind alone; the open path exists for a caller
+  outside it, which is what the protocol sentence above is about.
+- **What now prevents accidental expansion.** Three tests, in the suite CI runs:
+  `test_server.py::test_a_legacy_install_is_refused_by_name_and_runs_by_kind`
+  puts both halves on one machine state — the named submission is refused at
+  submit with `-32020` and `data.state == "blocked"` and leaves no job behind,
+  while the kind-only submission is admitted and runs — so widening the gate or
+  narrowing the refusal each fail a test instead of passing review unnoticed.
+  `test_server.py::test_kind_only_submission_cannot_load_a_damaged_model` (from
+  `55ff254`) bounds the bypass at the catalog: it does not reach integrity.
+  `test_provenance.py::DocumentTests::test_the_record_carries_exactly_the_frozen_fields`
+  pins the §3.6 field list against `provenance.document`, which is where an
+  "admitted by verdict" key would have to appear for the sidecar to start making a
+  claim the schema never authorised.
+- **The asymmetry the review named is still true and now stated plainly.** A
+  sidecar written on the kind path names a capability no verdict admitted. The
+  record is a statement of what produced the bytes; the place a support claim is
+  made is `capability.list`, and nothing reads the sidecar as one — the host's own
+  check (`AIProvenance.verifiedArtifact`) compares path, schema and digest and
+  ignores `capabilityId` entirely.
+
+Worker suite: 122 tests (`Ran 122 tests`), the two new ones included. No protocol,
+schema, C ABI, catalog or host behaviour changed in this addendum.
+
+Verification round (2026-11-18, §4 of the Product Owner's merge authorization) —
+the publication and adoption paths re-read against §3.6, with one new disclosure.
+
+The order, the refusal and the sweep all hold as recorded above, and each claim is
+backed by a test that was executed rather than read: 36 publication and upscale
+tests pass in the torch-free interpreter CI uses. The serialised payload is built
+before anything is created (`provenance.py:137`, with
+`test_provenance.PublicationTests.test_a_record_that_cannot_be_serialised_creates_nothing`
+as its proof), the sidecar lands first and the artifact rename is the commit point
+(`provenance.py:192-208`), a failed commit withdraws the sidecar and a pair that
+disagrees after landing is removed whole, and every cancellation window leaves an
+empty job folder (`engine.py:600-627` with
+`test_upscale.UpscaleJobTests.test_cancel_during_the_write_publishes_nothing` and
+`test_cancel_while_the_weights_load_stops_before_the_first_tile`). The host verifies
+before it decodes a pixel and refuses without deleting
+(`ExportService.swift:251-263`, `AICapability.swift:113-136`, proven by
+`Tests/ModelTests.swift::testAIProvenanceAdoption`). Nothing in the pair is renamed
+over a file it did not write: `publish` refuses when the target exists, the sidecar
+temp is created `O_EXCL | O_NOFOLLOW` at mode 0600 and only that temp is unlinked on
+the way out, and the startup sweep takes its timestamp before it lists anything and
+skips what lands at or after it (`server.py:53-55`, `provenance.py:216-258`). No
+text in code or docs calls the two renames atomic; the phrase that would have
+implied it in §3.6 is bounded by §11's correction.
+
+- **New disclosure — retention can outrun adoption, and it is not fixed here.**
+  `JobManager._trim` deletes the oldest finished job folder as soon as more than
+  `keep_jobs` (20) jobs are tracked, and it runs from `job.submit`
+  (`server.py:113`, `server.py:213-218`). A client that submits 21 further jobs
+  between a job finishing and its artifact being read therefore has that pair
+  removed under it. The reachable failure is a refusal — the host reports the
+  artifact missing (`Docs/W5_IMPLEMENTATION_DECISION_RECORD.md` §3.6: `E_ARTIFACT_MISSING`,
+  never a blank or stale draw) — and never an adoption without provenance, and no
+  flow in this repository can reach it: the macOS export verifies and decodes
+  inside the call that submitted (`ExportService.swift:219-263`), the worker runs
+  one job at a time (`BUSY`), and the acceptance harness reads immediately. Making
+  retention adoption-aware is a worker-side policy decision for a later milestone;
+  this round records it instead of quietly changing a retention rule the model
+  manager and the recovery tests both depend on.
+
+2026-11-18, after `480fe88` (the merge of PR #70). The `Ran 122 tests` line
+above is historical: the stacked branch also carries W5-5's two
+acceptance-harness tests, so the merged worker suite is 124 tests and the pins
+move with it, as `Docs/CI_GATES.md` records. Nothing in the §3 resolution
+changed: naming a capability the adapter cannot claim is still refused before
+weights load, a kind-only submission is still admitted, and both halves stay
+pinned by
+`worker/tests/test_server.py::test_a_legacy_install_is_refused_by_name_and_runs_by_kind`
+and
+`worker/tests/test_provenance.py::DocumentTests::test_the_record_carries_exactly_the_frozen_fields`.
+This round additionally recorded in `Docs/CI_GATES.md` that the x86_64
+(Rosetta) `MODEL STORE TESTS` child-process cases fail with the identical 11
+checks at the base commit `40b157f`, where none of W5-4's files exist in the
+diff: the gap belongs to `main` and to this machine's arm64-only CI coverage,
+not to W5-4 or W5-5, and its mechanism is not root-caused here.
