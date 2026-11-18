@@ -929,6 +929,9 @@ class L10n {
         case .aiWorking: return aiWorking
         case .aiApplied: return aiApplied
         case .aiAssetsMissing(let count): return aiAssetsMissing(count)
+        case .aiModelMissing: return aiModelMissing
+        case .aiCapabilityBlocked(let capability):
+            return aiCapabilityBlocked(forCapability: capability)
         case .settingsReset: return settingsResetStatus
         case .backdropFailed: return backdropFailed
         case .recentMissing(let name): return recentMissing(name)
@@ -1277,6 +1280,20 @@ class L10n {
     }
     var aiCapabilityUnsupported: String {
         "This AI tool is not available for this Mac build yet. Manage Models… shows what this adapter can run."
+    }
+    /// A capability this adapter *does* offer, whose model is on disk but not
+    /// in an install state the helper will run. `task` is the localized name of
+    /// the task it serves. This is the sentence `-32020` was never true for:
+    /// the build has the feature and the bytes are here, so what the owner
+    /// needs is the manager, not a different build or a re-download.
+    func aiCapabilityBlocked(_ task: String) -> String {
+        "\(task) is installed on this Mac but not ready to run yet. Manage Models… has the step it is waiting for."
+    }
+    /// The same sentence from the capability id a refusal names, so a status
+    /// line can hold the id instead of the finished wording and survive a
+    /// language switch.
+    func aiCapabilityBlocked(forCapability capability: String) -> String {
+        aiCapabilityBlocked(modelsTaskName(Self.capabilityTaskKey(for: capability)))
     }
     var aiRunEdit: String { "Run edit" }
     var aiCancelEdit: String { "Cancel" }

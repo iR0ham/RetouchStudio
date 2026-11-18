@@ -1,10 +1,25 @@
 import Foundation
 
-/// A typed failure from the AI helper. The UI shows `message`; `code` keeps the
-/// worker's own JSON-RPC code so a licence refusal is not mistaken for a crash.
-struct AIWorkerFailure: LocalizedError {
+/// A typed failure from the AI helper. The UI shows the sentence this type
+/// chooses (`EditorModel.localizedAIFailure(_:)`); `code` keeps the worker's own
+/// JSON-RPC code so a licence refusal is not mistaken for a crash, and the two
+/// capability fields keep what the worker said *about* the refusal — which is
+/// the difference between a capability this build never offers and one that is
+/// installed here and waiting for a tap. See
+/// `Docs/AI_REFUSAL_ROUTING_PROPOSAL.md` §3 and §5.
+struct AIWorkerFailure: LocalizedError, Equatable {
     let code: Int
     let message: String
+    let capabilityId: String?
+    let capabilityState: String?
+
+    init(code: Int, message: String, data: [String: Any]? = nil) {
+        self.code = code
+        self.message = message
+        capabilityId = data?["capabilityId"] as? String
+        capabilityState = data?["state"] as? String
+    }
+
     var errorDescription: String? { message }
 
     /// The W5-0 typed name for the numeric code, matching the Windows host.
@@ -21,6 +36,32 @@ struct AIWorkerFailure: LocalizedError {
         case -32020: return "E_UNSUPPORTED"
         default: return "E_INTERNAL"
         }
+    }
+
+    /// Whether the model manager holds the step this refusal is waiting for.
+    ///
+    /// A missing model has always opened it. `-32020` carries both classes the
+    /// frozen vocabulary separates, and only `blocked` means the adapter offers
+    /// the capability and something on this machine has to be settled — in part
+    /// by the Adopt chip the manager renders. `unsupported` is a product answer,
+    /// not a queue, so it opens nothing.
+    var opensModelManager: Bool {
+        switch code {
+        case -32011: return true
+        case -32020: return capabilityState == "blocked"
+        default: return false
+        }
+    }
+
+    /// The capability id of a refusal the model manager can act on, or nil.
+    ///
+    /// Both halves are needed: `blocked` says something on this machine is
+    /// missing, and the id says which task, so the sentence can name it. An
+    /// id-less `-32020` — the worker refusing a name that is not this kind's
+    /// capability — keeps the generic wording.
+    var blockedCapabilityId: String? {
+        guard code == -32020, capabilityState == "blocked", let capabilityId else { return nil }
+        return capabilityId
     }
 }
 
@@ -117,7 +158,8 @@ final class WorkerClient {
         }
         if let error = object["error"] as? [String: Any] {
             throw AIWorkerFailure(code: (error["code"] as? Int) ?? -32603,
-                                  message: (error["message"] as? String) ?? "helper error")
+                                  message: (error["message"] as? String) ?? "helper error",
+                                  data: error["data"] as? [String: Any])
         }
         return object["result"] ?? [:]
     }
@@ -179,7 +221,8 @@ final class WorkerClient {
                 if state == "failed" {
                     let error = result?["error"] as? [String: Any]
                     throw AIWorkerFailure(code: (error?["code"] as? Int) ?? -32603,
-                                          message: (error?["message"] as? String) ?? "the AI job failed")
+                                          message: (error?["message"] as? String) ?? "the AI job failed",
+                                          data: error?["data"] as? [String: Any])
                 }
                 if state == "cancelled" {
                     throw AIWorkerFailure(code: -32014, message: "cancelled")

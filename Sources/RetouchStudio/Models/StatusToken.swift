@@ -35,6 +35,12 @@ enum StatusToken: Equatable {
     case aiWorking
     case aiApplied
     case aiAssetsMissing(Int)
+    /// An AI task was refused because its model is not installed. The sentence
+    /// already exists for the inline case; this puts it on the status line.
+    case aiModelMissing
+    /// An AI task was refused because its installed model is not in a runnable
+    /// state. The payload is the worker's capability id, not a sentence.
+    case aiCapabilityBlocked(String)
     case settingsReset
     case backdropFailed
     case recentMissing(String)

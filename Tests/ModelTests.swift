@@ -6886,6 +6886,59 @@ func testAICapabilityReport() {
           "the host keeps the W5-0 typed names")
 }
 
+/// `E_UNSUPPORTED` carries two classes the worker's own payload separates, and
+/// the app used to answer both with a sentence about builds. These check the
+/// routing that keeps them apart: what opens the manager, and what the owner
+/// reads.
+@MainActor
+func testAIRefusalRouting() {
+    print("\n[W5-6] a blocked refusal keeps its own sentence and its own next step")
+
+    let blocked = AIWorkerFailure(code: -32020, message: "adopt it",
+                                  data: ["capabilityId": "upscale.4x", "state": "blocked"])
+    check(blocked.opensModelManager, "a blocked capability is the manager's to fix")
+    check(blocked.blockedCapabilityId == "upscale.4x", "the refusal names the task it waits on")
+
+    let unoffered = AIWorkerFailure(code: -32020, message: "not here",
+                                    data: ["capabilityId": "upscale.2x",
+                                           "state": "unsupported"])
+    check(!unoffered.opensModelManager && unoffered.blockedCapabilityId == nil,
+          "a product answer is not a queue")
+
+    check(!AIWorkerFailure(code: -32020, message: "no data").opensModelManager,
+          "a refusal with no state opens nothing")
+    check(AIWorkerFailure(code: -32011, message: "missing").opensModelManager,
+          "a missing model still opens the manager")
+    check(!AIWorkerFailure(code: -32010, message: "licence").opensModelManager,
+          "a licence refusal opens nothing")
+
+    let english = L10n.shared.statusText(.aiCapabilityBlocked("upscale.4x"))
+    check(english == "Upscaling is installed on this Mac but not ready to run yet. "
+          + "Manage Models… has the step it is waiting for.",
+          "the status line names the task, not the build")
+    check(!english.contains("not available"), "the build sentence is gone")
+    check(english == L10n.shared.aiCapabilityBlocked(forCapability: "upscale.4x"),
+          "the token and the direct call agree")
+
+    let persian = PersianL10n.table.statusText(.aiCapabilityBlocked("inpaint.spot"))
+    check(persian.contains("ترمیم"), "the Persian line names the same task")
+    check(persian.contains("مدیریت مدل‌ها…"), "the Persian line points at the manager")
+    check(!persian.contains("در دسترس نیست"), "the Persian line does not blame the build")
+
+    check(EditorModel.exportUpscaleRefusal(state: .blocked) == .aiCapabilityBlocked("upscale.4x"),
+          "an export whose upscale awaits adoption is refused before it renders")
+    check(EditorModel.exportUpscaleRefusal(state: .requiresModel) == .aiModelMissing,
+          "an export missing the model says so before it renders")
+    check(EditorModel.exportUpscaleRefusal(state: .supported) == nil
+          && EditorModel.exportUpscaleRefusal(state: .unsupported) == nil
+          && EditorModel.exportUpscaleRefusal(state: nil) == nil,
+          "nothing else stops the render")
+    check(L10n.shared.statusText(.aiModelMissing) == L10n.shared.aiModelMissing
+          && PersianL10n.table.statusText(.aiModelMissing)
+             == PersianL10n.table.aiModelMissing,
+          "the status line reuses the inline model-missing sentence in both languages")
+}
+
 // MARK: - W5-4 artifact provenance
 
 /// §3.6 leaves the host one way to tell an artifact it may adopt from a file
@@ -7163,6 +7216,7 @@ func runAll() async {
     testDocumentRestorationCarriesMasks()
     testRecoverySnapshotCarriesMasks()
     testAICapabilityReport()
+    testAIRefusalRouting()
     testAIProvenanceAdoption()
     testAIEditStoreProvenance()
     await testModelStoresMaskBesideEdit()

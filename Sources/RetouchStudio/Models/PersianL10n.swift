@@ -1217,6 +1217,9 @@ final class PersianL10n: L10n {
     override var aiCapabilityUnsupported: String {
         "این ابزار هوش مصنوعی هنوز برای این نسخهٔ مک در دسترس نیست. «مدیریت مدل‌ها…» نشان می‌دهد این آداپتور چه چیزی را اجرا می‌کند."
     }
+    override func aiCapabilityBlocked(_ task: String) -> String {
+        "«\(task)» روی این مک نصب است اما هنوز آمادهٔ اجرا نیست. «مدیریت مدل‌ها…» همان یک مرحله را نشان می‌دهد."
+    }
     override var aiRunEdit: String { "اجرای ویرایش" }
     override var aiCancelEdit: String { "لغو" }
     override var aiTryAgain: String { "ویرایش ناحیهٔ دیگر" }
