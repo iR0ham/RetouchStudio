@@ -157,3 +157,52 @@ statement about `verify` is about code paths, not about a real installed model
 being validated. Windows is out of scope: the host has no Windows sweep or
 adoption path for these artifacts, and `Docs/W5_UPSCALER_ACCEPTANCE.md` §6 (2026-11-17)
 records the Windows adapter as not started.
+
+## 8. Owner decisions (answered 2026-11-18)
+
+Two questions were put to the owner in §3, and both have answers. They are
+recorded here as decisions; §1–§7 stay as written, including the claim in §7
+that `patch_edit` writes no sidecar, which was true of the code this document
+described and stopped being true with the change below.
+
+- **The capability id a Remove Object edit records is `inpaint.object`.** The
+  preset's own mapping is now `healArea → inpaint.spot`,
+  `removeObject → inpaint.object`, `reimagine → generative.reimagine`
+  (`Sources/RetouchStudio/Models/QuickEdit.swift`, `AIQuickPreset.capabilityId`).
+- **A stored edit whose bytes do not match its record, or whose record cannot be
+  read, is shown as missing.** That is §3.6's `E_ARTIFACT_MISSING` semantics
+  applied to the editor: `AIEditStore.isAvailable` asks the digest when a
+  sidecar exists, and such an edit goes through the "missing" path the editor
+  already uses after a cache clean. An edit adopted before records existed has
+  nothing to disagree with and keeps the existence-only answer, so an old
+  project still opens.
+
+What was built is option **A1**: a record name the host asserts, carried in the
+`job.submit` envelope as `requestedCapability`, which the helper writes into the
+sidecar without putting through its verdict gate. A1 was chosen over naming the
+capability in `capabilityId` for exactly the reason §3 gives: DR-4 bounds
+`supported` by a recorded run, the flux and MI-GAN installs carry no such run,
+and gating the edit path on that verdict would refuse three tools that work
+today. **That refusal (A2) is still not decided and is still not implemented**,
+and PR #78's refusal-routing proposal remains unapproved and untouched.
+
+The privacy analysis in §6 still holds: the record is one more small file inside
+the edit folder under Application Support, the project body gains no keys, and
+nothing is added to an exported picture.
+
+Not verified by this round, and not claimed: no inference ran and no weights
+were downloaded, so the bytes in every sidecar proven here come from a stubbed
+render, a numpy stand-in, or a Swift test that writes its own pixels. What was
+still open last round — a live-worker crossing for `requestedCapability` — is
+measured now. `Tests/RuntimeV2Tests.swift` §P starts the shipped helper and
+submits the same capability id both ways: as `capabilityId` it is refused with
+`E_MODEL_MISSING` and no job folder is created, as `requestedCapability` it is
+accepted and the job fails inside the worker; a label the kind cannot
+carry is refused with `-32602` before any job folder exists. The same section
+then adopts, through the host's verification gate, a
+record the worker's own publication code wrote with
+`capabilityId: inpaint.object` and `capabilitySource: host-asserted`. Still
+unobserved is a real job's reply: the labelled job above fails inside the worker
+— in the interpreter that runs this suite today it stops at `import mlx` — and
+publishes nothing, so no flux or MI-GAN record for a real photo has been read by
+either side.
