@@ -63,3 +63,4 @@ run_suite Tests/ModelTests.swift modeltests
 run_suite Tests/ModelStoreTests.swift modelstoretests
 run_suite Tests/RuntimeProcessTests.swift runtimeprocesstests
 run_suite Tests/RuntimeV2Tests.swift runtimev2tests
+run_suite Tests/MaskQualityTests.swift maskqualitytests
