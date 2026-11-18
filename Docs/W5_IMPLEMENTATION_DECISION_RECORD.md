@@ -774,3 +774,28 @@ This round additionally recorded in `Docs/CI_GATES.md` that the x86_64
 checks at the base commit `40b157f`, where none of W5-4's files exist in the
 diff: the gap belongs to `main` and to this machine's arm64-only CI coverage,
 not to W5-4 or W5-5, and its mechanism is not root-caused here.
+
+---
+
+## Addendum (2026-11-18): the capability vocabulary is now proven against the worker
+
+The last paragraph of "NOT VERIFIED after Slice 2" mixed two claims, only one of
+which needed weights. Splitting them:
+
+- **"no real worker has yet been asked by this host to name a capability" is
+  closed.** `Tests/RuntimeV2Tests.swift` section M now calls `capability.list` on
+  the worker it spawns and feeds the reply to `AICapabilityReport`, the host's own
+  validator — the frozen id set answered exactly once, the adapter's platform and
+  provider names, and the rule that a `supported` record carries evidence while
+  every other state carries a reason. Measured here: five new checks green,
+  `RUNTIME V2 TESTS: PASS`. The guard has teeth: deleting
+  `Spec("upscale.2x", …)` from `worker/retouch_ai_worker/capabilities.py` and
+  re-running the same binary gives `RUNTIME V2 TESTS: FAIL (1)` at "the live
+  worker's capability report decodes in the host", and restoring that line turns
+  it green again. No model was loaded for either run, so what is pinned is the
+  answer a machine with nothing installed gives.
+- **"and return a pair the host then adopted, because no inference ran" still
+  stands**, and so does the sentence's other half: the nine host-side provenance
+  checks are still proven against files the test writes, not files the worker
+  writes. Closing that needs a real run on a real model, which is the owner's
+  approval to ask for, not code to write.
