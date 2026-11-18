@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import os
 import tempfile
@@ -25,6 +26,19 @@ UNCLEARED = ModelEntry(id="eval-only", name="Eval only", task="inpainting",
 LEGACY = ModelEntry(id="legacy-race", name="Legacy race", task="inpainting",
                     license_id="MIT", commercial_ok=True, source="local",
                     files=(ModelFile("weights.bin"),))
+
+# A model small enough for a test to write whole, so its load path can be
+# checked against a real digest instead of only a recorded size.
+WEIGHTS = b"weights"
+VERIFIED = ModelEntry(
+    id="tiny-model", name="Tiny", task="upscaling", license_id="Apache-2.0",
+    commercial_ok=True, source="local",
+    files=(ModelFile("weights.bin", hashlib.sha256(WEIGHTS).hexdigest(),
+                     len(WEIGHTS)),))
+UNDIGESTED = ModelEntry(
+    id="size-only", name="Size only", task="upscaling", license_id="Apache-2.0",
+    commercial_ok=True, source="local", files=(ModelFile("weights.bin", None,
+                                                         len(WEIGHTS)),))
 
 
 class _FakeClock:
@@ -117,6 +131,40 @@ class CatalogTests(unittest.TestCase):
         }), encoding="utf-8")
         catalog = Catalog(self.root, allow_uncleared=False)
         self.assertEqual(catalog.require("migan"), version)
+
+    def test_a_verified_load_returns_the_resolved_root(self):
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (VERIFIED,)):
+            self.assertEqual(catalog.require_verified(VERIFIED.id), folder)
+        self.assertEqual(len(catalog._leases), 1)
+
+    def test_a_file_that_does_not_match_its_digest_is_refused(self):
+        # Same length, different bytes: the size gate in `require` cannot see
+        # this, which is what the load-time digest is for.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (VERIFIED,)):
+            self.assertEqual(catalog.require_verified(VERIFIED.id), folder)
+            (folder / "weights.bin").write_bytes(b"tampered")
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require_verified(VERIFIED.id)
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(caught.exception.data["file"], "weights.bin")
+        # A model that failed its checksum stays deletable.
+        self.assertEqual(catalog._leases, {})
+
+    def test_an_entry_without_a_recorded_digest_loads_on_size(self):
+        folder = self.root / UNDIGESTED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (UNDIGESTED,)):
+            self.assertEqual(catalog.require_verified(UNDIGESTED.id), folder)
 
     def test_unknown_model(self):
         with self.assertRaises(WorkerError) as caught:

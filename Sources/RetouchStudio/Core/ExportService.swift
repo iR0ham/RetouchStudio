@@ -200,7 +200,10 @@ enum ExportService {
 
     /// Runs one upscale job through the local helper and reads the result back
     /// into memory. The working copy is deleted; the helper trims its own job
-    /// folders. Cancelling the surrounding task cancels the job as well.
+    /// folders. Cancelling the surrounding task cancels the job as well. The
+    /// result is read only after its provenance sidecar has been matched
+    /// against the artifact's bytes, and the job is named by its capability id
+    /// so the helper applies its own verdict before it loads a model.
     private static func upscale(_ image: CIImage,
                                 progress: ((Int, Int) -> Void)?) throws -> CIImage {
         guard RenderUpscale.canHandle(StudioSize(image.extent.size)) else {
@@ -213,7 +216,8 @@ enum ExportService {
         var used = false
         ModelActivity.shared.begin(.swin)
         defer { ModelActivity.shared.finish(.swin, used: used) }
-        let id = try WorkerClient.shared.submit("upscale", ["image": ["path": copy.path]])
+        let id = try WorkerClient.shared.submit(
+            "upscale", ["image": ["path": copy.path]], capability: "upscale.4x")
         let reply: [String: Any]
         do {
             reply = try WorkerClient.shared.wait(
@@ -233,8 +237,26 @@ enum ExportService {
             throw error
         }
         guard let payload = reply["result"] as? [String: Any],
-              let path = payload["output"] as? String,
-              let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let path = payload["output"] as? String else {
+            throw AIWorkerFailure(code: -32603, message: L10n.current.exportUpscaleFailed)
+        }
+        // §3.6: the file is adoptable only together with the sidecar that names
+        // these bytes. The helper publishes the sidecar first, so a refusal here
+        // means the pair arrived inconsistent rather than merely early, and
+        // decoding anyway would show the user an edit whose origin cannot be
+        // accounted for. The message is the one the user already sees for a
+        // failed pass; the refusal's technical reason is not carried further
+        // by this type — it is recoverable from the worker log, and the
+        // provenance contract, not the wording, is what refused the artifact.
+        let artifact: URL
+        do {
+            artifact = try AIProvenance.verifiedArtifact(
+                path: path, sidecarPath: payload["provenance"] as? String)
+        } catch {
+            throw AIWorkerFailure(code: -32603,
+                                  message: L10n.current.exportUpscaleFailed)
+        }
+        guard let source = CGImageSourceCreateWithURL(artifact as CFURL, nil),
               let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw AIWorkerFailure(code: -32603, message: L10n.current.exportUpscaleFailed)
         }

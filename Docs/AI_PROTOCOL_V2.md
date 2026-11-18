@@ -73,7 +73,7 @@ Every response echoes `contractVersion: "1"`.
 |---|---|
 | `hello` | `contractVersion`, `protocol` (`"2"`), `protocol_version` (2), `worker`, `pid`, `helper_generation`, `launch_nonce`, `providers` |
 | `health` | `contractVersion`, `protocol`, `protocol_version`, `pid`, `helper_generation`, `launch_nonce`, `providers` |
-| `provider.list` | `contractVersion`, `providers`: array of `{id, state, execution_providers}` |
+| `provider.list` | `contractVersion`, `providers`: array of `{id, state, execution_providers}`, plus `reason` when nothing initialised |
 | `capability.list` | `contractVersion`, `vocabulary` (`"capabilities/1"`), `platform`, `provider`, `capabilities` |
 | `ping` | `pong: true` |
 | `shutdown` | `stopping: true` |
@@ -81,9 +81,13 @@ Every response echoes `contractVersion: "1"`.
 `helper_generation` and `launch_nonce` may be `null` when the worker is started
 outside the host (developer shell), but the host never accepts that process.
 
-`state` is `available` or `unavailable`. A provider may report `CPU` only when
-the execution provider actually initialised, not because its library is
-present. DirectML is optional on Windows and is never required for startup.
+`state` is `available` or `unavailable`. `execution_providers` names only a
+provider that actually initialised in this process — `CPU` on Windows once the
+ONNX Runtime execution provider is up, `mps` or `cpu` on macOS once a loader has
+used one — not a library that is merely present or importable. Before any model
+has loaded, the record is still returned with `state: "unavailable"`, an empty
+`execution_providers` and a `reason` saying so. DirectML is optional on Windows
+and is never required for startup.
 
 ## Capability reporting
 
@@ -104,9 +108,10 @@ verified is not installable or supportable (DR-5). See
 for a capability that the adapter cannot run is refused before any work starts:
 `-32020` with `{capabilityId, state, reason}` data, or `-32011` with the missing
 model when the capability is only `requires_model`. It is never accepted and
-silently dropped. The macOS host keeps submitting by job kind in W5-3, so
-existing jobs take the unchanged path; the refusal is the contract for hosts
-that name capabilities (the Windows adapter requires the id).
+silently dropped. The macOS host names the capability for `upscale` (W5-4) and
+still submits the older job types by kind alone, so those take the unchanged
+path; the refusal is the contract for hosts that name capabilities (the Windows
+adapter requires the id).
 
 A submission that names only `kind` is still checked by the worker's own catalog
 before any weights load: a missing model is `-32011`, an uncleared licence is
@@ -136,7 +141,17 @@ worker's inherited stderr; the host does not parse them for protocol state.
 - `shutdown` stops accepting new jobs and exits; the host waits for the process
   and removes the socket. A second call while stopping is idempotent.
 - `job.cancel` is acknowledged immediately and takes effect at the worker's
-  next safe point. The response never claims instant cancellation.
+  next safe point. The response never claims instant cancellation. Safe points
+  are not only the gaps between inference tiles: the macOS upscale job also
+  checks before it loads the model and again after it has encoded the staged
+  output but before publication, so a cancel at the write leaves neither an
+  artifact, nor a staging file, nor a provenance sidecar. Publication itself is
+  deliberately uninterrupted: the sidecar lands first and the artifact rename
+  is the commit point, so a request that arrives there finishes a complete,
+  self-consistent pair rather than tearing an artifact away from its
+  provenance. Two renames are not one atomic act — see
+  [W5_IMPLEMENTATION_DECISION_RECORD.md](W5_IMPLEMENTATION_DECISION_RECORD.md)
+  §3.6 for what a host must therefore refuse.
 - On Windows the worker is in a Job Object with kill-on-close. On macOS the
   host tracks process identity, not just pid. A worker crash is a failed
   runtime, never a silent fallback to another protocol.
@@ -150,7 +165,8 @@ Both platforms must prove, from a fresh checkout:
 1. A real worker process starts from the repository sources.
 2. It publishes a ready record with matching generation/nonce/pid.
 3. `health` and `hello` answer every required field with the same identity.
-4. `provider.list` reports `CPU` only after that provider initialised.
+4. `provider.list` reports an execution provider only after that provider
+   initialised, and says why when none has.
 5. `shutdown` exits the process and leaves no live socket/pipe.
 6. The shared fixture's required methods all answer.
 7. `capability.list` answers every frozen id with a state and an

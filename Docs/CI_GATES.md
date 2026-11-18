@@ -192,6 +192,50 @@ product, so a Windows regression must be able to block `main`. The job had
 already run green on every PR between 2026-11-13 and the switch, including the
 runs recorded below.
 
+**Addendum (2026-11-17, W5-4 Slice 1).** `build-windows.ps1` output now tees to
+`$RUNNER_TEMP/windows-app.log`, and a following step fails the job unless that
+log reports `WINDOWS APP BUILD: PASS`, `AI RUNTIME TESTS: PASS`, `ONNX Runtime
+1.32.0 matches the recorded size and SHA-256`, `AI worker, protocol library and
+ORT CPU payload present` and `upscale stays blocked without an approved
+artifact`. Those five lines are what the run proved about Windows AI, including
+the refusal; a script that threw partway never prints the later ones, so the
+assertion — not the step's own exit status — is what closes the gap between a
+green job and a green claim. The log travels with the failure artifact. No
+required check, runner, timeout or job was added or removed, and no assertion
+was relaxed. In the `macOS Integration` verdict list the worker pin moved from
+`Ran 88 tests` to `Ran 100 tests` with the twelve new worker tests. No run on
+this head exists yet, so the widened gate itself is unverified until CI executes
+it.
+
+**2026-11-17, executed.** Run `44145839011` on head `fec5930` ran that widened
+gate: `Windows App` passed in 14m16s with its step
+"Assert every Windows verdict was reported" succeeding, and the job log carries
+`found: WINDOWS APP BUILD: PASS`, `found: AI RUNTIME TESTS: PASS`,
+`found: ONNX Runtime 1.32.0 matches the recorded size and SHA-256`,
+`found: AI worker, protocol library and ORT CPU payload present` and
+`found: upscale stays blocked without an approved artifact`. `macOS Integration`
+passed in 17m1s with `Ran 100 tests in 2.880s / OK`, `StudioCore: 288 checks
+passed` and `ABI TESTS: PASS (104 checks)`. The assertion step is therefore
+proven to fire on real output. What it proves about Windows is the generic host
+build plus an upscale **refusal**; it establishes no Windows inference. The
+publication work later the same day pins `Ran 115 tests`, and that pin is
+unverified until CI executes it.
+
+**2026-11-17, later.** The macOS Integration job of head `9b2b807`
+(`134322437405`) executed that pin: `found: Ran 115 tests`, `ENGINE TESTS:
+PASS`, `MODEL TESTS: PASS`, `StudioCore: 288 checks passed` and `ABI TESTS:
+PASS (104 checks)` — so the fifteen publication tests pass in the pinned
+source-built 3.13 environment, not only in the developer venv. Windows App and
+StudioCore Boundary were also green on that head. The independent review then
+moved the pin to `Ran 120 tests`, which stays unverified until the next macOS
+run prints it.
+
+**2026-11-18.** That sentence is now historical: run `44174322949`, macOS
+Integration job `134361670612`, printed `found: Ran 120 tests` on head
+`54e3e60`. The submission-boundary work of the same day adds two worker tests —
+the named-versus-kind-only pair and the frozen-field tripwire — so the pin moves
+to `Ran 122 tests` for the next run to execute.
+
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
 one operating system, one renderer, no pixel-parity claim: the macOS Core Image

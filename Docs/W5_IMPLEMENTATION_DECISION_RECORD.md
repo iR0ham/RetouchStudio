@@ -508,3 +508,253 @@ runtime package, MSI payload, GPU claim, release or tag is added by this
 record. The ONNX Runtime dependency is approved for W5-1, not added here. No
 capability is declared supported. No approved capability is removed; all
 follow-on milestones are retained in [W5_ROADMAP.md](W5_ROADMAP.md) §4.
+
+## 10. Addendum (2026-11-17) — W5-4 Slice 1 implementation decisions
+
+Sections 1–9 above are unchanged and remain the frozen contracts. This addendum
+records how Slice 1 implemented them on the macOS worker, and what it did not
+decide. Slice 1 changes no contract text, catalog entry, conformance fixture,
+schema key or C ABI export; downloads, installs and runs no model; performs no
+inference; and claims no capability. Windows is untouched: every Windows state
+and reason stays exactly as §4.2 and §4.3 record them, and Windows W5-4 remains
+BLOCKED on decision 6's artifact evidence.
+
+- **S1-1 — the §3.6 sidecar is written by the worker beside the artifact.**
+  `worker/retouch_ai_worker/provenance.py` emits
+  `retouchstudio.ai.provenance/1` as `<artifact>.provenance.json`, created with
+  `O_CREAT | O_EXCL | O_NOFOLLOW` mode 0600, fsynced, then renamed into place,
+  and only after the output itself has been adopted — a job that does not
+  publish writes no provenance. *(Superseded the same day: §11 records that
+  this order published the artifact first, and the sidecar now lands before it.
+  The sentence stays as the record of what Slice 1 shipped.)* Every field is measured from bytes that exist:
+  file digests are streamed SHA-256 of the published artifact, geometry and bit
+  depth come from reopening it, the input side comes from the decoded array.
+  For `upscale`, `authorizedRect` is the full frame and
+  `outsidePixelsIdentical` is `null`, because §5.3 exempts upscale by
+  definition rather than pretending a patch rule applies. A legacy flat install
+  has no version directory, so `model.version` is `null` there instead of an
+  invented `"1.0.0"`. Where §3.5 needs model identity and the catalog carries no
+  version field, the loader derives it from the resolved install; no catalog
+  entry was edited to make the sidecar easier.
+- **S1-2 — a provider is reported only after it initialised.**
+  `Engine.execution_providers` returns the device a loader actually used, and
+  before the first model returns none with `state: "unavailable"` and a reason.
+  Probing torch during the handshake was rejected: it would import a heavy
+  runtime to answer a claim, costing seconds and hundreds of megabytes on the
+  16 GB machine for no evidence. `Docs/AI_PROTOCOL_V2.md` already required this
+  (§Conformance 4); the macOS worker now complies, and
+  `Tests/RuntimeV2Tests.swift` asserts the pre-load shape. Windows keeps
+  reporting `CPU` because `Providers.Ensure()` genuinely initialises that
+  execution provider at worker start, which is the §4.2 W5-1 deliverable.
+- **S1-3 — the catalog digest is enforced on the load path, not in
+  `Catalog.require`.** `require_verified` runs `require` (licence, presence,
+  size) and then hashes each file with a recorded SHA-256 before the loader gets
+  a path, failing with `-32019` and releasing the lease so a refused install
+  stays repairable and deletable. Deliberate trade-off: it is used by the
+  upscaler only. Measured cost is 0.036 s for the 48,460,141-byte
+  `pytorch_model.bin` on this M3/16 GB Mac (2026-11-17), once per process;
+  hashing 4.6 GB of FLUX weights before every render is not a price the budget
+  can pay, so those entries keep the size gate plus the on-demand `models
+  verify`. The same measurement hashed the owner's live install and every
+  catalog digest matched, so the gate does not refuse a healthy store.
+  Enforcement at every `require` call remains a later decision, not made here.
+- **S1-4 — cancellation has load and write safe points.** The upscale job
+  checks before it loads the model, between tiles, and after the staged PNG is
+  complete but before it is renamed into place, so a cancel at the write leaves
+  neither artifact, staging file nor sidecar. `Docs/AI_PROTOCOL_V2.md` §Shutdown
+  records this. The MLX patch path keeps its single in-call safe point; nothing
+  about it changed.
+- **S1-5 — CI asserts the verdicts instead of the exit code.** The
+  `windows-app` job now fails unless the log reports `WINDOWS APP BUILD: PASS`,
+  `AI RUNTIME TESTS: PASS`, `ONNX Runtime 1.32.0 matches the recorded size and
+  SHA-256`, `AI worker, protocol library and ORT CPU payload present` and
+  `upscale stays blocked without an approved artifact`, and uploads that log as
+  a failure artifact. The pinned worker count in the macOS gate moves 88 → 100.
+  A generic green job is still not Windows AI support: these strings are the
+  evidence of what ran, including the refusal.
+
+**NOT VERIFIED after Slice 1 (add to §8's list, which stays as written):**
+no host or exporter consumes the provenance sidecar yet, and it is written
+beside the artifact inside the job workdir — §3.6 places adopted artifacts and
+their sidecars beside the edit id in the edit store, which needs the host-side
+adoption Slice 1 does not do (§11 closes the *consume* half — the host now
+verifies the pair before it decodes a pixel — while where a stored edit keeps
+its sidecar stays open); no real inference run
+has produced a sidecar, so its values are proven against a fake model and a real
+numpy array only; the load-time digest cost is measured on one file on one
+machine; the cancel-at-load and cancel-at-write paths are proven by deterministic
+tests, not by a timed real job; bit depth, peak memory and wall time for the 4×
+path are unmeasured since Slice 1 ran no inference; and none of this re-records
+the §4.3 acceptance gates.
+
+## 11. Addendum (2026-11-17) — the publication order is corrected, and the host consumes the pair
+
+Sections 1–10 stay as written. This records what the follow-up slices on the same
+branch changed, starting with the thing they proved about this record: §10 S1-1
+described the sidecar landing after the output had been adopted. That order can
+publish an artifact whose provenance then fails, which is precisely the state §3.6
+refuses to allow, so it is corrected here instead of left standing.
+
+- **S2-1 — the sidecar lands first.** `provenance.publish` writes
+  `<artifact>.provenance.json`, renames the staged artifact into place as the
+  commit point, then re-reads the pair and withdraws both if the recorded digest
+  does not match the bytes. No filesystem makes two renames atomic, so the
+  guarantee is carried by the order: the reachable bad state is a sidecar with no
+  artifact — inert, cleared by `provenance.reconcile` when a worker starts against
+  idle job folders — never an artifact with no provenance. Cancellation is checked
+  up to the moment publication begins and deliberately not inside it.
+- **S2-2 — the host will not decode what it cannot account for.**
+  `ExportService.upscale` names `capabilityId: "upscale.4x"`, so the worker
+  applies its own verdict before it loads weights, and
+  `AIProvenance.verifiedArtifact` matches the sidecar beside the returned file —
+  its path, its schema, and the recorded `output.sha256` against the digest of the
+  bytes — before a pixel is decoded. A refusal deletes nothing: the artifact
+  belongs to the worker's job folder and its recovery rules.
+- **Not decided here.** A 4× pass is an export-time render, so there is no edit
+  store entry for a sidecar to sit beside. Keeping provenance with an adopted
+  artifact past the job workdir — copied beside the edit id, or written into the
+  exported photo as metadata — is a product decision with a privacy side, and
+  neither slice implements §3.6's "beside the edit id" wording.
+- **Consequence on this Mac.** The live `swin2sr-x4` install is the legacy flat
+  layout, which `capability.list` reports as `blocked`. Because S2-2 names the
+  capability, a 4× export now stops with `E_UNSUPPORTED` until the owner adopts
+  that install in the model manager. That is the contract's answer, and it is the
+  first time the macOS path can reach it: the kind path ran this same install on
+  2026-11-07.
+
+**NOT VERIFIED after Slice 2:** §10's list stands, plus this — no real worker has
+yet been asked by this host to name a capability and return a pair the host then
+adopted, because no inference ran. The nine host-side checks are proven against
+files the test writes, not against files the worker writes.
+
+Addendum (2026-11-18, second independent review of the complete PR #70 diff at
+`c879761`; verdict: ready for Product Owner authorization, with the items
+below recorded):
+
+- **Finding 1 (should-fix, recorded as an open decision — no code change
+  here).** The kind-only submission path (no `capabilityId` in the envelope)
+  bypasses `_require_capability` by the retained pre-W5-3 contract, and
+  `_job_upscale` then writes `capabilityId: "upscale.4x"` into the sidecar
+  even though no verdict admitted it. The capability *name* is factual (the
+  kind maps to it in the frozen vocabulary); the *admission* is not recorded
+  anywhere machine-readable. The schema is frozen, so no field may be added
+  to carry the admission path; the two candidate resolutions both need a
+  product decision: gate kind-only upscale like the named path (closes the
+  blocked-install hole but removes the documented escape hatch that ran this
+  very install on 2026-11-07), or record `capabilityId: null` on un-named
+  submissions (honest, but makes the sidecar less informative about what the
+  artifact is). Recommended: the first, at the next milestone when the owner
+  has adopted the model, so nothing the owner can do today breaks.
+- **Finding 3 (nit, recorded).** After `AIProvenance.verifiedArtifact`
+  succeeds, `ExportService.upscale` decodes the artifact in a separate open.
+  The worker's job-folder retention (`keep_jobs`) could in principle remove
+  the pair between the two opens; the failure surface is a decode error,
+  never a partial or unprovenanced adoption. Recorded here as accepted
+  rather than fixed.
+- **Finding 2 (nit, fixed):** the export comment claimed the refusal's
+  technical reason "stays in the thrown detail"; `AIWorkerFailure` carries no
+  detail field, so the comment now states what actually happens — the
+  localized failed-pass message stands in and the reason is recoverable from
+  the worker log.
+- **Finding 4 (nit, noted):** §10 S1-5's "88 → 100" wording is a dated
+  Slice-1 record and stands under the append-only rule; the current pins are
+  narrated by `Docs/CI_GATES.md` and `Docs/W5_ROADMAP.md` (100 → 115 → 120,
+  with the next job to confirm).
+
+Addendum (2026-11-18, Product Owner verification round) — Finding 1 is resolved
+against the contract: the kind-only path stays open, and the boundary is pinned.
+
+Sections 1–11 and the dated review block above stay as written, including its
+recommendation, which this addendum supersedes rather than follows. The question
+the review left open — may an upscale job run, and write a provenance record,
+without a capability verdict admitting it? — is answered by contract text that
+already stands on `main`, so it needed a reading and a test, not a decision:
+
+- **The contract permits it, in those words.** `Docs/AI_PROTOCOL_V2.md`
+  §Capability reporting states that "`job.submit` accepts an optional
+  `capabilityId`" (line 107, from `cd872e0` in W5-3) and that a submission naming
+  only `kind` keeps its catalog checks while "deliberately [not refusing] the
+  `blocked` states that describe a *claim* (no recorded run, legacy flat layout,
+  a catalog entry without size or SHA-256); those keep already-installed models
+  usable, and running them is how the evidence for a support claim gets recorded"
+  (lines 116-123, from `55ff254`). Both commits are ancestors of `main`
+  `40b157f`, so the rule predates this branch. W5-0 §3.5 lists `capabilityId`
+  among the job request fields without making it mandatory (§5 rule 2 freezes
+  §3.2–§3.4, which map a job kind to its capability ids), which is why
+  `engine.py:600` naming `upscale.4x` on an un-named submission states the frozen
+  mapping rather than inventing a claim. `server.py:339-340` applies
+  `_require_capability` only to a named submission, unchanged since W5-3.
+- **Closing the bypass would be a contract change, so it is not done here.** It
+  would also break the path that ran the owner's own install on 2026-11-07 and
+  still runs every legacy flat install, which `capabilities.py:135-138` reports as
+  `blocked` for want of a version to bind evidence to. The review's recommendation
+  is therefore marked superseded by the text it was written against, not
+  implemented.
+- **Every submission path, enumerated.** macOS names the capability
+  (`ExportService.swift:220` → `WorkerClient.swift:136`, which puts the field on
+  the wire only when a caller names one). Windows cannot use the bypass: its
+  adapter refuses a submission with no id outright (`WorkerServer.cs:190-194`),
+  pinned by `Windows/RetouchStudio.AI.Tests/Program.cs:172-177`. The acceptance
+  harness names it (`worker/tools/upscale_acceptance.py:284-286`). Nothing in this
+  repository submits an upscale by kind alone; the open path exists for a caller
+  outside it, which is what the protocol sentence above is about.
+- **What now prevents accidental expansion.** Three tests, in the suite CI runs:
+  `test_server.py::test_a_legacy_install_is_refused_by_name_and_runs_by_kind`
+  puts both halves on one machine state — the named submission is refused at
+  submit with `-32020` and `data.state == "blocked"` and leaves no job behind,
+  while the kind-only submission is admitted and runs — so widening the gate or
+  narrowing the refusal each fail a test instead of passing review unnoticed.
+  `test_server.py::test_kind_only_submission_cannot_load_a_damaged_model` (from
+  `55ff254`) bounds the bypass at the catalog: it does not reach integrity.
+  `test_provenance.py::DocumentTests::test_the_record_carries_exactly_the_frozen_fields`
+  pins the §3.6 field list against `provenance.document`, which is where an
+  "admitted by verdict" key would have to appear for the sidecar to start making a
+  claim the schema never authorised.
+- **The asymmetry the review named is still true and now stated plainly.** A
+  sidecar written on the kind path names a capability no verdict admitted. The
+  record is a statement of what produced the bytes; the place a support claim is
+  made is `capability.list`, and nothing reads the sidecar as one — the host's own
+  check (`AIProvenance.verifiedArtifact`) compares path, schema and digest and
+  ignores `capabilityId` entirely.
+
+Worker suite: 122 tests (`Ran 122 tests`), the two new ones included. No protocol,
+schema, C ABI, catalog or host behaviour changed in this addendum.
+
+Verification round (2026-11-18, §4 of the Product Owner's merge authorization) —
+the publication and adoption paths re-read against §3.6, with one new disclosure.
+
+The order, the refusal and the sweep all hold as recorded above, and each claim is
+backed by a test that was executed rather than read: 36 publication and upscale
+tests pass in the torch-free interpreter CI uses. The serialised payload is built
+before anything is created (`provenance.py:137`, with
+`test_provenance.PublicationTests.test_a_record_that_cannot_be_serialised_creates_nothing`
+as its proof), the sidecar lands first and the artifact rename is the commit point
+(`provenance.py:192-208`), a failed commit withdraws the sidecar and a pair that
+disagrees after landing is removed whole, and every cancellation window leaves an
+empty job folder (`engine.py:600-627` with
+`test_upscale.UpscaleJobTests.test_cancel_during_the_write_publishes_nothing` and
+`test_cancel_while_the_weights_load_stops_before_the_first_tile`). The host verifies
+before it decodes a pixel and refuses without deleting
+(`ExportService.swift:251-263`, `AICapability.swift:113-136`, proven by
+`Tests/ModelTests.swift::testAIProvenanceAdoption`). Nothing in the pair is renamed
+over a file it did not write: `publish` refuses when the target exists, the sidecar
+temp is created `O_EXCL | O_NOFOLLOW` at mode 0600 and only that temp is unlinked on
+the way out, and the startup sweep takes its timestamp before it lists anything and
+skips what lands at or after it (`server.py:53-55`, `provenance.py:216-258`). No
+text in code or docs calls the two renames atomic; the phrase that would have
+implied it in §3.6 is bounded by §11's correction.
+
+- **New disclosure — retention can outrun adoption, and it is not fixed here.**
+  `JobManager._trim` deletes the oldest finished job folder as soon as more than
+  `keep_jobs` (20) jobs are tracked, and it runs from `job.submit`
+  (`server.py:113`, `server.py:213-218`). A client that submits 21 further jobs
+  between a job finishing and its artifact being read therefore has that pair
+  removed under it. The reachable failure is a refusal — the host reports the
+  artifact missing (`Docs/W5_IMPLEMENTATION_DECISION_RECORD.md` §3.6: `E_ARTIFACT_MISSING`,
+  never a blank or stale draw) — and never an adoption without provenance, and no
+  flow in this repository can reach it: the macOS export verifies and decodes
+  inside the call that submitted (`ExportService.swift:219-263`), the worker runs
+  one job at a time (`BUSY`), and the acceptance harness reads immediately. Making
+  retention adoption-aware is a worker-side policy decision for a later milestone;
+  this round records it instead of quietly changing a retention rule the model
+  manager and the recovery tests both depend on.

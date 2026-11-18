@@ -798,9 +798,14 @@ func testRealHelperHandshake() {
               "M: health echoes the generation")
         check(health["launch_nonce"] as? String == ready.launchNonce,
               "M: health echoes the launch nonce")
-        check((health["providers"] as? [[String: Any]])?.first?["execution_providers"]
-                as? [String] == ["CPU"],
-              "M: health reports the worker's CPU execution provider")
+        // Nothing has loaded a model at this point, so a provider would be a
+        // claim about a runtime that never initialised.
+        let provider = (health["providers"] as? [[String: Any]])?.first
+        check(provider?["execution_providers"] as? [String] == [],
+              "M: health names no execution provider before a model has loaded")
+        check(provider?["state"] as? String == "unavailable"
+                && (provider?["reason"] as? String)?.isEmpty == false,
+              "M: an uninitialised provider says why")
 
         // The same field set both platforms must answer, read from the shared
         // fixture rather than repeated here.

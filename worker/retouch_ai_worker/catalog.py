@@ -78,6 +78,14 @@ _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 LEGACY_LEASE = "@legacy"
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _safe_component(value: object, field: str) -> str:
     if not isinstance(value, str) or not _SAFE_COMPONENT.fullmatch(value) or ".." in value:
         raise ValueError(f"unsafe {field}")
@@ -322,6 +330,49 @@ class Catalog:
                                    "actual_bytes": size})
         return model_root
 
+    def require_verified(self, model_id: str) -> Path:
+        """`require`, plus the catalog's SHA-256 for every file it lists.
+
+        The job load path uses this: hashing the weights once, just before the
+        process trusts them, is 0.036 s for the 48 MB upscaler checkpoint on the
+        reference Mac, and it is where the recorded digest is actually enforced
+        on macOS. `require` keeps its size-only check so capability reporting,
+        the model manager and launch stay cheap, and a 4.6 GB model still has
+        `models verify` as its deep scan.
+        """
+        entry = self.get(model_id)
+        model_root = self.require(model_id)
+        identity = (LEGACY_LEASE if model_root == self.root / entry.id
+                    else model_root.name)
+        for spec in entry.files:
+            if spec.sha256 is None:
+                continue
+            target = model_root / spec.path
+            try:
+                actual = _sha256(target)
+            except OSError:
+                self._release(entry, identity)
+                raise WorkerError(MODEL_MISSING, f"{entry.id} is not installed",
+                                  {"model": entry.id, "missing": spec.path,
+                                   "download": entry.source})
+            if actual != spec.sha256:
+                # The lease is dropped so the damaged install can be reinstalled
+                # or deleted; the host maps this code to E_MODEL_UNVERIFIED.
+                self._release(entry, identity)
+                raise WorkerError(CHECKSUM_MISMATCH,
+                                  f"{entry.id} failed its recorded checksum",
+                                  {"model": entry.id, "file": spec.path})
+        return model_root
+
+    def release(self, model_id: str, model_root: Path) -> None:
+        """Drop the lease `require` took, so a failed load cannot block a repair."""
+        entry = self.get(model_id)
+        folder = self.root / entry.id
+        if model_root == folder:
+            self._release(entry, LEGACY_LEASE)
+        elif model_root.parent == folder:
+            self._release(entry, model_root.name)
+
     def health(self) -> dict:
         """Cheap launch check: catalog loads and every installed file is whole.
 
@@ -360,11 +411,7 @@ class Catalog:
             if not target.exists():
                 failed.append({"file": spec.path, "reason": "missing"})
                 continue
-            digest = hashlib.sha256()
-            with target.open("rb") as handle:
-                for block in iter(lambda: handle.read(1 << 20), b""):
-                    digest.update(block)
-            if digest.hexdigest() != spec.sha256:
+            if _sha256(target) != spec.sha256:
                 failed.append({"file": spec.path, "reason": "checksum"})
             checked += 1
         return {"model": entry.id, "checked": checked, "failed": failed,

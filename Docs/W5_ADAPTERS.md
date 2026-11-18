@@ -96,15 +96,20 @@ table of its own.
 
 ## Tests
 
-- Worker: 88 tests in `worker/tests` (`Tests/run-worker.sh`). 14 are new for
+- Worker: 122 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+  of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15, the
+  gate's admitting half adds 1, the independent review's fixes add 4 and the
+  submission-boundary pins add 2 (see the
+  addenda). 14 of the W5-3 tests are for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
   kind-only job that must not load a size-mismatched model (`-32019`), and the
   numeric cancel latency. Locally three `test_engine` composites error
   because this machine has no OpenCV; CI installs the hashed worker venv.
-- macOS: 11 new checks in `Tests/ModelTests.swift` decode and reject reports,
-  keep `requires_model` spelling, and check the typed names. The full
-  `MODEL TESTS` suite passes locally on arm64.
+- macOS: 20 new checks in `Tests/ModelTests.swift` decode and reject reports,
+  keep `requires_model` spelling, and check the typed names (11 from W5-3), and
+  adopt or refuse an artifact against its provenance sidecar (9, W5-4). The
+  full `MODEL TESTS` suite passes locally on arm64.
 - Windows: `RetouchStudio.AI.Tests/Program.cs` now checks
   `capability.list` over a real worker pipe (16 ids, no support, reasons),
   the `-32020`/`-32602` refusals, that a kind-only `job.submit` is refused
@@ -115,8 +120,17 @@ table of its own.
 
 ## Limitations, stated plainly
 
-- `supported` is limited to the single recorded `upscale.4x` run on this Mac
-  class. Installed-but-unproven models are reported `blocked`, not supported.
+- `supported` is limited to the exact tuple in the evidence ledger — one
+  recorded run of `upscale.4x` on `macos-arm64` with `swin2sr-x4 1.0.0` — and
+  that run is not claimable on this Mac as it stands. A read-only
+  `capability.list` inspection on 2026-11-17 against
+  `~/Library/Application Support/RetouchStudio/AI/models` reported
+  `upscale.4x` as `blocked` with "swin2sr-x4 is installed without a version;
+  adopt it in the model manager before a capability can bind it", because the
+  installed folder is the legacy flat layout. The capability is therefore
+  **not** reported `supported` by a live worker on this machine until that
+  install is adopted. Installed-but-unproven models are reported `blocked`, not
+  supported.
 - Windows behaviour is host-runner evidence, not physical Windows hardware or
   GPU evidence. DirectML, GPU and Windows ML are NOT VERIFIED.
 - The macOS capability panel was type-checked and its decode logic tested, but
@@ -125,7 +139,153 @@ table of its own.
 - Capability-based refusal is enforced when a caller sends `capabilityId`, and
   the kind-only macOS path still enforces presence, licence and integrity in
   the worker. It does not refuse the `blocked` claim states (no evidence,
-  legacy layout, DR-5 metadata): doing so would stop the existing mask, heal
-  and upscale jobs and the runs that produce evidence. The macOS provider
-  record is static (`available`); a missing MLX/torch runtime fails the job
-  with `E_INTERNAL` rather than being reported as an unavailable provider.
+  legacy layout, DR-5 metadata): `mask`, `patch_edit` and the other job kinds
+  still send no id, so they keep that property. `upscale` names its id since
+  Slice 2 below, which has a user-visible consequence on this Mac: the install
+  there is the legacy flat layout the bullet above records, so a 4× pass is
+  refused with `E_UNSUPPORTED` until the owner adopts it in the model manager.
+  The refusal is the contract's answer, not a defect — but it does mean the
+  feature that ran through the kind path stops running until that one tap. The macOS provider
+  record was static (`available`) in W5-3. Since W5-4 Slice 1 it is
+  evidence-based: `execution_providers` is empty with `state: "unavailable"`
+  and a reason until a loader names the device it used, so a worker that never
+  initialised a runtime no longer claims one, and a missing MLX/torch still
+  fails the job with `E_INTERNAL` rather than reporting a provider.
+
+## Addendum (2026-11-17, W5-4 Slice 1)
+
+Four things changed in the macOS adapter after this document was written. None
+of them makes a new capability claim.
+
+- **Provenance sidecar.** A successful `upscale` job writes
+  `retouchstudio.ai.provenance/1` beside its artifact
+  (`<name>.png.provenance.json`, `worker/retouch_ai_worker/provenance.py`) and
+  returns the path as `provenance`. The record binds the job id, capability id,
+  model id/version/format, the file digests, the provider, the parameters, and
+  input/output geometry measured from the bytes the publishing rename moves.
+  Decision record §3.6 is the contract; nothing in it was invented here.
+- **Publication is ordered, not atomic.** The first draft of this work
+  published the artifact and then wrote its sidecar, which left a real failure
+  window: a record that could not be serialised, or a folder that could not be
+  written, produced an artifact with no provenance for a host to adopt. No two
+  renames can be made atomic on these filesystems, so `provenance.publish`
+  lands the sidecar first and treats the artifact rename as the commit point,
+  withdraws the sidecar if that rename fails, and re-reads the pair afterwards
+  to remove it whole if the digests disagree. The state a crash between the two
+  renames can leave is therefore a sidecar with no artifact — inert, because
+  there is nothing to adopt — which `provenance.reconcile` clears when the
+  worker starts and no job is in flight. An artifact without provenance is the
+  state this path cannot produce. A host that adopts must still verify the pair
+  itself; `provenance.verify` is the same check, and a reader that skips it is
+  trusting a claim it can measure.
+- **Load-time integrity.** `upscale` now resolves its weights through
+  `Catalog.require_verified`, which hashes each file the catalog gives a SHA-256
+  for and fails with `-32019` while releasing the lease. The check runs once per
+  process on a 48 MB checkpoint — 0.036 s measured for its 48,460,141-byte
+  `pytorch_model.bin` on this M3/16 GB Mac on 2026-11-17 — not on every tile,
+  and not on the multi-gigabyte models; see the trade-off in `worker/README.md`
+  invariant 10. The same measurement found all three live `swin2sr-x4` files
+  matching their catalog digests, so the gate does not refuse the owner's
+  existing install.
+- **Cancel points.** The upscale job checks for a cancel before it loads,
+  between tiles, and after the staged PNG is written but before publication
+  begins, so a cancelled write leaves neither artifact, nor temp file, nor
+  sidecar. Inside publication nothing is checked: a cancel that arrives there
+  completes the pair rather than tearing it, which is the whole point of the
+  ordering above.
+- **Truthful provider.** `Engine.execution_providers` reports the device a
+  loader actually used; before the first model, `provider.list` and `health`
+  report no execution provider with `state: "unavailable"` and a reason.
+  `Tests/RuntimeV2Tests.swift` asserts that pre-load shape, and the Windows
+  suite keeps reporting `CPU` because `Providers.Ensure()` genuinely
+  initialises it at worker start.
+
+Still true after Slice 1: Windows claims nothing (`upscale.4x` is `blocked`
+there with the artifact-approval reason, and the Windows worker loads no model
+weights), the Windows CI job is host-runner evidence, and no macOS 4× run has
+been re-recorded since Slice 1 — the acceptance gates in decision record §4.3
+that need a real inference run are open, so W5-4 is not complete.
+
+## Evidence scopes (2026-11-17)
+
+Four kinds of "verified" get mixed together in this program. This is what each
+statement about the upscaler is actually backed by, in descending strength.
+Nothing here has been established by real inference on either platform in this
+workstream.
+
+**Physically measured on the reference Mac (the strongest evidence here).** The
+`swin2sr-x4` checkpoint digest and size, the 0.036 s cost of hashing its
+48,460,141-byte `pytorch_model.bin`, the legacy flat layout of the installed
+store, and the `blocked` verdict `capability.list` returns for `upscale.4x` on
+this machine. These were read from the live store and the live worker with
+read-only commands on 2026-11-17. The older 4× inference measurements this
+document quotes are recorded elsewhere, not re-run here:
+`worker/retouch_ai_worker/capability-evidence.json` binds `upscale.4x` on
+`macos-arm64` to a real 4× job that produced a 256×256 artifact from a 64×64
+input on the M3 using `mps` in 5–7 s for the whole job (its cited source is
+`Docs/PHASE5_ACCEPTANCE.md` §4), and `Resources/model-catalog.json` carries the
+6.2 s per 256² tile figure in the `swin2sr-x4` notes. Both predate Slice 1 and
+neither has been re-measured since.
+
+**CI-proven on macOS** (run `44145839011`, `macOS Integration`, 17m1s): the
+worker suites pass on the pinned source-built 3.13 runtime created by
+`Tools/setup-worker-venv.sh`, StudioCore passes 288 checks, the C ABI passes
+104, and the Swift runtime suite asserts the provider shape a fresh worker
+reports before any model loads. This proves the protocol and the adapters'
+code paths that the tests exercise — not that a 4× job ran.
+
+**CI-proven on Windows** (same run, `Windows App`, 14m16s, and `Windows
+StudioCore`, 3m33s): the .NET host builds against the Swift C ABI, the AI
+worker and ONNX Runtime payload match their recorded size and SHA-256, the
+host's own AI tests pass, and `upscale.4x` is refused with the
+artifact-approval reason. That refusal is the Windows upscaling verdict:
+**a green Windows App check establishes that the generic host works and that
+inference is not offered, nothing more.** These are GitHub-hosted runners —
+no physical Windows device, no GPU, and no DirectML claim is in evidence.
+
+**Unit-tested only, with a fake engine.** The provenance sidecar fields, the
+ordered publication and every failure window inside it (serialisation, create,
+write, both renames, verification), the load-time digest gate and its
+`-32019`, the cancel points and the startup orphan sweep. They run against a
+numpy stand-in for torch and a fake model, on purpose: they prove the
+worker's own bookkeeping, and they are not evidence that the real network
+produces a good image. No test in this repository uses fake inference to claim
+real inference works, and none may start. Also in this class: the host's
+adoption rule — the nine `MODEL TESTS` checks write real files and hash them,
+so the digest comparison is proven, but no check runs a worker and adopts what
+it published.
+
+**Not verified at all.** Anything about output quality, bit depth, ICC
+behaviour, alpha behaviour, orientation, peak memory, wall-clock time, tile
+counts or cancellation latency under a real 4× job; the ONNX artifact questions
+on Windows; and a real upscale round trip in which the host names
+`upscale.4x`, the worker publishes the pair and the host adopts it. Those are
+the open W5-4 gates, and the acceptance harness in Phase 4 exists to make them
+measurable once the owner authorises a real run.
+
+## Addendum (2026-11-17, W5-4 Slice 2 — the host names the capability and checks the pair)
+
+Two integration points closed, both inside the macOS host, neither a contract
+change.
+
+`ExportService.upscale` now submits `capabilityId: "upscale.4x"`, so the worker
+applies its own verdict before it loads 48 MB of weights: a model that is
+missing, unverified or unproven is refused with `-32011`/`-32020` instead of
+running on the kind path's weaker checks. The wire contract is untouched —
+`capabilityId` was already optional, `Tests/Contract/protocol2.json` is
+unchanged, and mask and patch jobs still submit by kind alone.
+
+It then refuses to decode the artifact until `AIProvenance.verifiedArtifact`
+matches the sidecar beside it: the path the job returned, the
+`retouchstudio.ai.provenance/1` schema, and the recorded `output.sha256` against
+the digest of the bytes the host is about to show. A pair that does not agree
+ends the pass with the usual failure message; a refusal never deletes anything,
+because the artifact belongs to the worker's job folder and its own recovery
+rules.
+
+The consequence recorded under *Limitations* is real and intended: on this Mac
+the installed `swin2sr-x4` is still the legacy flat layout, which
+`capability.list` reports as `blocked`, so a 4× pass now stops at the gate until
+the owner adopts it. The worker gained one test for the other half of that gate
+— that a **supported** capability is still admitted — because every refusal test
+in the file would stay green while the feature became unreachable.

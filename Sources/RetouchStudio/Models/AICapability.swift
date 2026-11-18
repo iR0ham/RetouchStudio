@@ -93,3 +93,49 @@ enum AICapabilityClient {
         return report
     }
 }
+
+/// The `retouchstudio.ai.provenance/1` sidecar that W5-0 §3.6 requires beside
+/// every artifact the host adopts. The helper writes the sidecar first and the
+/// artifact second, so a file the host is told about arrives with the record
+/// that names its bytes; this is the host half of that agreement.
+///
+/// A pair that does not agree is refused rather than shown. The sidecar is the
+/// only evidence that a rendered file is the output of the job the user asked
+/// for, so adopting an artifact whose record is missing, of another schema,
+/// filed somewhere other than beside it, or naming different bytes would put
+/// an unaccountable edit in front of a user as if it were their own.
+enum AIProvenance {
+    static let schema = "retouchstudio.ai.provenance/1"
+    static let sidecarSuffix = ".provenance.json"
+
+    /// The artifact at `path`, once the sidecar named `sidecarPath` has been
+    /// read and the digest it records matched against those bytes.
+    static func verifiedArtifact(path: String?,
+                                 sidecarPath: String?) throws -> URL {
+        guard let path, !path.isEmpty, let sidecarPath, !sidecarPath.isEmpty else {
+            throw refusal("the helper returned an artifact with no provenance")
+        }
+        let artifact = URL(fileURLWithPath: path)
+        let sidecar = URL(fileURLWithPath: sidecarPath)
+        guard sidecar.lastPathComponent == artifact.lastPathComponent + sidecarSuffix,
+              sidecar.deletingLastPathComponent().path
+                == artifact.deletingLastPathComponent().path else {
+            throw refusal("the provenance is not the sidecar of this artifact")
+        }
+        guard let data = try? Data(contentsOf: sidecar),
+              let record = (try? JSONSerialization.jsonObject(with: data))
+                as? [String: Any],
+              record["schema"] as? String == schema,
+              let recorded = (record["output"] as? [String: Any])?["sha256"]
+                as? String,
+              let actual = try? AIRuntime.sha256(of: artifact),
+              recorded == actual else {
+            throw refusal("the provenance does not describe these bytes")
+        }
+        return artifact
+    }
+
+    private static func refusal(_ detail: String) -> AIWorkerFailure {
+        AIWorkerFailure(code: -32603, message: detail)
+    }
+}
