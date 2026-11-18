@@ -40,6 +40,23 @@ enum AIQuickPreset: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// The frozen W5-0 id each preset's artifacts are recorded under (§3.6).
+    ///
+    /// Four capabilities share the `patch_edit` kind and the helper cannot tell
+    /// them apart from a request, so only this table can say which tool the user
+    /// pressed; the name travels as `requestedCapability`, which the helper
+    /// writes into the provenance without running its verdict gate on it. A
+    /// blocked verdict here is deliberately not a refusal — that would take the
+    /// shipped Remove/heal/Reimagine buttons away, which is the separate A2
+    /// decision the owner has not made.
+    var capabilityId: String {
+        switch self {
+        case .healArea: return "inpaint.spot"
+        case .removeObject: return "inpaint.object"
+        case .reimagine: return "generative.reimagine"
+        }
+    }
+
     /// Reimagine redraws the whole frame from the prompt, so it needs no mask
     /// or point. The other two act only on what the owner marks.
     var isFullFrame: Bool { self == .reimagine }
@@ -139,7 +156,8 @@ enum QuickEditRunner {
         ModelActivity.shared.begin(model)
         defer { ModelActivity.shared.finish(model, used: used) }
 
-        let id = try WorkerClient.shared.submit("patch_edit", params)
+        let id = try WorkerClient.shared.submit("patch_edit", params,
+                                                requestedCapability: preset.capabilityId)
         onJob(id)
         let started = Date()
         let reply = try WorkerClient.shared.wait(job: id, timeout: timeout,
@@ -156,17 +174,24 @@ enum QuickEditRunner {
         // one opaque layer over the working frame, so undo and export use the
         // same layer machinery as every other edit.
         if mode == "full-frame" {
-            guard let outputPath = payload["output"] as? String else {
+            guard let outputPath = payload["output"] as? String,
+                  let outputProvenance = payload["provenance"] as? String,
+                  let alphaPath = payload["alpha"] as? String,
+                  let alphaProvenance = payload["alpha_provenance"] as? String else {
                 throw AIWorkerFailure(code: -32603, message: L10n.current.aiBadReply)
             }
-            // The worker redrew the whole original, so the layer covers the
-            // whole original. The compositor maps that box through any crop,
-            // which keeps the visible window aligned with what was generated.
+            // The worker redrew the whole frame, so the layer covers the whole
+            // frame and the opaque alpha it returns is its own: both adopted
+            // files come from the same hand and carry the records that name
+            // their bytes. The compositor maps that box through any crop, which
+            // keeps the visible window aligned with what was generated.
             let editID = UUID()
             let files = try AIEditStore.adopt(
                 id: editID,
                 patch: URL(fileURLWithPath: outputPath),
-                alpha: try writeOpaqueAlpha(size: copy.size, beside: copy.url))
+                alpha: URL(fileURLWithPath: alphaPath),
+                patchProvenance: URL(fileURLWithPath: outputProvenance),
+                alphaProvenance: URL(fileURLWithPath: alphaProvenance))
             return AIEdit(id: editID,
                           preset: preset.rawValue,
                           prompt: prompt,
@@ -183,7 +208,9 @@ enum QuickEditRunner {
               let box = payload["box"] as? [Int], box.count == 4,
               let size = payload["image_size"] as? [Int], size.count == 2,
               let patchPath = payload["patch"] as? String,
-              let alphaPath = payload["alpha"] as? String else {
+              let alphaPath = payload["alpha"] as? String,
+              let patchProvenance = payload["patch_provenance"] as? String,
+              let alphaProvenance = payload["alpha_provenance"] as? String else {
             // A masked edit the helper routed to a whole-frame render is not
             // what this sheet promised, so it says so instead of replacing the
             // picture. Reimagine asks for that path explicitly above.
@@ -206,7 +233,9 @@ enum QuickEditRunner {
         let editID = UUID()
         let files = try AIEditStore.adopt(id: editID,
                                           patch: URL(fileURLWithPath: patchPath),
-                                          alpha: URL(fileURLWithPath: alphaPath))
+                                          alpha: URL(fileURLWithPath: alphaPath),
+                                          patchProvenance: URL(fileURLWithPath: patchProvenance),
+                                          alphaProvenance: URL(fileURLWithPath: alphaProvenance))
         return AIEdit(id: editID,
                       preset: preset.rawValue,
                       prompt: prompt,
@@ -253,26 +282,6 @@ enum QuickEditRunner {
 
     private static func writeMask(_ mask: CGImage, beside copy: URL) throws -> URL {
         try writePNG(mask, to: copy.deletingLastPathComponent().appendingPathComponent("mask.png"))
-    }
-
-    /// A whole-frame render has no mask of its own; the editor still needs an
-    /// alpha layer beside the patch, so it gets one that covers every pixel.
-    private static func writeOpaqueAlpha(size: CGSize, beside copy: URL) throws -> URL {
-        let width = max(1, Int(size.width.rounded()))
-        let height = max(1, Int(size.height.rounded()))
-        guard let context = CGContext(data: nil, width: width, height: height,
-                                      bitsPerComponent: 8, bytesPerRow: width,
-                                      space: CGColorSpaceCreateDeviceGray(),
-                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
-            throw AIWorkerFailure(code: -32000, message: L10n.current.aiMaskFailed)
-        }
-        context.setFillColor(gray: 1, alpha: 1)
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        guard let alpha = context.makeImage() else {
-            throw AIWorkerFailure(code: -32000, message: L10n.current.aiMaskFailed)
-        }
-        return try writePNG(alpha, to: copy.deletingLastPathComponent()
-            .appendingPathComponent("alpha.png"))
     }
 
     private static func writePNG(_ image: CGImage, to url: URL) throws -> URL {

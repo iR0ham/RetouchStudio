@@ -772,14 +772,36 @@ class L10n {
     var aiHelperStarting: String {
         "The AI helper is still starting. Try again in a moment."
     }
+    // Capability ids map to a task key rather than to a display string: several
+    // ids describe the same task, and the manager row must name each once. An id
+    // with no task here is shown as written instead of guessed at.
+    static func capabilityTaskKey(for capability: String) -> String {
+        switch capability {
+        case "mask.click": return "segmentation"
+        case "upscale.2x", "upscale.4x": return "upscaling"
+        case "inpaint.spot", "inpaint.object": return "inpainting"
+        case "generative.edit", "generative.reimagine": return "generative"
+        default: return capability
+        }
+    }
     func modelsTaskName(_ task: String) -> String {
         switch task {
         case "segmentation": return "Selection"
         case "upscaling": return "Upscaling"
         case "inpainting": return "Healing"
-        case "generative-edit": return "Object removal"
+        case "generative": return "Generative editing"
         default: return task
         }
+    }
+    /// One task name per distinct task an entry serves, in catalog order.
+    func modelsCapabilityLabel(_ capabilities: [String]) -> String {
+        var seen = Set<String>()
+        var names: [String] = []
+        for capability in capabilities {
+            let name = modelsTaskName(L10n.capabilityTaskKey(for: capability))
+            if seen.insert(name).inserted { names.append(name) }
+        }
+        return names.joined(separator: " · ")
     }
     func modelsUsedFor(_ action: String) -> String { "Used for: \(action)" }
     var modelsInUse: String { "In use" }

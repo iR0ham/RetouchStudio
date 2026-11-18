@@ -380,9 +380,9 @@ public partial class ModelManagerWindow : Window
         string.Join(" · ", entry.Capabilities.Select(capability => capability switch
         {
             "mask.click" => "Selection",
-            "upscale.4x" => "Upscaling",
+            "upscale.2x" or "upscale.4x" => "Upscaling",
             "inpaint.spot" or "inpaint.object" => "Healing",
-            "generative.edit" or "generative.reimagine" => "Object removal",
+            "generative.edit" or "generative.reimagine" => "Generative editing",
             _ => capability,
         }).Distinct());
 

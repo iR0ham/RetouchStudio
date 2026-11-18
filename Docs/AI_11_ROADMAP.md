@@ -82,11 +82,15 @@ still decides when a package may start.
 
 ### R0 — Reproducible worker and licence inventory (W5 prerequisite)
 
-**Why first:** the worker is a separate checkout. A fresh clone cannot
-reproduce a single inference, and the catalog's integrity fields are
-incomplete (SAM 2.1 tiny has neither size nor SHA256 — [AI_RUNTIME.md](AI_RUNTIME.md)
+**Why first:** the worker was a separate checkout. A fresh clone could not
+reproduce a single inference, and the catalog's integrity fields were
+incomplete (SAM 2.1 tiny had neither size nor SHA256 — [AI_RUNTIME.md](AI_RUNTIME.md)
 §6.3). No model decision can be verified against a source that is not in the
-repository.
+repository. Both halves moved on 2026-11-18: the worker source is tracked under
+`worker/`, and SAM 2.1 tiny's checkpoint carries a measured size and digest
+([W5_MODEL_MANAGER.md](W5_MODEL_MANAGER.md) §2). What R0 still owes is a lock
+file a fresh clone can install for every model in the catalog — `sam2` loads in
+`engine.py` and appears in neither `requirements.lock` nor the `models` extra.
 
 **Deliverables:** worker source in the repository or a pinned, fetchable
 dependency; `requirements.lock` reproducible; every catalog entry carries
@@ -324,7 +328,11 @@ second platform; M9 is optimization. V4 still decides which stage is active.
    running, writing) leaves no half-edit and no working copy; a helper crash
    leaves the document unchanged. The host cleanup gap recorded in
    [AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md) §2.2 must be closed before
-   this check can pass.
+   this check can pass. *(Closed on 2026-11-18 for what the host can reach: the
+   working-copy root is swept on both launch paths and the jobs roots are swept
+   at launch under a per-workdir claim — §16, §18 and §19 of that document record
+   the sweeps, the Windows finding and the evidence. This item stays open for
+   what no sweep answers: a cancel observed at every stage under a real job.)*
 5. **Memory.** Peak memory is measured per adopted model; a refusal before load
    is preferred to a crash. The 16 GB target is the design constraint.
 6. **Privacy.** Zero endpoints during any job; audit repeated whenever an
@@ -336,7 +344,7 @@ second platform; M9 is optimization. V4 still decides which stage is active.
 
 | Risk / decision | Needed by | Owner input |
 |---|---|---|
-| Worker source outside the repository | M0 | Decide: move source in, or pin a fetchable dependency |
+| ~~Worker source outside the repository~~ — **closed 2026-11-18: moved in** (`worker/`, hashed locks; `AI_11_ARCHITECTURE.md` §17) | M0 | No input needed on the source; weights still need their own decision |
 | Windows landmark model and its weights licence | M3 | Choose a distributable model or accept no Windows face/mask |
 | Fine-matte weights licence (BiRefNet-class) | M6 | Authorize contacting the maintainer or pick a MIT/Apache alternative |
 | LaMa weights licence | M5 | Same: written grant or exclude |

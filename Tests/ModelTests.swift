@@ -2770,6 +2770,22 @@ func solidImage(width: Int, height: Int,
     return ctx.makeImage()
 }
 
+/// The §3.6 sidecar of a staged artifact, holding what the host reads before it
+/// adopts: the schema and the digest of these bytes. The full field set is the
+/// helper's business and is checked against its real records in
+/// Tests/RuntimeV2Tests.swift, so a fixture here only has to be honest about
+/// the two the adoption path compares.
+func provenanceSidecar(for artifact: URL, sha: String? = nil) -> URL? {
+    let sidecar = URL(fileURLWithPath: artifact.path + AIProvenance.sidecarSuffix)
+    let document: [String: Any] = [
+        "schema": AIProvenance.schema,
+        "capabilityId": "inpaint.object",
+        "output": ["sha256": sha ?? (try? AIRuntime.sha256(of: artifact)) ?? ""],
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: document) else { return nil }
+    return (try? data.write(to: sidecar)) != nil ? sidecar : nil
+}
+
 /// Stages a real pair of files in the edit store: solid patch pixels and an
 /// alpha that is opaque only in a centered inset. The inset is the same
 /// fraction the worker's dilation leaves inside its rectangle.
@@ -2795,8 +2811,12 @@ func storedAIEdit(box: CGRect, inset: CGFloat = 0.25) -> AIEdit? {
     let patchURL = workDir.appendingPathComponent("patch-\(UUID().uuidString).png")
     let alphaURL = workDir.appendingPathComponent("alpha-\(UUID().uuidString).png")
     guard writePNG(patch, to: patchURL), writePNG(alpha, to: alphaURL) else { return nil }
+    guard let patchSidecar = provenanceSidecar(for: patchURL),
+          let alphaSidecar = provenanceSidecar(for: alphaURL) else { return nil }
     let id = UUID()
-    guard let files = try? AIEditStore.adopt(id: id, patch: patchURL, alpha: alphaURL)
+    guard let files = try? AIEditStore.adopt(id: id, patch: patchURL, alpha: alphaURL,
+                                             patchProvenance: patchSidecar,
+                                             alphaProvenance: alphaSidecar)
     else { return nil }
     return AIEdit(id: id,
                   preset: "removeObject", prompt: "test", seed: 1,
@@ -6933,6 +6953,104 @@ func testAIProvenanceAdoption() {
     try? FileManager.default.removeItem(at: folder)
 }
 
+/// The same contract applied to the edit store, where it is the only thing that
+/// tells a composited edit from a truncated one. Adoption verifies the pair
+/// twice — the helper's bytes, then the stored copy under the name the document
+/// will read back — and availability asks the digest whenever a record exists.
+@MainActor
+func testAIEditStoreProvenance() {
+    print("\n[W5-A1] an adopted edit is only as available as its provenance")
+    let manager = FileManager.default
+
+    func artifact(_ red: CGFloat) -> URL? {
+        let url = workDir.appendingPathComponent("edit-\(UUID().uuidString).png")
+        guard let image = solidImage(width: 8, height: 8, red: red, green: 0.2, blue: 0.1),
+              writePNG(image, to: url) else { return nil }
+        return url
+    }
+    func edit(id: UUID, files: (patch: String, alpha: String)) -> AIEdit {
+        AIEdit(id: id, preset: "removeObject", prompt: "test", seed: 1,
+               patchFile: files.patch, alphaFile: files.alpha,
+               box: CGRect(x: 0, y: 0, width: 1, height: 1),
+               imagePixels: CGSize(width: 8, height: 8))
+    }
+
+    // A refusal must not half-land: the store is where the document looks.
+    guard let patch = artifact(0.9), let alpha = artifact(0.1) else {
+        check(false, "the fixtures can write pixels"); return
+    }
+    guard let goodAlphaSidecar = provenanceSidecar(for: alpha),
+          let wrongPatchSidecar = provenanceSidecar(for: patch,
+                                                    sha: String(repeating: "0", count: 64))
+    else {
+        check(false, "the fixtures can write their records"); return
+    }
+    let refused = UUID()
+    let refusedFiles = try? AIEditStore.adopt(id: refused, patch: patch, alpha: alpha,
+                                              patchProvenance: wrongPatchSidecar,
+                                              alphaProvenance: goodAlphaSidecar)
+    check(refusedFiles == nil, "a patch whose record names other bytes is refused")
+    check(!manager.fileExists(atPath: AIEditStore.folder(for: refused).path),
+          "the refusal leaves nothing in the store")
+    check(!manager.fileExists(atPath: AIEditStore.root
+                                .appendingPathComponent(".\(refused.uuidString).staging").path),
+          "a refused adoption takes its staging folder with it")
+
+    let missingRecord = UUID()
+    if let orphan = artifact(0.5), let orphanSidecar = provenanceSidecar(for: orphan) {
+        try? manager.removeItem(at: orphanSidecar)
+        let orphanFiles = try? AIEditStore.adopt(id: missingRecord, patch: orphan,
+                                                 alpha: alpha, patchProvenance: orphanSidecar,
+                                                 alphaProvenance: goodAlphaSidecar)
+        check(orphanFiles == nil, "an artifact with no record beside it is refused")
+        try? manager.removeItem(at: orphan)
+    }
+
+    // The accepted pair, and what its stored record is worth afterwards.
+    let id = UUID()
+    guard let patchSidecar = provenanceSidecar(for: patch),
+          let files = try? AIEditStore.adopt(id: id, patch: patch, alpha: alpha,
+                                             patchProvenance: patchSidecar,
+                                             alphaProvenance: goodAlphaSidecar)
+    else {
+        check(false, "a pair whose records agree is adopted"); return
+    }
+    let stored = edit(id: id, files: files)
+    check(AIEditStore.isAvailable(stored), "an adopted pair is available")
+    check(manager.fileExists(atPath: AIEditStore.sidecar(of: AIEditStore.patchURL(stored)).path),
+          "the record travels with the bytes into the store")
+
+    let legacy = UUID()
+    guard let legacyFiles = try? AIEditStore.adopt(id: legacy, patch: patch, alpha: alpha,
+                                                   patchProvenance: patchSidecar,
+                                                   alphaProvenance: goodAlphaSidecar)
+    else {
+        check(false, "the same pair can be adopted twice"); return
+    }
+    let legacyEdit = edit(id: legacy, files: legacyFiles)
+    try? manager.removeItem(at: AIEditStore.sidecar(of: AIEditStore.patchURL(legacyEdit)))
+    try? manager.removeItem(at: AIEditStore.sidecar(of: AIEditStore.alphaURL(legacyEdit)))
+    check(AIEditStore.isAvailable(legacyEdit),
+          "an edit stored before records existed keeps the answer it always gave")
+
+    // The weakness this closes: an edit that exists is not an edit that is true.
+    let storedPatch = AIEditStore.patchURL(stored)
+    if let handle = try? FileHandle(forWritingTo: storedPatch) {
+        try? handle.truncateFile(atOffset: 4)
+        try? handle.close()
+    }
+    check(!AIEditStore.isAvailable(stored),
+          "bytes that no longer match their record read as missing, not healthy")
+    check(AICompositor.missing([stored, legacyEdit]).map(\.id) == [stored.id],
+          "the editor reports exactly the edit that cannot be trusted")
+
+    try? AIEditStore.remove(stored)
+    try? AIEditStore.remove(legacyEdit)
+    for url in [patch, alpha] { try? manager.removeItem(at: url) }
+    try? manager.removeItem(at: goodAlphaSidecar)
+    try? manager.removeItem(at: wrongPatchSidecar)
+}
+
 // MARK: - runner
 
 @MainActor
@@ -7046,6 +7164,7 @@ func runAll() async {
     testRecoverySnapshotCarriesMasks()
     testAICapabilityReport()
     testAIProvenanceAdoption()
+    testAIEditStoreProvenance()
     await testModelStoresMaskBesideEdit()
 
     // Invalidate any debounced write left by the last scenario: the scratch

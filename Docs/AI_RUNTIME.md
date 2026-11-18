@@ -21,7 +21,7 @@ The helper is self-contained. A full build carries it inside the app. Release bu
 | **Whole full app bundle** | | **~1.31 GiB** |
 | Model weights | Not shipped; downloaded by consent | 28 MB – 4.6 GB |
 
-Download sizes from the catalog: FLUX.2 klein 4B q4 — 4.6 GB; SAM 2.1 tiny — ~298 MB on disk; Swin2SR x4 — 48.5 MB; MI-GAN — 28.1 MB. The app works with any subset; a missing model produces a clear “open Manage Models” message instead of a failed job.
+Download sizes from the catalog: FLUX.2 klein 4B q4 — 4.6 GB; SAM 2.1 tiny — 148.8 MB (156,008,466 bytes, measured 2026-11-18); Swin2SR x4 — 48.5 MB; MI-GAN — 28.1 MB. The app works with any subset; a missing model produces a clear “open Manage Models” message instead of a failed job.
 
 The worker is the framework interpreter copied from Homebrew Python 3.13.15, with the Homebrew dylibs it needs (`libssl`, `libcrypto`, `liblzma`, `libmpdec`, `libsqlite3`) relocated into `Worker/lib` and every Mach-O reference rewritten to `@loader_path`. No Homebrew installation is required on the target Mac, and no Mach-O load command in the bundle refers to `/opt/homebrew`. A handful of unused framework scripts (`pip3`, `pydoc3`, `idle3`) and pkg-config files still carry Homebrew shebangs or build paths; the helper never runs them — it is started through the bundled `Python.framework` interpreter.
 
@@ -61,7 +61,7 @@ After the models are installed:
 
 This was measured, not assumed: see [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md) §3 — zero TCP/UDP endpoints while idle and during a real upscale job, and exactly two HTTPS connections during an approved download.
 
-If a model file with a catalog SHA256 is damaged, `Manage Models… → Verify` reports the mismatched file and the model can be downloaded again. The SAM 2.1 tiny entry has no SHA256, so Verify has nothing to compare for that file. Launch never re-downloads anything on its own.
+If a model file with a catalog SHA256 is damaged, `Manage Models… → Verify` reports the mismatched file and the model can be downloaded again. SAM 2.1 tiny's checkpoint gained its recorded size and SHA256 on 2026-11-18, so Verify now compares that file too; what its entry still refuses is the download, because the `sam2` runtime package is not part of the bundled worker. Launch never re-downloads anything on its own.
 
 ---
 
@@ -79,6 +79,81 @@ Paths depend on which helper is running.
 | `~/Library/Application Support/RetouchStudio/AI/worker.sock` | Local JSON-RPC socket |
 | `~/Library/Application Support/RetouchStudio/AI/helper-owner.json` | Which app instance owns the running helper |
 | `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
+
+Both rows above say "Helper working copies and job outputs (cleaned up over
+time)". Measured against the code on 2026-11-18, that describes two different
+places as if they were one, and overstates the cleanup:
+
+- **Job outputs** do live here — one folder per job id, written by the helper.
+- **Working copies** — the resized `photo.png`/`source.png` the host hands the
+  helper — live in `$TMPDIR/RetouchStudioAI/<job-uuid>/` instead
+  (`AIWorker.workingDirectory`), which is passed to the helper only as an
+  allowed read root. The host deletes a job's folder when the job returns, and
+  `AIWorker.ensureRunning()` sweeps copies older than 24 h from that root after
+  either launch path starts a helper (`AI_11_ARCHITECTURE.md` §16).
+- "cleaned up over time" is true of the *current session only* for these two
+  `jobs/` folders. The helper prunes them with an in-process ledger that keeps
+  the last `keep_jobs` (20) entries and forgets the rest at exit
+  (`worker/retouch_ai_worker/server.py:88, 256-262`), so folders from earlier
+  sessions stay until the owner sets a disk retention rule — recorded as an open
+  decision, not implemented, because a completed result the user never adopted
+  is user-visible work. What startup does clear is provenance debris: it walks
+  every job folder and removes a `*.provenance.json` whose artifact never
+  arrived plus any half-written sidecar temp, skipping anything written at or
+  after the sweep's own timestamp so a worker sharing the jobs root cannot take
+  a live publication's evidence (`server.py:84-86`, `provenance.py:226-268`).
+  Those are the only names it can match. The upscale path wrote the first of
+  them; since 2026-11-18 every job the host names a capability for writes a pair
+  too (`Docs/AI_EDIT_PROVENANCE_DECISION.md` §8), so the sweep now guards edit
+  folders as well. The staged artifact of a publication — `<name>.png.tmp` — is
+  not one of the names it matches: the publishing call removes it on every exit
+  path it controls, so the residue a `SIGKILL` mid-write leaves is the same
+  per-job clutter the retention decision above already covers, not new evidence
+  with nothing to clear it.
+
+**Addendum, 2026-11-18: the jobs-root retention rule is implemented.** The
+paragraph above is kept as the measurement it was written from; what follows is
+what runs now, and it is the answer to the decision that paragraph left open.
+
+- **The job says what it owns.** `JobManager._run` takes an exclusive `flock` on
+  `<workdir>/.lock` before it builds the job's context and closes it after
+  `job.finished` has been emitted (`server.py`, `JOB_LOCK_NAME`,
+  `acquire_folder_lock`). The kernel drops it if the helper dies, so a crash
+  cannot leave a guard outliving the render it protected. The claim is what lets
+  a job run longer than the age bound below without being cleaned under itself —
+  the case an age-only sweep gets wrong.
+- **The host clears what an earlier helper left.** `AppDelegate.attach` calls
+  `AIWorker.cleanupJobsAtStartup()`, which sweeps *both* jobs roots —
+  `AI/jobs/` and `AI/runtimes/protocol-v2/jobs/` — on a utility queue at launch,
+  whether or not a helper ever starts (`AIWorker.cleanStaleJobFolders`). A folder
+  is removed only when all three hold: its name is the helper's job-id spelling
+  (twelve lowercase hex characters), its date is at least 24 h old, and this
+  process can take its `.lock`. Anything else is kept and logged with the reason:
+  an unreadable date, a name that is not a job id, a folder a live job holds, a
+  removal that failed. The jobs root itself is never a candidate.
+- **Why an unreadable date keeps a folder here.** The working-copy sweep in
+  `AIWorker.ensureRunning()` treats a copy it cannot date as ancient, which is
+  safe because those copies are duplicated in the project. These folders are not
+  duplicated anywhere, so this sweep takes the other branch: no date, no
+  deletion.
+- **Nothing persisted points into these folders, so nothing breaks when they
+  go.** An adopted Quick Edit or removal is a copy under `AI/edits` with its own
+  sidecar, taken synchronously during adoption (`QuickEdit.swift`), and the
+  export-time upscale artifact is verified and decoded inside the export that
+  produced it. `EditorModel.aiJobID` is cancel-only and is never serialized; the
+  recovery records store no path into `AI/jobs/`. That is the fact that makes a
+  launch sweep safe, and it is why the "user-visible work" worry in the
+  paragraph above does not apply to a folder that is already 24 h old at launch:
+  the document that referenced it is closed, and a reopened document loads from
+  `AI/edits` or the exported file.
+- **What is still not claimed.** `_trim`'s in-session window (`keep_jobs` = 20)
+  is unchanged, so the current session still trims by ledger rather than by
+  age; the sweep runs at launch only, not on a timer, so a session that stays
+  open for days accumulates as before; and the export-time provenance record
+  dies with its folder 24 h after it was written, which is fine for a host that
+  verified it during the export and has no reason to read it again — a future
+  feature that wants long-lived upscale provenance must publish it somewhere
+  durable first.
 
 **Protocol-v2 runtime (when a package is configured):**
 
@@ -165,6 +240,8 @@ The complete pinned list is `worker/requirements.lock`.
 
 Weights are downloaded, never redistributed inside the app. Each download is verified against the SHA256 in the catalog when the manifest provides one. Inspected on 2026-11-10, the worker catalog (`retouch_ai_worker/catalog.py` in the separate checkout) gives SAM 2.1 tiny neither a size nor a SHA256: that download cannot be checksum-verified and its progress is indeterminate. That checkout is not under version control here, so this describes it as inspected, not a property of the app bundle.
 
+Corrected 2026-11-18: both halves of that sentence are now out of date, and the paragraph is kept as the inspection it was. The worker source lives in this repository under `worker/`, and SAM 2.1 tiny's checkpoint carries a measured size (156,008,466 bytes) and SHA256 (`7402e0d8…be69`, from the installed file, matching the pinned URL's stream and HuggingFace's LFS object id). Downloading that entry is still refused, now for the reason that actually applies: `sam2` is in neither `worker/requirements.lock` nor the `models` extra of `worker/pyproject.toml`, so a machine that fetched the weights would have nothing that could load them. See [`W5_MODEL_MANAGER.md`](W5_MODEL_MANAGER.md) §2 for the manifest-digest rule that also gives the entry its own digest.
+
 ---
 
 ## 7. Building from source
@@ -195,3 +272,10 @@ Overrides used by the bundler:
 `Tools/bundle-worker.sh` keeps a stamp of the Python version, the worker source hash and the wheel list in `Worker/.stamp`; an unchanged runtime is reused across builds. It refuses to finish if any Mach-O still refers to `/opt/homebrew`, if a symlink in the runtime is broken, or if a required signature step fails.
 
 > **The worker source is a separate checkout.** It is not part of this repository. Point `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` at it to bundle the helper. Without them the app still builds and runs; the AI tools simply report that the helper is not installed. Moving `worker/` and `requirements.lock` into this repository would make the build self-contained; it is listed as a follow-up.
+
+> **Superseded 2026-11-18.** `worker/` *is* in this repository: 31 tracked paths
+> including the hashed `worker/requirements.lock`, and
+> `Tools/bundle-worker.sh:16` already defaults `WORKER_ROOT` to `$REPO_ROOT/worker`
+> — `RETOUCH_WORKER_ROOT` and `RETOUCH_WORKER_VENV` are now overrides for a custom
+> interpreter, not requirements. A plain clone bundles with no environment set, and
+> CI does exactly that. See `AI_11_ARCHITECTURE.md` §17.

@@ -4,6 +4,8 @@ Invariants this file exists to protect:
 
 - one heavy job at a time (the machine has 16 GB, two models do not fit);
 - the job thread never writes the input image;
+- a job folder carries an exclusive flock while its job runs, which is how a
+  sweep of the jobs root by another process knows to walk past it;
 - no network code: model acquisition is a separate, user-initiated command run
   outside this server, and only the pure manifest builder is imported here;
 - cancellation is acknowledged immediately and takes effect at the next
@@ -11,6 +13,7 @@ Invariants this file exists to protect:
 """
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import queue
@@ -34,6 +37,34 @@ from .protocol import (BUSY, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
 from .transport import BufferRegistry
 
 LOG = logging.getLogger("retouch_ai_worker")
+
+# A job's workdir holds pixels derived from the user's photo, and the host sweeps
+# the ones a previous helper left behind: old and unlocked, the same rule the
+# model store applies to its staging trees. `JOB_LOCK_NAME` is how a folder says
+# "a job is writing here right now", including when that job belongs to a second
+# worker sharing the root — a developer's `python -m retouch_ai_worker serve`,
+# which defaults to the directory the app passes as `--jobs`. The kernel drops
+# the flock when the holder dies, so a crash cannot leave a guard that outlives
+# the job it protected.
+JOB_LOCK_NAME = ".lock"
+
+
+def acquire_folder_lock(folder: Path) -> int | None:
+    """`LOCK_EX` on `<folder>/.lock`, or None when another process holds it.
+
+    The caller keeps the returned descriptor for as long as the folder is
+    live and closes it afterwards; the file itself is the folder's business.
+    """
+    try:
+        handle = os.open(str(folder / JOB_LOCK_NAME), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(handle)
+        return None
+    return handle
 
 
 class JobManager:
@@ -86,7 +117,8 @@ class JobManager:
 
     # --- lifecycle ----------------------------------------------------
     def submit(self, kind: str, params: dict, out_shm: str | None = None,
-               capability_id: str | None = None) -> dict:
+               capability_id: str | None = None,
+               requested_capability: str | None = None) -> dict:
         with self._lock:
             if self._current is not None:
                 raise WorkerError(BUSY, "another job is running",
@@ -97,6 +129,7 @@ class JobManager:
                 "id": job_id,
                 "kind": kind,
                 "capability": capability_id,
+                "requested_capability": requested_capability,
                 "status": "queued",
                 "created": time.time(),
                 "started": None,
@@ -120,12 +153,18 @@ class JobManager:
     def _run(self, job: dict, params: dict, out_shm: str | None) -> None:
         workdir = self.jobs_root / job["id"]
         workdir.mkdir(parents=True, exist_ok=True)
+        # Held for the whole render, so a sweep from the other direction — the
+        # app clearing folders an earlier helper left — walks past this one even
+        # if the job runs long enough that its last write falls outside the age
+        # bound it checks.
+        lock = acquire_folder_lock(workdir)
         ctx = Context(job_id=job["id"], workdir=workdir,
                       cancel=job["cancel"].is_set,
                       progress=lambda fields: self._progress(job, fields),
                       allow_roots=self.allow_roots,
                       buffers=self.buffers, out_shm=out_shm,
-                      capability_id=job["capability"])
+                      capability_id=job["capability"],
+                      requested_capability=job["requested_capability"])
         job["status"] = "running"
         job["started"] = time.time()
         self._emit("job.started", {"job_id": job["id"], "kind": job["kind"]})
@@ -158,6 +197,10 @@ class JobManager:
                 job["cancel_latency_ms"] = max(0, round(
                     (time.monotonic() - job["cancel_requested_at"]) * 1000, 1))
             self._emit("job.finished", self._public(job))
+            # Released after the reply is out: the host reads the artifacts the
+            # moment it sees this event, and the folder stays claimed until then.
+            if lock is not None:
+                os.close(lock)
 
     def _progress(self, job: dict, fields: dict) -> None:
         job["progress"] = fields
@@ -294,6 +337,27 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
                               {"capabilityId": capability_id,
                                "model": item.get("modelId")})
 
+    def _requested_capability(self, params: dict, kind: str) -> str | None:
+        """The record-only capability name a host may attach to a job (A1).
+
+        `capabilityId` is a gate: naming it means the worker must refuse the job
+        unless it really provides that capability. `requestedCapability` is a
+        label: the host says which product feature these bytes are evidence for
+        so the provenance record can name it, and the worker only checks the
+        name is one this kind can carry at all. It deliberately does not consult
+        the model-state verdict — refusing a job for a name the adapter does
+        render is the A2 decision the owner has not made.
+        """
+        requested = params.get("requestedCapability")
+        if requested is None:
+            return None
+        requested = str(requested)
+        if not any(item.id == requested for item in job_capability(kind)):
+            raise WorkerError(INVALID_PARAMS,
+                              f"{requested} is not a {kind} capability",
+                              {"capabilityId": requested, "kind": kind})
+        return requested
+
     # --- dispatch -----------------------------------------------------
     def dispatch(self, method: str, params: dict, connection) -> dict:
         if method == "hello":
@@ -340,7 +404,8 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
                 self._require_capability(str(capability_id), kind)
             return self.manager.submit(
                 kind, job_params, params.get("out_shm"),
-                str(capability_id) if capability_id else None)
+                str(capability_id) if capability_id else None,
+                self._requested_capability(params, kind))
         if method == "job.status":
             return self.manager.status(str(params.get("job_id", "")))
         if method == "job.result":

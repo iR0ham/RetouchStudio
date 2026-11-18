@@ -148,9 +148,19 @@ CATALOG: tuple[ModelEntry, ...] = (
         license_id="Apache-2.0",
         commercial_ok=True,
         source="hf:facebook/sam2.1-hiera-tiny",
-        files=(ModelFile("sam2.1_hiera_tiny.pt", url=
-                         "https://dl.fbaipublicfiles.com/segment_anything_2/092824/"
-                         "sam2.1_hiera_tiny.pt"),),
+        files=(ModelFile(
+            "sam2.1_hiera_tiny.pt",
+            # Measured 2026-11-18 three ways that agree: the pinned URL streams
+            # 156,008,466 bytes to this digest, HuggingFace's LFS object id for
+            # the same path is identical, and so is the copy this app installed
+            # from the URL on 2026-11-08. Downloading is still refused by the
+            # JSON entry's `unverifiableReason`: `sam2` is in neither
+            # requirements.lock nor the `models` extra, so these weights have no
+            # runtime to load them.
+            "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69",
+            156_008_466,
+            url="https://dl.fbaipublicfiles.com/segment_anything_2/092824/"
+                "sam2.1_hiera_tiny.pt"),),
         notes="Point/box prompts; 21 ms warm at 1024².",
     ),
     ModelEntry(

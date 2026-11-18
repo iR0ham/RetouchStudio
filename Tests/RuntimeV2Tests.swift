@@ -18,7 +18,26 @@ import Foundation
 //
 // M starts the real in-repository worker from a fresh support tree and makes
 // the host verify its protocol-2 readiness and identity handshake. A stub
-// would not prove that the worker source and the host agree.
+// would not prove that the worker source and the host agree. Its
+// `capability.list` answer is parsed by the host's own validator too, so the
+// frozen vocabulary is proven against what the adapter really writes rather
+// than against a payload this file writes.
+//
+// N asks that same shipped worker to publish a provenance pair and hands it to
+// the host's adoption gate. §3.6 is an agreement in two languages, and a
+// sidecar this file writes cannot prove the Python half of it.
+//
+// O sends the job envelope the export really builds through that worker. The
+// gate must refuse a named capability before any job exists, and the fields the
+// host reads out of `job.status` and `job.result` must be the fields Python
+// wrote: a rename on either side leaves every stub-based test green while the
+// owner's export fails.
+//
+// P separates O's two spellings, which an edit path depends on: a capability the
+// host *names* is put through the worker's verdict, and a capability the host
+// only asks to be *recorded* is not. The same live worker state has to answer
+// those two envelopes differently, and only a real helper can show that the
+// label still arrives in Swift.
 
 let rawArguments = CommandLine.arguments
 if rawArguments.count > 2, rawArguments[1].hasPrefix("--child-") {
@@ -698,6 +717,158 @@ func testStalePreparingReplacementHoldsExclusiveLease() {
     free?.release()
 }
 
+// MARK: - A live helper
+
+/// Why there is no live worker to start, phrased as the check that reports it.
+enum LiveWorkerProblem: String, Error {
+    case noInterpreter = "a worker interpreter is available"
+    case noSource = "the worker source is in this checkout"
+}
+
+let liveWorkerRemedy
+    = "set RETOUCH_WORKER_PYTHON or create worker/.venv with Tools/setup-worker-venv.sh"
+
+/// Where the shipped worker lives and which interpreter runs it. Every section
+/// that needs a real worker rather than a stub resolves it the same way, with
+/// the checkout's `worker/.venv` as the fallback.
+func liveWorker() -> Result<(repo: URL, worker: URL, python: URL), LiveWorkerProblem> {
+    let environment = ProcessInfo.processInfo.environment
+    let repo = URL(fileURLWithPath: environment["RETOUCH_TESTS_ROOT"]
+                   ?? FileManager.default.currentDirectoryPath, isDirectory: true)
+    let worker = repo.appendingPathComponent("worker", isDirectory: true)
+    let python = environment["RETOUCH_WORKER_PYTHON"].map { URL(fileURLWithPath: $0) }
+        ?? worker.appendingPathComponent(".venv/bin/python3")
+    guard FileManager.default.isExecutableFile(atPath: python.path) else {
+        return .failure(.noInterpreter)
+    }
+    guard FileManager.default.fileExists(
+        atPath: worker.appendingPathComponent("retouch_ai_worker").path) else {
+        return .failure(.noSource)
+    }
+    return .success((repo, worker, python))
+}
+
+struct LiveHelperError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+}
+
+/// A real helper running from a support tree of its own, with the roots it was
+/// told it may read.
+struct LiveHelper {
+    let support: URL
+    let inputs: URL
+    let jobs: URL
+    let models: URL
+    let socket: URL
+    let log: URL
+    let ready: HelperRegistry.Record?
+    let client: WorkerClient
+    let child: ChildProcess
+    // Held so the lease object cannot be deallocated while the child still
+    // borrows its descriptor number; the lease itself was released at spawn.
+    private let lease: RuntimeUsageLease
+
+    /// The memberwise initializer is private because `lease` is, and the
+    /// sections construct this through `launchLiveHelper` anyway.
+    init(support: URL, inputs: URL, jobs: URL, models: URL, socket: URL, log: URL,
+         ready: HelperRegistry.Record?, client: WorkerClient, child: ChildProcess,
+         lease: RuntimeUsageLease) {
+        self.support = support
+        self.inputs = inputs
+        self.jobs = jobs
+        self.models = models
+        self.socket = socket
+        self.log = log
+        self.ready = ready
+        self.client = client
+        self.child = child
+        self.lease = lease
+    }
+
+    /// A refusal is only useful if the helper's own log explains it, so a failing
+    /// run prints the tail rather than an exit code.
+    var logTail: String {
+        String(((try? String(contentsOf: log, encoding: .utf8)) ?? "").suffix(400))
+    }
+
+    /// For a section that ends without shutting the helper down itself. A test
+    /// run must never outlive the worker it started: the child owns the shared
+    /// usage lease, so an orphan keeps it until it exits on its own and slows
+    /// the exclusive-lease checks in another suite. `terminate` is only SIGTERM,
+    /// so a helper that ignores both the protocol and the signal is killed.
+    func stopIfNeeded() {
+        guard child.isRunning else { return }
+        _ = try? WorkerClient(socketPath: socket.path).call("shutdown", timeout: 5)
+        if child.wait(timeout: 5) { return }
+        child.terminate()
+        if child.wait(timeout: 5) { return }
+        child.send(SIGKILL)
+        _ = child.wait(timeout: 5)
+    }
+}
+
+/// Starts the shipped worker the way the app starts one — a preparing record, a
+/// shared usage lease held across the spawn, then the same arguments — and waits
+/// for the registry to call that launch ready. A nil `ready` is the failure, and
+/// `logTail` is its reason.
+func launchLiveHelper(worker: URL, python: URL, named name: String) throws -> LiveHelper {
+    let support = freshSupport(name)
+    let inputs = support.appendingPathComponent("inputs")
+    let jobs = support.appendingPathComponent("jobs")
+    let models = support.appendingPathComponent("models")
+    let socket = support.appendingPathComponent("worker.sock")
+    let log = support.appendingPathComponent("worker.log")
+    for folder in [inputs, jobs, models] {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    }
+    guard let parent = ProcessIdentity.capture(getpid()) else {
+        throw LiveHelperError(message: "this process has no identity")
+    }
+    let store = try HelperRegistryStore(root: support)
+    let preparing = RuntimeBootstrap.preparingRecord(parent: parent, socket: socket,
+                                                     previous: nil)
+    try store.update { _ in (preparing, ()) }
+    let lease = try RuntimeUsageLease.acquireShared(support: support)
+    let arguments = RuntimeBootstrap.arguments(
+        socket: socket, jobs: jobs, models: models, allowRoots: [inputs, jobs, models],
+        generation: preparing.generation, nonce: preparing.launchNonce,
+        registry: support.appendingPathComponent(HelperRegistry.fileName))
+    let environment = ProcessInfo.processInfo.environment
+    var childEnvironment = [
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": environment["HOME"] ?? NSHomeDirectory(),
+        "TMPDIR": NSTemporaryDirectory(),
+        "PYTHONPATH": worker.path,
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    ]
+    if let lang = environment["LANG"] { childEnvironment["LANG"] = lang }
+    let child = try RuntimeBootstrap.spawn(RuntimeBootstrap.Configuration(
+        executable: python, arguments: arguments,
+        environment: childEnvironment, log: log, lease: lease))
+    let ready = RuntimeBootstrap.waitForReady(store: store, generation: preparing.generation,
+                                              nonce: preparing.launchNonce, timeout: 30)
+    return LiveHelper(support: support, inputs: inputs, jobs: jobs, models: models,
+                      socket: socket, log: log, ready: ready,
+                      client: WorkerClient(socketPath: socket.path),
+                      child: child, lease: lease)
+}
+
+/// One decodable PNG inside a root the helper was told it may open. No job
+/// below looks at these bytes; the envelope that carries them is what is under
+/// test, so it is the smallest real image rather than a made-up path.
+func writeLivePixel(_ directory: URL) throws -> URL {
+    let url = directory.appendingPathComponent("pixel.png")
+    guard let data = Data(base64Encoded: """
+        iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+        """) else {
+        throw LiveHelperError(message: "the pixel fixture is not valid base64")
+    }
+    try data.write(to: url)
+    return url
+}
+
 // MARK: - M
 
 /// A real helper process, started the way the app starts one, answering the
@@ -705,82 +876,39 @@ func testStalePreparingReplacementHoldsExclusiveLease() {
 /// not prove that the shipped worker source and the host agree.
 func testRealHelperHandshake() {
     print("\n[M] a real helper process completes the protocol-2 handshake")
-    let environment = ProcessInfo.processInfo.environment
-    let root = URL(fileURLWithPath: environment["RETOUCH_TESTS_ROOT"]
-                   ?? FileManager.default.currentDirectoryPath, isDirectory: true)
-    let workerRoot = root.appendingPathComponent("worker", isDirectory: true)
-    let python = environment["RETOUCH_WORKER_PYTHON"].map { URL(fileURLWithPath: $0) }
-        ?? workerRoot.appendingPathComponent(".venv/bin/python3")
-    guard FileManager.default.isExecutableFile(atPath: python.path) else {
-        check(false, "M: a worker interpreter is available",
-              "set RETOUCH_WORKER_PYTHON or create worker/.venv with Tools/setup-worker-venv.sh")
+    let worker: (repo: URL, worker: URL, python: URL)
+    switch liveWorker() {
+    case .failure(let problem):
+        check(false, "M: \(problem.rawValue)", liveWorkerRemedy)
         return
+    case .success(let found):
+        worker = found
     }
-    guard FileManager.default.fileExists(
-        atPath: workerRoot.appendingPathComponent("retouch_ai_worker").path) else {
-        check(false, "M: the worker source is in this checkout")
-        return
-    }
-
-    let support = freshSupport("protocol2")
-    let jobs = support.appendingPathComponent("jobs")
-    let models = support.appendingPathComponent("models")
-    let socket = support.appendingPathComponent("worker.sock")
-    let log = support.appendingPathComponent("worker.log")
-    try? FileManager.default.createDirectory(at: jobs, withIntermediateDirectories: true)
-    try? FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
-
-    guard let parent = ProcessIdentity.capture(getpid()) else {
-        check(false, "M: this process has an identity")
-        return
-    }
-    let store: HelperRegistryStore
+    let live: LiveHelper
     do {
-        store = try HelperRegistryStore(root: support)
-        let preparing = RuntimeBootstrap.preparingRecord(parent: parent, socket: socket,
-                                                         previous: nil)
-        try store.update { _ in (preparing, ()) }
-        let lease = try RuntimeUsageLease.acquireShared(support: support)
-        let arguments = RuntimeBootstrap.arguments(
-            socket: socket, jobs: jobs, models: models, allowRoots: [jobs, models],
-            generation: preparing.generation, nonce: preparing.launchNonce,
-            registry: support.appendingPathComponent(HelperRegistry.fileName))
-        var childEnvironment = [
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "HOME": environment["HOME"] ?? NSHomeDirectory(),
-            "TMPDIR": NSTemporaryDirectory(),
-            "PYTHONPATH": workerRoot.path,
-            "PYTHONUNBUFFERED": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        ]
-        if let lang = environment["LANG"] { childEnvironment["LANG"] = lang }
-        let child = try RuntimeBootstrap.spawn(RuntimeBootstrap.Configuration(
-            executable: python, arguments: arguments,
-            environment: childEnvironment, log: log, lease: lease))
-        defer {
-            if child.isRunning {
-                _ = try? WorkerClient(socketPath: socket.path).call("shutdown", timeout: 5)
-                _ = child.wait(timeout: 5)
-                child.terminate()
-            }
-        }
-
-        guard let ready = RuntimeBootstrap.waitForReady(
-            store: store, generation: preparing.generation,
-            nonce: preparing.launchNonce, timeout: 30) else {
-            let detail = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
-            check(false, "M: the helper publishes a ready registry record",
-                  String(detail.suffix(400)))
-            return
-        }
+        live = try launchLiveHelper(worker: worker.worker, python: worker.python,
+                                    named: "protocol2")
+    } catch {
+        check(false, "M: the real helper starts", "\(error)")
+        return
+    }
+    defer { live.stopIfNeeded() }
+    guard let ready = live.ready else {
+        check(false, "M: the helper publishes a ready registry record", live.logTail)
+        return
+    }
+    let root = worker.repo
+    let socket = live.socket
+    let log = live.log
+    let child = live.child
+    let client = live.client
+    do {
         check(ready.state == .ready && ready.helper?.pid == child.pid,
               "M: the helper publishes a ready registry record naming its process")
         guard let helper = ready.helper else {
             check(false, "M: the ready record carries the helper identity")
             return
         }
-
-        let client = WorkerClient(socketPath: socket.path)
         let health: [String: Any]
         do {
             health = try client.verifiedHealth(generation: ready.generation,
@@ -855,6 +983,36 @@ func testRealHelperHandshake() {
         check(pong?["pong"] as? Bool == true,
               "M: ping answers pong")
 
+        // What the adapter actually answers, run through the host's own
+        // validator. W5-3 proves the validator against payloads written here;
+        // only a live worker can prove the two sides still spell the frozen
+        // vocabulary the same way. Nothing is loaded to answer it, so this
+        // stays cheap and cannot disturb a job.
+        let capabilityReply = try? client.call("capability.list", timeout: 15)
+        if let payload = capabilityReply as? [String: Any],
+           let report = AICapabilityReport(payload: payload) {
+            check(true, "M: the live worker's capability report decodes in the host")
+            check(report.capabilities.count == AICapabilityReport.vocabularyIds.count
+                    && Set(report.capabilities.map(\.id))
+                        == Set(AICapabilityReport.vocabularyIds),
+                  "M: the adapter answers every frozen id exactly once")
+            check(["macos-arm64", "macos-x64"].contains(report.platform),
+                  "M: the report names a platform the host recognises", report.platform)
+            check(report.provider == "macos-python",
+                  "M: the report names the adapter", report.provider)
+            // The rule that keeps a report honest, checked against real output
+            // rather than a fixture: a claim of support carries the run that
+            // justifies it, and any other state says why.
+            check(report.capabilities.allSatisfy { capability in
+                capability.state == .supported
+                    ? (capability.evidence?.isEmpty == false)
+                    : (capability.reason?.isEmpty == false)
+            }, "M: every live record backs its state with evidence or a reason")
+        } else {
+            check(false, "M: the live worker's capability report decodes in the host",
+                  String(describing: capabilityReply).prefix(200).description)
+        }
+
         _ = try? client.call("shutdown", timeout: 5)
         check(child.wait(timeout: 10), "M: the helper exits after shutdown")
         let deadline = Date().addingTimeInterval(2)
@@ -863,8 +1021,483 @@ func testRealHelperHandshake() {
         }
         check(!FileManager.default.fileExists(atPath: socket.path),
               "M: shutdown removes the socket")
+    }
+}
+
+// MARK: - N
+
+/// §3.6 leaves adoption to one comparison made in two languages: the shipped
+/// worker records a digest beside the artifact it renames into place, and the
+/// host re-hashes those bytes before it will show them. The host's own checks
+/// have Swift write both halves of that pair, so they test the validator and
+/// never the agreement. This section runs the real `provenance` module over a
+/// real PNG, in the shape `engine._job_upscale` publishes, and hands the paths
+/// back to `AIProvenance.verifiedArtifact`. No weights load and no inference
+/// runs: the pixels are not under test, the publication is.
+func testWorkerPublishedPairIsAdoptedByHost() {
+    print("\n[N] the host adopts a pair the shipped worker published")
+    guard case .success(let worker) = liveWorker() else {
+        check(false, "N: \(liveWorkerRemedy)")
+        return
+    }
+    let root = worker.repo
+    let workerRoot = worker.worker
+    let python = worker.python
+
+    let folder = freshSupport("pair")
+    let script = """
+    import json, sys
+    sys.path.insert(0, sys.argv[1])
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+
+    from retouch_ai_worker import provenance
+    from retouch_ai_worker.capabilities import current_platform
+    from retouch_ai_worker.protocol import CONTRACT_VERSION
+
+    folder = Path(sys.argv[2])
+    staged, target = folder / "upscaled.png.tmp", folder / "upscaled.png"
+    source = np.zeros((2, 2, 3), dtype=np.uint8)
+    source[0, 0] = (200, 30, 30)
+    Image.fromarray(source).save(staged, format="PNG")
+    record = provenance.document(
+        capability_id="upscale.2x", job_id="host-adoption",
+        contract_version=CONTRACT_VERSION,
+        model={"name": "fixture", "version": None, "digest": None},
+        adapter={"platform": current_platform(), "version": "0.1.0"},
+        parameters={"scale": 2, "tile": 512, "overlap": 32}, seed=None,
+        input=provenance.pixels(source), output=provenance.artifact(staged),
+        authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+        outside_pixels_identical=None, elapsed_seconds=0.0, state="succeeded")
+    sidecar = provenance.publish(staged, target, record)
+    print(json.dumps({"artifact": str(target), "sidecar": str(sidecar),
+                      "record": json.loads(sidecar.read_text("utf-8"))}), flush=True)
+    """
+    let process = Process()
+    process.executableURL = python
+    process.arguments = ["-c", script, workerRoot.path, folder.path]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    do {
+        try process.run()
     } catch {
-        check(false, "M: the real helper starts", "\(error)")
+        check(false, "N: the worker's provenance module runs", "\(error)")
+        return
+    }
+    let bytes = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    let output = String(data: bytes, encoding: .utf8) ?? ""
+    guard process.terminationStatus == 0,
+          let line = output.split(separator: "\n").first(where: { $0.hasPrefix("{") }),
+          let reply = (try? JSONSerialization.jsonObject(with: Data(line.utf8)))
+            as? [String: Any],
+          let artifactPath = reply["artifact"] as? String,
+          let sidecarPath = reply["sidecar"] as? String else {
+        check(false, "N: the worker publishes a pair", String(output.suffix(500)))
+        return
+    }
+    let artifact = URL(fileURLWithPath: artifactPath)
+    let sidecar = URL(fileURLWithPath: sidecarPath)
+    let record = (reply["record"] as? [String: Any]) ?? [:]
+
+    var adopted: URL?
+    var refusal: String = ""
+    do {
+        adopted = try AIProvenance.verifiedArtifact(path: artifactPath,
+                                                    sidecarPath: sidecarPath)
+    } catch {
+        refusal = "\(error)"
+    }
+    check(adopted == artifact, "N: the host adopts what the worker published", refusal)
+
+    let recorded = ((record["output"] as? [String: Any])?["sha256"] as? String) ?? ""
+    let hashed = (try? AIRuntime.sha256(of: artifact)) ?? ""
+    check(hashed.count == 64 && hashed == recorded,
+          "N: both languages hash these bytes to the same digest",
+          "host \(hashed.prefix(12)) worker \(recorded.prefix(12))")
+
+    check(record["schema"] as? String == AIProvenance.schema,
+          "N: the worker writes the schema string the host requires")
+    check(sidecar.lastPathComponent == artifact.lastPathComponent
+                    + AIProvenance.sidecarSuffix
+            && sidecar.deletingLastPathComponent().path
+                == artifact.deletingLastPathComponent().path,
+          "N: the sidecar is where the host looks for it")
+
+    let required: Set<String> = ["schema", "contractVersion", "capabilityId", "jobId",
+                                 "createdAt", "model", "adapter", "parameters", "seed",
+                                 "input", "output", "authorizedRect",
+                                 "outsidePixelsIdentical", "elapsedSeconds", "state"]
+    let missing = required.subtracting(record.keys).sorted()
+    check(missing.isEmpty, "N: the record carries every §3.6 field",
+          missing.joined(separator: " "))
+
+    if let original = try? Data(contentsOf: artifact) {
+        var tampered = original
+        tampered.append(0x00)
+        try? tampered.write(to: artifact)
+        check((try? AIProvenance.verifiedArtifact(path: artifactPath,
+                                                  sidecarPath: sidecarPath)) == nil,
+              "N: a byte the record does not name makes the host refuse the pair")
+    } else {
+        check(false, "N: the artifact is readable")
+    }
+}
+
+// MARK: - O
+
+/// `job.submit` is the call the owner's export cannot survive without, and its
+/// envelope, its refusal and its reply are named in two languages. The worker's
+/// own suite already sends these frames over a socket and checks the codes back
+/// (`worker/tests/test_server.py`), so the gate is proven in Python. What was
+/// never proven is the Swift reader: `WorkerClient.submit`, `wait` and
+/// `AIWorkerFailure.typedCode` had no test that reached a real helper at all,
+/// and the stubs the other suites use answer with fields those same files
+/// wrote. A rename on the Python side would therefore leave every Swift test
+/// green while the owner's export stopped working. This section sends the
+/// envelope `ExportService` really builds — `upscale`, `{"image": {"path": …}}`
+/// — through a live helper whose models root holds nothing, which makes the
+/// answers the frozen table's rather than this machine's luck.
+func testHostJobSubmissionAgainstLiveWorker() {
+    print("\n[O] the host and the worker agree on the job fields")
+    guard case .success(let worker) = liveWorker() else {
+        check(false, "O: \(liveWorkerRemedy)")
+        return
+    }
+    let live: LiveHelper
+    do {
+        live = try launchLiveHelper(worker: worker.worker, python: worker.python,
+                                    named: "jobfields")
+    } catch {
+        check(false, "O: the helper starts for job submission", "\(error)")
+        return
+    }
+    defer { live.stopIfNeeded() }
+    guard live.ready != nil else {
+        check(false, "O: the helper is ready", live.logTail)
+        return
+    }
+    let pixel: URL
+    do {
+        pixel = try writeLivePixel(live.inputs)
+    } catch {
+        check(false, "O: an input image is written in the allowed root", "\(error)")
+        return
+    }
+    let client = live.client
+    let image: [String: Any] = ["image": ["path": pixel.path]]
+
+    func refusal(_ capability: String) -> AIWorkerFailure? {
+        do {
+            _ = try client.submit("upscale", image, capability: capability)
+            return nil
+        } catch let failure as AIWorkerFailure {
+            return failure
+        } catch {
+            return AIWorkerFailure(code: 0, message: "unexpected \(error)")
+        }
+    }
+
+    // The worker's own report supplies both the state and the sentence, so a
+    // reworded reason cannot quietly desynchronise this file from the adapter.
+    let listed = (try? client.call("capability.list", timeout: 20)) as? [String: Any] ?? [:]
+    let records = (listed["capabilities"] as? [[String: Any]]) ?? []
+    func published(_ capability: String) -> [String: Any]? {
+        records.first { $0["capabilityId"] as? String == capability }
+    }
+    check(published("upscale.2x")?["state"] as? String == "unsupported",
+          "O: 2× is unsupported in the worker's own report")
+    check(published("upscale.4x")?["state"] as? String == "requires_model",
+          "O: 4× needs weights this models root does not have")
+
+    let two = refusal("upscale.2x")
+    check(two?.code == -32020 && two?.typedCode == "E_UNSUPPORTED",
+          "O: naming 2× is refused as unsupported", two?.message ?? "")
+    // `upscale.2x` is in the vocabulary but binds no job kind, so the kind
+    // lookup — which runs before the adapter state is consulted — answers with
+    // the sentence about kinds, not with the state's own reason. The state
+    // still says what `capability.list` says above; this pins the sentence the
+    // gate actually sends today.
+    check(two?.message.contains("is not a upscale capability") == true,
+          "O: an id the kind does not name is told so, whatever its state says",
+          two?.message ?? "")
+
+    let four = refusal("upscale.4x")
+    check(four?.code == -32011 && four?.typedCode == "E_MODEL_MISSING",
+          "O: naming 4× without weights opens the model manager",
+          four?.message ?? "")
+    check(four?.message == published("upscale.4x")?["reason"] as? String,
+          "O: a missing-model refusal names the model", four?.message ?? "")
+
+    // The gate filters the frozen table by job kind, so an id that exists under
+    // another kind must not pass: the kind is what the worker looks up.
+    let wrongKind = refusal("inpaint.object")
+    check(wrongKind?.code == -32020
+              && wrongKind?.message.contains("is not a upscale capability") == true,
+          "O: an id belonging to another job kind does not pass the gate",
+          wrongKind?.message ?? "")
+    let invented = refusal("upscale.8x")
+    check(invented?.code == -32020,
+          "O: an id outside the frozen vocabulary is refused",
+          invented?.message ?? "")
+
+    // `capability.list` is also the only place the vocabulary is written, so the
+    // id used above as the wrong-kind sample really is a capability of another
+    // kind rather than a typo this section invented.
+    check(published("inpaint.object")?["capabilityId"] as? String == "inpaint.object",
+          "O: the wrong-kind sample is a published capability")
+
+    // Every refusal above happens before `manager.submit`, so none may leave a
+    // job folder or a job record. That is the difference between a gate and a
+    // job that fails early: an early failure still costs a workdir and a slot.
+    let refusedFolders = ((try? FileManager.default.contentsOfDirectory(atPath: live.jobs.path))
+                          ?? ["unreadable"]).sorted()
+    check(refusedFolders.isEmpty, "O: a capability refusal creates no job folder",
+          refusedFolders.joined(separator: " "))
+    let snapshot = (try? client.call("jobs.list", timeout: 20)) as? [String: Any] ?? [:]
+    check((snapshot["jobs"] as? [[String: Any]])?.isEmpty == true
+              && (snapshot["current"] == nil || snapshot["current"] is NSNull),
+          "O: a capability refusal creates no job record", "\(snapshot)")
+
+    // A job the gate accepts really runs. `ping` needs no weights, so it lands
+    // the same way here and in CI, and the frame it returns is read through the
+    // names `wait` and the export were written with.
+    let pongJob: String
+    do {
+        pongJob = try client.submit("ping", image)
+    } catch {
+        check(false, "O: a kind-only submit keeps the unchanged job path", "\(error)")
+        return
+    }
+    check(!pongJob.isEmpty, "O: the id field the host reads is job_id", pongJob)
+    var pong: [String: Any]?
+    var pongFailure: AIWorkerFailure?
+    do {
+        pong = try client.wait(job: pongJob, timeout: 30)
+    } catch let failure as AIWorkerFailure {
+        pongFailure = failure
+    } catch {
+        pongFailure = AIWorkerFailure(code: 0, message: "\(error)")
+    }
+    check(pongFailure == nil && pong?["status"] as? String == "succeeded",
+          "O: a succeeded job reports through the status field the host polls",
+          pongFailure?.message ?? "\(pong ?? [:])")
+    check((pong?["result"] as? [String: Any])?["pong"] as? Bool == true,
+          "O: the payload the export reads sits under result")
+
+    // A kind the engine does not have is accepted by the gate and fails inside
+    // the job. Its code, -32602, is not the host's -32603 default for an
+    // unreadable reply, so agreeing on it proves the read rather than a guess.
+    let unknownJob: String
+    do {
+        unknownJob = try client.submit("w5NoSuchKind", image)
+    } catch {
+        check(false, "O: an unknown kind is accepted as a job", "\(error)")
+        return
+    }
+    var jobFailure: AIWorkerFailure?
+    do {
+        _ = try client.wait(job: unknownJob, timeout: 30)
+        check(false, "O: an unknown kind does not succeed")
+    } catch let failure as AIWorkerFailure {
+        jobFailure = failure
+    } catch {
+        jobFailure = AIWorkerFailure(code: 0, message: "\(error)")
+    }
+    check(jobFailure?.code == -32602 && jobFailure?.typedCode == "E_INVALID_INPUT",
+          "O: the host surfaces the worker's own job failure code",
+          jobFailure?.message ?? "")
+    let frame = (try? client.call("job.result", ["job_id": unknownJob], timeout: 20))
+        as? [String: Any] ?? [:]
+    let errorFrame = frame["error"] as? [String: Any]
+    check(errorFrame?["code"] as? Int == jobFailure?.code
+              && errorFrame?["message"] as? String == jobFailure?.message,
+          "O: error.code and error.message are the fields the host reads",
+          "\(errorFrame ?? [:])")
+    let ranFolders = ((try? FileManager.default.contentsOfDirectory(atPath: live.jobs.path))
+                      ?? []).sorted()
+    check(ranFolders.contains(unknownJob),
+          "O: an accepted job gets the workdir named by its id",
+          ranFolders.joined(separator: " "))
+}
+
+// MARK: - P
+
+/// A1 lives on one distinction: a capability the host names in `capabilityId`
+/// goes through the worker's verdict, and a capability it offers as
+/// `requestedCapability` only asks to be written into the record. Sections O and
+/// N each proved one half of the machinery — the refusals, and a pair the host
+/// adopts — and nothing crossed the wire with a label on it, so a rename of that
+/// envelope key in `WorkerClient.submit` would leave every Python test and every
+/// stub green while the owner's edits shipped with no provenance at all. This
+/// section sends both spellings to one live helper whose models root is empty,
+/// which is the only state where they answer differently. No weights load and no
+/// inference runs.
+func testLabelledSubmissionIsRecordedNotGated() {
+    print("\n[P] a labelled job runs where a named capability is refused")
+    guard case .success(let worker) = liveWorker() else {
+        check(false, "P: \(liveWorkerRemedy)")
+        return
+    }
+    let live: LiveHelper
+    do {
+        live = try launchLiveHelper(worker: worker.worker, python: worker.python,
+                                    named: "label")
+    } catch {
+        check(false, "P: the helper starts for a labelled submit", "\(error)")
+        return
+    }
+    defer { live.stopIfNeeded() }
+    guard live.ready != nil else {
+        check(false, "P: the helper is ready", live.logTail)
+        return
+    }
+    let pixel: URL
+    do {
+        pixel = try writeLivePixel(live.inputs)
+    } catch {
+        check(false, "P: an input image is written in the allowed root", "\(error)")
+        return
+    }
+    let client = live.client
+    // Reimagine's real envelope, because it is the path whose adopted alpha this
+    // build takes from the worker rather than drawing itself.
+    let params: [String: Any] = ["image": ["path": pixel.path],
+                                 "prompt": "a paper boat on water",
+                                 "full_frame": true]
+    func folders() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: live.jobs.path)) ?? []).sorted()
+    }
+    func sent(_ submit: () throws -> String) -> (id: String, failure: AIWorkerFailure?) {
+        do { return (try submit(), nil) }
+        catch let failure as AIWorkerFailure { return ("", failure) }
+        catch { return ("", AIWorkerFailure(code: 0, message: "\(error)")) }
+    }
+
+    let named = sent { try client.submit("patch_edit", params,
+                                         capability: "generative.reimagine") }
+    check(named.failure?.code == -32011 && named.failure?.typedCode == "E_MODEL_MISSING",
+          "P: naming a capability the adapter cannot run stops the job",
+          named.failure?.message ?? "")
+    check(folders().isEmpty, "P: the gated spelling leaves no job folder",
+          folders().joined(separator: " "))
+
+    let wrong = sent { try client.submit("patch_edit", params,
+                                         requestedCapability: "upscale.4x") }
+    check(wrong.failure?.code == -32602
+              && wrong.failure?.message.contains("is not a patch_edit capability") == true,
+          "P: a label the job kind cannot carry is refused, not ignored",
+          wrong.failure?.message ?? "")
+    check(folders().isEmpty, "P: a refused label leaves no job folder",
+          folders().joined(separator: " "))
+
+    let labelled = sent { try client.submit("patch_edit", params,
+                                            requestedCapability: "generative.reimagine") }
+    check(labelled.failure == nil && !labelled.id.isEmpty,
+          "P: the same capability as a label does not gate the job",
+          labelled.failure?.message ?? "")
+    check(folders().contains(labelled.id),
+          "P: a labelled job really runs, in a workdir named by its id",
+          folders().joined(separator: " "))
+    var inside: AIWorkerFailure?
+    do {
+        _ = try client.wait(job: labelled.id, timeout: 60)
+    } catch let failure as AIWorkerFailure {
+        inside = failure
+    } catch {
+        inside = AIWorkerFailure(code: 0, message: "\(error)")
+    }
+    // Leg one shows this helper has no reimagine weights, so the job the label
+    // route accepted cannot succeed: it must end inside the worker. Which error
+    // it ends with depends on the interpreter running the helper — a full
+    // runtime reaches the missing-weights check, a minimal one dies at the model
+    // import — so this asserts the distinction that matters instead of a code.
+    // A refusal at submit would mean the label had quietly become the gate,
+    // which is the A2 decision the owner has not made.
+    check(inside != nil, "P: the labelled job dies inside the worker, not at a verdict",
+          inside?.message ?? "")
+
+    // The label's destination is the record, so the shape A1 produces — one key
+    // wider than §3.6's frozen list — must still pass the host's adoption gate.
+    // Section N published a record with no origin; this is the one with one.
+    let folder = freshSupport("labelpair")
+    let script = """
+    import json, sys
+    sys.path.insert(0, sys.argv[1])
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+
+    from retouch_ai_worker import provenance
+    from retouch_ai_worker.capabilities import current_platform
+    from retouch_ai_worker.protocol import CONTRACT_VERSION
+
+    folder = Path(sys.argv[2])
+    staged, target = folder / "patch.png.tmp", folder / "patch.png"
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    pixels[1:3, 1:3] = (10, 120, 200)
+    Image.fromarray(pixels).save(staged, format="PNG")
+    record = provenance.document(
+        capability_id="inpaint.object", job_id="labelled-adoption",
+        contract_version=CONTRACT_VERSION,
+        model={"id": "fixture", "version": None, "format": None, "files": []},
+        adapter={"platform": current_platform(), "version": "0.1.0"},
+        parameters={"engine": "patch"}, seed=None,
+        input=provenance.pixels(pixels), output=provenance.artifact(staged),
+        authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+        outside_pixels_identical=True, elapsed_seconds=0.0, state="succeeded",
+        capability_source="host-asserted")
+    sidecar = provenance.publish(staged, target, record)
+    print(json.dumps({"artifact": str(target), "sidecar": str(sidecar),
+                      "record": json.loads(sidecar.read_text("utf-8"))}), flush=True)
+    """
+    let process = Process()
+    process.executableURL = worker.python
+    process.arguments = ["-c", script, worker.worker.path, folder.path]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    do {
+        try process.run()
+        let bytes = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(data: bytes, encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0,
+              let line = output.split(separator: "\n")
+                .first(where: { $0.hasPrefix("{") }) else {
+            check(false, "P: the worker publishes a labelled record",
+                  String(output.suffix(400)))
+            return
+        }
+        guard let reply = (try? JSONSerialization.jsonObject(with: Data(line.utf8)))
+                as? [String: Any],
+              let artifactPath = reply["artifact"] as? String,
+              let sidecarPath = reply["sidecar"] as? String else {
+            check(false, "P: the labelled record is readable", String(line.prefix(200)))
+            return
+        }
+        var refusal = ""
+        do {
+            _ = try AIProvenance.verifiedArtifact(path: artifactPath,
+                                                  sidecarPath: sidecarPath)
+        } catch {
+            refusal = "\(error)"
+        }
+        check(refusal.isEmpty,
+              "P: the host adopts a record that names a host assertion", refusal)
+        let record = (reply["record"] as? [String: Any]) ?? [:]
+        check(record["capabilitySource"] as? String == "host-asserted",
+              "P: the record says the name is the host's, not a verdict",
+              "\(record["capabilitySource"] ?? "absent")")
+        check(record["capabilityId"] as? String == "inpaint.object",
+              "P: the record names the capability the host pressed",
+              "\(record["capabilityId"] ?? "absent")")
+    } catch {
+        check(false, "P: the worker's provenance module runs", "\(error)")
     }
 }
 
@@ -878,6 +1511,9 @@ testShutdownOwnershipCAS()
 testLockFileHardening()
 testStalePreparingReplacementHoldsExclusiveLease()
 testRealHelperHandshake()
+testWorkerPublishedPairIsAdoptedByHost()
+testHostJobSubmissionAgainstLiveWorker()
+testLabelledSubmissionIsRecordedNotGated()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 

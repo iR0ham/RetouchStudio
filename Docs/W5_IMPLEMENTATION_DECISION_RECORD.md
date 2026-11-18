@@ -774,3 +774,105 @@ This round additionally recorded in `Docs/CI_GATES.md` that the x86_64
 checks at the base commit `40b157f`, where none of W5-4's files exist in the
 diff: the gap belongs to `main` and to this machine's arm64-only CI coverage,
 not to W5-4 or W5-5, and its mechanism is not root-caused here.
+
+---
+
+## Addendum (2026-11-18): the capability vocabulary is now proven against the worker
+
+The last paragraph of "NOT VERIFIED after Slice 2" mixed two claims, only one of
+which needed weights. Splitting them:
+
+- **"no real worker has yet been asked by this host to name a capability" is
+  closed.** `Tests/RuntimeV2Tests.swift` section M now calls `capability.list` on
+  the worker it spawns and feeds the reply to `AICapabilityReport`, the host's own
+  validator — the frozen id set answered exactly once, the adapter's platform and
+  provider names, and the rule that a `supported` record carries evidence while
+  every other state carries a reason. Measured here: five new checks green,
+  `RUNTIME V2 TESTS: PASS`. The guard has teeth: deleting
+  `Spec("upscale.2x", …)` from `worker/retouch_ai_worker/capabilities.py` and
+  re-running the same binary gives `RUNTIME V2 TESTS: FAIL (1)` at "the live
+  worker's capability report decodes in the host", and restoring that line turns
+  it green again. No model was loaded for either run, so what is pinned is the
+  answer a machine with nothing installed gives.
+- **"and return a pair the host then adopted, because no inference ran" still
+  stands**, and so does the sentence's other half: the nine host-side provenance
+  checks are still proven against files the test writes, not files the worker
+  writes. Closing that needs a real run on a real model, which is the owner's
+  approval to ask for, not code to write.
+
+---
+
+## Addendum (2026-11-18): the adopted Quick Edit pair now carries its §3.6 record
+
+The owner answered the two open questions in `Docs/AI_EDIT_PROVENANCE_DECISION.md`
+§3 on 2026-11-18: a Remove Object edit records `inpaint.object`, and a stored
+edit whose bytes disagree with its record — or whose record cannot be read — is
+shown as missing. That unblocks A1, which is now implemented. A2 (routing the
+same name through the worker's verdict gate, which would refuse the three
+shipped edit tools until a recorded run exists) is still undecided, still not
+implemented, and PR #78 stays unapproved and untouched.
+
+**The envelope has a second, weaker field.** §3.6 needs a capability name in the
+record; `capabilityId` cannot supply it for `patch_edit`, because four
+capabilities share that job kind and DR-4 bounds `supported` by a recorded run
+the flux and MI-GAN installs do not have. So `job.submit` accepts
+`requestedCapability` alongside it: the worker validates that the name belongs to
+the job's kind (`-32602` otherwise, so a typo is refused rather than recorded
+wrong), and otherwise ignores it — no refusal, no state lookup, no new
+unreachable code. `Docs/AI_PROTOCOL_V2.md` now states the difference.
+
+**`capabilitySource` is an additive field on the sidecar, and the frozen field
+test still passes.** `test_the_record_carries_exactly_the_frozen_fields` keeps
+its answer because the key is written only when the name's origin needs saying:
+`host-asserted` for a record built from the envelope label, `worker-derived` for
+the upscale record of a kind-only submission, and absent when the worker's own
+verdict is what made the name true. The project body gains no keys.
+
+**All three edit paths publish the pair through the same boundary as upscale**
+(`worker/retouch_ai_worker/engine.py`): `_job_patch_edit`, `_inpaint` and
+`_full_frame` each land their adopted files with `provenance.publish`, so a
+cancel during the write leaves nothing, and a target that already exists is
+refused rather than renamed over. Reimagine's alpha is now the worker's own
+opaque plane instead of one the host drew, which is what lets both adopted files
+carry a digest. The MI-GAN record keeps `seed: null` — the seed the host sends
+does not shape those bytes. Model identity is built at load time from the catalog
+entry the load actually trusted, with the provider measured (`cpu` for MI-GAN,
+`mx.default_device()` for flux) and `version: null` for a legacy flat install.
+
+**The host reads the record, not the directory entry.** `AIEditStore.adopt`
+takes both sidecars and verifies each pair twice — against the helper's file,
+then against the stored copy under the name the document will read back, because
+adoption renames `result.png` to `patch.png` and a digest taken from the wrong
+side of that copy would license bytes nobody measured. A refusal leaves no
+staging folder. `isAvailable` now asks the digest whenever a sidecar exists,
+cached by size and modification time so a per-frame composite call does not
+re-hash, and an edit with no sidecar keeps the existence-only answer it always
+gave — the owner's carve-out for projects saved before this existed.
+
+Windows is unchanged: its `WorkerServer` refuses every job, so no adopted edit
+artifact can come from it, and `Docs/AI_EDIT_PROVENANCE_DECISION.md` §7 already
+recorded that scope.
+
+**Measured, this round.** `Tests/run-worker.sh`: `Ran 133 tests … OK` (nine new:
+seven publication-boundary cases in `test_engine.EditProvenanceTests`, two
+envelope cases in `test_server.ServerTests`). `Tests/ModelTests.swift`:
+`MODEL TESTS: PASS` on arm64 including nine new checks, from "a patch whose
+record names other bytes is refused" to "bytes that no longer match their record
+read as missing, not healthy". Both runs are on the tree of this commit; the
+`ci.yml` pin, `Tests/run-worker.sh`, `worker/README.md`,
+`Docs/worker-regressions/README.md` and `Docs/W5_ADAPTERS.md` move to
+`Ran 133 tests` with it.
+
+**NOT VERIFIED by this round.** No inference ran and no weights were downloaded,
+so every sidecar proven here was written against a stubbed render. The reply of
+a real flux or MI-GAN job on a real photo has not been observed: the §P check in
+`Tests/RuntimeV2Tests.swift` starts the shipped helper and shows the same
+capability id refusing the job as `capabilityId` (`E_MODEL_MISSING`, no job
+folder) and running it as `requestedCapability` until it fails inside the worker,
+refuses a label the kind cannot carry with `-32602`, and adopts a worker-written
+record whose `capabilitySource` is `host-asserted` — but that job dies before it
+publishes, so no real job's labelled record has been read by either side. A
+rollout also pairs this app with a helper that publishes: against an older
+helper the reply has no `*_provenance` keys and the edit is refused as an
+unexpected result rather than adopted unsigned. That is the §3.6 rule, not a
+fallback.

@@ -63,10 +63,10 @@ release architecture or replace the existing worker.
 | Non-destructive AI edits | A result is a patch plus an alpha file stored beside the edit id; the compositor uses `CIBlendWithMask` and crops the blend to the edit's rectangle, so pixels outside the authorized box stay the input pixels; preview and export rebuild the same layers at their own sizes. | `Sources/RetouchStudio/Core/AICompositor.swift:63-83` |
 | 4× upscaling | Export-time only: render at source size, send the pixels to the `upscale` job (Swin2SR x4), show tile progress, then apply analysis callouts at the enlarged size. The job timeout is 1500 s. A real 4× upscale from the bundled runtime was recorded. | `ExportService.swift:137-165`, `:204-242`, [AI_RUNTIME.md](AI_RUNTIME.md) §3 |
 | Model manager | Catalog, plan and verify are worker RPC methods; download runs in the worker's model CLI. The host shows the list, a consent plan with a manifest hash, progress, verify and remove. A missing size makes progress indeterminate rather than fake. | `Sources/RetouchStudio/Models/ModelManager.swift:70-239` |
-| Consent and integrity | Each model sheet shows file count, total size and licence; the download runs only after approval with the manifest hash; catalog SHA256 files are verified. SAM 2.1 tiny has neither a size nor a SHA256 in the inspected catalog, so it cannot be checksum-verified. | [AI_RUNTIME.md](AI_RUNTIME.md) §3, §6.3 |
+| Consent and integrity | Each model sheet shows file count, total size and licence; the download runs only after approval with the manifest hash; catalog SHA256 files are verified. SAM 2.1 tiny had neither a size nor a SHA256 in the catalog as inspected — closed 2026-11-18, when its checkpoint gained a measured size and digest ([W5_MODEL_MANAGER.md](W5_MODEL_MANAGER.md) §2). | [AI_RUNTIME.md](AI_RUNTIME.md) §3, §6.3 |
 | Runtime v2 host lifecycle | Transactional install with staging, backup, functional validation, rollback and recovery; registry, generation, nonce and CAS; process identity checks; a shared usage lease inherited by the child through fd 197. | `AIRuntime.swift`, `AIRuntimeTransaction.swift`, `AIRuntimeValidation.swift`, `HelperRegistry.swift`, `RuntimeUsageLease.swift` |
 | Network behavior | Measured zero TCP/UDP endpoints while idle and during a real upscale; exactly two HTTPS connections during an approved download. | [PRIVACY_AUDIT.md](PRIVACY_AUDIT.md) §3 |
-| Catalog today | FLUX.2 klein 4B (q4) 4.6 GB, SAM 2.1 tiny ~298 MB on disk, Swin2SR x4 48.5 MB, MI-GAN 28.1 MB; licences recorded as Apache-2.0, Apache-2.0, Apache-2.0 and MIT (weights) respectively. These are catalog/documented facts, not model tests run by AI-01. | [AI_RUNTIME.md](AI_RUNTIME.md) §1, §6.3 |
+| Catalog today | FLUX.2 klein 4B (q4) 4.6 GB, SAM 2.1 tiny 148.8 MB (156,008,466 bytes, measured 2026-11-18; the ~298 MB this row carried came from an unrecorded catalog and was wrong), Swin2SR x4 48.5 MB, MI-GAN 28.1 MB; licences recorded as Apache-2.0, Apache-2.0, Apache-2.0 and MIT (weights) respectively. These are catalog/documented facts, not model tests run by AI-01. | [AI_RUNTIME.md](AI_RUNTIME.md) §1, §6.3 |
 
 ### 2.2 What is disabled, incomplete or unverified
 
@@ -75,7 +75,7 @@ release architecture or replace the existing worker.
 | On-demand runtime package | `AIRuntime.package` is `nil`; no official protocol-v2 package exists, so no runtime download is offered (`AIRuntime.swift:40`). |
 | Worker-side protocol v2 behavior | The host side is implemented; the worker side handshake, readiness and shutdown against a real protocol-v2 helper are **NOT VERIFIED**. |
 | Worker source | Outside this repository, not under version control here; its catalog, preprocessing and inference details are **NOT VERIFIED**. |
-| SAM 2.1 tiny integrity | No size or SHA256 in the inspected catalog; verify cannot compare it. |
+| SAM 2.1 tiny integrity | No size or SHA256 in the catalog as inspected, so verify could not compare it — closed 2026-11-18; the entry now refuses download because `sam2` is not a worker dependency, not because its bytes are unknown. |
 | Model removal guard | `ModelManager.remove` checks that the target stays under `AI/models` but takes no runtime lease and does not check `ModelActivity.isRunning(id)` before deleting; it only calls `forget` afterwards, so a removal racing a running job is not excluded (`ModelManager.swift:196-207`). |
 | Working-copy cleanup | Only a >24 h sweep of export temp siblings runs. `clearWorkingCopies()` has no call site and the helper's job cleanup is **NOT VERIFIED**. |
 | Windows AI | No face path, no masks, no AI edits and no runtime. The Windows host preserves AI/mask records and names them as edits it cannot render. |
@@ -534,3 +534,155 @@ accurate when written and are quoted here rather than rewritten.
   asked for. Until that decision is taken, §2.2's "the helper's own job cleanup
   is NOT VERIFIED" stays correct in the cross-restart sense, and the Windows
   host's equivalent remains unmeasured.
+
+## 17. Addendum (2026-11-18): the worker source is in this repository — narrowing four blanket stamps
+
+Four sentences in this document, one in `AI_11_MODEL_EVALUATION.md` §15, one in
+`AI_RUNTIME.md`, one row in `PRIVACY_AUDIT.md` and one owner-decision row in
+`AI_11_ROADMAP.md` §8 all rest on a fact that stopped being true when W5 landed
+the worker. They are quoted rather than rewritten; this is the correction.
+
+- Four sentences in this file carry the stale fact: §2 line 60 "the worker
+  source is a separate checkout and is **NOT VERIFIED** here"; §2.2 line 77
+  "Outside this repository, not under version control here"; §10 line 387 "The
+  worker source must become reproducible (W5 requirement). Until then, every
+  worker-internal claim stays **NOT VERIFIED**"; §13 line 447 "Worker source not
+  in the repository … **NOT VERIFIED** today".
+- What is true now. `git ls-files worker` lists 31 tracked paths: the package
+  (`worker/retouch_ai_worker/`: 12 Python modules plus its
+  `capability-evidence.json`), its tests (`worker/tests/`, 10 files),
+  `worker/tools/` (2), `worker/requirements.lock` (284 lines, every pin carrying
+  `--hash=sha256:`), `worker/requirements-test.lock`, `worker/LICENSE` and
+  `worker/THIRD_PARTY_NOTICES.md`. `Tools/bundle-worker.sh:16` defaults to
+  `WORKER_ROOT="${RETOUCH_WORKER_ROOT:-$REPO_ROOT/worker}"`, so the env var is an
+  override and a plain clone bundles without it — which is what
+  `.github/workflows/ci.yml:139-145` does on every run: it builds the CPython
+  runtime with `Tools/build-python-runtime.sh`, hands that interpreter to
+  `Tools/setup-worker-venv.sh` (default profile: `worker/.venv` from the
+  hash-locked `worker/requirements-test.lock`; `--full` uses
+  `worker/requirements.lock`), and runs `./Tests/run-worker.sh` inside the macOS
+  Integration context. Measured here with
+  `RETOUCH_WORKER_PYTHON=<torch-free 3.13 venv> ./Tests/run-worker.sh`
+  (`Tests/run-worker.sh:6` otherwise defaults to `worker/.venv/bin/python3`, the
+  one CI builds): `Ran 124 tests in 4.430s … OK`.
+- What the stamps may now cover, and what they may not. "Checkpoint choice,
+  preprocessing, tiling, dtype, job routing" (`AI_11_MODEL_EVALUATION.md` §15)
+  are readable in tracked source and asserted by tracked tests, so they are no
+  longer unverifiable *as implemented behavior*; stamping them **NOT VERIFIED**
+  sent later readers to re-derive answers the repository already holds. What
+  stays **NOT VERIFIED** is what no amount of reading the source can prove:
+  that a real weight file produces the output the adapter claims (`sam2.1-hiera-tiny`
+  still has `sizeBytes: null` and no `sha256` in `Resources/model-catalog.json`,
+  so it cannot be verified at all today), and that any inference has been
+  reproduced from a fresh clone. `AI_11_ROADMAP.md` R0's deliverables — "worker
+  source in the repository … `requirements.lock` reproducible" and the licence
+  inventory — are met by the tracked files above; its M0 exit line ("that
+  inference is reproducible in general") is **not**, and the §8 row asking the
+  owner to decide whether to move the source in can be closed as decided.
+- History stays history. `Docs/PHASE0_CROSSPLATFORM_AUDIT.md:201` ("Worker
+  source | Not in this repository | no `worker/` directory") was a correct
+  observation at the time it was taken and is left as it was written;
+  `Docs/W5_ROADMAP.md:103` already records the move, which is why this addendum
+  points rather than re-narrates.
+
+## 18. Addendum (2026-11-18): §16's Windows clause is measured, and the answer is that there is nothing to sweep
+
+§16 closed with "the Windows host's equivalent remains unmeasured". It is
+measured now, read on `main`, and the answer is that that host has no
+working-copy cleanup because it has no working copies — not that a sweep exists
+and passes there.
+
+- Why there is nothing to sweep. The Windows adapter never runs a job.
+  `Windows/RetouchStudio.AI/WorkerServer.cs:171` routes `job.submit` to
+  `RefuseJob` (:188), which answers `Protocol.InvalidParams` for an envelope
+  that names no `capabilityId` (:194) and `Protocol.Unsupported`, with the
+  recorded state beside it, for one that does (:203). No submission reaches a
+  handler, so no copy of the source is written for a job and no per-job folder
+  is created for anything to revisit.
+- What the similarly named paths there actually belong to. `working.retouch`
+  (`Windows/RetouchStudio.Core/Project/Recovery.cs:186`) is the recovery
+  autosave slot and `TemporaryFiles.SiblingTempPath` is the atomic-publish
+  sibling; both serve the document, not AI. Searching the `Windows/` tree for
+  the job handoff the macOS sweep depends on (`--allow-root`, `--jobs`, a job
+  workdir) returns only `Windows/RetouchStudio.AI/WorkerRegistry.cs:39`, which
+  creates the registry folder, and the only `Path.GetTempPath()` callers are in
+  the test projects.
+- What this does not claim. It is not a port of `cleanStaleWorkingCopies()` and
+  no Windows test exercises any cleanup. The refusals stay asserted by that
+  host's own suite (`Windows/RetouchStudio.AI.Tests/Program.cs:172-184`, which
+  pins -32020 for an unsupported capability and -32602 for an unknown one), so
+  the premise is checked where it lives: a later slice that lets the Windows
+  adapter actually run a job reopens §16's question instead of answering it
+  here.
+- Unchanged. The helper's job *output* folders and the cross-restart retention
+  bound §16 recorded as an owner decision stay open; this closes only the
+  sweep clause.
+
+
+## 19. Addendum (2026-11-18): the jobs-root retention bound is a sweep, and the premise that blocked it was false
+
+§16 closed the working-copy half of the cleanup question and left this sentence
+behind, quoted rather than rewritten:
+
+> A disk-level retention bound is an owner decision, not a sweep: a completed but
+> not yet adopted result is user-visible work, and deleting it at launch would
+> destroy the edit the user asked for.
+
+§18 repeated it ("the cross-restart retention bound §16 recorded as an owner
+decision stay open"). The reasoning was wrong about this codebase, and the
+consequence was measurable: a read-only inspection of
+`~/Library/Application Support/RetouchStudio/AI/jobs` on 2026-11-18 found 35
+job-shaped folders holding 71.0 MB of derived pixels, the newest of them dated
+2026-11-08. The protocol-v2 jobs root and the legacy `Retouch Studio` root do not
+exist on this machine.
+
+- Why the premise does not hold. Nothing any document persists points into
+  `AI/jobs`. Adoption is a synchronous *copy*: `AIEditStore.adopt` runs inside
+  the adopting action (`QuickEdit.swift:189` for a masked patch, `:234` for a
+  whole-frame edit) and the layer's bytes then live under `AI/edits` with their
+  own sidecar. `EditorModel.aiJobID` (`EditorModel.swift:199`) exists only so the
+  status bar can cancel the job in flight; it is cleared when the job returns and
+  is never serialized. The export-time upscale artifact is verified and decoded
+  inside the export that produced it. So "the edit the user asked for" is not
+  sitting in a job folder waiting to be destroyed at launch — by the time a
+  folder is 24 h old, whatever the owner kept has already been copied out of it.
+- What runs now. The worker claims each workdir with an exclusive `flock` on
+  `<workdir>/.lock` for the whole render and releases it after `job.finished` is
+  out (`worker/retouch_ai_worker/server.py`, `JOB_LOCK_NAME`,
+  `acquire_folder_lock`, `_run`). The host sweeps both jobs roots at launch on a
+  utility queue, helper or no helper (`AIWorker.cleanupJobsAtStartup`, called
+  from `AppDelegate.attach` next to `ModelManager.cleanupAtStartup`). A folder
+  goes only when its name is the helper's twelve-lowercase-hex job id, its date
+  is at least the 24 h grace old and this process can take its lock; an
+  unreadable date, an unfamiliar name, a live claim and a failed removal are each
+  kept and logged with the reason they were kept. The rule is the model store's
+  cleanup rule, deliberately stricter than the working-copy sweep: a copy it
+  cannot date is treated as young here, because these bytes exist in one place
+  only.
+- Proof. `Tests/RuntimeProcessTests.swift` section K drives the real sweep over
+  real files: stale residue goes with its bytes, a folder just inside the bound
+  and one started now survive, a folder whose lock a separate open file
+  description holds is walked past however old it is and is taken once that claim
+  closes, `notes-for-me` and `A9B8C7D6E5F4` are not job ids, a dangling entry
+  sharing a job id's shape is kept, and the jobs root itself is never a
+  candidate. `worker/tests/test_server.py` proves the other side from inside the
+  worker: a running job's `.lock` is refused both to a second descriptor in the
+  same process and to a genuine child process that never spoke to this worker —
+  the app is that stranger — and the finished job's folder is ordinary residue
+  again. `worker/tests/test_provenance.py` pins that the startup provenance sweep
+  leaves the lock alone, and `tools/upscale_acceptance.py`'s two cleanup gates
+  now discount exactly that one name and no other, so a stray tile or temp still
+  fails the acceptance run.
+- What is still not claimed. `_trim`'s in-session window (`keep_jobs` = 20) is
+  unchanged, so a running helper still trims by ledger and not by age; the sweep
+  is launch-only, so a session that stays open for days accumulates as before;
+  the export-time provenance record dies with its folder, which is honest only
+  because the export verified it during the same pass; and the owner's 35 folders
+  are not deleted by anything in this addendum's evidence — the sweep has never
+  been run against his store, because his app is open. It clears them on a normal
+  launch, which is the point of the change.
+- Pointer drift in §16's record. §16 cites `_trim` at
+  `worker/retouch_ai_worker/server.py:41, 213-219`; the claim this addendum adds
+  moved `keep_jobs` to `server.py:88` and `_trim` to `server.py:256-262`. §16's
+  prose is kept as it was written, including the owner-decision sentence this
+  addendum shows was premised on a fact that did not hold.
