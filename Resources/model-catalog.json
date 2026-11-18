@@ -1,6 +1,6 @@
 {
   "schema": "retouchstudio.model-catalog/1",
-  "catalogVersion": "2026-11-16.1",
+  "catalogVersion": "2026-11-19.1",
   "entries": [
     {
       "id": "flux2-klein-4b-q4",
@@ -147,8 +147,7 @@
       "id": "migan",
       "name": "MI-GAN (512, Places2)",
       "capabilities": [
-        "inpaint.spot",
-        "inpaint.object"
+        "inpaint.spot"
       ],
       "version": "1.0.0",
       "format": "onnx",
@@ -167,8 +166,7 @@
       "weightsLicense": "MIT",
       "licenseEvidenceUrl": "https://huggingface.co/andraniksargsyan/migan",
       "platforms": [
-        "macos-arm64",
-        "windows-x64"
+        "macos-arm64"
       ],
       "requiredProvider": "cpu",
       "minimumContractVersion": "1",
@@ -177,7 +175,7 @@
         "version": "1"
       },
       "deterministic": true,
-      "notes": "Weights are MIT (LICENSE-WEIGHTS); the ONNX pipeline is the author's own export. Used for small holes; refused above 25 % of the frame."
+      "notes": "Weights are MIT (LICENSE-WEIGHTS); the ONNX pipeline is the author's own export. Spot healing only, and only on macOS: the worker refuses holes above 25 % of the frame and routes object removal to flux2-klein-4b-q4. No Windows runtime executes a submitted job (W5-3), so the entry is not advertised on windows-x64."
     }
   ]
 }
