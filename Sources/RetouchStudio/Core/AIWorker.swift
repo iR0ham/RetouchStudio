@@ -603,6 +603,10 @@ enum AIWorker {
                     try ensureRunningLocked()
                 }
             }
+            // Either path, not just the bundled one: a downloaded runtime used to
+            // start without ever sweeping, so copies left by a crash stayed until
+            // something else launched a bundled helper.
+            cleanStaleWorkingCopies()
             noteLaunchProblem(nil)
         } catch {
             noteLaunchProblem(error.localizedDescription)
@@ -708,7 +712,6 @@ enum AIWorker {
         if !WorkerClient.shared.isAvailable() {
             throw AIWorkerFailure(code: -32000, message: missingHelperMessage)
         }
-        cleanStaleWorkingCopies()
     }
 
     // MARK: - Protocol-v2 lifecycle
@@ -1243,11 +1246,12 @@ enum AIWorker {
 
     /// Copy folders left by a previous run. Only stale ones go, so a working
     /// copy another window is still using is never touched.
-    private static func cleanStaleWorkingCopies(olderThan age: TimeInterval = 86_400) {
+    static func cleanStaleWorkingCopies(in root: URL = workingDirectory,
+                                        olderThan age: TimeInterval = 86_400) {
         let manager = FileManager.default
         let cutoff = Date().addingTimeInterval(-age)
         guard let items = try? manager.contentsOfDirectory(
-            at: workingDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey])
         else { return }
         for item in items {
             let modified = (try? item.resourceValues(forKeys: [.contentModificationDateKey]))
@@ -1409,7 +1413,8 @@ enum AIWorker {
 
     // MARK: - Working copies
 
-    /// Where the helper may read. One folder per instance, cleared on quit.
+    /// Where the helper may read. One folder per job; the ones a crash left
+    /// behind are swept by `cleanStaleWorkingCopies` when a helper starts.
     static var workingDirectory: URL {
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("RetouchStudioAI", isDirectory: true)
@@ -1450,10 +1455,6 @@ enum AIWorker {
             throw AIWorkerFailure(code: -32000, message: "could not write the working copy")
         }
         return (url, target)
-    }
-
-    static func clearWorkingCopies() {
-        try? FileManager.default.removeItem(at: workingDirectory)
     }
 
     /// Writes a rendered export at its own size for the upscaler. Unlike
