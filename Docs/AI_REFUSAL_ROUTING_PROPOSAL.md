@@ -4,6 +4,12 @@ Status: **proposal prepared by the engineering agent on 2026-11-18.** Nothing
 here is adopted. It asks one product question and one wording question, listed
 in §6. No code in this repository was changed by it.
 
+Every `file:line` pointer below was re-pinned against `main` on 2026-11-18.
+This branch now sits on a `main` whose task-label, provenance and
+jobs-retention merges moved `server.py` and the strings table, so the numbers
+the first draft carried had drifted. The quoted sentences, the measured
+capability states and the two questions are unchanged.
+
 ## 1. What was measured, on this Mac, today
 
 The shipped worker was started the way the app starts it and asked
@@ -19,18 +25,18 @@ The sentence is built in `worker/retouch_ai_worker/capabilities.py:138-140`,
 and the state comes from an internal class the adapter names `legacy`
 (`capabilities.py:138`) — an installed model whose bytes are on disk in the
 pre-versioning layout. The remedy is real and it is one tap:
-`Sources/RetouchStudio/Views/ModelManagerView.swift:413-419` renders an Adopt
+`Sources/RetouchStudio/Views/ModelManagerView.swift:411-417` renders an Adopt
 chip for `manager.legacyBytes`, which asks first (`:128-131`) and then
 re-layouts the files. Nothing is downloaded, so no consent and no cost.
 
 What the owner sees instead is decided by two lines of the host. The worker
 answers a blocked capability with `-32020`
-(`worker/retouch_ai_worker/server.py:287-291`), whose JSON-RPC `message` *is*
+(`worker/retouch_ai_worker/server.py:330-334`), whose JSON-RPC `message` *is*
 that actionable sentence, and `Core/WorkerClient.swift:119-121` copies the
 message into `AIWorkerFailure`. Then `Models/EditorModel.swift:1758`
 replaces it: `case -32020: return L10n.current.aiCapabilityUnsupported`, which
 reads, in English, "This AI tool is not available for this Mac build yet.
-Manage Models… shows what this adapter can run." (`Models/Localization.swift:1256-1258`,
+Manage Models… shows what this adapter can run." (`Models/Localization.swift:1278-1280`,
 and the same shape in Persian at `Models/PersianL10n.swift:1217-1219`).
 
 So the helper's own instruction reaches the app and is discarded, and the
@@ -45,7 +51,7 @@ mechanism the blocked case needs already exists one `case` away.
 The refusal itself is recorded twice as deliberate, and this proposal does not
 reopen it:
 
-- `Docs/W5_ADAPTERS.md:145-148` — "a 4× pass is refused with `E_UNSUPPORTED`
+- `Docs/W5_ADAPTERS.md:158-161` — "a 4× pass is refused with `E_UNSUPPORTED`
   until the owner adopts it in the model manager. The refusal is the contract's
   answer, not a defect".
 - `Docs/W5_IMPLEMENTATION_DECISION_RECORD.md:618-623` — the same consequence,
@@ -98,9 +104,9 @@ the owner of a machine that already has the weights is told a shipped feature
 does — or re-download 46 MB he already owns.
 
 **B. Emit `-32011` for the legacy class.** One-line change in
-`server.py:287-291`, and the sheet opens by itself. Rejected as written:
+`server.py:330-334`, and the sheet opens by itself. Rejected as written:
 `-32011`'s sentence is "The local AI models are not installed. Open Settings →
-Manage Models… **to download them**" (`Localization.swift:1247-1249`), which
+Manage Models… **to download them**" (`Localization.swift:1269-1271`), which
 would invite a re-download of bytes on disk, and it contradicts the recorded
 meaning of the code. Changing the code's meaning is a contract change, not a
 fix.
