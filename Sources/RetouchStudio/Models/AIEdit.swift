@@ -75,7 +75,10 @@ enum AIEditStore {
 
     /// Compositing asks this per frame, so a match is remembered against the
     /// file's own size and modification time: the pair is hashed once per edit,
-    /// and any write to either file changes the stamp and asks again.
+    /// and a write that changes either file's size or timestamp asks again. A
+    /// tool that rewrote the bytes while preserving the timestamp is the state
+    /// the cache cannot see, and this app does not produce it: `adopt` only ever
+    /// renames a folder it staged moments earlier.
     private static func provenanceIntact(_ edit: AIEdit, file: String) -> Bool {
         let artifact = url(for: edit, file: file)
         let record = sidecar(of: artifact)
