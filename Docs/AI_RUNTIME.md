@@ -97,8 +97,13 @@ places as if they were one, and overstates the cleanup:
   (`worker/retouch_ai_worker/server.py:41, 213-219`), so folders from earlier
   sessions stay until the owner sets a disk retention rule — recorded as an open
   decision, not implemented, because a completed result the user never adopted
-  is user-visible work. 4× upscale artifacts are the exception: they are
-  reconciled against their provenance sidecars when a worker starts.
+  is user-visible work. What startup does clear is provenance debris: it walks
+  every job folder and removes a `*.provenance.json` whose artifact never
+  arrived plus any half-written sidecar temp, skipping anything written at or
+  after the sweep's own timestamp so a worker sharing the jobs root cannot take
+  a live publication's evidence (`server.py:53-55`, `provenance.py:216-265`).
+  Those are the only names it can match, and today only the upscale path writes
+  them.
 
 **Protocol-v2 runtime (when a package is configured):**
 
