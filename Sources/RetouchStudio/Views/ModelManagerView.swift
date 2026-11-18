@@ -592,16 +592,7 @@ struct ModelManagerView: View {
     // MARK: - Labels
 
     private func capabilityLabel(_ entry: ModelCatalogEntry) -> String {
-        let names = entry.capabilities.map { capability -> String in
-            switch capability {
-            case "segmentation", "mask.click": return editor.s.modelsTaskName("segmentation")
-            case "upscaling", "upscale.4x": return editor.s.modelsTaskName("upscaling")
-            case "inpainting", "inpaint.spot", "inpaint.object": return editor.s.modelsTaskName("inpainting")
-            case "generative.edit", "generative.reimagine": return editor.s.modelsTaskName("generative-edit")
-            default: return capability
-            }
-        }
-        return names.joined(separator: " · ")
+        editor.s.modelsCapabilityLabel(entry.capabilities)
     }
 
     private func sourceLine(_ entry: ModelCatalogEntry) -> String {
