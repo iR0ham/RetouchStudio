@@ -584,3 +584,123 @@ store access, no adoption. The harness's new mode and boundary rule carry
 synthetic-logic evidence (the 14 tests above); whether the model clears
 24.0 dB on `lr` is **NOT MEASURED** and is the next round's question. The
 production store and `upscale.4x` remain exactly as §8.4 left them.
+
+---
+
+## 10. Phase 2 `lr` measurement (run 2026-11-18T21:37–21:53Z; recorded 2026-11-19): A1 bar met and the bicubic control beaten on every image
+
+Status of this section: append-only. Nothing above is rewritten, reordered or
+softened. §9.5 left the `lr` result NOT MEASURED and made it "the next
+measurement's decision, not this section's"; this section records that run and
+nothing else. No number below is an estimate.
+
+### 10.1 What was run
+
+The real `upscale.4x` capability, through the worker socket, against the
+adopted production store **`swin2sr-x4` 1.0.0** (the same record reports
+`capability: "upscale.4x supported"`). Eight fixtures from the owner's private
+portrait set, referred to by label only — no path, file name or derived pixel
+is in this repository. Seven are 2268×4032 and one is 3213×5712 cropped to
+3212×5712 (crop to a multiple of 4); all are 8-bit, three-channel, no alpha,
+EXIF orientation 1, Display P3. 129 tiles in total; every tile ran on `mps`;
+every output was exactly the reference size; every sidecar named model
+version 1.0.0; every succeeded job folder held only its published pair.
+
+Protocol, fixed before the run and not tuned after it:
+
+- **Colour first:** Display P3 → sRGB (Pillow `ImageCms.profileToProfile`,
+  `renderingIntent=1`, relative colorimetric), then crop to a multiple of 4.
+- **Degradation `lr`, in this order:** Gaussian **blur radius 1.2 px at the
+  reference resolution** → antialiased **bicubic downscale ÷4** → **JPEG
+  quality 70, 4:2:0** → **Gaussian noise σ = 5 code values** of 255, the last
+  two at the degraded resolution. One deterministic seed per image, base
+  20261118 (20261118…20261125 below).
+- **PSNR:** 8-bit gamma-encoded sRGB code values, RGB, RMS over all channels,
+  between the 4× output and the true reference.
+- **Seam band:** ±32 px around the engine's own `_axis_tiles` boundaries;
+  diagnostic only, no threshold.
+- **Control:** plain bicubic ×4 of the same degraded input, recorded per image
+  and never an exit-code input; the 0.5 dB margin is reporting only.
+- **Gate:** Decision A1's per-image minimum **24.0 dB**, applied to each image,
+  never to the mean; the bar was not moved.
+- **SSIM:** 8-bit sRGB luma (Rec.601), 11×11 Gaussian window σ = 1.5,
+  K1 = 0.01, K2 = 0.03, mean over the valid area; computed after the run on
+  the same output files and the same control pairs.
+
+### 10.2 Per-image results
+
+| image | reference px | tiles | job s | PSNR dB | seam band dB | bicubic control dB | Δ vs control | SSIM model | SSIM control |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| R1 | 2268×4032 | 15 | 100.87 | 31.51 | 31.50 | 30.19 | +1.32 | 0.859036 | 0.812626 |
+| R2 | 2268×4032 | 15 | 100.22 | 31.82 | 30.95 | 30.57 | +1.25 | 0.844326 | 0.806012 |
+| C1 | 2268×4032 | 15 | 103.12 | 33.32 | 33.12 | 31.40 | +1.92 | 0.882312 | 0.839645 |
+| C2 | 2268×4032 | 15 | 104.56 | 31.49 | 30.33 | 29.66 | +1.83 | 0.933397 | 0.876221 |
+| C3 | 2268×4032 | 15 | 107.16 | 32.70 | 31.61 | 30.49 | +2.21 | 0.949544 | 0.891057 |
+| H1 | 2268×4032 | 15 | 110.12 | 30.65 | 31.13 | 29.57 | +1.08 | 0.842856 | 0.796489 |
+| B1 | 2268×4032 | 15 | 110.38 | 31.48 | 29.24 | 30.11 | +1.37 | 0.880061 | 0.833055 |
+| L1 | 3212×5712 | 24 | 180.35 | 31.79 | 30.71 | 29.34 | +2.45 | 0.887050 | 0.834942 |
+
+### 10.3 Verdict
+
+- **A1 bar:** `a1Bar: met`, exit code 0; per-image minimum **30.65 dB**,
+  mean **31.84 dB**, median **31.65 dB**; `belowBar`, `notMeasured` and
+  `dimensionFailures` are all empty.
+- **Control:** bicubic ×4 scores minimum **29.34 dB**, mean **30.17 dB**,
+  median **30.15 dB**; the model wins on all eight images
+  (+1.08…+2.45 dB), with no tie and no loss.
+- **SSIM:** the model is higher on every image — model 0.842856–0.949544,
+  control 0.796489–0.891057; the arithmetic means over the table are
+  0.884823 and 0.836256.
+
+### 10.4 Determinism
+
+One fixture was run twice at seed 20261118 (two consecutive same-seed records,
+immediately before the corpus run): PSNR **33.32 / 33.32 dB**, seam band
+**33.11 / 33.11 dB**, bicubic control **31.40 / 31.40 dB** — spread
+**0.00 dB** on every metric. Job time was 64.0 s and 90.2 s (wall 67.53 s and
+91.21 s): timing on this laptop is load-dependent and is not a benchmark,
+while quality reproduced. The corpus image with the same dimensions and seed
+(C1) records 33.32 dB PSNR, 31.40 dB control and 33.12 dB seam; the 0.01 dB
+seam difference is a band diagnostic only, and no threshold depends on it.
+
+### 10.5 Evidence tier
+
+Real inference on this Mac's MPS (MacBook Air M3, 16 GB, macOS 27.2), through
+the worker socket, against the adopted production store `swin2sr-x4` 1.0.0.
+The harness logic is unit-tested on synthetic pixels
+(`worker/tests/test_upscale_quality_corpus.py`, 14 tests: crop, PSNR, seam
+mask, degradation order, verdict and exit mapping), so CI proves the tool's
+logic.
+
+It is **not** shipped-build evidence: the installed bundle carries no
+`Contents/Resources/Worker` and `AIRuntime.package` is nil. No product-path
+export with upscaling and no export-cancel ran this round. CI cannot reproduce
+the numbers — no runner has this model store or MPS, and no fixture is
+committed.
+
+### 10.6 NOT VERIFIED
+
+- The degradation is **synthetic** (blur → bicubic ÷4 → JPEG q70 → noise); it
+  is not a camera capture. No true high-ISO sensor frame and no motion-blurred
+  frame was measured.
+- H1 and C1 are **proxies**, chosen on their noise / sharpness appearance, not
+  on recorded ISO or exposure metadata.
+- **No perceptual or human judgement** was made this round: no side-by-side
+  viewing and no preference votes.
+- **Windows** upscaling and **2×** upscaling are untouched.
+- **No memory or VRAM profiling** this round; the memory profile of the
+  upscale path is not measured here.
+- Timing is **single-run and load-dependent** (64–180 s per image); it is not
+  a benchmark.
+- No product-path UI export, no export-cancel, no download, install or
+  conversion; the store was already adopted.
+- No fixture or derived pixel is in the repository; the evidence JSON lives
+  outside it.
+
+### 10.7 What may be said
+
+Quality value-add over a classical resize is now **MEASURED AND MET within
+this documented protocol** — these eight private portraits, the `lr`
+degradation above, per-image PSNR and SSIM — and **must not be quoted outside
+it**. It says nothing about other degradations, other content, Windows, 2× or
+a shipped build, and it does not by itself make `upscale.4x` production-ready.
