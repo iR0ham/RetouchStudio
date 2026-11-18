@@ -11,9 +11,9 @@ from unittest import mock
 from retouch_ai_worker.catalog import Catalog
 from retouch_ai_worker.capabilities import (PROVIDER, SUPPORTED, VOCABULARY,
                                             current_platform)
-from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, MODEL_MISSING,
-                                        PATH_DENIED, UNSUPPORTED, WorkerError,
-                                        decode, encode)
+from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, INVALID_PARAMS,
+                                        MODEL_MISSING, PATH_DENIED, UNSUPPORTED,
+                                        WorkerError, decode, encode)
 from retouch_ai_worker.server import JobManager, WorkerServer
 from retouch_ai_worker.transport import read_image
 
@@ -33,6 +33,12 @@ class FakeEngine:
             return {"finished": True}
         if kind == "boom":
             raise WorkerError(-32602, "bad input", {"field": "prompt"})
+        if kind == "patch_edit":
+            # Enough of the real job to see where each envelope name lands: the
+            # gate reaches the context as `capability_id`, the A1 label as
+            # `requested_capability`, and the two are not the same thing.
+            return {"capability": ctx.capability_id,
+                    "requested": ctx.requested_capability}
         raise WorkerError(-32601, f"no such kind {kind}")
 
     def execution_providers(self):
@@ -321,6 +327,45 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(reported["upscale.4x"]["state"], SUPPORTED,
                              reported["upscale.4x"].get("reason"))
             self.server._require_capability("upscale.4x", "upscale")
+
+    def test_a_requested_capability_labels_a_record_without_gating_the_job(self):
+        # The approved A1: an edit needs a capability name in its provenance, but
+        # the name is the host's statement about which tool ran, not a worker
+        # verdict. So the same string refuses the job as `capabilityId` — flux is
+        # not installed here — and starts it as `requestedCapability`. Collapsing
+        # the two would refuse shipped Quick Edit tools whose models carry no
+        # recorded run, which is the A2 decision the owner has not made.
+        gated = self.session.call("job.submit", {
+            "kind": "patch_edit", "capabilityId": "generative.reimagine",
+            "params": {}})
+        self.assertEqual(gated["error"]["code"], MODEL_MISSING)
+
+        started = self.session.call("job.submit", {
+            "kind": "patch_edit", "requestedCapability": "generative.reimagine",
+            "params": {}})
+        self.assertNotIn("error", started)
+        job_id = started["result"]["job_id"]
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            status = self.session.call("job.status", {"job_id": job_id})["result"]
+            if status["status"] in ("succeeded", "failed", "cancelled"):
+                break
+            time.sleep(0.02)
+        self.assertEqual(status["status"], "succeeded", status)
+        reply = self.session.call("job.result", {"job_id": job_id})["result"]
+        self.assertEqual(reply["result"],
+                         {"capability": None,
+                          "requested": "generative.reimagine"})
+
+    def test_a_requested_capability_must_belong_to_the_kind(self):
+        # A label the kind cannot carry is a caller bug, not a capability claim,
+        # so it is refused before any job exists.
+        for kind, name in (("patch_edit", "upscale.4x"), ("upscale", "inpaint.spot")):
+            reply = self.session.call("job.submit", {
+                "kind": kind, "requestedCapability": name, "params": {}})
+            self.assertEqual(reply["error"]["code"], INVALID_PARAMS, reply)
+            self.assertEqual(reply["error"]["data"]["capabilityId"], name)
+            self.assertEqual(reply["error"]["data"]["kind"], kind)
 
     def test_kind_only_submission_cannot_load_a_damaged_model(self):
         # A submit that names no capability still fails at load time when
