@@ -167,3 +167,52 @@ on its own, so it is left to the owner rather than implemented.
   frozen contract, and no model was downloaded, installed or run.
 - Whether the Windows host should mirror option C was not researched beyond the
   code table cited above; Windows AI stays BLOCKED regardless.
+
+## 8. Addendum (2026-11-18): the mandate chose C + D, and they are implemented
+
+The ownership mandate recorded the same day says a routine product decision is
+made and written down rather than queued for the owner, so both questions of §6
+were answered here.
+
+**Question 1 — yes, for the states the manager can speak to.** `-32011` already
+opened the model manager; `-32020` whose payload says `state == "blocked"` now
+does the same, and `state == "unsupported"` still does not, because the first
+kind of §3 has no chip to press. That split is only possible because
+`AIWorkerFailure` now carries `capabilityId` and `capabilityState` out of the
+`data` object it used to drop, which is exactly the payload
+`Docs/AI_PROTOCOL_V2.md:109` already documents and §4-C said no protocol change
+was needed to read. The routing lives in `opensModelManager` and the sentence in
+`EditorModel.localizedAIFailure(_:)`.
+
+**Question 2 — the sentence, in both languages.** English: *"«task» is installed
+on this Mac but not ready to run yet. Manage Models… says what it is waiting
+for."* Persian mirrors it in `PersianL10n.swift`. It is true of row 2 and row 3
+of §3 at once, which is what §4-D could not manage, and it stops one deliberate
+notch short of a promise: *says what it is waiting for*, not *gives you the
+step*, because the second kind of §3 — `matte.fine` with no cleared rights,
+`generative.outpaint` with no licensed engine, `mask.click` with no importable
+`sam2` — is `blocked` for a reason the manager can state and cannot settle. `Tests/ModelTests.swift` pins both sentences
+byte-for-byte, the routing table, and that a payload-less refusal keeps saying
+what it said before.
+
+**Export asks before it renders.** §4-C assumed the refusal reaches the host as
+a message, and for an export it does not: `RenderError` belongs to the frozen
+StudioCore contract and C ABI (`Sources/StudioCore/RenderContract.swift:270`),
+and `MacDocumentRenderer.map` has nowhere to put an AI code, so `-32020` and
+`-32011` both collapse into `.renderFailed` at
+`Sources/RetouchStudio/Core/MacDocumentRenderer.swift:107-114` — which is the
+whole reason a 4× export answered "Export failed". Widening that enum is a
+material contract change, so the export path reads `capability.list` for
+`upscale.4x` first and returns the routed sentence instead of starting a render
+that cannot finish: `blocked` gets the new line, `requires_model` reuses the
+existing missing-model sentence rather than inventing a third one. The manager
+sheet is not opened from there, because the export sheet is already in front of
+it.
+
+**Not done.** Windows has no equivalent routing, so §4-C's parity cost is still
+unpaid; and a batch export still reports per file without these sentences,
+because the files can differ in whether 4× is available and "abort the batch"
+versus "label the file" is a decision of its own. The other §3 note is separate
+too: what makes `mask.click` `blocked` is now the worker's own importability
+gate, not DR-5, which branch `feat/ai-capability-runtime-package` says in the
+report itself.
