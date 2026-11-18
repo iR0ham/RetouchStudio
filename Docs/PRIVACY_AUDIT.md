@@ -188,4 +188,12 @@ The downloader prints a JSON progress object on stderr for every chunk; the last
 | Explicit consent before model downloads | **Pass** — consent sheet shown and the approved manifest hash required; checksums verified where the catalog provides one (SAM 2.1 tiny has none); staged and atomic |
 | Offline after installation | **Pass** — edit, upscale and export need no network (scenario B) |
 
+**Addendum 2026-11-18.** This table's consent row and §4's item 4 both say SAM
+2.1 tiny has no checksum. That is what the catalog held while the audit ran. PR
+#83 pinned that checkpoint's measured size and SHA-256, so the parenthetical no
+longer describes the shipped catalog and the file is hashed before its move. The
+consent path is unchanged and no SAM download is offered: the entry refuses it
+because nothing in `worker/requirements.lock` can load those weights
+([`AI_RUNTIME.md`](AI_RUNTIME.md) §6.2).
+
 The only outbound connections the audited 2.1 build can make are the HTTPS transfers of a model download that the owner approved, after a sheet showing the file count, total size and license was accepted. The stabilization branch adds a runtime-download code path, but it is disabled (`AIRuntime.package` is nil) and makes no transfer in the current build; an enabled approved package would add one equally explicit, SHA256-verified transfer from a single fixed release URL.
