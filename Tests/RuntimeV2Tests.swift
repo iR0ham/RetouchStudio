@@ -1085,10 +1085,14 @@ func testWorkerPublishedPairIsAdoptedByHost() {
 // MARK: - O
 
 /// `job.submit` is the call the owner's export cannot survive without, and its
-/// envelope, its refusal and its reply are written in Python and read in Swift
-/// by name. Everything else in this file covers the handshake, the provenance
-/// pair and the `capability.list` report; the job path itself is exercised
-/// against stubs whose fields this file also writes. So this section sends the
+/// envelope, its refusal and its reply are named in two languages. The worker's
+/// own suite already sends these frames over a socket and checks the codes back
+/// (`worker/tests/test_server.py`), so the gate is proven in Python. What was
+/// never proven is the Swift reader: `WorkerClient.submit`, `wait` and
+/// `AIWorkerFailure.typedCode` had no test that reached a real helper at all,
+/// and the stubs the other suites use answer with fields those same files
+/// wrote. A rename on the Python side would therefore leave every Swift test
+/// green while the owner's export stopped working. This section sends the
 /// envelope `ExportService` really builds — `upscale`, `{"image": {"path": …}}`
 /// — through a live helper whose models root holds nothing, which makes the
 /// answers the frozen table's rather than this machine's luck.
