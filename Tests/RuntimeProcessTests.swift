@@ -15,7 +15,9 @@ import Foundation
 //    death of the app that launched it and keeps a replacement out;
 // H. a cancel request does not free the lease while the CLI is still running;
 // I. the production-default model CLI locks and leases the same support tree
-//    the runtime installer replaces, while models stay in AI/models.
+//    the runtime installer replaces, while models stay in AI/models;
+// J. the working-copy sweep takes folders older than its bound and leaves a
+//    copy that is still inside it, so a live job is never cleaned under.
 //
 // Every child below is a genuine separate process (this same test binary started
 // with a `--child-` argument), and every runtime is a temporary fixture.
@@ -901,6 +903,66 @@ func testProductionDefaultUsesInstallerSupport() {
     check(tool.wait(timeout: 8), "I: the CLI exits on its own")
 }
 
+// MARK: - J. The working-copy sweep
+
+func testStaleWorkingCopiesAreSweptAndLiveOnesAreNot() {
+    let manager = FileManager.default
+    let root = rootDirectory.appendingPathComponent("working-copies", isDirectory: true)
+    try? manager.removeItem(at: root)
+    try! manager.createDirectory(at: root, withIntermediateDirectories: true)
+
+    func planted(_ age: TimeInterval, file: String = "photo.png") -> URL {
+        let folder = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try! manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        try! Data([0x89, 0x50]).write(to: folder.appendingPathComponent(file))
+        if age != 0 {
+            try! manager.setAttributes([.modificationDate: Date(timeIntervalSinceNow: age)],
+                                       ofItemAtPath: folder.path)
+        }
+        return folder
+    }
+
+    let stale = planted(-90_000)
+    let justInside = planted(-86_000)
+    let live = planted(0)
+    // A working copy that became a link into someone's folder: the sweep may
+    // take the entry, never the bytes the entry points at.
+    let outside = rootDirectory.appendingPathComponent("linked-target", isDirectory: true)
+    try? manager.removeItem(at: outside)
+    try! manager.createDirectory(at: outside, withIntermediateDirectories: true)
+    let kept = outside.appendingPathComponent("photo.png")
+    try! Data([0x89, 0x50]).write(to: kept)
+    try! manager.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -90_000)],
+                               ofItemAtPath: outside.path)
+    let link = root.appendingPathComponent("linked-copy", isDirectory: true)
+    try! manager.createSymbolicLink(atPath: link.path, withDestinationPath: outside.path)
+    // Age the link itself, not what it points at: `lutimes` does not follow.
+    var when = [timeval(tv_sec: Int(time(nil)) - 90_000, tv_usec: 0),
+                timeval(tv_sec: Int(time(nil)) - 90_000, tv_usec: 0)]
+    lutimes(link.path, &when)
+
+    // First launch: the root does not exist yet, and that is not an error.
+    AIWorker.cleanStaleWorkingCopies(
+        in: root.appendingPathComponent("absent", isDirectory: true))
+    let untouched = (try? manager.contentsOfDirectory(atPath: root.path)) ?? []
+    check(untouched.count == 4, "J: sweeping a root that was never created takes nothing")
+    AIWorker.cleanStaleWorkingCopies(in: root)
+
+    let left = (try? manager.contentsOfDirectory(atPath: root.path)) ?? []
+    check(!left.contains(stale.lastPathComponent),
+          "J: a copy older than the bound is swept with its bytes")
+    check(left.contains(justInside.lastPathComponent),
+          "J: a copy just inside the bound survives")
+    check(manager.fileExists(atPath: live.appendingPathComponent("photo.png").path),
+          "J: a copy a job is still using keeps its file")
+    check(!left.contains(link.lastPathComponent),
+          "J: a stale link entry goes with its own date")
+    check(manager.fileExists(atPath: kept.path),
+          "J: the sweep never follows a link into bytes it does not own")
+    check(manager.fileExists(atPath: root.path),
+          "J: the sweep takes entries, never the working root itself")
+}
+
 // MARK: - Run
 
 testCLILaunchCannotRaceSwap()
@@ -912,6 +974,7 @@ testBoundedLockWaitIsRetryable()
 testModelCLILeaseIsChildOwned()
 testCancellationKeepsLeaseUntilExit()
 testProductionDefaultUsesInstallerSupport()
+testStaleWorkingCopiesAreSweptAndLiveOnesAreNot()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 
