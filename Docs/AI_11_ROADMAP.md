@@ -328,7 +328,11 @@ second platform; M9 is optimization. V4 still decides which stage is active.
    running, writing) leaves no half-edit and no working copy; a helper crash
    leaves the document unchanged. The host cleanup gap recorded in
    [AI_11_ARCHITECTURE.md](AI_11_ARCHITECTURE.md) §2.2 must be closed before
-   this check can pass.
+   this check can pass. *(Closed on 2026-11-18 for what the host can reach: the
+   working-copy root is swept on both launch paths and the jobs roots are swept
+   at launch under a per-workdir claim — §16, §18 and §19 of that document record
+   the sweeps, the Windows finding and the evidence. This item stays open for
+   what no sweep answers: a cancel observed at every stage under a real job.)*
 5. **Memory.** Peak memory is measured per adopted model; a refusal before load
    is preferred to a crash. The 16 GB target is the design constraint.
 6. **Privacy.** Zero endpoints during any job; audit repeated whenever an

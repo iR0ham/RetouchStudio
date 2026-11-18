@@ -1,6 +1,8 @@
 import json
 import os
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -14,7 +16,8 @@ from retouch_ai_worker.capabilities import (PROVIDER, SUPPORTED, VOCABULARY,
 from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, INVALID_PARAMS,
                                         MODEL_MISSING, PATH_DENIED, UNSUPPORTED,
                                         WorkerError, decode, encode)
-from retouch_ai_worker.server import JobManager, WorkerServer
+from retouch_ai_worker.server import (JOB_LOCK_NAME, JobManager,
+                                      acquire_folder_lock, WorkerServer)
 from retouch_ai_worker.transport import read_image
 
 
@@ -97,6 +100,17 @@ class Session:
 
     def close(self):
         self.sock.close()
+
+
+LOCK_PROBE = """
+import fcntl, os, sys
+handle = os.open(sys.argv[1], os.O_RDWR)
+try:
+    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    raise SystemExit(3)
+raise SystemExit(0)
+"""
 
 
 class ServerTests(unittest.TestCase):
@@ -240,6 +254,59 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], -32014)
         self.assertIsInstance(result["cancelLatencyMs"], (int, float))
         self.assertGreaterEqual(result["cancelLatencyMs"], 0)
+
+    def stranger_claims(self, lock_file: Path) -> bool:
+        """Ask a process the worker has never heard of to lock the folder.
+
+        The sweep is the app's, not the worker's, so an in-process second
+        descriptor proves less than a real child with its own kernel table.
+        """
+        probe = subprocess.run([sys.executable, "-c", LOCK_PROBE, str(lock_file)],
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(probe.returncode in (0, 3), True, probe.stderr)
+        return probe.returncode == 0
+
+    def test_a_running_job_claims_its_workdir_until_the_job_ends(self):
+        # `<workdir>/.lock` is how a job says "the pixels here are being written".
+        # The launch sweep in the app walks past a folder it cannot claim, so a
+        # render that overruns the age bound still cannot be cleaned under.
+        job_id = self.session.call("job.submit",
+                                   {"kind": "slow", "params": {"ticks": 200}})["result"]["job_id"]
+        workdir = Path(self.manager.jobs_root) / job_id
+        lock_file = workdir / JOB_LOCK_NAME
+        deadline = time.time() + 5
+        while time.time() < deadline and not lock_file.exists():
+            time.sleep(0.02)
+        self.assertTrue(lock_file.exists(),
+                        "the running job created the lock its workdir is claimed with")
+        self.assertIsNone(acquire_folder_lock(workdir),
+                          "a second claim on a running job's folder is refused")
+        self.assertFalse(self.stranger_claims(lock_file),
+                         "a process that never spoke to this worker is refused too")
+
+        self.session.call("job.cancel", {"job_id": job_id})
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            status = self.session.call("job.status", {"job_id": job_id})["result"]
+            if status["status"] == "cancelled":
+                break
+            time.sleep(0.02)
+        self.assertEqual(status["status"], "cancelled")
+
+        # The claim belongs to the job, not to the process: once the render is
+        # over the folder is ordinary residue, which is what the sweep needs.
+        free = False
+        deadline = time.time() + 5
+        while time.time() < deadline and not free:
+            claim = acquire_folder_lock(workdir)
+            if claim is None:
+                time.sleep(0.02)
+                continue
+            os.close(claim)
+            free = True
+        self.assertTrue(free, "the finished job lets go of its folder")
+        self.assertTrue(self.stranger_claims(lock_file),
+                        "the lock file stays put and is simply free to take")
 
     def test_capability_list_reports_the_frozen_vocabulary(self):
         reply = self.session.call("capability.list")["result"]

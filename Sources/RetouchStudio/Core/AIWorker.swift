@@ -1260,6 +1260,111 @@ enum AIWorker {
         }
     }
 
+    /// What launch decided about one leftover job folder.
+    struct JobFolderDecision: Equatable {
+        let folder: String
+        let action: String
+        let reason: String
+    }
+
+    /// The name a helper claims its workdir with while a job runs; the worker
+    /// holds an exclusive `flock` on it for the whole render.
+    static let jobLockName = ".lock"
+
+    /// A job workdir is named by the helper's truncated uuid — twelve lowercase
+    /// hex characters. Anything else sharing the jobs root is left alone, however
+    /// old it is.
+    static func isJobFolderName(_ name: String) -> Bool {
+        name.count == 12 && name.allSatisfy { $0.isHexDigit && ($0.isNumber || $0.isLowercase) }
+    }
+
+    /// Take `<folder>/.lock` exclusively, or return nil when a live helper holds
+    /// it. The descriptor is the claim: the caller closes it once the folder has
+    /// been dealt with, and the kernel drops it if this process dies first.
+    private static func claimJobFolder(_ folder: URL) -> Int32? {
+        let path = folder.appendingPathComponent(jobLockName).path
+        let descriptor = Darwin.open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return nil }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            return nil
+        }
+        return descriptor
+    }
+
+    /// Job folders an earlier helper left behind, cleared at launch.
+    ///
+    /// Every byte in one of these is a render of somebody's photograph, so the
+    /// bound is the model store's cleanup rule and not the temp sweep's looser
+    /// one: a folder goes only when it is older than `grace` **and** no live job
+    /// claims it, and a folder whose date cannot be read is kept. The working
+    /// copy sweep above treats an unreadable date as ancient because those copies
+    /// are duplicated in the project; here the cheaper mistake is the residue.
+    ///
+    /// Nothing in the app reads these folders. An adopted edit is a copy under
+    /// `AI/edits`, and the export-time upscale artifact is consumed inside the
+    /// export that produced it, so what this removes is bytes nobody points at.
+    @discardableResult
+    static func cleanStaleJobFolders(in root: URL = jobsDirectory,
+                                     now: Date = Date(),
+                                     grace: TimeInterval = 86_400) -> [JobFolderDecision] {
+        let manager = FileManager.default
+        guard let children = try? manager.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+            return []
+        }
+        var decisions: [JobFolderDecision] = []
+        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let name = child.lastPathComponent
+            guard isJobFolderName(name) else {
+                decisions.append(.init(folder: name, action: "keep",
+                                       reason: "not a job workdir"))
+                continue
+            }
+            guard let modified = (try? child.resourceValues(forKeys: [.contentModificationDateKey]))
+                    .flatMap(\.contentModificationDate) else {
+                decisions.append(.init(folder: name, action: "keep",
+                                       reason: "its date could not be read"))
+                continue
+            }
+            guard now.timeIntervalSince(modified) >= grace else {
+                decisions.append(.init(folder: name, action: "keep",
+                                       reason: "younger than the grace period"))
+                continue
+            }
+            guard let claim = claimJobFolder(child) else {
+                decisions.append(.init(folder: name, action: "keep",
+                                       reason: "a running job holds its lock"))
+                continue
+            }
+            defer { close(claim) }
+            do {
+                try manager.removeItem(at: child)
+                decisions.append(.init(folder: name, action: "removed",
+                                       reason: "older than the grace period and unlocked"))
+            } catch {
+                decisions.append(.init(folder: name, action: "keep",
+                                       reason: "removal failed: \(error.localizedDescription)"))
+            }
+        }
+        for decision in decisions {
+            NSLog("[RetouchStudio] job cleanup %@: %@ (%@)", decision.folder,
+                  decision.action, decision.reason)
+        }
+        return decisions
+    }
+
+    /// Both jobs roots, cleared of what earlier helpers left. This runs at launch
+    /// whether or not a helper ever starts: residue from a feature the owner
+    /// stopped using is still residue, and `ensureRunning` only sweeps on the path
+    /// where a helper is actually launched.
+    static func cleanupJobsAtStartup() {
+        DispatchQueue.global(qos: .utility).async {
+            _ = cleanStaleJobFolders(in: jobsDirectory)
+            _ = cleanStaleJobFolders(in: v2JobsDirectory)
+        }
+    }
+
     /// Stops a helper this app started. A helper the owner launched by hand is
     /// left alone.
     static func shutdown() {

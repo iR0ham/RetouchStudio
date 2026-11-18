@@ -13,7 +13,9 @@ Gates judged (frozen criteria, cited in the JSON record):
                its own bytes, this capability and this model     (§3.6, §4.3)
   cleanup      a succeeded job's folder holds only the pair; a
                cancelled job's folder holds no artifact and no
-               temp at all                                       (§4.3)
+               temp at all. The `.lock` a running job claims its
+               workdir with belongs to the folder, not the render,
+               and is not counted as a leftover.                (§4.3)
   provider     the device the result names is the device the
                worker's provider.list reports                    (§4.3)
 
@@ -63,6 +65,13 @@ from PIL import Image  # noqa: E402
 CANCELLED = -32014
 EXPECTED_CAPABILITY = "upscale.4x"
 EXPECTED_MODEL = "swin2sr-x4"
+# The file JobManager claims a workdir with while its job runs —
+# retouch_ai_worker/server.py's JOB_LOCK_NAME. It belongs to the folder, not to
+# the render, so the cleanup gates below allow for it and still refuse anything
+# else. The name is restated rather than imported because pulling in the server
+# module would pull in the engine, and the engine would pull in torch, for a
+# tool that only ever speaks over a socket.
+WORKDIR_LOCK = ".lock"
 
 
 class Client:
@@ -375,7 +384,11 @@ def main() -> int:
 
         job_folder = artifact.parent if args.jobs_root else None
         if job_folder is not None:
-            entries = sorted(entry.name for entry in job_folder.iterdir())
+            # The frozen criterion is about what the *render* leaves behind, so
+            # the folder's own claim file is not counted as a leftover; every
+            # other name still has to be one of the pair.
+            entries = sorted(entry.name for entry in job_folder.iterdir()
+                             if entry.name != WORKDIR_LOCK)
             clean = entries == ["upscaled.png",
                                 "upscaled.png.provenance.json"]
             gates.append(gate(
@@ -420,7 +433,11 @@ def main() -> int:
                 "code")
             if args.jobs_root is not None:
                 folder = args.jobs_root / cancel_job
-                leftovers = sorted(entry.name for entry in folder.iterdir()) \
+                # As above: the workdir's own claim is not a leftover of the
+                # cancelled render, so it is not counted and nothing else is
+                # allowed.
+                leftovers = sorted(entry.name for entry in folder.iterdir()
+                                   if entry.name != WORKDIR_LOCK) \
                     if folder.is_dir() else []
                 clean = leftovers == []
                 gates.append(gate(
