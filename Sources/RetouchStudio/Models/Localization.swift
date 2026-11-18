@@ -640,6 +640,9 @@ class L10n {
     var capabilityNeedsModel: String { "Needs a model" }
     var capabilityBlocked: String { "Blocked" }
     var capabilityUnavailable: String { "Not available" }
+    /// A blocked row already says `Blocked`; the worker's reason says what it
+    /// is waiting for, and the row that needs no hover to be understood.
+    func capabilityWaitingFor(_ reason: String) -> String { "Waiting for: \(reason)" }
     var capabilityHelperStopped: String {
         "The local AI helper is not running, so the capability list cannot be read."
     }

@@ -193,7 +193,11 @@ step*, because the second kind of §3 — `matte.fine` with no cleared rights,
 `generative.outpaint` with no licensed engine, `mask.click` with no importable
 `sam2` — is `blocked` for a reason the manager can state and cannot settle. `Tests/ModelTests.swift` pins both sentences
 byte-for-byte, the routing table, and that a payload-less refusal keeps saying
-what it said before.
+what it said before. The promise the sentence makes is kept on the row, not
+behind a pointer: `ModelManagerView` used to keep the worker's reason in a
+`.help` tooltip only, and a blocked chip now prints it under itself
+(`Waiting for: …` / `در انتظارِ: …`), the same way a model row already prints
+the worker's unverifiable reason inside a localized lead-in.
 
 **Export asks before it renders.** §4-C assumed the refusal reaches the host as
 a message, and for an export it does not: `RenderError` belongs to the frozen

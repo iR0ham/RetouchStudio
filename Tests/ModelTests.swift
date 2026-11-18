@@ -6925,6 +6925,14 @@ func testAIRefusalRouting() {
     check(persian.contains("مدیریت مدل‌ها…"), "the Persian line points at the manager")
     check(!persian.contains("در دسترس نیست"), "the Persian line does not blame the build")
 
+    // The manager's answer must be on the row, not behind a hover.
+    check(L10n.shared.capabilityWaitingFor("no cleared rights")
+          == "Waiting for: no cleared rights",
+          "the English lead-in keeps the worker's reason whole")
+    check(PersianL10n.table.capabilityWaitingFor("no cleared rights")
+          == "در انتظارِ: no cleared rights",
+          "the Persian lead-in keeps the worker's reason whole")
+
     check(EditorModel.exportUpscaleRefusal(state: .blocked) == .aiCapabilityBlocked("upscale.4x"),
           "an export whose upscale awaits adoption is refused before it renders")
     check(EditorModel.exportUpscaleRefusal(state: .requiresModel) == .aiModelMissing,

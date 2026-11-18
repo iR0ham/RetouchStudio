@@ -193,7 +193,8 @@ struct ModelManagerView: View {
     }
 
     /// The worker's own answer, not a UI table. Each state carries the reason
-    /// the worker recorded, shown in the tooltip; nothing here guesses support.
+    /// the worker recorded: a blocked one prints it under its chip, the others
+    /// keep it in the tooltip. Nothing here guesses support.
     private var capabilitySection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -249,19 +250,28 @@ struct ModelManagerView: View {
         case .unsupported:
             title = editor.s.capabilityUnavailable
         }
-        return HStack(spacing: 6) {
-            Text(capabilityTitle(capability))
-                .font(Theme.Font.face(size: 10.5))
-                .foregroundStyle(Theme.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Spacer(minLength: 4)
-            Text(title)
-                .font(Theme.Font.face(size: 9, weight: .medium))
-                .foregroundStyle(ink)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule(style: .continuous).fill(fill))
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(capabilityTitle(capability))
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                Text(title)
+                    .font(Theme.Font.face(size: 9, weight: .medium))
+                    .foregroundStyle(ink)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule(style: .continuous).fill(fill))
+            }
+            if capability.state == .blocked, let reason = capability.reason {
+                Text(editor.s.capabilityWaitingFor(reason))
+                    .font(Theme.Font.face(size: 9))
+                    .foregroundStyle(Theme.warning)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .help(capability.reason ?? capability.evidence ?? capability.id)
     }

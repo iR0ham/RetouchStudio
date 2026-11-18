@@ -653,6 +653,9 @@ final class PersianL10n: L10n {
     override var capabilityNeedsModel: String { "نیازمند مدل" }
     override var capabilityBlocked: String { "مسدود" }
     override var capabilityUnavailable: String { "در دسترس نیست" }
+    override func capabilityWaitingFor(_ reason: String) -> String {
+        "در انتظارِ: \(reason)"
+    }
     override var capabilityHelperStopped: String {
         "کمک‌یار محلی هوش مصنوعی در حال اجرا نیست، بنابراین فهرست توانایی‌ها خوانده نمی‌شود."
     }
