@@ -49,7 +49,13 @@ table of its own.
   neither `requirements.lock` nor the `models` extra, so the weights being
   installed is not enough to make segmentation runnable. `find_spec` answers
   without executing the package, so the query stays cheap and loads no device
-  context.
+  context. The host already made the same distinction its own way: the runtime
+  validator probes `sam2` as an optional backend
+  (`Sources/RetouchStudio/Core/AIRuntimeValidation.swift:68`) and a recorded
+  check asserts a missing optional backend does not invalidate the runtime
+  (`Tests/ModelTests.swift:6025`). The worker's `blocked` record and the host's
+  `segmentation: false` are the same fact at two boundaries, which is why no
+  host change was needed here.
 - **Evidence ledger** `worker/retouch_ai_worker/capability-evidence.json`
   contains one recorded run: `upscale.4x` on `macos-arm64` with
   `swin2sr-x4 1.0.0`, citing `Docs/PHASE5_ACCEPTANCE.md` §4 and
