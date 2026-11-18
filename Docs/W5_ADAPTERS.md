@@ -96,7 +96,7 @@ table of its own.
 
 ## Tests
 
-- Worker: 135 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+- Worker: 137 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
   of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15, the
   gate's admitting half adds 1, the independent review's fixes add 4, the
   submission-boundary pins add 2, W5-5 adds 2 (the acceptance harness

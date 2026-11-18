@@ -663,7 +663,7 @@ exist on this machine.
   real files: stale residue goes with its bytes, a folder just inside the bound
   and one started now survive, a folder whose lock a separate open file
   description holds is walked past however old it is and is taken once that claim
-  closes, `notes-for-me` and `A1B2C3D4E5F6` are not job ids, a dangling entry
+  closes, `notes-for-me` and `A9B8C7D6E5F4` are not job ids, a dangling entry
   sharing a job id's shape is kept, and the jobs root itself is never a
   candidate. `worker/tests/test_server.py` proves the other side from inside the
   worker: a running job's `.lock` is refused both to a second descriptor in the
@@ -681,3 +681,8 @@ exist on this machine.
   are not deleted by anything in this addendum's evidence — the sweep has never
   been run against his store, because his app is open. It clears them on a normal
   launch, which is the point of the change.
+- Pointer drift in §16's record. §16 cites `_trim` at
+  `worker/retouch_ai_worker/server.py:41, 213-219`; the claim this addendum adds
+  moved `keep_jobs` to `server.py:88` and `_trim` to `server.py:256-262`. §16's
+  prose is kept as it was written, including the owner-decision sentence this
+  addendum shows was premised on a fact that did not hold.

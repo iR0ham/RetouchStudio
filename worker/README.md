@@ -207,7 +207,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-135 tests, no GPU and no model download: framing, contract versioning, request
+137 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing
@@ -219,7 +219,11 @@ runtime. `test_provenance.py` patches the three syscalls the writer uses and
 fails each one in turn — serialise, create, write, rename the sidecar, rename
 the artifact, verify — to prove that every failure leaves either a complete,
 self-consistent pair or nothing at all, and that startup recovery clears an
-orphan sidecar without touching a completed pair or any other file.
+orphan sidecar without touching a completed pair or any other file. The workdir
+claim is covered from both sides: `test_server.py` submits a slow job and shows
+its `<workdir>/.lock` refused to a second descriptor and to a real child process
+until `job.finished`, then granted once the job lets go, and `test_provenance.py`
+shows the same startup sweep leaving that lock file alone.
 
 ## Acceptance
 

@@ -94,14 +94,14 @@ places as if they were one, and overstates the cleanup:
 - "cleaned up over time" is true of the *current session only* for these two
   `jobs/` folders. The helper prunes them with an in-process ledger that keeps
   the last `keep_jobs` (20) entries and forgets the rest at exit
-  (`worker/retouch_ai_worker/server.py:41, 216-222`), so folders from earlier
+  (`worker/retouch_ai_worker/server.py:88, 256-262`), so folders from earlier
   sessions stay until the owner sets a disk retention rule — recorded as an open
   decision, not implemented, because a completed result the user never adopted
   is user-visible work. What startup does clear is provenance debris: it walks
   every job folder and removes a `*.provenance.json` whose artifact never
   arrived plus any half-written sidecar temp, skipping anything written at or
   after the sweep's own timestamp so a worker sharing the jobs root cannot take
-  a live publication's evidence (`server.py:53-55`, `provenance.py:226-268`).
+  a live publication's evidence (`server.py:84-86`, `provenance.py:226-268`).
   Those are the only names it can match. The upscale path wrote the first of
   them; since 2026-11-18 every job the host names a capability for writes a pair
   too (`Docs/AI_EDIT_PROVENANCE_DECISION.md` §8), so the sweep now guards edit
