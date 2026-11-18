@@ -209,10 +209,15 @@ existing missing-model sentence rather than inventing a third one. The manager
 sheet is not opened from there, because the export sheet is already in front of
 it.
 
-**Not done.** Windows has no equivalent routing, so §4-C's parity cost is still
-unpaid; and a batch export still reports per file without these sentences,
-because the files can differ in whether 4× is available and "abort the batch"
-versus "label the file" is a decision of its own. The other §3 note is separate
-too: what makes `mask.click` `blocked` is now the worker's own importability
-gate, not DR-5, which branch `feat/ai-capability-runtime-package` says in the
-report itself.
+**Not done.** §4-C named a Windows parity cost and it turns out to be larger
+than a string: the Windows app has no user-facing AI failure path to route,
+because it never calls the worker — it only opens the model store
+(`Windows/RetouchStudio.App/ModelManagerWindow.xaml.cs:4`,
+`App.xaml.cs:40`), and `AIWorkerException` is caught in the test harness alone
+(`Windows/RetouchStudio.AI.Tests/Program.cs:283-314`). Parity there means wiring
+inference into the app, which is the blocked Windows AI slice and not this one.
+Nor does a batch export carry these sentences yet: the files can differ in
+whether 4× is available, and "abort the batch" versus "label the file" is a
+decision of its own. The other §3 note is separate too: what makes `mask.click`
+`blocked` is now the worker's own importability gate, not DR-5, which branch
+`feat/ai-capability-runtime-package` says in the report itself.
