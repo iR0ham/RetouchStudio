@@ -800,8 +800,11 @@ public static class ModelStoreChecks
             "SAM 2.1 is listed but unverifiable");
         C(catalog.Entry("swin2sr-x4")?.Supports("windows-x64") == false,
             "Swin2SR is not advertised on Windows");
-        C(catalog.Entry("migan")?.Supports("windows-x64") == true,
-            "MI-GAN is advertised on Windows");
+        C(catalog.Entry("migan")?.Supports("windows-x64") == false,
+            "MI-GAN is not advertised on Windows");
+        C(catalog.Entry("migan")?.Capabilities.SequenceEqual(new[] { "inpaint.spot" }) == true,
+            "MI-GAN is advertised for spot healing only",
+            string.Join(", ", catalog.Entry("migan")?.Capabilities ?? new List<string>()));
         C(catalog.Entries.All(e => e.LicenseEvidenceUrl.StartsWith("https://",
             StringComparison.OrdinalIgnoreCase)),
             "every shipped entry has an HTTPS licence evidence URL");

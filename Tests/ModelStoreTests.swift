@@ -579,15 +579,22 @@ do {
     check(swin?.supports(platform: "windows-x64") == false,
           "Swin2SR is not advertised on Windows")
     let migan = production.entry(id: "migan")
-    check(migan?.supports(platform: "windows-x64") == true,
-          "MI-GAN is advertised on Windows")
+    check(migan?.supports(platform: "windows-x64") == false,
+          "MI-GAN is not advertised on Windows")
+    // The worker routes object removal to flux2-klein-4b-q4
+    // (capabilities.py:64) and the Windows worker refuses every submitted job,
+    // so MI-GAN's only honest capability is the spot heal it actually performs.
+    check(migan?.capabilities == ["inpaint.spot"],
+          "MI-GAN is advertised for spot healing only",
+          (migan?.capabilities ?? []).joined(separator: ", "))
     check(production.entries.allSatisfy { $0.licenseEvidenceUrl.lowercased().hasPrefix("https://") },
           "every shipped entry has an HTTPS licence evidence URL")
 
     // The manager row shows one label per distinct task an entry serves. FLUX
-    // declares two generative ids plus object inpainting, and MI-GAN declares two
-    // inpainting ids, so translating every id on its own repeated the row and
-    // promised "Object removal" from a generative model.
+    // declares two generative ids plus object inpainting, so translating every
+    // id on its own repeated the row and promised "Object removal" from a
+    // generative model. MI-GAN now declares spot healing alone, and its row
+    // must still name that one task.
     let flux = production.entry(id: "flux2-klein-4b-q4")?.capabilities ?? []
     let fluxLabel = L10n.shared.modelsCapabilityLabel(flux)
     check(fluxLabel == "Generative editing · Healing",
@@ -595,7 +602,7 @@ do {
     let fluxFa = PersianL10n.table.modelsCapabilityLabel(flux)
     check(fluxFa == "ویرایش زایشی · ترمیم", "the Persian FLUX row says the same", fluxFa)
     let miganLabel = L10n.shared.modelsCapabilityLabel(migan?.capabilities ?? [])
-    check(miganLabel == "Healing", "MI-GAN does not list Healing twice", miganLabel)
+    check(miganLabel == "Healing", "MI-GAN's row names Healing", miganLabel)
     let untranslated = production.entries.filter { entry in
         entry.capabilities.contains { L10n.capabilityTaskKey(for: $0) == $0 }
     }
