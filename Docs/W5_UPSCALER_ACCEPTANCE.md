@@ -460,3 +460,127 @@ different corpus should decide is an owner/project-manager decision and is
 - `upscale.4x` is **not usable by a real user of the installed app today**:
   the production store is still the un-versioned legacy layout. Nothing in
   this round adopted it.
+
+---
+
+## 9. Harness review follow-up (2026-11-19): the bar alone decides, and corrections to §7.5–§7.6 and §8
+
+Status of this section: append-only. Nothing above is rewritten. Where §7.5,
+§7.6 or §8 state something the review of 2026-11-18 proved wrong or stale,
+the correction is recorded here, dated; those sections stay as written for the
+record. No inference was run for this section, and no number below is a new
+measurement: every figure is either arithmetic over the §7.5/§8 tables or a
+restatement of the review's finding.
+
+### 9.1 What the harness now does differently
+
+`worker/tools/upscale_corpus.py`:
+
+- **The exit code keys on the A1 bar only.** `a1Bar` is `met`, `missed` or
+  `not-measured`; exit 0, 1 or 2 respectively (3 is reserved for a harness
+  bug). The bicubic-x4 control is always measured and is now recorded per
+  image as `control: win|tie|lose` with `controlDeltaDb`, and in aggregate
+  under `aggregate.controlOutcomes`; it is never an input to the exit code.
+  Before this change one lost pair forced exit 1 even when every image met
+  the bar, so a rerun of the §7.5 corpus could not report what the owner
+  decided.
+- **Exit codes are distinguished.** 0 measured and bar met; 1 bar missed;
+  2 nothing measurable (capability not `supported`, model not verified,
+  worker unreachable, unreadable fixture, or a job that produced no
+  exact-size output from the approved model version); 3 the harness itself
+  raised. Previously every exception and every incomplete measurement
+  collapsed into the same "bar missed" exit.
+- **`--degradation lr`** applies the §8.1 parameters in the order that keeps
+  them: Gaussian blur radius 1.2 at the reference resolution, bicubic ×4
+  downscale, then JPEG q=70 (4:2:0) and Gaussian noise σ = 5/255 at the
+  degraded resolution. The parameters and a per-sample seed (base 20261118,
+  position offset) are in the record; a rerun is deterministic. `bicubic`
+  and `realistic` are unchanged, so §7.5 and §8 stay reproducible.
+- **Seam bands follow the engine's tile rule.** `engine._axis_tiles`
+  (`worker/retouch_ai_worker/engine.py:153-166`) uses starts
+  `range(0, length - 256 + 1, 240)` and clamps the last start to
+  `length - 256`; the boundaries are those starts after the first, ×4. A
+  567×1008 input therefore has x boundaries **960, 1244** and y boundaries
+  **960, 1920, 2880, 3008**; an 803×1428 input has x **960, 1920, 2188** and
+  y **960, 1920, 2880, 3840, 4688**. (The earlier tool used multiples of 960
+  only. The review's note listed the 567×1008 x boundaries as
+  "960, 1920, 1244"; 1920 belongs to the 1008-pixel axis — the arithmetic
+  above is the engine's.) The per-image record now carries `seamBoundaries`.
+- **The median is `statistics.median`.** The earlier expression took the
+  upper of the two middle values.
+- **ICC conversion is `renderingIntent=1`** (relative colorimetric) and the
+  record states it; the review observed it byte-identical to intent 0 on
+  these Display P3 matrix profiles. `describe()` now also records bit depth,
+  channel count, alpha and EXIF orientation, like the acceptance harness.
+
+Because the pure logic (crop, PSNR, seam mask, degradation order, verdict and
+exit mapping) had no test, `worker/tests/test_upscale_quality_corpus.py` now
+covers it on synthetic pixels: 14 tests, no worker, no model, no fixture. The
+discovered worker suite is **154 tests** (`Ran 154 tests ... OK`), and the five
+pinned places are updated together (`Tests/run-worker.sh`,
+`.github/workflows/ci.yml`, `worker/README.md`, `Docs/W5_ADAPTERS.md`,
+`Docs/worker-regressions/README.md`).
+
+### 9.2 Corrections to §7.5 and §7.6 (recorded values, no rerun)
+
+- **The control also clears the bar.** On the eight §7.5 pairs the bicubic
+  control scores minimum **32.23 dB**, mean **34.15 dB** (model: minimum
+  32.42 dB, mean 34.13 dB). The 24.0 dB bar therefore does not discriminate
+  a learned upscaler from a classical resize on a bicubic-degraded corpus.
+  Clearing it is not evidence of quality value-add, and **quality value-add
+  over the control is NOT PROVEN** by this corpus. Nothing in this section
+  claims otherwise.
+- **Attribution.** The 24.0 dB per-image minimum is the owner's Decision A1
+  bar. The "must beat the bicubic ×4 control" condition was added by the
+  harness/lead, not by the owner; the project manager withdrew it as a gate
+  on 2026-11-18 and it has been a diagnostic since. §7.6's "A1 fixed two
+  conditions" is corrected here.
+- **"No seam degradation" is false as written.** The §7.5 seam column sits
+  0.10–1.85 dB *below* the whole-frame PSNR on six of the eight images (C1,
+  C2, C3, C4, C6, C7) and above it on two (C5 +0.34 dB, C8 +0.08 dB). Those
+  bands were also computed with the 960-only boundary set, which misses the
+  clamped last start, so the column is superseded for seam purposes. It was
+  not recomputed here (no inference this round); the next measured run will
+  produce the corrected bands.
+- **The §7.5 "median" is the upper middle value.** The arithmetic median of
+  the eight recorded values is 34.345 dB (34.34 dB at two decimals), not
+  34.59 dB. §8's three-value median (34.67 dB) is unaffected.
+
+### 9.3 Corrections and annotations to §8
+
+- §8.3 and §8.4 stand as measured: R1 +0.13 dB against the +0.5 dB
+  condition, harness exit 1 at that time. The condition is now recorded as a
+  diagnostic; the §8 measurement and its consequence (no production
+  adoption) are unchanged.
+- **The §8 degradation order has a defect, now recorded.** §8.1 applies
+  JPEG, noise and blur at the reference resolution and then downscales ×4;
+  the downscale averages the injected noise, which §8.5 itself measured as
+  an RMS difference of 1.83–1.97 code values against the plain bicubic
+  input (about 0.7 % of full scale). Most of the intended adversarial
+  content therefore never reaches the model. `--degradation lr` exists to
+  apply it at the degraded resolution; it has not been run on the corpus.
+- §8.5's closing question (where the degradation belongs) is answered for
+  the tool by the `lr` mode; whether the corpus result changes is the next
+  measurement's decision, not this section's.
+
+### 9.4 The launch-time jobs sweep, stated plainly (owner-facing)
+
+The review's socket inspection — no IPv4 socket observed during a sampled
+run — is a sampling observation of one run, not a verified invariant; this
+section does not upgrade it to one. What is verified in the code is the other
+half: the app sweeps **both** AI jobs roots on every launch,
+unconditionally, whether or not a helper is started
+(`Sources/RetouchStudio/App.swift:29` → `AIWorker.cleanupJobsAtStartup`,
+`Sources/RetouchStudio/Core/AIWorker.swift:1361-1366`). Folders that are
+unlocked and older than the grace period are removed by that sweep. Nothing
+in this PR changes it; it is recorded here so the owner can decide whether an
+unconditional launch sweep is the intended behaviour for a local-first
+editor.
+
+### 9.5 Evidence tier for this section
+
+Documentation and tool logic only: no inference, no corpus run, no model
+store access, no adoption. The harness's new mode and boundary rule carry
+synthetic-logic evidence (the 14 tests above); whether the model clears
+24.0 dB on `lr` is **NOT MEASURED** and is the next round's question. The
+production store and `upscale.4x` remain exactly as §8.4 left them.
