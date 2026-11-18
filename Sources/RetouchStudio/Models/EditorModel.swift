@@ -784,7 +784,7 @@ final class EditorModel: ObservableObject {
     private var renderTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
-    private var exportJob: Task<RenderError?, Never>?
+    private var exportJob: Task<ExportOutcome, Never>?
     /// Bumped per export so tile reports that arrive after the job finished
     /// cannot repaint "Saved" as "{n}/{m} upscaling" again.
     private var exportGeneration = 0
@@ -1742,23 +1742,49 @@ final class EditorModel: ObservableObject {
     }
 
     /// Worker errors that mean "the machine is not set up" get a sentence the
-    /// owner can act on instead of the helper's internal wording. A missing
-    /// model also opens the model manager, where the install lives.
+    /// owner can act on instead of the helper's internal wording. Both the
+    /// missing model and the install waiting to be adopted open the model
+    /// manager, because that is where their next step lives.
     private func reportAIFailure(_ error: Error) -> String {
-        let failure = error as? AIWorkerFailure
-        if failure?.code == -32011 { showModelManager = true }
+        if (error as? AIWorkerFailure)?.opensModelManager == true { showModelManager = true }
         return localizedAIFailure(error)
     }
 
     private func localizedAIFailure(_ error: Error) -> String {
-        switch (error as? AIWorkerFailure)?.code {
+        guard let failure = error as? AIWorkerFailure else {
+            return error.localizedDescription
+        }
+        switch failure.code {
         case -32011: return L10n.current.aiModelMissing
         case -32012: return L10n.current.aiModelBusy
         case -32010: return L10n.current.aiLicenseBlocked
-        case -32020: return L10n.current.aiCapabilityUnsupported
+        case -32020:
+            return L10n.current.statusText(Self.unsupportedStatus(failure))
         case -32602: return L10n.current.aiMaskTooLarge
-        default: return error.localizedDescription
+        default: return failure.localizedDescription
         }
+    }
+
+    /// What a `-32020` refusal should say.
+    ///
+    /// Three classes share the code. A runtime package the helper cannot load
+    /// is reported `blocked` like an install waiting to be adopted, but it
+    /// needs its own sentence: no download settles it, and the package name
+    /// tells the owner what is actually missing. A blocked capability is not
+    /// an unsupported one — the adapter offers it and the weights are here, so
+    /// the build sentence is false and the task name is the useful half of the
+    /// answer. Anything else (including a refusal the worker sends without
+    /// data, which is what the mask job produced before the engine learned to
+    /// name its state) keeps the build sentence.
+    nonisolated static func unsupportedStatus(_ failure: AIWorkerFailure) -> StatusToken {
+        if let refusal = failure.runtimeRefusal {
+            return .aiCapabilityRuntimeMissing(refusal.capability,
+                                               refusal.package)
+        }
+        if let capability = failure.blockedCapabilityId {
+            return .aiCapabilityBlocked(capability)
+        }
+        return .aiCapabilityUnsupported
     }
 
     /// Runs the selected preset against the working photo. The helper gets a
@@ -3217,6 +3243,14 @@ final class EditorModel: ObservableObject {
                                       includeAnalysis: includeAnalysis)
     }
 
+    /// How one export attempt ended. `refused` carries the status line for a
+    /// state the helper named before anything was rendered.
+    private enum ExportOutcome {
+        case written
+        case render(RenderError)
+        case refused(StatusToken)
+    }
+
     func export(to url: URL) {
         guard let image = sourceFull, let snapshot = makeExportSnapshot() else { return }
         // Refuse before rendering: the source is immutable even when the chosen
@@ -3227,6 +3261,9 @@ final class EditorModel: ObservableObject {
             return
         }
         let protectedURL = imageURL
+        // Read on the main actor, before the job starts, so the detached task
+        // never touches the planner.
+        let needsUpscale = usesExportUpscale
         guard let token = begin(.export) else {
             statusToken = .operationBusy
             return
@@ -3257,7 +3294,17 @@ final class EditorModel: ObservableObject {
                 self.statusToken = .upscaling(done, total)
             }
         }
-        let job = Task.detached(priority: .userInitiated) { () -> RenderError? in
+        let job = Task.detached(priority: .userInitiated) { () -> ExportOutcome in
+            // The upscale verdict is asked before the render, not after it
+            // fails: see `exportPreflight(cancellationRequested:verdict:)`.
+            if needsUpscale {
+                switch Self.exportPreflight(cancellationRequested: { Task.isCancelled },
+                                            verdict: Self.exportUpscaleRefusal) {
+                case .cancelled: return .render(.cancelled)
+                case .refused(let refusal): return .refused(refusal)
+                case .proceed: break
+                }
+            }
             let renderer = MacDocumentRenderer()
             let report: (RenderProgress) -> Void = { event in
                 guard event.stage == .upscaling else { return }
@@ -3267,11 +3314,11 @@ final class EditorModel: ObservableObject {
                 _ = try renderer.renderAndWrite(snapshot, source: source, to: url,
                                                 protecting: protectedURL,
                                                 progress: report)
-                return nil
+                return .written
             } catch let error as RenderError {
-                return error
+                return .render(error)
             } catch {
-                return .renderFailed
+                return .render(.renderFailed)
             }
         }
         exportJob = job
@@ -3285,19 +3332,81 @@ final class EditorModel: ObservableObject {
             // failed or was cancelled.
             self.end(token)
             switch outcome {
-            case nil:
+            case .written:
                 self.showExportSheet = false
                 self.statusToken = .saved(url.lastPathComponent)
                 // An exported copy is not a saved project: the edits still
                 // live only in this window, so the clean baseline must not move.
-            case .cancelled?:
-                self.statusToken = .exportCancelled
-            case .sourceIsDestination?:
-                self.statusToken = .exportRefusedOriginal
-            default:
-                self.statusToken = .exportFailed
+            case .refused(let refusal):
+                // The status line carries the instruction. The manager sheet is
+                // not opened from here: the export sheet is still up in front of
+                // it, so the owner would have to dismiss one window to see the
+                // other.
+                self.statusToken = refusal
+            case .render(let error):
+                switch error {
+                case .cancelled:
+                    self.statusToken = .exportCancelled
+                case .sourceIsDestination:
+                    self.statusToken = .exportRefusedOriginal
+                default:
+                    self.statusToken = .exportFailed
+                }
             }
         }
+    }
+
+    /// The helper's own verdict on the export's 4× pass, asked before any
+    /// pixels are rendered.
+    ///
+    /// An `AIWorkerFailure` cannot cross the renderer port: `RenderError` is
+    /// part of the frozen StudioCore contract, so `MacDocumentRenderer.map`
+    /// collapses every AI refusal into one case and the owner would get a bare
+    /// "Export failed" for a state the app can name and act on. Asking first
+    /// also stops a doomed export before it spends minutes tiling a photo the
+    /// helper has already decided it cannot upscale. A report that cannot be
+    /// fetched answers nil, and the render proceeds on its own terms.
+    nonisolated private static func exportUpscaleRefusal() -> StatusToken? {
+        guard let capability = try? AICapabilityClient.fetch()
+            .find(AICapabilityReport.upscale4x)
+        else { return nil }
+        return exportUpscaleRefusal(state: capability.state)
+    }
+
+    /// What the export should do with the state the helper reported for its
+    /// upscale. nil means render: `supported` can run, `unsupported` is the
+    /// adapter's product answer that the render will report itself, and a
+    /// report that could not be read says nothing.
+    nonisolated static func exportUpscaleRefusal(state: AICapability.State?) -> StatusToken? {
+        switch state {
+        case .blocked: return .aiCapabilityBlocked(AICapabilityReport.upscale4x)
+        case .requiresModel: return .aiModelMissing
+        case .supported, .unsupported, .none: return nil
+        }
+    }
+
+    /// One export's pre-flight answer, and the only place the ordering lives.
+    enum ExportPreflight: Equatable {
+        case proceed
+        case refused(StatusToken)
+        case cancelled
+    }
+
+    /// Asks the helper for its upscale verdict, but a cancellation wins — both
+    /// before the ask and while it is in flight.
+    ///
+    /// The ask is a blocking socket call with an 8 s timeout, so the second
+    /// check is the one that matters: without it, cancelling during the ask
+    /// printed "Upscaling is installed on this Mac but not ready to run yet"
+    /// instead of "Export cancelled". The first check also keeps a cancelled
+    /// export from waking the helper at all.
+    nonisolated static func exportPreflight(cancellationRequested: () -> Bool,
+                                            verdict: () -> StatusToken?) -> ExportPreflight {
+        if cancellationRequested() { return .cancelled }
+        let refusal = verdict()
+        if cancellationRequested() { return .cancelled }
+        guard let refusal else { return .proceed }
+        return .refused(refusal)
     }
 
     /// Stops the one-photo export. The render job checks cancellation before it

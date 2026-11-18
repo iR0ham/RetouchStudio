@@ -379,6 +379,10 @@ class SamRuntimeTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, -32020)
         self.assertEqual(caught.exception.data["package"], "sam2")
         self.assertEqual(caught.exception.data["capabilityId"], "mask.click")
+        # The host routes on `state`; without it a mask refusal fell through
+        # to the "not in this build" sentence even though the state is known.
+        self.assertEqual(caught.exception.data["state"], "blocked")
+        self.assertIn("cannot import sam2", caught.exception.data["reason"])
         self.assertIn("nothing to run on", str(caught.exception))
         self.assertFalse(require.called,
                          "the refusal ran after a lease was taken")
