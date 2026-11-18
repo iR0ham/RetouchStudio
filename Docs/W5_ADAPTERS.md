@@ -96,15 +96,18 @@ table of its own.
 
 ## Tests
 
-- Worker: 135 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+- Worker: 137 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
   of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15, the
   gate's admitting half adds 1, the independent review's fixes add 4, the
   submission-boundary pins add 2, W5-5 adds 2 (the acceptance harness
   itself, driven end to end against a deterministic fake engine — see the
   addenda), the A1 edit-provenance work adds 9 (seven at the publication
   boundary in `test_engine`, two at the envelope in `test_server`) and the
-  SAM 2.1 tiny catalog pin adds 2 (its measured size and digest, and DR-5's
-  branch kept alive with the digests taken back out of an entry). 14 of the W5-3 tests are for
+  jobs-root claim adds 2 (a running job's `<workdir>/.lock` refused to a second
+  descriptor and to a real child process, and `provenance.reconcile` leaving
+  that file alone) and the SAM 2.1 tiny catalog pin adds 2 (its measured size
+  and digest, and DR-5's branch kept alive with the digests taken back out of
+  an entry). 14 of the W5-3 tests are for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
   kind-only job that must not load a size-mismatched model (`-32019`), and the
