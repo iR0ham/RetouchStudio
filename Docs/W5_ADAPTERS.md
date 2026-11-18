@@ -344,8 +344,9 @@ were wrong on the evidence this document already carries:
   answers every `job.submit` with `RefuseJob`, and the Windows adapter reports
   no `supported` capability at all (see the Windows adapter section above). A
   `windows-x64` label therefore described something no Windows build can do,
-  and it contradicted this document's own W5-2 honesty gate ("any unapproved
-  ONNX artifact stay out of the catalog", `Docs/W5_MODEL_MANAGER.md:206`).
+  and it contradicted the W5-2 honesty gate these adapters were written against
+  ("any unapproved ONNX artifact stay out of the catalog",
+  `Docs/W5_MODEL_MANAGER.md:206`).
 
 **The change.** `migan` is now `capabilities: ["inpaint.spot"]`,
 `platforms: ["macos-arm64"]`, and its `notes` say what is true: spot healing
