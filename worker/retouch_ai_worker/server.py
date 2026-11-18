@@ -86,7 +86,8 @@ class JobManager:
 
     # --- lifecycle ----------------------------------------------------
     def submit(self, kind: str, params: dict, out_shm: str | None = None,
-               capability_id: str | None = None) -> dict:
+               capability_id: str | None = None,
+               requested_capability: str | None = None) -> dict:
         with self._lock:
             if self._current is not None:
                 raise WorkerError(BUSY, "another job is running",
@@ -97,6 +98,7 @@ class JobManager:
                 "id": job_id,
                 "kind": kind,
                 "capability": capability_id,
+                "requested_capability": requested_capability,
                 "status": "queued",
                 "created": time.time(),
                 "started": None,
@@ -125,7 +127,8 @@ class JobManager:
                       progress=lambda fields: self._progress(job, fields),
                       allow_roots=self.allow_roots,
                       buffers=self.buffers, out_shm=out_shm,
-                      capability_id=job["capability"])
+                      capability_id=job["capability"],
+                      requested_capability=job["requested_capability"])
         job["status"] = "running"
         job["started"] = time.time()
         self._emit("job.started", {"job_id": job["id"], "kind": job["kind"]})
@@ -294,6 +297,27 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
                               {"capabilityId": capability_id,
                                "model": item.get("modelId")})
 
+    def _requested_capability(self, params: dict, kind: str) -> str | None:
+        """The record-only capability name a host may attach to a job (A1).
+
+        `capabilityId` is a gate: naming it means the worker must refuse the job
+        unless it really provides that capability. `requestedCapability` is a
+        label: the host says which product feature these bytes are evidence for
+        so the provenance record can name it, and the worker only checks the
+        name is one this kind can carry at all. It deliberately does not consult
+        the model-state verdict — refusing a job for a name the adapter does
+        render is the A2 decision the owner has not made.
+        """
+        requested = params.get("requestedCapability")
+        if requested is None:
+            return None
+        requested = str(requested)
+        if not any(item.id == requested for item in job_capability(kind)):
+            raise WorkerError(INVALID_PARAMS,
+                              f"{requested} is not a {kind} capability",
+                              {"capabilityId": requested, "kind": kind})
+        return requested
+
     # --- dispatch -----------------------------------------------------
     def dispatch(self, method: str, params: dict, connection) -> dict:
         if method == "hello":
@@ -340,7 +364,8 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
                 self._require_capability(str(capability_id), kind)
             return self.manager.submit(
                 kind, job_params, params.get("out_shm"),
-                str(capability_id) if capability_id else None)
+                str(capability_id) if capability_id else None,
+                self._requested_capability(params, kind))
         if method == "job.status":
             return self.manager.status(str(params.get("job_id", "")))
         if method == "job.result":

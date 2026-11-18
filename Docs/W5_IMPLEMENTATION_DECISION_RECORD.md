@@ -799,3 +799,75 @@ which needed weights. Splitting them:
   checks are still proven against files the test writes, not files the worker
   writes. Closing that needs a real run on a real model, which is the owner's
   approval to ask for, not code to write.
+
+---
+
+## Addendum (2026-11-18): the adopted Quick Edit pair now carries its §3.6 record
+
+The owner answered the two open questions in `Docs/AI_EDIT_PROVENANCE_DECISION.md`
+§3 on 2026-11-18: a Remove Object edit records `inpaint.object`, and a stored
+edit whose bytes disagree with its record — or whose record cannot be read — is
+shown as missing. That unblocks A1, which is now implemented. A2 (routing the
+same name through the worker's verdict gate, which would refuse the three
+shipped edit tools until a recorded run exists) is still undecided, still not
+implemented, and PR #78 stays unapproved and untouched.
+
+**The envelope has a second, weaker field.** §3.6 needs a capability name in the
+record; `capabilityId` cannot supply it for `patch_edit`, because four
+capabilities share that job kind and DR-4 bounds `supported` by a recorded run
+the flux and MI-GAN installs do not have. So `job.submit` accepts
+`requestedCapability` alongside it: the worker validates that the name belongs to
+the job's kind (`-32602` otherwise, so a typo is refused rather than recorded
+wrong), and otherwise ignores it — no refusal, no state lookup, no new
+unreachable code. `Docs/AI_PROTOCOL_V2.md` now states the difference.
+
+**`capabilitySource` is an additive field on the sidecar, and the frozen field
+test still passes.** `test_the_record_carries_exactly_the_frozen_fields` keeps
+its answer because the key is written only when the name's origin needs saying:
+`host-asserted` for a record built from the envelope label, `worker-derived` for
+the upscale record of a kind-only submission, and absent when the worker's own
+verdict is what made the name true. The project body gains no keys.
+
+**All three edit paths publish the pair through the same boundary as upscale**
+(`worker/retouch_ai_worker/engine.py`): `_job_patch_edit`, `_inpaint` and
+`_full_frame` each land their adopted files with `provenance.publish`, so a
+cancel during the write leaves nothing, and a target that already exists is
+refused rather than renamed over. Reimagine's alpha is now the worker's own
+opaque plane instead of one the host drew, which is what lets both adopted files
+carry a digest. The MI-GAN record keeps `seed: null` — the seed the host sends
+does not shape those bytes. Model identity is built at load time from the catalog
+entry the load actually trusted, with the provider measured (`cpu` for MI-GAN,
+`mx.default_device()` for flux) and `version: null` for a legacy flat install.
+
+**The host reads the record, not the directory entry.** `AIEditStore.adopt`
+takes both sidecars and verifies each pair twice — against the helper's file,
+then against the stored copy under the name the document will read back, because
+adoption renames `result.png` to `patch.png` and a digest taken from the wrong
+side of that copy would license bytes nobody measured. A refusal leaves no
+staging folder. `isAvailable` now asks the digest whenever a sidecar exists,
+cached by size and modification time so a per-frame composite call does not
+re-hash, and an edit with no sidecar keeps the existence-only answer it always
+gave — the owner's carve-out for projects saved before this existed.
+
+Windows is unchanged: its `WorkerServer` refuses every job, so no adopted edit
+artifact can come from it, and `Docs/AI_EDIT_PROVENANCE_DECISION.md` §7 already
+recorded that scope.
+
+**Measured, this round.** `Tests/run-worker.sh`: `Ran 133 tests … OK` (nine new:
+seven publication-boundary cases in `test_engine.EditProvenanceTests`, two
+envelope cases in `test_server.ServerTests`). `Tests/ModelTests.swift`:
+`MODEL TESTS: PASS` on arm64 including nine new checks, from "a patch whose
+record names other bytes is refused" to "bytes that no longer match their record
+read as missing, not healthy". Both runs are on the tree of this commit; the
+`ci.yml` pin, `Tests/run-worker.sh`, `worker/README.md`,
+`Docs/worker-regressions/README.md` and `Docs/W5_ADAPTERS.md` move to
+`Ran 133 tests` with it.
+
+**NOT VERIFIED by this round.** No inference ran and no weights were downloaded,
+so every sidecar proven here was written against a stubbed render. The reply of
+a real flux or MI-GAN job on a real photo has not been observed, and no
+live-worker cross-language test covers `requestedCapability` end to end —
+`Tests/RuntimeV2Tests.swift` is where it belongs. A rollout also pairs this app
+with a helper that publishes: against an older helper the reply has no
+`*_provenance` keys and the edit is refused as an unexpected result rather than
+adopted unsigned. That is the §3.6 rule, not a fallback.

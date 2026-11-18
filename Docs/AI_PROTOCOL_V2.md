@@ -113,6 +113,21 @@ still submits the older job types by kind alone, so those take the unchanged
 path; the refusal is the contract for hosts that name capabilities (the Windows
 adapter requires the id).
 
+`job.submit` also accepts an optional `requestedCapability`, which is a record
+name and not a gate. The helper writes it into the §3.6 provenance of the
+artifacts it hands back, and it never refuses a job because of it: four
+`patch_edit` capabilities share one job kind, so only the host knows which tool
+the user pressed, and the models behind two of them carry no recorded run (DR-4)
+while shipping anyway. Turning that label into a verdict is a separate product
+decision, not this field. A name the job kind cannot carry is `-32602` with
+`{capabilityId, kind}`, so a typo is a refused submission rather than a record
+that would misdescribe an edit. When both fields are present the gated answer
+wins the record and no origin label is written; a record that names a host
+assertion the worker did not adjudicate carries `"capabilitySource":
+"host-asserted"`, and one the worker chose from the job kind itself carries
+`"worker-derived"`. A record the worker's own verdict approved carries no
+`capabilitySource` at all.
+
 A submission that names only `kind` is still checked by the worker's own catalog
 before any weights load: a missing model is `-32011`, an uncleared licence is
 `-32010`, and a file whose size differs from the catalog record is `-32019`

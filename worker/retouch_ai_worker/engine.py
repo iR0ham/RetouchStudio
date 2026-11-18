@@ -23,7 +23,7 @@ from PIL import Image
 
 from . import __version__, provenance
 from .capabilities import current_platform, job_capability
-from .catalog import Catalog
+from .catalog import Catalog, ModelEntry
 from .protocol import (BUDGET_EXCEEDED, CONTRACT_VERSION, INTERNAL_ERROR,
                        INVALID_PARAMS, WorkerError)
 from .transport import BufferRegistry, read_image
@@ -60,6 +60,10 @@ class Context:
     metrics: dict = field(default_factory=dict)
     # The capability the host named in the envelope; §3.6 records it in provenance.
     capability_id: str | None = None
+    # The capability the host asks the record to name without putting the job
+    # through the verdict gate (the approved A1). It is metadata only: nothing
+    # here refuses a job because of it.
+    requested_capability: str | None = None
 
     def emit(self, stage: str, **fields) -> None:
         self.progress({"stage": stage, **fields})
@@ -368,7 +372,7 @@ class Engine:
         crop_path = ctx.workdir / "crop.png"
         Image.fromarray(crop).resize((patch_w, patch_h), Image.LANCZOS).save(crop_path)
 
-        model = self._ensure_flux(ctx)
+        model, identity = self._ensure_flux(ctx)
         ctx.check_cancel()
         started = time.perf_counter()
         generated = self._generate(model, prompt, crop_path, patch_w, patch_h, params, ctx)
@@ -392,9 +396,40 @@ class Engine:
         result_path = ctx.workdir / "result.png"
         Image.fromarray(out).save(result_path)
         patch_path = ctx.workdir / "patch.png"
-        Image.fromarray(full[ey0:ey1, ex0:ex1]).save(patch_path)
         alpha_path = ctx.workdir / "alpha.png"
-        Image.fromarray(np.round(alpha[ey0:ey1, ex0:ex1] * 255).astype(np.uint8)).save(alpha_path)
+        patch_pixels = full[ey0:ey1, ex0:ex1]
+        alpha_pixels = np.round(alpha[ey0:ey1, ex0:ex1] * 255).astype(np.uint8)
+        # The app adopts this pair, so this is where §3.6 lands: each file
+        # arrives with the sidecar that names its bytes. A job submitted by
+        # kind alone publishes nothing rather than a record that would have to
+        # guess which of the four patch_edit capabilities ran.
+        published: dict[str, str] = {}
+        capability = self._recorded_capability(ctx)
+        if capability:
+            rect = {"x": ex0 / width, "y": ey0 / height,
+                    "width": (ex1 - ex0) / width, "height": (ey1 - ey0) / height}
+            edit_parameters = {"prompt": prompt, "engine": "patch",
+                               "steps": int(params.get("steps", 4)),
+                               "patch": patch_long,
+                               "context": float(params.get("context", 0.25)),
+                               "dilate": dilate, "feather": feather,
+                               "guidance": float(params.get("guidance", 1.0))}
+            published["patch_provenance"] = str(self._publish_provenanced(
+                ctx, patch_path, patch_pixels, capability=capability,
+                identity=identity, parameters=edit_parameters,
+                seed=int(params.get("seed", 42)), source=source, rect=rect,
+                outside=outside_identical, seconds=generate_s))
+            # The alpha plane is not a promise about picture pixels, so its
+            # record keeps the field null; the patch record carries the
+            # measured one for the pair.
+            published["alpha_provenance"] = str(self._publish_provenanced(
+                ctx, alpha_path, alpha_pixels, capability=capability,
+                identity=identity, parameters=edit_parameters,
+                seed=int(params.get("seed", 42)), source=source, rect=rect,
+                outside=None, seconds=generate_s))
+        else:
+            Image.fromarray(patch_pixels).save(patch_path)
+            Image.fromarray(alpha_pixels).save(alpha_path)
         return {
             "output": str(result_path),
             "mode": "patch",
@@ -411,8 +446,83 @@ class Engine:
             "mask_fraction": round(fraction, 4),
             "authorized_fraction": round(float(region.mean()), 4),
             "generate_s": round(generate_s, 2),
+            **published,
             **ctx.publish(out),
         }
+
+    # ------------------------------------------------------------------
+    # §3.6 provenance for adopted edit artifacts (the approved A1).
+    def _recorded_capability(self, ctx: Context) -> tuple[str, str | None] | None:
+        """The capability name this job may record, and where the name came from.
+
+        A gated name needs no label: the worker's own verdict is what made it
+        true. `requested_capability` is the A1 route — the host names the edit
+        it ran and the worker records that name without putting the job through
+        the verdict gate — so its sidecars say `host-asserted`. A job that was
+        submitted by kind alone has no honest name, because four capabilities
+        share the kind and only the host knows which tool ran; its artifacts
+        carry no provenance rather than a guessed one.
+        """
+        if ctx.capability_id:
+            return ctx.capability_id, None
+        if ctx.requested_capability:
+            return ctx.requested_capability, "host-asserted"
+        return None
+
+    def _entry_identity(self, entry: ModelEntry, root: Path, provider: str) -> dict:
+        """The model half of a record, built the way the load path sees it.
+
+        The digests come from the catalog entry, which the load already
+        trusted; re-hashing gigabytes per job would prove nothing the load did
+        not already prove, and `version` is absent exactly when the running
+        bytes are the legacy flat install rather than a versioned one.
+        """
+        flat = self.catalog.root / entry.id
+        return {"id": entry.id,
+                "version": None if root == flat else root.name,
+                "format": entry.files[0].path.rsplit(".", 1)[-1] if entry.files else None,
+                "provider": provider,
+                "files": [{"path": spec.path, "sha256": spec.sha256}
+                          for spec in entry.files if spec.sha256]}
+
+    def _publish_provenanced(self, ctx: Context, target: Path, pixels: np.ndarray,
+                             *, capability: tuple[str, str | None], identity: dict,
+                             parameters: dict, seed: int | None,
+                             source: np.ndarray, rect: dict,
+                             outside: bool | None, seconds: float) -> Path:
+        """Write `pixels` as `target` and land its §3.6 sidecar with it.
+
+        The same publication boundary as the upscale path: a cancel that
+        arrives while the bytes are being written stops the job here with
+        nothing published, and nothing is checked once the two renames start,
+        because that is the point a pair cannot be torn at.
+        """
+        staged = target.with_name(target.name + ".tmp")
+        try:
+            Image.fromarray(pixels).save(staged, format="PNG")
+            ctx.check_cancel()
+            capability_id, capability_source = capability
+            record = provenance.document(
+                capability_id=capability_id, job_id=ctx.job_id,
+                contract_version=CONTRACT_VERSION, model=identity,
+                adapter={"platform": current_platform(),
+                         "version": __version__},
+                parameters=parameters, seed=seed,
+                input=provenance.pixels(source),
+                output=provenance.artifact(staged),
+                authorized_rect=rect, outside_pixels_identical=outside,
+                elapsed_seconds=round(seconds, 2), state="succeeded",
+                capability_source=capability_source)
+            return provenance.publish(staged, target, record)
+        except provenance.ProvenanceError as exc:
+            staged.unlink(missing_ok=True)
+            raise WorkerError(INTERNAL_ERROR,
+                              "the edit artifact could not be published "
+                              f"with provenance: {exc}",
+                              {"job": ctx.job_id}) from exc
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            raise
 
     # ------------------------------------------------------------------
     def _job_inpaint(self, params: dict, ctx: Context) -> dict:
@@ -436,7 +546,7 @@ class Engine:
                               {"fraction": round(fraction, 3),
                                "limit": INPAINT_MAX_FRACTION})
 
-        session = self._ensure_migan()
+        session, identity = self._ensure_migan()
         # The author's pipeline takes 255 for known pixels and 0 for the hole.
         known = np.where(mask > 127, 0, 255).astype(np.uint8)
         image_input = np.ascontiguousarray(source.transpose(2, 0, 1)[None])
@@ -466,9 +576,34 @@ class Engine:
         result_path = ctx.workdir / "result.png"
         Image.fromarray(out).save(result_path)
         patch_path = ctx.workdir / "patch.png"
-        Image.fromarray(generated[ey0:ey1, ex0:ex1]).save(patch_path)
         alpha_path = ctx.workdir / "alpha.png"
-        Image.fromarray(np.round(alpha[ey0:ey1, ex0:ex1] * 255).astype(np.uint8)).save(alpha_path)
+        patch_pixels = generated[ey0:ey1, ex0:ex1]
+        alpha_pixels = np.round(alpha[ey0:ey1, ex0:ex1] * 255).astype(np.uint8)
+        # The same adopted-pair rule as the generative path: provenance when
+        # the host named the capability, nothing when it would have to guess.
+        # MI-GAN takes no seed — the seed the host sent did not shape these
+        # bytes, so the record says null rather than repeating a number that
+        # only the generative model honours.
+        published: dict[str, str] = {}
+        capability = self._recorded_capability(ctx)
+        if capability:
+            rect = {"x": ex0 / width, "y": ey0 / height,
+                    "width": (ex1 - ex0) / width, "height": (ey1 - ey0) / height}
+            edit_parameters = {"engine": "inpaint", "dilate": dilate,
+                               "feather": feather,
+                               "steps": int(params.get("steps", 4))}
+            published["patch_provenance"] = str(self._publish_provenanced(
+                ctx, patch_path, patch_pixels, capability=capability,
+                identity=identity, parameters=edit_parameters, seed=None,
+                source=source, rect=rect, outside=outside_identical,
+                seconds=generate_s))
+            published["alpha_provenance"] = str(self._publish_provenanced(
+                ctx, alpha_path, alpha_pixels, capability=capability,
+                identity=identity, parameters=edit_parameters, seed=None,
+                source=source, rect=rect, outside=None, seconds=generate_s))
+        else:
+            Image.fromarray(patch_pixels).save(patch_path)
+            Image.fromarray(alpha_pixels).save(alpha_path)
         return {
             "output": str(result_path),
             "mode": "patch",
@@ -485,6 +620,7 @@ class Engine:
             "mask_fraction": round(fraction, 4),
             "authorized_fraction": round(float(region.mean()), 4),
             "generate_s": round(generate_s, 2),
+            **published,
             **ctx.publish(out),
         }
 
@@ -499,20 +635,51 @@ class Engine:
         reference = ctx.workdir / "reference.png"
         Image.fromarray(source).resize((render_w, render_h), Image.LANCZOS).save(reference)
 
-        model = self._ensure_flux(ctx)
+        model, identity = self._ensure_flux(ctx)
         ctx.check_cancel()
         started = time.perf_counter()
         generated = self._generate(model, prompt, reference, render_w, render_h, params, ctx)
         generate_s = time.perf_counter() - started
         out = np.array(generated.convert("RGB").resize((width, height), Image.LANCZOS))
         result_path = ctx.workdir / "result.png"
-        Image.fromarray(out).save(result_path)
+        alpha_path = ctx.workdir / "alpha.png"
+        # A whole-frame render covers every pixel, so its alpha is the opaque
+        # frame itself. It used to be drawn by the host, which left the pair
+        # half-signed; the worker writes it now so both adopted files arrive
+        # from the same hand and the same digest rule covers both.
+        opaque = np.full((height, width), 255, dtype=np.uint8)
+        full_rect = {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+        published: dict[str, str] = {}
+        capability = self._recorded_capability(ctx)
+        edit_parameters = {"prompt": prompt, "engine": "patch",
+                           "full_frame": True,
+                           "steps": int(params.get("steps", 4)),
+                           "max_side": max_side,
+                           "guidance": float(params.get("guidance", 1.0))}
+        if capability:
+            published["provenance"] = str(self._publish_provenanced(
+                ctx, result_path, out, capability=capability,
+                identity=identity, parameters=edit_parameters,
+                seed=int(params.get("seed", 42)), source=source,
+                rect=full_rect,
+                outside=False,  # the whole frame was redrawn, on purpose
+                seconds=generate_s))
+            published["alpha_provenance"] = str(self._publish_provenanced(
+                ctx, alpha_path, opaque, capability=capability,
+                identity=identity, parameters=edit_parameters,
+                seed=int(params.get("seed", 42)), source=source,
+                rect=full_rect, outside=None, seconds=generate_s))
+        else:
+            Image.fromarray(out).save(result_path)
+            Image.fromarray(opaque).save(alpha_path)
         return {
             "output": str(result_path),
             "mode": "full-frame",
+            "alpha": str(alpha_path),
             "render_size": [render_w, render_h],
             "mask_fraction": round(fraction, 4),
             "generate_s": round(generate_s, 2),
+            **published,
             **ctx.publish(out),
         }
 
@@ -617,7 +784,12 @@ class Engine:
                 authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0,
                                  "height": 1.0},
                 outside_pixels_identical=None, elapsed_seconds=seconds,
-                state="succeeded")
+                state="succeeded",
+                # A host that named the capability had it approved by the
+                # verdict first, which needs no label; a kind-only submit got
+                # this name from the worker itself, and the record says so.
+                capability_source=None if ctx.capability_id
+                else "worker-derived")
             sidecar = provenance.publish(staging, result, record)
         except provenance.ProvenanceError as exc:
             staging.unlink(missing_ok=True)
@@ -701,10 +873,14 @@ class Engine:
         root = self.catalog.require("migan")
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4
-        self._migan = ort.InferenceSession(
+        session = ort.InferenceSession(
             str(root / "migan_pipeline_v2.onnx"),
             sess_options=options, providers=["CPUExecutionProvider"])
         self._note_provider("cpu")
+        # The provider is not a guess here: the session was pinned to the CPU
+        # execution provider above, and the record says what the session is.
+        self._migan = (session, self._entry_identity(
+            self.catalog.get("migan"), root, "cpu"))
         return self._migan
 
     def _ensure_flux(self, ctx: Context):
@@ -720,9 +896,17 @@ class Engine:
         if MLX_WIRED_GB > 0:
             mx.set_wired_limit(int(min(MLX_WIRED_GB, MEMORY_BUDGET_GB) * 1e9))
         ctx.emit("load", model="flux2-klein-4b-q4")
-        self._flux = Flux2KleinEdit(model_config=ModelConfig.flux2_klein_4b(),
-                                    model_path=str(root))
-        self._flux.callbacks.register(_ProgressBridge(self))
+        model = Flux2KleinEdit(model_config=ModelConfig.flux2_klein_4b(),
+                               model_path=str(root))
+        model.callbacks.register(_ProgressBridge(self))
+        # mflux offers no device handle, but MLX answers for itself: the
+        # default device is what the weights actually ran on. "metal" is the
+        # GPU name MLX gives for its unified-memory device on Apple silicon.
+        device_type = getattr(mx.default_device(), "device_type", None)
+        provider = {"gpu": "metal", "cpu": "cpu"}.get(device_type,
+                                                      device_type or "unknown")
+        self._flux = (model, self._entry_identity(
+            self.catalog.get("flux2-klein-4b-q4"), root, provider))
         return self._flux
 
 

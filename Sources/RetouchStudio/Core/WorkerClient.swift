@@ -130,10 +130,19 @@ final class WorkerClient {
     /// run is refused with `E_UNSUPPORTED` or `E_MODEL_MISSING` instead of
     /// being attempted through the job kind, which only checks the catalog.
     /// A caller that names nothing keeps the unchanged kind-only path.
+    ///
+    /// `requestedCapability` is a different thing from `capability`: it asks the
+    /// helper to write this id into the provenance of the artifacts it hands
+    /// back, and nothing more. The helper does not put it through its verdict,
+    /// because the Quick Edit tools ship on models whose installs carry no
+    /// recorded run — gating the name would refuse edits that work today. A
+    /// name the kind cannot carry is refused as bad params.
     func submit(_ kind: String, _ params: [String: Any],
-                capability: String? = nil) throws -> String {
+                capability: String? = nil,
+                requestedCapability: String? = nil) throws -> String {
         var envelope: [String: Any] = ["kind": kind, "params": params]
         if let capability { envelope["capabilityId"] = capability }
+        if let requestedCapability { envelope["requestedCapability"] = requestedCapability }
         let result = try call("job.submit", envelope, timeout: 20) as? [String: Any]
         guard let id = result?["job_id"] as? String else {
             throw AIWorkerFailure(code: -32603, message: "the helper did not return a job id")

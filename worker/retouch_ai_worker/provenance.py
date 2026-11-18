@@ -97,9 +97,16 @@ def document(*, capability_id: str, job_id: str, contract_version: str,
              model: dict, adapter: dict, parameters: dict, seed: int | None,
              input: dict, output: dict, authorized_rect: dict,
              outside_pixels_identical: bool | None, elapsed_seconds: float,
-             state: str) -> dict:
-    """The §3.6 field set, in the order the decision record lists it."""
-    return {
+             state: str, capability_source: str | None = None) -> dict:
+    """The §3.6 field set, in the order the decision record lists it.
+
+    `capability_source` is the approved A1 label and is absent unless the
+    name's origin needs saying: "host-asserted" for a capability the host
+    named for the record without the worker's verdict, "worker-derived" for
+    a name the worker chose from the kind itself. A record with the gate's own
+    answer carries no label, because the verdict is what made the name true.
+    """
+    record = {
         "schema": SCHEMA,
         "contractVersion": contract_version,
         "capabilityId": capability_id,
@@ -117,6 +124,9 @@ def document(*, capability_id: str, job_id: str, contract_version: str,
         "elapsedSeconds": elapsed_seconds,
         "state": state,
     }
+    if capability_source is not None:
+        record["capabilitySource"] = capability_source
+    return record
 
 
 def sidecar_path(artifact_path: Path) -> Path:
