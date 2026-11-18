@@ -25,7 +25,7 @@ from . import __version__, provenance
 from .capabilities import current_platform, job_capability
 from .catalog import Catalog, ModelEntry
 from .protocol import (BUDGET_EXCEEDED, CONTRACT_VERSION, INTERNAL_ERROR,
-                       INVALID_PARAMS, WorkerError)
+                       INVALID_PARAMS, UNSUPPORTED, WorkerError)
 from .transport import BufferRegistry, read_image
 
 MULTIPLE = 16
@@ -855,9 +855,20 @@ class Engine:
     def _ensure_sam(self) -> None:
         if self._sam is not None:
             return
+        # Asked before the model, and before `require` takes its lease: the
+        # weights can be perfectly installable and still have nothing that
+        # reads them. `sam2` is not in `requirements.lock`, so this is the
+        # ordinary answer for a lock-reproducible runtime, not a damaged one.
+        try:
+            from sam2.build_sam import build_sam2
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+        except ImportError as error:
+            raise WorkerError(
+                UNSUPPORTED,
+                "this worker cannot import sam2, so SAM 2.1 tiny has nothing "
+                "to run on",
+                {"capabilityId": "mask.click", "package": "sam2"}) from error
         root = self.catalog.require("sam2.1-hiera-tiny")
-        from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
 
         checkpoint = str(root / "sam2.1_hiera_tiny.pt")
         sam2 = build_sam2("configs/sam2.1/sam2.1_hiera_t.yaml", checkpoint, device="mps")

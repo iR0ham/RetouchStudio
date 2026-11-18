@@ -164,7 +164,9 @@ The corresponding license texts ship inside each wheel's `.dist-info` directory 
 
 ### 6.2 Python wheels
 
-71 pinned packages are bundled. The principal ones:
+68 packages are pinned by `worker/requirements.lock`, and every one of them is
+bundled. The count is the number of distinct names in that file, counted
+2026-11-18; the table gives the principal ones:
 
 | Package | Version | License |
 |---|---|---|
@@ -179,11 +181,24 @@ The corresponding license texts ship inside each wheel's `.dist-info` directory 
 | huggingface-hub | 1.33.0 | Apache-2.0 |
 | tokenizers | 0.23.3 | Apache-2.0 |
 | safetensors | 0.8.0 | Apache-2.0 |
-| SAM-2 (`facebookresearch/sam2` @ `2b90b9f`) | git checkout | Apache-2.0 |
-| simple-lama-inpainting | 0.1.0 | Apache-2.0 |
 | matplotlib, fsspec, protobuf | 3.11.2 / 2026.9.0 / 7.36.2 | PSF-style / BSD-3-Clause / BSD-3-Clause |
 
 The complete pinned list is `worker/requirements.lock`.
+
+**Two rows this table used to carry are not in that lock.** `SAM-2`
+(`facebookresearch/sam2` @ `2b90b9f`, a git checkout) and
+`simple-lama-inpainting` 0.1.0 were both listed here as bundled. Neither name
+appears in `worker/requirements.lock`, so neither is fetched by
+`Tools/setup-worker-venv.sh`, and neither exists in the venvs this machine builds
+with. `build/Worker.cache` still holds the 2026-11-08 bundle, where they sit
+beside the 68 locked packages with `pip` and `psutil` — 72 `.dist-info`
+directories. LaMa is not wanted back: its weights carry no licence and the model
+was removed from the catalog entirely (`worker/README.md` invariant 3), so the
+row described a package nothing loads. SAM-2's own metadata says Apache 2.0, so
+the obstacle there is a reproducible pin rather than the licence. What follows
+from SAM-2's absence is stated where it is enforced: `mask.click` is `blocked`
+because a lock-reproducible worker has no package that can read the SAM 2.1
+checkpoint (`W5_ADAPTERS.md` §States).
 
 ### 6.3 Models
 
@@ -195,6 +210,8 @@ The complete pinned list is `worker/requirements.lock`.
 | MI-GAN (512, Places2) | Small-hole inpainting | MIT (weights) | Yes |
 
 Weights are downloaded, never redistributed inside the app. Each download is verified against the SHA256 in the catalog when the manifest provides one. Inspected on 2026-11-10, the worker catalog (`retouch_ai_worker/catalog.py` in the separate checkout) gives SAM 2.1 tiny neither a size nor a SHA256: that download cannot be checksum-verified and its progress is indeterminate. That checkout is not under version control here, so this describes it as inspected, not a property of the app bundle.
+
+**Closed 2026-11-18.** The sentence above is kept as the inspection it was. The entry now records the checkpoint's size (156,008,466 bytes) and SHA-256, so `Verify` compares that file and its download reports real progress; PR #83 pinned both. What still refuses the download is the entry's `unverifiableReason`, and it is a different fact: no package in the lock can load the weights (§6.2). Both statements are now testable rather than inspected — `worker/tests/test_capabilities.py` covers the DR-5 branch being reached only with the digests taken back out, and the checkpoint on this Mac hashes to the recorded digest.
 
 Corrected 2026-11-18: both halves of that sentence are now out of date, and the paragraph is kept as the inspection it was. The worker source lives in this repository under `worker/`, and SAM 2.1 tiny's checkpoint carries a measured size (156,008,466 bytes) and SHA256 (`7402e0d8…be69`, from the installed file, matching the pinned URL's stream and HuggingFace's LFS object id). Downloading that entry is still refused, now for the reason that actually applies: `sam2` is in neither `worker/requirements.lock` nor the `models` extra of `worker/pyproject.toml`, so a machine that fetched the weights would have nothing that could load them. See [`W5_MODEL_MANAGER.md`](W5_MODEL_MANAGER.md) §2 for the manifest-digest rule that also gives the entry its own digest.
 

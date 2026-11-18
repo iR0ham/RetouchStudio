@@ -72,6 +72,13 @@ Models are loaded from local paths. The Swin2SR loader uses `from_pretrained(<lo
 3. The downloader is launched with `--yes` and the approved `--consent-hash`. If the catalog changed after the sheet was shown, the hash no longer matches and nothing is downloaded.
 4. Each file is written under `<root>/.staging/...`, hashed when the catalog provides a SHA256, and moved into place only when it matches. The SAM 2.1 tiny entry has no SHA256, so that file is moved without a checksum check. A partial download can never be treated as an installed model.
 
+   **Closed 2026-11-18, kept as written.** That sentence was true when this
+   audit ran. SAM 2.1 tiny's checkpoint gained a recorded size and SHA-256 in
+   PR #83, so it is now hashed before the move like every other pinned file —
+   and nothing fetches it, because the entry's `unverifiableReason` refuses the
+   download for the separate reason that no locked package can load those
+   weights ([`AI_RUNTIME.md`](AI_RUNTIME.md) §6.2).
+
 `ConsentStore` records the approved manifest and a timestamp in `~/Library/Application Support/RetouchStudio/AI/download-consent.json`.
 
 ---
