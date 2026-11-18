@@ -719,3 +719,42 @@ already stands on `main`, so it needed a reading and a test, not a decision:
 
 Worker suite: 122 tests (`Ran 122 tests`), the two new ones included. No protocol,
 schema, C ABI, catalog or host behaviour changed in this addendum.
+
+Verification round (2026-11-18, §4 of the Product Owner's merge authorization) —
+the publication and adoption paths re-read against §3.6, with one new disclosure.
+
+The order, the refusal and the sweep all hold as recorded above, and each claim is
+backed by a test that was executed rather than read: 36 publication and upscale
+tests pass in the torch-free interpreter CI uses. The serialised payload is built
+before anything is created (`provenance.py:137`, with
+`test_provenance.PublicationTests.test_a_record_that_cannot_be_serialised_creates_nothing`
+as its proof), the sidecar lands first and the artifact rename is the commit point
+(`provenance.py:192-208`), a failed commit withdraws the sidecar and a pair that
+disagrees after landing is removed whole, and every cancellation window leaves an
+empty job folder (`engine.py:600-627` with
+`test_upscale.UpscaleJobTests.test_cancel_during_the_write_publishes_nothing` and
+`test_cancel_while_the_weights_load_stops_before_the_first_tile`). The host verifies
+before it decodes a pixel and refuses without deleting
+(`ExportService.swift:251-263`, `AICapability.swift:113-136`, proven by
+`Tests/ModelTests.swift::testAIProvenanceAdoption`). Nothing in the pair is renamed
+over a file it did not write: `publish` refuses when the target exists, the sidecar
+temp is created `O_EXCL | O_NOFOLLOW` at mode 0600 and only that temp is unlinked on
+the way out, and the startup sweep takes its timestamp before it lists anything and
+skips what lands at or after it (`server.py:53-55`, `provenance.py:216-258`). No
+text in code or docs calls the two renames atomic; the phrase that would have
+implied it in §3.6 is bounded by §11's correction.
+
+- **New disclosure — retention can outrun adoption, and it is not fixed here.**
+  `JobManager._trim` deletes the oldest finished job folder as soon as more than
+  `keep_jobs` (20) jobs are tracked, and it runs from `job.submit`
+  (`server.py:113`, `server.py:213-218`). A client that submits 21 further jobs
+  between a job finishing and its artifact being read therefore has that pair
+  removed under it. The reachable failure is a refusal — the host reports the
+  artifact missing (`Docs/W5_IMPLEMENTATION_DECISION_RECORD.md` §3.6: `E_ARTIFACT_MISSING`,
+  never a blank or stale draw) — and never an adoption without provenance, and no
+  flow in this repository can reach it: the macOS export verifies and decodes
+  inside the call that submitted (`ExportService.swift:219-263`), the worker runs
+  one job at a time (`BUSY`), and the acceptance harness reads immediately. Making
+  retention adoption-aware is a worker-side policy decision for a later milestone;
+  this round records it instead of quietly changing a retention rule the model
+  manager and the recovery tests both depend on.
