@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Removes only stale, unlocked staging/quarantine trees; it never
         // downloads and never touches an installed version.
         ModelManager.cleanupAtStartup()
+        // Same rule for the helper's job folders: stale and unlocked only, and
+        // here it matters that launch runs it rather than a helper start,
+        // because the pixels inside belong to nobody after adoption.
+        AIWorker.cleanupJobsAtStartup()
         // Finder can deliver the open event before the window appears, so an
         // early URL waits here until the model exists.
         if let pendingURL {
