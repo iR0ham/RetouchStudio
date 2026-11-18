@@ -1,0 +1,108 @@
+{
+  "schema": "retouchstudio.mask-quality-reference/1",
+  "authoredBy": "Test Engineer (Software Dev Team), 2026-11-19",
+  "derivation": "Scene regions are transcribed from the committed fixture generator, Tests/CorpusSupport.swift. The face box, eye rects, brow rects and lip rect are the authored drawing constants (faceGeometry(box:), lines 423-450); the shapes are the primitives drawPortrait/drawEye fill with those constants (face: fillEllipse(px(box)); eyes: drawEye fillEllipse(px(leftEyeRect)); lips: fillEllipse(px(lipRect)); brows: fillRounded(px(brow box) inset by -0.6 px, radius 0.45*height)). No value here is read from FaceAnalyzer/MaskBuilder or any product mask, so measuring a product mask against these regions is not a comparison of the product with itself.",
+  "fixtures": [
+    {
+      "id": "F01",
+      "file": "F01_portrait_srgb_8.png",
+      "width": 512,
+      "height": 512,
+      "sha256": "8e0bdc284c5c62ca6728416b99fd17cc832158335f0108c444c6b1224de39867",
+      "faceBox": { "x": 0.22, "y": 0.20, "width": 0.56, "height": 0.64 },
+      "coverage": {
+        "minRecallNative": 0.98, "minRecallHalf": 0.95,
+        "minPrecisionNative": 0.75, "minPrecisionHalf": 0.70,
+        "maxBoundaryF1Drift": 0.10
+      },
+      "regions": [
+        { "name": "face", "mask": "face", "shape": "ellipse",
+          "rect": { "x": 0, "y": 0, "width": 1, "height": 1 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawPortrait: fillEllipse(px(box)) - the drawn face oval" },
+        { "name": "left_eye", "mask": "leftEye", "shape": "ellipse",
+          "rect": { "x": 0.1875, "y": 0.59375, "width": 0.21875, "height": 0.109375 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawEye: fillEllipse(px(leftEyeRect)) - the drawn eye opening" },
+        { "name": "right_eye", "mask": "rightEye", "shape": "ellipse",
+          "rect": { "x": 0.59375, "y": 0.59375, "width": 0.21875, "height": 0.109375 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawEye: fillEllipse(px(rightEyeRect)) - the drawn eye opening" },
+        { "name": "lips", "mask": "lips", "shape": "ellipse",
+          "rect": { "x": 0.34, "y": 0.115, "width": 0.32, "height": 0.115 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawPortrait: fillEllipse(px(lipRect)) - the drawn mouth" },
+        { "name": "brows", "mask": "brows", "shape": "rounded_rect_pair",
+          "rect": { "x": 0.171875, "y": 0.734375, "width": 0.25, "height": 0.046875 },
+          "secondRect": { "x": 0.578125, "y": 0.734375, "width": 0.25, "height": 0.046875 },
+          "radiusFractionOfHeight": 0.45,
+          "inflatePixels": 0.6,
+          "windowed": true,
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawPortrait: fillRounded(px(brow box) inset by -0.6 px, radius 0.45*height) for both brows; the product brow mask is one combined image, so the score is taken inside each brow's own window. Its IoU floor matches the other guards (0.75/0.70) because the product grows brows 1.06x and blurs them with an absolute-pixel feather: on F01 a 3 px feather over a 15 px band yields IoU 0.784 with recall 1.0, while the 38 px band at F08 yields 0.802. The floor encodes 'covers the band, spill bounded at 25%', not exact tracing." }
+      ],
+      "skinLeakRegions": ["left_eye", "right_eye", "lips"]
+    },
+    {
+      "id": "F08",
+      "file": "F08_highres_portrait.png",
+      "width": 1600,
+      "height": 1067,
+      "sha256": "d6de05d6cdd48dbabab0d7c26b2e951b32e4a763d23de1162ed629e5e9dc67c9",
+      "faceBox": { "x": 0.30, "y": 0.12, "width": 0.38, "height": 0.76 },
+      "coverage": {
+        "minRecallNative": 0.98, "minRecallHalf": 0.95,
+        "minPrecisionNative": 0.75, "minPrecisionHalf": 0.70,
+        "maxBoundaryF1Drift": 0.10
+      },
+      "regions": [
+        { "name": "face", "mask": "face", "shape": "ellipse",
+          "rect": { "x": 0, "y": 0, "width": 1, "height": 1 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawPortrait: fillEllipse(px(box)) - the drawn face oval" },
+        { "name": "left_eye", "mask": "leftEye", "shape": "ellipse",
+          "rect": { "x": 0.1875, "y": 0.59375, "width": 0.21875, "height": 0.109375 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawEye: fillEllipse(px(leftEyeRect)) - the drawn eye opening" },
+        { "name": "right_eye", "mask": "rightEye", "shape": "ellipse",
+          "rect": { "x": 0.59375, "y": 0.59375, "width": 0.21875, "height": 0.109375 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawEye: fillEllipse(px(rightEyeRect)) - the drawn eye opening" },
+        { "name": "lips", "mask": "lips", "shape": "ellipse",
+          "rect": { "x": 0.34, "y": 0.115, "width": 0.32, "height": 0.115 },
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawPortrait: fillEllipse(px(lipRect)) - the drawn mouth" },
+        { "name": "brows", "mask": "brows", "shape": "rounded_rect_pair",
+          "rect": { "x": 0.171875, "y": 0.734375, "width": 0.25, "height": 0.046875 },
+          "secondRect": { "x": 0.578125, "y": 0.734375, "width": 0.25, "height": 0.046875 },
+          "radiusFractionOfHeight": 0.45,
+          "inflatePixels": 0.6,
+          "windowed": true,
+          "minIouNative": 0.75, "minIouHalf": 0.70,
+          "source": "drawPortrait: fillRounded(px(brow box) inset by -0.6 px, radius 0.45*height) for both brows; the product brow mask is one combined image, so the score is taken inside each brow's own window. Its IoU floor matches the other guards (0.75/0.70) because the product grows brows 1.06x and blurs them with an absolute-pixel feather: on F01 a 3 px feather over a 15 px band yields IoU 0.784 with recall 1.0, while the 38 px band at F08 yields 0.802. The floor encodes 'covers the band, spill bounded at 25%', not exact tracing." }
+      ],
+      "skinLeakRegions": ["left_eye", "right_eye", "lips"]
+    }
+  ],
+  "analytic": [
+    { "name": "rect", "shape": "rect", "rect": { "x": 0.10, "y": 0.15, "width": 0.60, "height": 0.45 } },
+    { "name": "ellipse", "shape": "ellipse", "rect": { "x": 0.10, "y": 0.15, "width": 0.60, "height": 0.45 } },
+    { "name": "rounded_rect", "shape": "rounded_rect", "radiusFraction": 0.25,
+      "rect": { "x": 0.10, "y": 0.15, "width": 0.60, "height": 0.45 } },
+    { "name": "star", "shape": "polygon",
+      "points": [[0.50, 0.78], [0.564, 0.60], [0.75, 0.60], [0.60, 0.48], [0.66, 0.30],
+                 [0.50, 0.41], [0.34, 0.30], [0.40, 0.48], [0.25, 0.60], [0.436, 0.60]] },
+    { "name": "hole", "shape": "rect_minus_ellipse",
+      "rect": { "x": 0.10, "y": 0.15, "width": 0.60, "height": 0.45 },
+      "hole": { "x": 0.25, "y": 0.25, "width": 0.30, "height": 0.25 } }
+  ],
+  "notes": [
+    "Masks are opaque grayscale, white = apply. A mask pixel counts as foreground when its linear-light coverage is >= 0.5, because Core Image blends the mask in linear light: linear 0.5 is the contour where the effect is half applied, and it is the same contour for a hard edge and for a blurred guard. Core Graphics antialiases in code space, so a hard edge's linear-0.5 contour sits 0.2-0.4 px inside the geometric edge; that bias is below the 2 px boundary band and is why analytic IoU floors are 0.97, not 0.99.",
+    "Coverage contract per fixture: every region must reach recall >= 0.98 native / 0.95 at 0.5x (it covers the shape the fixture drew) and precision >= 0.75 native / 0.70 at 0.5x (growth beyond the drawn shape stays bounded). The floors are the contract, not a measurement of whether the mask is pretty: the product's maps are guards, deliberately wider than the features (eye shields, brows scaled 1.06 and blurred, face = contour + forehead + upper-face).",
+    "Boundary tolerance is 2 pixels (Chebyshev), applied symmetrically: each boundary's precision counts points within 2 px of the other boundary, and vice versa. Boundary F1 is reported for every region at both tiers. It is gated for an absolute value only on the analytic shapes, where the product path and the reference describe the same outline; on scene regions it is gated for drift <= 0.10 between tiers, because demanding a low absolute boundary distance from a guard mask would encode a contract the app never had.",
+    "Native tier = mask built at the extent's own pixel size (maxDimension = max(width, height)); 0.5x tier = mask built at half that size and upscaled, which is what the 1024 px preview cap does to a larger photo.",
+    "The 0.5x tier exists to expose resolution sensitivity, not to set a second quality bar of its own.",
+    "Hair, teeth, sclera, iris, lashes, forehead, cheeks, under-eyes, nose, lids, liners and contours have no independent reference in the committed corpus: the fixture generator draws hair and teeth from product-derived rects (circular), and the rest are not drawn as regions at all. They are measured for invariants only and are listed in the suite output as NO REFERENCE.",
+    "Vision detects 0 faces in every committed portrait fixture (checked with VNDetectFaceLandmarksRequest on F01, F02, F03 and F08 on 2026-11-19), so detector accuracy is NOT measured by this harness; the mask pipeline is measured from the fixture's authored landmark layout."
+  ]
+}
