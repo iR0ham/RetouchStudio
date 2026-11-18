@@ -764,12 +764,19 @@ struct LiveHelper {
         String(((try? String(contentsOf: log, encoding: .utf8)) ?? "").suffix(400))
     }
 
-    /// For a section that ends without shutting the helper down itself.
+    /// For a section that ends without shutting the helper down itself. A test
+    /// run must never outlive the worker it started: the child owns the shared
+    /// usage lease, so an orphan keeps it until it exits on its own and slows
+    /// the exclusive-lease checks in another suite. `terminate` is only SIGTERM,
+    /// so a helper that ignores both the protocol and the signal is killed.
     func stopIfNeeded() {
         guard child.isRunning else { return }
         _ = try? WorkerClient(socketPath: socket.path).call("shutdown", timeout: 5)
-        _ = child.wait(timeout: 5)
+        if child.wait(timeout: 5) { return }
         child.terminate()
+        if child.wait(timeout: 5) { return }
+        child.send(SIGKILL)
+        _ = child.wait(timeout: 5)
     }
 }
 
