@@ -6914,7 +6914,7 @@ func testAIRefusalRouting() {
 
     let english = L10n.shared.statusText(.aiCapabilityBlocked("upscale.4x"))
     check(english == "Upscaling is installed on this Mac but not ready to run yet. "
-          + "Manage Models… has the step it is waiting for.",
+          + "Manage Models… says what it is waiting for.",
           "the status line names the task, not the build")
     check(!english.contains("not available"), "the build sentence is gone")
     check(english == L10n.shared.aiCapabilityBlocked(forCapability: "upscale.4x"),

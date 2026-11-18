@@ -1284,10 +1284,11 @@ class L10n {
     /// A capability this adapter *does* offer, whose model is on disk but not
     /// in an install state the helper will run. `task` is the localized name of
     /// the task it serves. This is the sentence `-32020` was never true for:
-    /// the build has the feature and the bytes are here, so what the owner
-    /// needs is the manager, not a different build or a re-download.
+    /// the build has the feature and the bytes are here. It stays short of
+    /// promising a tap, because `blocked` also covers a state the manager can
+    /// explain but cannot yet settle.
     func aiCapabilityBlocked(_ task: String) -> String {
-        "\(task) is installed on this Mac but not ready to run yet. Manage Models… has the step it is waiting for."
+        "\(task) is installed on this Mac but not ready to run yet. Manage Models… says what it is waiting for."
     }
     /// The same sentence from the capability id a refusal names, so a status
     /// line can hold the id instead of the finished wording and survive a
