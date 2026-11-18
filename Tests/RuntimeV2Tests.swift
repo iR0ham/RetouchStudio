@@ -22,6 +22,10 @@ import Foundation
 // `capability.list` answer is parsed by the host's own validator too, so the
 // frozen vocabulary is proven against what the adapter really writes rather
 // than against a payload this file writes.
+//
+// N asks that same shipped worker to publish a provenance pair and hands it to
+// the host's adoption gate. §3.6 is an agreement in two languages, and a
+// sidecar this file writes cannot prove the Python half of it.
 
 let rawArguments = CommandLine.arguments
 if rawArguments.count > 2, rawArguments[1].hasPrefix("--child-") {
@@ -901,6 +905,133 @@ func testRealHelperHandshake() {
     }
 }
 
+// MARK: - N
+
+/// §3.6 leaves adoption to one comparison made in two languages: the shipped
+/// worker records a digest beside the artifact it renames into place, and the
+/// host re-hashes those bytes before it will show them. The host's own checks
+/// have Swift write both halves of that pair, so they test the validator and
+/// never the agreement. This section runs the real `provenance` module over a
+/// real PNG, in the shape `engine._job_upscale` publishes, and hands the paths
+/// back to `AIProvenance.verifiedArtifact`. No weights load and no inference
+/// runs: the pixels are not under test, the publication is.
+func testWorkerPublishedPairIsAdoptedByHost() {
+    print("\n[N] the host adopts a pair the shipped worker published")
+    let environment = ProcessInfo.processInfo.environment
+    let root = URL(fileURLWithPath: environment["RETOUCH_TESTS_ROOT"]
+                   ?? FileManager.default.currentDirectoryPath, isDirectory: true)
+    let workerRoot = root.appendingPathComponent("worker", isDirectory: true)
+    let python = environment["RETOUCH_WORKER_PYTHON"].map { URL(fileURLWithPath: $0) }
+        ?? workerRoot.appendingPathComponent(".venv/bin/python3")
+    guard FileManager.default.isExecutableFile(atPath: python.path) else {
+        check(false, "N: a worker interpreter is available",
+              "set RETOUCH_WORKER_PYTHON or create worker/.venv with Tools/setup-worker-venv.sh")
+        return
+    }
+
+    let folder = freshSupport("pair")
+    let script = """
+    import json, sys
+    sys.path.insert(0, sys.argv[1])
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+
+    from retouch_ai_worker import provenance
+    from retouch_ai_worker.capabilities import current_platform
+    from retouch_ai_worker.protocol import CONTRACT_VERSION
+
+    folder = Path(sys.argv[2])
+    staged, target = folder / "upscaled.png.tmp", folder / "upscaled.png"
+    source = np.zeros((2, 2, 3), dtype=np.uint8)
+    source[0, 0] = (200, 30, 30)
+    Image.fromarray(source).save(staged, format="PNG")
+    record = provenance.document(
+        capability_id="upscale.2x", job_id="host-adoption",
+        contract_version=CONTRACT_VERSION,
+        model={"name": "fixture", "version": None, "digest": None},
+        adapter={"platform": current_platform(), "version": "0.1.0"},
+        parameters={"scale": 2, "tile": 512, "overlap": 32}, seed=None,
+        input=provenance.pixels(source), output=provenance.artifact(staged),
+        authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+        outside_pixels_identical=None, elapsed_seconds=0.0, state="succeeded")
+    sidecar = provenance.publish(staged, target, record)
+    print(json.dumps({"artifact": str(target), "sidecar": str(sidecar),
+                      "record": json.loads(sidecar.read_text("utf-8"))}), flush=True)
+    """
+    let process = Process()
+    process.executableURL = python
+    process.arguments = ["-c", script, workerRoot.path, folder.path]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    do {
+        try process.run()
+    } catch {
+        check(false, "N: the worker's provenance module runs", "\(error)")
+        return
+    }
+    let bytes = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    let output = String(data: bytes, encoding: .utf8) ?? ""
+    guard process.terminationStatus == 0,
+          let line = output.split(separator: "\n").first(where: { $0.hasPrefix("{") }),
+          let reply = (try? JSONSerialization.jsonObject(with: Data(line.utf8)))
+            as? [String: Any],
+          let artifactPath = reply["artifact"] as? String,
+          let sidecarPath = reply["sidecar"] as? String else {
+        check(false, "N: the worker publishes a pair", String(output.suffix(500)))
+        return
+    }
+    let artifact = URL(fileURLWithPath: artifactPath)
+    let sidecar = URL(fileURLWithPath: sidecarPath)
+    let record = (reply["record"] as? [String: Any]) ?? [:]
+
+    var adopted: URL?
+    var refusal: String = ""
+    do {
+        adopted = try AIProvenance.verifiedArtifact(path: artifactPath,
+                                                    sidecarPath: sidecarPath)
+    } catch {
+        refusal = "\(error)"
+    }
+    check(adopted == artifact, "N: the host adopts what the worker published", refusal)
+
+    let recorded = ((record["output"] as? [String: Any])?["sha256"] as? String) ?? ""
+    let hashed = (try? AIRuntime.sha256(of: artifact)) ?? ""
+    check(hashed.count == 64 && hashed == recorded,
+          "N: both languages hash these bytes to the same digest",
+          "host \(hashed.prefix(12)) worker \(recorded.prefix(12))")
+
+    check(record["schema"] as? String == AIProvenance.schema,
+          "N: the worker writes the schema string the host requires")
+    check(sidecar.lastPathComponent == artifact.lastPathComponent
+                    + AIProvenance.sidecarSuffix
+            && sidecar.deletingLastPathComponent().path
+                == artifact.deletingLastPathComponent().path,
+          "N: the sidecar is where the host looks for it")
+
+    let required: Set<String> = ["schema", "contractVersion", "capabilityId", "jobId",
+                                 "createdAt", "model", "adapter", "parameters", "seed",
+                                 "input", "output", "authorizedRect",
+                                 "outsidePixelsIdentical", "elapsedSeconds", "state"]
+    let missing = required.subtracting(record.keys).sorted()
+    check(missing.isEmpty, "N: the record carries every §3.6 field",
+          missing.joined(separator: " "))
+
+    if let original = try? Data(contentsOf: artifact) {
+        var tampered = original
+        tampered.append(0x00)
+        try? tampered.write(to: artifact)
+        check((try? AIProvenance.verifiedArtifact(path: artifactPath,
+                                                  sidecarPath: sidecarPath)) == nil,
+              "N: a byte the record does not name makes the host refuse the pair")
+    } else {
+        check(false, "N: the artifact is readable")
+    }
+}
+
 // MARK: - Run
 
 testRegistryRecordAndCAS()
@@ -911,6 +1042,7 @@ testShutdownOwnershipCAS()
 testLockFileHardening()
 testStalePreparingReplacementHoldsExclusiveLease()
 testRealHelperHandshake()
+testWorkerPublishedPairIsAdoptedByHost()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 
