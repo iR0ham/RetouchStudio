@@ -72,6 +72,13 @@ Models are loaded from local paths. The Swin2SR loader uses `from_pretrained(<lo
 3. The downloader is launched with `--yes` and the approved `--consent-hash`. If the catalog changed after the sheet was shown, the hash no longer matches and nothing is downloaded.
 4. Each file is written under `<root>/.staging/...`, hashed when the catalog provides a SHA256, and moved into place only when it matches. The SAM 2.1 tiny entry has no SHA256, so that file is moved without a checksum check. A partial download can never be treated as an installed model.
 
+   **Closed 2026-11-18, kept as written.** That sentence was true when this
+   audit ran. SAM 2.1 tiny's checkpoint gained a recorded size and SHA-256 in
+   PR #83, so it is now hashed before the move like every other pinned file —
+   and nothing fetches it, because the entry's `unverifiableReason` refuses the
+   download for the separate reason that no locked package can load those
+   weights ([`AI_RUNTIME.md`](AI_RUNTIME.md) §6.2).
+
 `ConsentStore` records the approved manifest and a timestamp in `~/Library/Application Support/RetouchStudio/AI/download-consent.json`.
 
 ---
@@ -180,5 +187,13 @@ The downloader prints a JSON progress object on stderr for every chunk; the last
 | No hidden network requests | **Pass** — zero sockets in idle and edit windows; the only traffic in the audit was the explicitly approved download |
 | Explicit consent before model downloads | **Pass** — consent sheet shown and the approved manifest hash required; checksums verified where the catalog provides one (SAM 2.1 tiny has none); staged and atomic |
 | Offline after installation | **Pass** — edit, upscale and export need no network (scenario B) |
+
+**Addendum 2026-11-18.** This table's consent row and §4's item 4 both say SAM
+2.1 tiny has no checksum. That is what the catalog held while the audit ran. PR
+#83 pinned that checkpoint's measured size and SHA-256, so the parenthetical no
+longer describes the shipped catalog and the file is hashed before its move. The
+consent path is unchanged and no SAM download is offered: the entry refuses it
+because nothing in `worker/requirements.lock` can load those weights
+([`AI_RUNTIME.md`](AI_RUNTIME.md) §6.2).
 
 The only outbound connections the audited 2.1 build can make are the HTTPS transfers of a model download that the owner approved, after a sheet showing the file count, total size and license was accepted. The stabilization branch adds a runtime-download code path, but it is disabled (`AIRuntime.package` is nil) and makes no transfer in the current build; an enabled approved package would add one equally explicit, SHA256-verified transfer from a single fixed release URL.

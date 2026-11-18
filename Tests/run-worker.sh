@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs the worker's protocol, server and registry regressions (137 tests).
+# Runs the worker's protocol, server and registry regressions (140 tests).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

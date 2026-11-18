@@ -4,7 +4,10 @@ The vocabulary is frozen in W5-0 §3.2 and versioned as `capabilities/1`. A
 capability is `supported` only when the adapter provides it, a catalog model is
 installed at a recorded version and passes the quick size check, and a recorded
 run binds that platform, provider, model id and version to a valid artifact
-(DR-4). Everything else carries a reason: `requires_model`, `blocked` or
+(DR-4). A fourth condition decides before the other three: the Python package
+that loads the model has to be importable in this interpreter. Weights with no
+runtime to run on are a blocked capability, not a supported one that fails.
+Everything else carries a reason: `requires_model`, `blocked` or
 `unsupported`.
 
 This module never loads a model, never takes a lease and never hashes weights:
@@ -13,9 +16,11 @@ deep check remains the Model Manager's verify action.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import platform
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +43,7 @@ class Spec:
     id: str
     job: str | None = None
     models: tuple[str, ...] = ()
+    packages: tuple[str, ...] = ()
     state: str | None = None
     reason: str | None = None
 
@@ -51,7 +57,7 @@ CAPABILITIES: tuple[Spec, ...] = (
          reason="no learned face-parsing model is adopted (follow-on F2)"),
     Spec("mask.subject", state=UNSUPPORTED,
          reason="the worker does not run person segmentation; the macOS host uses Vision"),
-    Spec("mask.click", "mask", ("sam2.1-hiera-tiny",)),
+    Spec("mask.click", "mask", ("sam2.1-hiera-tiny",), packages=("sam2",)),
     Spec("matte.fine", state=BLOCKED,
          reason="no fine-matte model with cleared commercial rights is adopted (S2)"),
     Spec("inpaint.spot", "patch_edit", ("migan",)),
@@ -115,6 +121,19 @@ def _evidence_for(entries: tuple[dict, ...], spec: Spec, platform_name: str,
     return None
 
 
+def _importable(name: str) -> bool:
+    """Whether this interpreter can load the top-level package `name`.
+
+    `find_spec` resolves the module without executing it, so the check stays
+    cheap and cannot start a GPU context — which is the whole reason it is done
+    here instead of in the job.
+    """
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def _inspect(catalog: Catalog, model_id: str) -> tuple[str, str | None, str | None]:
     """Return `(state, version, reason)` for one model without taking a lease.
 
@@ -169,16 +188,26 @@ def _record(spec: Spec, state: str, provider: str, model_id: str | None = None,
 
 
 def report(catalog: Catalog, evidence: tuple[dict, ...] | None = None,
-           platform_name: str | None = None, provider: str = PROVIDER) -> dict:
+           platform_name: str | None = None, provider: str = PROVIDER,
+           importable: Callable[[str], bool] | None = None) -> dict:
     platform_name = platform_name or current_platform()
     ledger = load_evidence() if evidence is None else evidence
+    have = _importable if importable is None else importable
     records = []
     for spec in CAPABILITIES:
         if spec.state is not None:
             records.append(_record(spec, spec.state, provider, reason=spec.reason))
             continue
-        state, version, reason = _inspect(catalog, spec.models[0])
         model_id = spec.models[0]
+        absent = [name for name in spec.packages if not have(name)]
+        if absent:
+            # Asked before the model, because downloading cannot answer it.
+            records.append(_record(
+                spec, BLOCKED, provider, model_id,
+                reason=f"this worker cannot import {', '.join(absent)}, so "
+                       f"{model_id} has nothing to run on"))
+            continue
+        state, version, reason = _inspect(catalog, model_id)
         if state == "missing":
             records.append(_record(spec, REQUIRES_MODEL, provider, model_id,
                                    reason=reason))

@@ -1,11 +1,15 @@
+import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
 
 from retouch_ai_worker import provenance
+from retouch_ai_worker.catalog import Catalog
 from retouch_ai_worker.engine import (Cancelled, Context, Engine, _square_box,
                                       composite, mask_policy, region_alpha)
 from retouch_ai_worker.protocol import (CONTRACT_VERSION, INTERNAL_ERROR,
@@ -332,6 +336,54 @@ class NoNetworkTests(unittest.TestCase):
     def test_server_does_not_import_the_downloader(self):
         source = (PACKAGE / "server.py").read_text("utf-8")
         self.assertNotIn("downloads", source)
+
+
+class SamRuntimeTests(unittest.TestCase):
+    """A mask job refuses by name when nothing can import `sam2`.
+
+    `sam2` is in neither `requirements.lock` nor the `models` extra, so a
+    lock-reproducible runtime has the weights and no package that reads them.
+    The answer has to be the typed `-32020` both hosts already map to
+    `E_UNSUPPORTED`, and it has to arrive before the catalog leases a model this
+    process cannot use.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.inputs = self.tmp / "inputs"
+        self.inputs.mkdir()
+        self.image = self.inputs / "photo.png"
+        Image.fromarray(np.zeros((24, 32, 3), dtype=np.uint8)).save(self.image)
+        self.workdir = self.tmp / "job"
+        self.workdir.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _context(self):
+        return Context(job_id="mask-1", workdir=self.workdir,
+                       cancel=lambda: False, progress=lambda fields: None,
+                       allow_roots=(self.inputs,), capability_id="mask.click")
+
+    def test_an_unimportable_package_refuses_the_job_before_the_model(self):
+        # `sys.modules[name] = None` makes `import name` raise ImportError
+        # without touching the machine's real environment, so this proves the
+        # same refusal on a Mac that does have sam2 installed.
+        catalog = Catalog(self.tmp / "models", allow_uncleared=False)
+        engine = Engine(catalog, allow_roots=(self.inputs,))
+        params = {"image": {"path": str(self.image)}, "box": [4, 4, 20, 20]}
+        with mock.patch.object(Catalog, "require") as require:
+            with mock.patch.dict(sys.modules, {"sam2": None}):
+                with self.assertRaises(WorkerError) as caught:
+                    engine.run("mask", params, self._context())
+        self.assertEqual(caught.exception.code, -32020)
+        self.assertEqual(caught.exception.data["package"], "sam2")
+        self.assertEqual(caught.exception.data["capabilityId"], "mask.click")
+        self.assertIn("nothing to run on", str(caught.exception))
+        self.assertFalse(require.called,
+                         "the refusal ran after a lease was taken")
+        self.assertEqual(list(self.workdir.iterdir()), [],
+                         "a refused job left bytes in its workdir")
 
 
 if __name__ == "__main__":

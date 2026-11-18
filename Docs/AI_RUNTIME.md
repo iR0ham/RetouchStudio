@@ -208,7 +208,9 @@ The corresponding license texts ship inside each wheel's `.dist-info` directory 
 
 ### 6.2 Python wheels
 
-71 pinned packages are bundled. The principal ones:
+68 packages are pinned by `worker/requirements.lock`, and every one of them is
+bundled. The count is the number of distinct names in that file, counted
+2026-11-18; the table gives the principal ones:
 
 | Package | Version | License |
 |---|---|---|
@@ -223,11 +225,24 @@ The corresponding license texts ship inside each wheel's `.dist-info` directory 
 | huggingface-hub | 1.33.0 | Apache-2.0 |
 | tokenizers | 0.23.3 | Apache-2.0 |
 | safetensors | 0.8.0 | Apache-2.0 |
-| SAM-2 (`facebookresearch/sam2` @ `2b90b9f`) | git checkout | Apache-2.0 |
-| simple-lama-inpainting | 0.1.0 | Apache-2.0 |
 | matplotlib, fsspec, protobuf | 3.11.2 / 2026.9.0 / 7.36.2 | PSF-style / BSD-3-Clause / BSD-3-Clause |
 
 The complete pinned list is `worker/requirements.lock`.
+
+**Two rows this table used to carry are not in that lock.** `SAM-2`
+(`facebookresearch/sam2` @ `2b90b9f`, a git checkout) and
+`simple-lama-inpainting` 0.1.0 were both listed here as bundled. Neither name
+appears in `worker/requirements.lock`, so neither is fetched by
+`Tools/setup-worker-venv.sh`, and neither exists in the venvs this machine builds
+with. `build/Worker.cache` still holds the 2026-11-08 bundle, where they sit
+beside the 68 locked packages with `pip` and `psutil` — 72 `.dist-info`
+directories. LaMa is not wanted back: its weights carry no licence and the model
+was removed from the catalog entirely (`worker/README.md` invariant 3), so the
+row described a package nothing loads. SAM-2's own metadata says Apache 2.0, so
+the obstacle there is a reproducible pin rather than the licence. What follows
+from SAM-2's absence is stated where it is enforced: `mask.click` is `blocked`
+because a lock-reproducible worker has no package that can read the SAM 2.1
+checkpoint (`W5_ADAPTERS.md` §States).
 
 ### 6.3 Models
 
@@ -246,21 +261,34 @@ Corrected 2026-11-18: both halves of that sentence are now out of date, and the 
 
 ## 7. Building from source
 
-Prerequisites: macOS 14 or later with Xcode Command Line Tools. The local AI helper is optional and lives in a separate worker checkout with a Python 3.13 virtual environment.
+Prerequisites: macOS 14 or later with Xcode Command Line Tools. The local AI helper is optional; its source is tracked at `worker/` in this repository, and its Python 3.13 environment is created by `Tools/setup-worker-venv.sh` at `worker/.venv`.
 
 ```bash
 ./build.sh release            # compiles, bundles the helper when it is reachable, runs the engine self-test, signs ad-hoc
 RETOUCH_SKIP_WORKER=1 ./build.sh release   # app only; the AI tools report the helper as missing
 RETOUCH_REBUNDLE=1 ./build.sh release      # force a fresh copy of the Python runtime
 ./Tests/run.sh                # Engine, Model, RuntimeProcess and RuntimeV2 suites
-cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # 60 worker tests
+./Tests/run-worker.sh         # the worker suite (its count is pinned, see the note below)
 ```
 
 `Tests/run.sh` compiles every Swift file under `Sources/RetouchStudio` except `App.swift` and `SelfCheck.swift`, then runs four suites: Engine, Model, RuntimeProcess and RuntimeV2. `RETOUCH_ARCH=x86_64 ./Tests/run.sh` runs the same suites against an x86_64 build (Rosetta on Apple silicon).
 
-The worker checkout is not under version control here. Regression tests that
-must survive a fresh clone are copied into `Docs/worker-regressions/` with their
-own run instructions; they are not part of the Swift suite.
+`Tests/run-worker.sh` discovers `worker/tests` with `unittest`, using
+`worker/.venv/bin/python3` unless `RETOUCH_WORKER_PYTHON` names another
+interpreter that can import the pinned wheels. Its test count is pinned in
+four places — `.github/workflows/ci.yml`, the header comment of
+`Tests/run-worker.sh`, `worker/README.md` and `Docs/W5_ADAPTERS.md` (plus the
+`Docs/worker-regressions/README.md` copy) — so a new test moves them together.
+
+Corrected 2026-11-18: this section used to say the helper "lives in a separate
+worker checkout" and to print `cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python
+-m unittest discover -s tests` for 60 tests. Neither described a clone of this
+repository: `worker/` is tracked, the runner is `Tests/run-worker.sh`, and the
+discover path it used is what that script does internally. The superseded note
+at the end of this section records the same correction for the build side.
+`Docs/worker-regressions/` is still kept, but as the historical P0-06 artifact
+its README describes, not as the place a test has to be copied to survive a
+clone.
 
 Overrides used by the bundler:
 
