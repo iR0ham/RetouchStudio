@@ -37,6 +37,11 @@ INPAINT_MAX_FRACTION = 0.25
 # The overlap is blended so the same texture does not restart at a tile edge.
 UPSCALE_TILE = 256
 UPSCALE_MAX_OUTPUT = 40_000_000
+# The artifact is quantised one band of output rows at a time, so no full-frame
+# float temporary (12 B per pixel) exists beside the accumulator. 1024 output
+# rows is one tile row at x4 for the measured 256 px tile; the trailing band
+# may be shorter.
+UPSCALE_BAND_ROWS = 1024
 MEMORY_BUDGET_GB = float(os.environ.get("RETOUCH_AI_MEMORY_BUDGET_GB", "7.5"))
 MLX_CACHE_GB = float(os.environ.get("RETOUCH_AI_MLX_CACHE_GB", "4.0"))
 # Weights that get paged out cost seconds per denoising step. Wiring them keeps
@@ -206,6 +211,32 @@ def _pad_to_window(array: np.ndarray, window: int = SWIN_WINDOW) -> tuple[np.nda
     if pad_y or pad_x:
         array = np.pad(array, ((0, pad_y), (0, pad_x), (0, 0)), mode="reflect")
     return array, height, width
+
+
+def _quantise(acc: np.ndarray, weights: np.ndarray,
+              band_rows: int = UPSCALE_BAND_ROWS) -> np.ndarray:
+    """Normalise and quantise an accumulation without full-frame temporaries.
+
+    `acc` is the weighted sum of the tiles and `weights` their summed blending
+    weights, with zero weights already replaced by 1 so every pixel divides by
+    a positive number. `acc` is float32 and is overwritten in place: the divide
+    and the clip write back into it, and the uint8 artifact is filled one band
+    of rows at a time. The peak is therefore the accumulator (12 B/px), the
+    weight plane (4 B/px), the artifact (3 B/px) and one band's float
+    temporary, instead of three extra 12 B/px full-frame arrays.
+
+    The band is only a loop boundary. Each byte comes from the same
+    elementwise `* 255`, `round`, `astype(uint8)` sequence the whole-frame
+    expression ran, so the artifact — and the PNG written from it — is
+    byte-identical.
+    """
+    np.divide(acc, weights[..., None], out=acc)
+    np.clip(acc, 0, 1, out=acc)
+    pixels = np.empty(acc.shape, dtype=np.uint8)
+    for start in range(0, acc.shape[0], band_rows):
+        stop = min(start + band_rows, acc.shape[0])
+        pixels[start:stop] = (acc[start:stop] * 255).round().astype(np.uint8)
+    return pixels
 
 
 class Engine:
@@ -752,8 +783,7 @@ class Engine:
                 ctx.emit("upscale", tile=done, tiles=total)
 
         weights[weights == 0] = 1.0
-        output = np.clip(acc / weights[..., None], 0, 1)
-        pixels = (output * 255).round().astype(np.uint8)
+        pixels = _quantise(acc, weights)
         result = ctx.workdir / "upscaled.png"
         # Nothing is visible at `result` until the last rename. The rendered
         # bytes land in a sibling temp, the sidecar is built from those bytes,
