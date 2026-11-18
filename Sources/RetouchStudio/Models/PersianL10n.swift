@@ -805,7 +805,7 @@ final class PersianL10n: L10n {
         case "segmentation": return "انتخاب"
         case "upscaling": return "بزرگ‌نمایی"
         case "inpainting": return "ترمیم"
-        case "generative-edit": return "حذف شیء"
+        case "generative": return "ویرایش زایشی"
         default: return task
         }
     }
