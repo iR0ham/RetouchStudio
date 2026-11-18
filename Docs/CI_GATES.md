@@ -674,3 +674,51 @@ before it reached a milestone branch); root-cause the child-process install
 failure in its own slice; or record the arm64-only scope in
 `Docs/CROSS_PLATFORM_COMPATIBILITY.md` and accept it as Rosetta evidence with
 a known gap. Nothing in W5-4 or W5-5 changes this behaviour.
+
+**Resolution (2026-11-18, `fix/model-test-child-platform`): the middle option
+was taken and the cause was in the harness, not in Rosetta.**
+
+- Root cause. The `--install-once` and `--delete-once` child modes built their
+  `ModelStore` without a `platform:` argument, so it took the default
+  `ModelPlatform.current` (`Sources/RetouchStudio/Models/ModelStore.swift:227`),
+  which is chosen by `#if arch(arm64)` in
+  `Sources/RetouchStudio/Models/ModelCatalog.swift:248-255`. An x86_64-compiled
+  child therefore asked for `macos-x64`, which no fixture catalog offers — every
+  entry in `Tests/Fixtures/model-store/` lists `["macos-arm64","windows-x64"]`
+  and `macos-x64` appears nowhere — so `install` refused at its own platform
+  guard (`ModelStore.swift:320-321`, via `ModelCatalog.swift:137-139`) and the
+  child exited 2 before any socket, lock, staging tree or crash hook was
+  reached. The parent always passed the fixture platform explicitly, which is
+  why only the child-process cases failed and why in-process installs passed
+  under the same translation. That explains each recorded symptom: `[2, 2]`
+  where `[0, 3]` was expected, status 2 instead of 86, a staging count of 0
+  because no staging was ever created, and a delete that saw no lease.
+- Fix. One `fixturePlatform` constant in `Tests/ModelStoreTests.swift`, now used
+  by the parent store, both child modes and the legacy-layout store, so a child
+  cannot resolve a different platform from the parent that launched it. No
+  product code changed.
+- Measured on this head, this machine (MacBook Air M3), one variable at a time,
+  same command in both runs
+  (`RETOUCH_WORKER_PYTHON=/private/tmp/rs-worker-venv/bin/python3 RETOUCH_ARCH=x86_64 Tests/run.sh`):
+  at `36dd06d` without the constant, `MODEL STORE TESTS: FAIL (11)` — the ten
+  child-process checks named in finding 5 plus their summary line; with the
+  constant, the full x86_64 matrix is green: `StudioCore: 288 checks passed`,
+  `ABI TESTS: PASS (104 checks)` and `ENGINE / MODEL / MODEL STORE / RUNTIME
+  PROCESS / RUNTIME V2 TESTS: PASS`, matrix exit 0. On arm64, `MODEL STORE
+  TESTS` exits 0 both with and without the constant, which is the expected
+  result and the reason no CI context ever noticed: `ModelPlatform.current`
+  already equals the fixture platform there.
+- What this does not buy. No required context compiles an x86_64 test binary, so
+  CI cannot regress this either way; the guard is the shared constant, this
+  record, and the local recipe above. Native Intel hardware remains
+  **NOT VERIFIED** — the green x86_64 result is Rosetta evidence on Apple
+  silicon, as `Docs/CROSS_PLATFORM_COMPATIBILITY.md` has always labelled it.
+- One product question this surfaced, unchanged by the fix and still the owner's.
+  `Resources/model-catalog.json` gives no entry a `macos-x64` platform
+  (`flux2-klein-4b-q4`, `sam2.1-hiera-tiny` and `swin2sr-x4` are
+  `["macos-arm64"]`, `migan` is `["macos-arm64","windows-x64"]`) while
+  `.github/workflows/release.yml` builds a `macos-x86_64` slice. An Intel build
+  therefore reports every model `.unsupportedPlatform`
+  (`ModelStore.swift:247`). That is consistent with the recorded arm64-only AI
+  packaging decision, so nothing was changed here; making models available on
+  Intel is a catalog, measurement and licensing decision, not a string edit.
