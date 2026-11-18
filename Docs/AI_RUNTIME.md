@@ -80,6 +80,26 @@ Paths depend on which helper is running.
 | `~/Library/Application Support/RetouchStudio/AI/helper-owner.json` | Which app instance owns the running helper |
 | `~/Library/Application Support/RetouchStudio/AI/download-consent.json` | The approved manifest and its timestamp |
 
+Both rows above say "Helper working copies and job outputs (cleaned up over
+time)". Measured against the code on 2026-11-18, that describes two different
+places as if they were one, and overstates the cleanup:
+
+- **Job outputs** do live here — one folder per job id, written by the helper.
+- **Working copies** — the resized `photo.png`/`source.png` the host hands the
+  helper — live in `$TMPDIR/RetouchStudioAI/<job-uuid>/` instead
+  (`AIWorker.workingDirectory`), which is passed to the helper only as an
+  allowed read root. The host deletes a job's folder when the job returns, and
+  `AIWorker.ensureRunning()` sweeps copies older than 24 h from that root after
+  either launch path starts a helper (`AI_11_ARCHITECTURE.md` §16).
+- "cleaned up over time" is true of the *current session only* for these two
+  `jobs/` folders. The helper prunes them with an in-process ledger that keeps
+  the last `keep_jobs` (20) entries and forgets the rest at exit
+  (`worker/retouch_ai_worker/server.py:41, 213-219`), so folders from earlier
+  sessions stay until the owner sets a disk retention rule — recorded as an open
+  decision, not implemented, because a completed result the user never adopted
+  is user-visible work. 4× upscale artifacts are the exception: they are
+  reconciled against their provenance sidecars when a worker starts.
+
 **Protocol-v2 runtime (when a package is configured):**
 
 | Path | Contents |
