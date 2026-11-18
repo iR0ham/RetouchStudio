@@ -191,8 +191,18 @@ the edit folder under Application Support, the project body gains no keys, and
 nothing is added to an exported picture.
 
 Not verified by this round, and not claimed: no inference ran and no weights
-were downloaded, so the sidecars proven here are the ones the publication code
-writes against a stubbed render plus the ones the Swift tests write by hand. The
-worker's reply for a real flux or MI-GAN job on a real photo has not been
-observed, and no live-worker cross-language check covers `requestedCapability`
-yet — `Tests/RuntimeV2Tests.swift` is where that belongs.
+were downloaded, so the bytes in every sidecar proven here come from a stubbed
+render, a numpy stand-in, or a Swift test that writes its own pixels. What was
+still open last round — a live-worker crossing for `requestedCapability` — is
+measured now. `Tests/RuntimeV2Tests.swift` §P starts the shipped helper and
+submits the same capability id both ways: as `capabilityId` it is refused with
+`E_MODEL_MISSING` and no job folder is created, as `requestedCapability` it is
+accepted and the job fails inside the worker; a label the kind cannot
+carry is refused with `-32602` before any job folder exists. The same section
+then adopts, through the host's verification gate, a
+record the worker's own publication code wrote with
+`capabilityId: inpaint.object` and `capabilitySource: host-asserted`. Still
+unobserved is a real job's reply: the labelled job above fails inside the worker
+— in the interpreter that runs this suite today it stops at `import mlx` — and
+publishes nothing, so no flux or MI-GAN record for a real photo has been read by
+either side.

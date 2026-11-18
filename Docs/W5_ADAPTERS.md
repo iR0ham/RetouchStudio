@@ -108,10 +108,16 @@ table of its own.
   kind-only job that must not load a size-mismatched model (`-32019`), and the
   numeric cancel latency. Locally three `test_engine` composites error
   because this machine has no OpenCV; CI installs the hashed worker venv.
-- macOS: 20 new checks in `Tests/ModelTests.swift` decode and reject reports,
-  keep `requires_model` spelling, and check the typed names (11 from W5-3), and
-  adopt or refuse an artifact against its provenance sidecar (9, W5-4). The
-  full `MODEL TESTS` suite passes locally on arm64.
+- macOS: 29 new checks in `Tests/ModelTests.swift` decode and reject reports,
+  keep `requires_model` spelling, and check the typed names (11 from W5-3),
+  adopt or refuse an upscale artifact against its provenance sidecar (9, W5-4)
+  and adopt or refuse an *edit* pair the same way (9, A1). The full `MODEL
+  TESTS` suite reports 117 checks and passes locally on arm64. The live-helper
+  suite `Tests/RuntimeV2Tests.swift` carries the crossings a host-only test
+  cannot: section N adopts a pair a real shipped worker published, section O
+  pins `job.submit`'s field names against the helper's own signature, and
+  section P (A1) shows a `requestedCapability` label records and runs where the
+  same id named as a gate refuses.
 - Windows: `RetouchStudio.AI.Tests/Program.cs` now checks
   `capability.list` over a real worker pipe (16 ids, no support, reasons),
   the `-32020`/`-32602` refusals, that a kind-only `job.submit` is refused
@@ -253,9 +259,12 @@ numpy stand-in for torch and a fake model, on purpose: they prove the
 worker's own bookkeeping, and they are not evidence that the real network
 produces a good image. No test in this repository uses fake inference to claim
 real inference works, and none may start. Also in this class: the host's
-adoption rule — the nine `MODEL TESTS` checks write real files and hash them,
-so the digest comparison is proven, but no check runs a worker and adopts what
-it published.
+adoption rule. The `MODEL TESTS` checks write real files and hash them, so the
+digest comparison is proven inside one process; `Tests/RuntimeV2Tests.swift`
+sections N and P run a shipped helper, adopt what it published and read its
+record back on both sides of the socket. Neither drives a real model: every
+pair they adopt is published over stand-in pixels, so they prove the bytes and
+the vocabulary cross correctly, not that an edit looks right.
 
 **Not verified at all.** Anything about output quality, bit depth, ICC
 behaviour, alpha behaviour, orientation, peak memory, wall-clock time, tile

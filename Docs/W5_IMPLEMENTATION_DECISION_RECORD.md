@@ -865,9 +865,14 @@ read as missing, not healthy". Both runs are on the tree of this commit; the
 
 **NOT VERIFIED by this round.** No inference ran and no weights were downloaded,
 so every sidecar proven here was written against a stubbed render. The reply of
-a real flux or MI-GAN job on a real photo has not been observed, and no
-live-worker cross-language test covers `requestedCapability` end to end —
-`Tests/RuntimeV2Tests.swift` is where it belongs. A rollout also pairs this app
-with a helper that publishes: against an older helper the reply has no
-`*_provenance` keys and the edit is refused as an unexpected result rather than
-adopted unsigned. That is the §3.6 rule, not a fallback.
+a real flux or MI-GAN job on a real photo has not been observed: the §P check in
+`Tests/RuntimeV2Tests.swift` starts the shipped helper and shows the same
+capability id refusing the job as `capabilityId` (`E_MODEL_MISSING`, no job
+folder) and running it as `requestedCapability` until it fails inside the worker,
+refuses a label the kind cannot carry with `-32602`, and adopts a worker-written
+record whose `capabilitySource` is `host-asserted` — but that job dies before it
+publishes, so no real job's labelled record has been read by either side. A
+rollout also pairs this app with a helper that publishes: against an older
+helper the reply has no `*_provenance` keys and the edit is refused as an
+unexpected result rather than adopted unsigned. That is the §3.6 rule, not a
+fallback.

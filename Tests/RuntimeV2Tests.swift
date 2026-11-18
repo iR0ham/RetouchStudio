@@ -32,6 +32,12 @@ import Foundation
 // host reads out of `job.status` and `job.result` must be the fields Python
 // wrote: a rename on either side leaves every stub-based test green while the
 // owner's export fails.
+//
+// P separates O's two spellings, which an edit path depends on: a capability the
+// host *names* is put through the worker's verdict, and a capability the host
+// only asks to be *recorded* is not. The same live worker state has to answer
+// those two envelopes differently, and only a real helper can show that the
+// label still arrives in Swift.
 
 let rawArguments = CommandLine.arguments
 if rawArguments.count > 2, rawArguments[1].hasPrefix("--child-") {
@@ -1318,6 +1324,183 @@ func testHostJobSubmissionAgainstLiveWorker() {
           ranFolders.joined(separator: " "))
 }
 
+// MARK: - P
+
+/// A1 lives on one distinction: a capability the host names in `capabilityId`
+/// goes through the worker's verdict, and a capability it offers as
+/// `requestedCapability` only asks to be written into the record. Sections O and
+/// N each proved one half of the machinery — the refusals, and a pair the host
+/// adopts — and nothing crossed the wire with a label on it, so a rename of that
+/// envelope key in `WorkerClient.submit` would leave every Python test and every
+/// stub green while the owner's edits shipped with no provenance at all. This
+/// section sends both spellings to one live helper whose models root is empty,
+/// which is the only state where they answer differently. No weights load and no
+/// inference runs.
+func testLabelledSubmissionIsRecordedNotGated() {
+    print("\n[P] a labelled job runs where a named capability is refused")
+    guard case .success(let worker) = liveWorker() else {
+        check(false, "P: \(liveWorkerRemedy)")
+        return
+    }
+    let live: LiveHelper
+    do {
+        live = try launchLiveHelper(worker: worker.worker, python: worker.python,
+                                    named: "label")
+    } catch {
+        check(false, "P: the helper starts for a labelled submit", "\(error)")
+        return
+    }
+    defer { live.stopIfNeeded() }
+    guard live.ready != nil else {
+        check(false, "P: the helper is ready", live.logTail)
+        return
+    }
+    let pixel: URL
+    do {
+        pixel = try writeLivePixel(live.inputs)
+    } catch {
+        check(false, "P: an input image is written in the allowed root", "\(error)")
+        return
+    }
+    let client = live.client
+    // Reimagine's real envelope, because it is the path whose adopted alpha this
+    // build takes from the worker rather than drawing itself.
+    let params: [String: Any] = ["image": ["path": pixel.path],
+                                 "prompt": "a paper boat on water",
+                                 "full_frame": true]
+    func folders() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: live.jobs.path)) ?? []).sorted()
+    }
+    func sent(_ submit: () throws -> String) -> (id: String, failure: AIWorkerFailure?) {
+        do { return (try submit(), nil) }
+        catch let failure as AIWorkerFailure { return ("", failure) }
+        catch { return ("", AIWorkerFailure(code: 0, message: "\(error)")) }
+    }
+
+    let named = sent { try client.submit("patch_edit", params,
+                                         capability: "generative.reimagine") }
+    check(named.failure?.code == -32011 && named.failure?.typedCode == "E_MODEL_MISSING",
+          "P: naming a capability the adapter cannot run stops the job",
+          named.failure?.message ?? "")
+    check(folders().isEmpty, "P: the gated spelling leaves no job folder",
+          folders().joined(separator: " "))
+
+    let wrong = sent { try client.submit("patch_edit", params,
+                                         requestedCapability: "upscale.4x") }
+    check(wrong.failure?.code == -32602
+              && wrong.failure?.message.contains("is not a patch_edit capability") == true,
+          "P: a label the job kind cannot carry is refused, not ignored",
+          wrong.failure?.message ?? "")
+    check(folders().isEmpty, "P: a refused label leaves no job folder",
+          folders().joined(separator: " "))
+
+    let labelled = sent { try client.submit("patch_edit", params,
+                                            requestedCapability: "generative.reimagine") }
+    check(labelled.failure == nil && !labelled.id.isEmpty,
+          "P: the same capability as a label does not gate the job",
+          labelled.failure?.message ?? "")
+    check(folders().contains(labelled.id),
+          "P: a labelled job really runs, in a workdir named by its id",
+          folders().joined(separator: " "))
+    var inside: AIWorkerFailure?
+    do {
+        _ = try client.wait(job: labelled.id, timeout: 60)
+    } catch let failure as AIWorkerFailure {
+        inside = failure
+    } catch {
+        inside = AIWorkerFailure(code: 0, message: "\(error)")
+    }
+    // Leg one shows this helper has no reimagine weights, so the job the label
+    // route accepted cannot succeed: it must end inside the worker. Which error
+    // it ends with depends on the interpreter running the helper — a full
+    // runtime reaches the missing-weights check, a minimal one dies at the model
+    // import — so this asserts the distinction that matters instead of a code.
+    // A refusal at submit would mean the label had quietly become the gate,
+    // which is the A2 decision the owner has not made.
+    check(inside != nil, "P: the labelled job dies inside the worker, not at a verdict",
+          inside?.message ?? "")
+
+    // The label's destination is the record, so the shape A1 produces — one key
+    // wider than §3.6's frozen list — must still pass the host's adoption gate.
+    // Section N published a record with no origin; this is the one with one.
+    let folder = freshSupport("labelpair")
+    let script = """
+    import json, sys
+    sys.path.insert(0, sys.argv[1])
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+
+    from retouch_ai_worker import provenance
+    from retouch_ai_worker.capabilities import current_platform
+    from retouch_ai_worker.protocol import CONTRACT_VERSION
+
+    folder = Path(sys.argv[2])
+    staged, target = folder / "patch.png.tmp", folder / "patch.png"
+    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
+    pixels[1:3, 1:3] = (10, 120, 200)
+    Image.fromarray(pixels).save(staged, format="PNG")
+    record = provenance.document(
+        capability_id="inpaint.object", job_id="labelled-adoption",
+        contract_version=CONTRACT_VERSION,
+        model={"id": "fixture", "version": None, "format": None, "files": []},
+        adapter={"platform": current_platform(), "version": "0.1.0"},
+        parameters={"engine": "patch"}, seed=None,
+        input=provenance.pixels(pixels), output=provenance.artifact(staged),
+        authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+        outside_pixels_identical=True, elapsed_seconds=0.0, state="succeeded",
+        capability_source="host-asserted")
+    sidecar = provenance.publish(staged, target, record)
+    print(json.dumps({"artifact": str(target), "sidecar": str(sidecar),
+                      "record": json.loads(sidecar.read_text("utf-8"))}), flush=True)
+    """
+    let process = Process()
+    process.executableURL = worker.python
+    process.arguments = ["-c", script, worker.worker.path, folder.path]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    do {
+        try process.run()
+        let bytes = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(data: bytes, encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0,
+              let line = output.split(separator: "\n")
+                .first(where: { $0.hasPrefix("{") }) else {
+            check(false, "P: the worker publishes a labelled record",
+                  String(output.suffix(400)))
+            return
+        }
+        guard let reply = (try? JSONSerialization.jsonObject(with: Data(line.utf8)))
+                as? [String: Any],
+              let artifactPath = reply["artifact"] as? String,
+              let sidecarPath = reply["sidecar"] as? String else {
+            check(false, "P: the labelled record is readable", String(line.prefix(200)))
+            return
+        }
+        var refusal = ""
+        do {
+            _ = try AIProvenance.verifiedArtifact(path: artifactPath,
+                                                  sidecarPath: sidecarPath)
+        } catch {
+            refusal = "\(error)"
+        }
+        check(refusal.isEmpty,
+              "P: the host adopts a record that names a host assertion", refusal)
+        let record = (reply["record"] as? [String: Any]) ?? [:]
+        check(record["capabilitySource"] as? String == "host-asserted",
+              "P: the record says the name is the host's, not a verdict",
+              "\(record["capabilitySource"] ?? "absent")")
+        check(record["capabilityId"] as? String == "inpaint.object",
+              "P: the record names the capability the host pressed",
+              "\(record["capabilityId"] ?? "absent")")
+    } catch {
+        check(false, "P: the worker's provenance module runs", "\(error)")
+    }
+}
+
 // MARK: - Run
 
 testRegistryRecordAndCAS()
@@ -1330,6 +1513,7 @@ testStalePreparingReplacementHoldsExclusiveLease()
 testRealHelperHandshake()
 testWorkerPublishedPairIsAdoptedByHost()
 testHostJobSubmissionAgainstLiveWorker()
+testLabelledSubmissionIsRecordedNotGated()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 
