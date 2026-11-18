@@ -323,3 +323,50 @@ the installed `swin2sr-x4` is still the legacy flat layout, which
 the owner adopts it. The worker gained one test for the other half of that gate
 — that a **supported** capability is still admitted — because every refusal test
 in the file would stay green while the feature became unreachable.
+
+## Addendum (2026-11-19, the shipped catalog stops claiming MI-GAN on Windows)
+
+A verified false-capability claim was corrected in `Resources/model-catalog.json`.
+Nothing in this section was measured; it records a metadata correction against
+code that already existed.
+
+**The defect.** The `migan` entry advertised `capabilities: ["inpaint.spot",
+"inpaint.object"]` and `platforms: ["macos-arm64", "windows-x64"]`. Both values
+were wrong on the evidence this document already carries:
+
+- Object removal does not route to MI-GAN. `worker/retouch_ai_worker/capabilities.py:64`
+  binds `inpaint.object` to `flux2-klein-4b-q4`, and
+  `worker/retouch_ai_worker/engine.py:350,543-547` sends a `patch_edit` hole
+  above `INPAINT_MAX_FRACTION` (0.25 of the frame, `engine.py:34`) to FLUX as
+  well. The macOS host had already agreed: `Sources/RetouchStudio/Models/QuickEdit.swift:154`
+  submits healing to `.migan` and object removal to `.flux`.
+- No Windows runtime executes a model job. `Windows/RetouchStudio.AI/WorkerServer.cs:171-172`
+  answers every `job.submit` with `RefuseJob`, and the Windows adapter reports
+  no `supported` capability at all (see the Windows adapter section above). A
+  `windows-x64` label therefore described something no Windows build can do,
+  and it contradicted this document's own W5-2 honesty gate ("any unapproved
+  ONNX artifact stay out of the catalog", `Docs/W5_MODEL_MANAGER.md:206`).
+
+**The change.** `migan` is now `capabilities: ["inpaint.spot"]`,
+`platforms: ["macos-arm64"]`, and its `notes` say what is true: spot healing
+only, on macOS only, holes above 25 % of the frame refused, object removal
+routed to `flux2-klein-4b-q4`, and no Windows job execution path. The entry's
+files, sizes, digests, licences, provider and preprocess id are untouched, so
+its manifest digest is unchanged. `catalogVersion` moved from `2026-11-16.1` to
+`2026-11-19.1` because the shipped data changed.
+
+**What flips in the suites.** The two assertions that encoded the falsehood are
+inverted, not deleted: `Tests/ModelStoreTests.swift` (catalog/platform facts)
+and `Windows/RetouchStudio.AI.Tests/ModelStoreChecks.cs` (case `[M17]`) now
+require `MI-GAN is not advertised on Windows`, and each suite gained one check
+that the entry advertises `inpaint.spot` alone. The label mapping is unaffected
+because `inpaint.spot` still maps to the Healing task
+(`Sources/RetouchStudio/Models/Localization.swift:782`); the Model Manager row
+reads "Healing" on macOS and MI-GAN no longer appears as an installable Windows
+model.
+
+**What this does not change.** No worker code, routing, capability ledger,
+manifest digest, store layout or lease was touched, and `inpaint.object` remains
+a real capability bound to FLUX — only MI-GAN's claim to it is withdrawn.
+`Docs/CI_GATES.md:687,719` quote the superseded platform list as part of a
+past run's evidence; they are history and are left as written.
