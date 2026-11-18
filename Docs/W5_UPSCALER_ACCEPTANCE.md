@@ -176,3 +176,151 @@ Windows upscaler. Findings, with nothing adopted and no catalog change:
 - Consequence: `upscale.4x` remains `blocked` on Windows in the capability
   adapter; Windows keeps no upscaler path; nothing in this repository
   downloads, converts or approves an ONNX artifact.
+
+---
+
+## 7. Decision A1 executed (2026-11-18): sandbox adoption, real inference, corpus PSNR
+
+Decision A1 (owner-approved: adopt the installed `swin2sr-x4` and measure the
+corpus against a 24.0 dB per-image minimum) was executed on this Mac. Every
+number below was measured today on the MacBook Air M3 (16 GB, macOS 27.2);
+nothing here is an estimate. The measured outcome fails one of the two
+conditions A1 fixed, and that is recorded as measured, not softened.
+
+### 7.1 Runtime (probed, not changed)
+
+`AI/runtime/bin/python3` — CPython 3.13.15; `torch` 2.15.0, `transformers`
+5.22.1, `numpy` 2.5.4, `Pillow` 13.0.0; `torch.backends.mps.is_available()`
+True. The `sam2` package is importable in this interpreter. Nothing was
+upgraded, installed or downloaded.
+
+### 7.2 Sandbox adoption through the real UI
+
+The three flat files (772 / 152 / 48,460,141 bytes, the SHA-256 values in §1)
+were copied to a scratch model root and the app was launched against it with
+`RETOUCH_AI_MODELS=<scratch>/models`. Model Manager → **Adopt…** → confirm
+performed the adoption; the confirmation dialog states it hashes the bytes,
+moves them, and uses no network.
+
+Result (verified on disk):
+
+```
+<scratch>/models/swin2sr-x4/1.0.0/{config.json, preprocessor_config.json,
+                                   pytorch_model.bin, manifest.json}
+<scratch>/models/swin2sr-x4/active.json      version 1.0.0, manifest e0da6778…
+<scratch>/models/.locks/{install, swin2sr-x4@legacy, swin2sr-x4-1.0.0}   (empty)
+```
+
+The adopted `pytorch_model.bin` still hashes to
+`4a5f52a20932085557ed115f87c0ee8385e12f2719108c0dfd38c64aedea4710`. While
+the confirm button was pressed the app held no IPv4/IPv6 socket (sampled every
+0.5 s), so adoption made no network call. The production model directory was
+not touched: right after the run its three files still hashed to the values in
+§1.
+
+The app sweeps job folders at launch (older than 24 h and unlocked);
+launching it for this test removed the stale render folders that had been
+sitting in the production jobs root since 2026-11-08. Those folders are render
+residue the host never reads (`AIWorker.cleanStaleJobFolders`); no edit,
+project or original was involved.
+
+### 7.3 `capability.list`, before and after, same worker code
+
+| capability | before adoption | after adoption |
+|---|---|---|
+| `upscale.4x` | `blocked` — “swin2sr-x4 is installed without a version; adopt it in the model manager before a capability can bind it” | `supported`, `modelVersion` `1.0.0`, evidence `Docs/PHASE5_ACCEPTANCE.md §4 …`, no reason |
+| every other id | unchanged | unchanged |
+
+`mask.click` stayed `requires_model` in the scratch root, because that root
+holds no `sam2.1-hiera-tiny`; the package itself imports (7.1). The whole list
+was compared id by id, not spot-checked.
+
+### 7.4 Real inference (worker CLI, `worker/tools/upscale_acceptance.py`)
+
+One genuine job and one cancellation against a generated 640×480 probe image
+(not an owner photo):
+
+- output 2560×1920, exactly 4×; 6 tiles of 256 with 16 overlap; `mps`;
+  26.1 s job, 36.05 s wall
+- provenance sidecar: `upscale.4x`, `swin2sr-x4` **1.0.0**, artifact SHA-256
+  matches its own bytes
+- gates: dimensions, provenance, cleanup, provider, cancelCleanup — all
+  `pass`
+- cancellation requested 2.0 s in: status `cancelled` after 2899 ms, error
+  `-32014`, job folder left with only its `.lock`
+
+Evidence tier for the capability at this point: **real inference on this
+hardware** (not “production ready”; see 7.7).
+
+### 7.5 The corpus and its numbers
+
+`worker/tools/upscale_corpus.py` (new, a tool — not under `worker/tests`, so
+the discovered worker test count stays 140). Protocol, as A1 fixed it: convert
+to sRGB from the embedded ICC profile first, crop to a multiple of 4, plain
+antialiased bicubic downscale ×4 → `D`, run the real 4× capability on `D`, then
+PSNR on 8-bit gamma-encoded sRGB code values, RGB, RMS over all channels; the
+bicubic control is `D` upscaled ×4 with the same resampler. Seam bands are
+±32 px around every multiple of 960 output px (tile step 256 − 16 = 240) and
+are diagnostic only. Derived pixels stayed in a temporary directory and were
+deleted; no fixture or derived image is in the repository.
+
+Corpus: 8 fixtures from the owner’s private portrait set — 6 at 2268×4032 and
+2 at 3213×5712 cropped to 3212×5712; all 8-bit JPEG with a Display P3 profile,
+orientation 1; C4 is the low-saturation frame. 138 tiles in total.
+
+| image | reference px | tiles | job s | PSNR dB | seam band dB | bicubic control dB | vs control |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C1 | 2268×4032  | 15 | 146.03 | 33.31 | 31.81 | 34.58 | −1.27 |
+| C2 | 2268×4032  | 15 | 133.12 | 34.59 | 33.62 | 35.18 | −0.59 |
+| C3 | 2268×4032  | 15 | 139.62 | 34.92 | 34.82 | 34.90 | +0.02 |
+| C4 | 2268×4032  | 15 | 144.01 | 34.10 | 32.25 | 34.25 | −0.15 |
+| C5 | 2268×4032  | 15 | 143.76 | 32.42 | 32.76 | 32.80 | −0.38 |
+| C6 | 2268×4032  | 15 | 155.96 | 35.52 | 35.09 | 35.90 | −0.38 |
+| C7 | 3212×5712  | 24 | 266.85 | 34.74 | 33.06 | 33.36 | +1.38 |
+| C8 | 3212×5712  | 24 | 247.06 | 33.44 | 33.52 | 32.23 | +1.21 |
+
+Aggregate: minimum **32.42 dB**, mean 34.13 dB, median 34.59 dB; every output
+was exactly the reference size; every sidecar named model version 1.0.0; every
+tile ran on `mps`, at roughly 4–11 s per tile.
+
+### 7.6 Verdict against A1, and what it means
+
+A1 fixed two conditions. Both are reported, separately, because they did not
+agree:
+
+- **Per-image minimum ≥ 24.0 dB — PASS.** The lowest image is 32.42 dB, and no
+  image is near the bar.
+- **The model must beat a bicubic-×4 control on the same pairs — FAIL.** It
+  does not on C1, C2, C4, C5 and C6 (by 0.15–1.27 dB); it does on C3, C7 and
+  C8 (by 0.02–1.38 dB). The combined verdict of the harness is therefore
+  `fail`, and the 24.0 dB bar was not lowered to change that.
+
+What the numbers show: the degradation A1 fixed is *bicubic* downscaling, and
+the control is bicubic upscaling — the control is close to the inverse of the
+degradation, so it recovers these pairs very well. The model is being asked to
+beat a matched inverse, not a camera or JPEG degradation. That is a property
+of the measurement design, not a defect in the model or the harness: the same
+runs put the model at 32–35 dB absolute, with no seam degradation (seam bands
+sit in the same range as the whole frame, sometimes higher). Whether a
+realistic capture degradation should be the comparison, or whether the control
+condition should be dropped, is an owner decision and is **not** made here. No
+threshold in this document, in the harness or in the capability adapter was
+changed.
+
+### 7.7 What this run did not do
+
+- **Production adoption: not performed.** The follow-on step ran only if every
+  earlier step was green; the control condition in 7.6 is not green, so the
+  production store was left exactly as it was (flat legacy install, capability
+  `blocked`). Any later adoption still needs the owner’s word.
+- **Product-path GUI export with upscaling: not exercised** (same precondition).
+  The installed bundle used for the adoption test carries no worker runtime,
+  so whether `adoptRunningHelper`/`waitForHelper` accept a hand-started helper
+  through `RETOUCH_AI_SOCKET` is still unverified. The evidence tier for the
+  feature stays at “real inference on this hardware”; it is not “production
+  ready”.
+- **CI cannot reproduce these numbers.** No GitHub runner has this model store
+  or MPS; CI proves the harness’s logic only. No fixture is committed, so CI
+  never sees owner pixels.
+- 2× upscaling and any Windows ONNX artifact remain out of A1 scope and are
+  untouched; nothing was downloaded, installed or converted.
