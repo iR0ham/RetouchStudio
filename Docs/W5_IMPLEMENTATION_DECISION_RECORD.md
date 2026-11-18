@@ -660,3 +660,62 @@ below recorded):
   Slice-1 record and stands under the append-only rule; the current pins are
   narrated by `Docs/CI_GATES.md` and `Docs/W5_ROADMAP.md` (100 → 115 → 120,
   with the next job to confirm).
+
+Addendum (2026-11-18, Product Owner verification round) — Finding 1 is resolved
+against the contract: the kind-only path stays open, and the boundary is pinned.
+
+Sections 1–11 and the dated review block above stay as written, including its
+recommendation, which this addendum supersedes rather than follows. The question
+the review left open — may an upscale job run, and write a provenance record,
+without a capability verdict admitting it? — is answered by contract text that
+already stands on `main`, so it needed a reading and a test, not a decision:
+
+- **The contract permits it, in those words.** `Docs/AI_PROTOCOL_V2.md`
+  §Capability reporting states that "`job.submit` accepts an optional
+  `capabilityId`" (line 107, from `cd872e0` in W5-3) and that a submission naming
+  only `kind` keeps its catalog checks while "deliberately [not refusing] the
+  `blocked` states that describe a *claim* (no recorded run, legacy flat layout,
+  a catalog entry without size or SHA-256); those keep already-installed models
+  usable, and running them is how the evidence for a support claim gets recorded"
+  (lines 116-123, from `55ff254`). Both commits are ancestors of `main`
+  `40b157f`, so the rule predates this branch. W5-0 §3.5 lists `capabilityId`
+  among the job request fields without making it mandatory (§5 rule 2 freezes
+  §3.2–§3.4, which map a job kind to its capability ids), which is why
+  `engine.py:600` naming `upscale.4x` on an un-named submission states the frozen
+  mapping rather than inventing a claim. `server.py:339-340` applies
+  `_require_capability` only to a named submission, unchanged since W5-3.
+- **Closing the bypass would be a contract change, so it is not done here.** It
+  would also break the path that ran the owner's own install on 2026-11-07 and
+  still runs every legacy flat install, which `capabilities.py:135-138` reports as
+  `blocked` for want of a version to bind evidence to. The review's recommendation
+  is therefore marked superseded by the text it was written against, not
+  implemented.
+- **Every submission path, enumerated.** macOS names the capability
+  (`ExportService.swift:220` → `WorkerClient.swift:136`, which puts the field on
+  the wire only when a caller names one). Windows cannot use the bypass: its
+  adapter refuses a submission with no id outright (`WorkerServer.cs:190-194`),
+  pinned by `Windows/RetouchStudio.AI.Tests/Program.cs:172-177`. The acceptance
+  harness names it (`worker/tools/upscale_acceptance.py:284-286`). Nothing in this
+  repository submits an upscale by kind alone; the open path exists for a caller
+  outside it, which is what the protocol sentence above is about.
+- **What now prevents accidental expansion.** Three tests, in the suite CI runs:
+  `test_server.py::test_a_legacy_install_is_refused_by_name_and_runs_by_kind`
+  puts both halves on one machine state — the named submission is refused at
+  submit with `-32020` and `data.state == "blocked"` and leaves no job behind,
+  while the kind-only submission is admitted and runs — so widening the gate or
+  narrowing the refusal each fail a test instead of passing review unnoticed.
+  `test_server.py::test_kind_only_submission_cannot_load_a_damaged_model` (from
+  `55ff254`) bounds the bypass at the catalog: it does not reach integrity.
+  `test_provenance.py::DocumentTests::test_the_record_carries_exactly_the_frozen_fields`
+  pins the §3.6 field list against `provenance.document`, which is where an
+  "admitted by verdict" key would have to appear for the sidecar to start making a
+  claim the schema never authorised.
+- **The asymmetry the review named is still true and now stated plainly.** A
+  sidecar written on the kind path names a capability no verdict admitted. The
+  record is a statement of what produced the bytes; the place a support claim is
+  made is `capability.list`, and nothing reads the sidecar as one — the host's own
+  check (`AIProvenance.verifiedArtifact`) compares path, schema and digest and
+  ignores `capabilityId` entirely.
+
+Worker suite: 122 tests (`Ran 122 tests`), the two new ones included. No protocol,
+schema, C ABI, catalog or host behaviour changed in this addendum.

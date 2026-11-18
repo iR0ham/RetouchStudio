@@ -370,6 +370,46 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], CHECKSUM_MISMATCH)
         self.assertEqual(result["error"]["data"]["model"], "swin2sr-x4")
 
+    def test_a_legacy_install_is_refused_by_name_and_runs_by_kind(self):
+        # The two submission shapes must answer differently for one and the same
+        # install, which is what Docs/AI_PROTOCOL_V2.md §Capability reporting
+        # freezes (`capabilityId` is optional, and the kind path "deliberately
+        # does not refuse the blocked states that describe a claim"): naming a
+        # capability the adapter cannot claim refuses before any work starts,
+        # while naming only `kind` keeps an installed-but-unproven model running,
+        # because running it is how the evidence for a claim gets recorded. Both
+        # halves are pinned on the same machine state so the boundary cannot drift
+        # quietly: closing the kind path would remove the documented escape hatch,
+        # and opening the named path would make `supported` advisory again.
+        flat = self.server.catalog.root / "swin2sr-x4"
+        flat.mkdir(parents=True)
+        for name, size in (("config.json", 772), ("preprocessor_config.json", 152),
+                           ("pytorch_model.bin", 48_460_141)):
+            with (flat / name).open("wb") as handle:
+                handle.truncate(size)
+        reported = {item["capabilityId"]: item for item in
+                    self.session.call("capability.list")["result"]["capabilities"]}
+        self.assertEqual(reported["upscale.4x"]["state"], "blocked")
+        self.assertIn("without a version", reported["upscale.4x"]["reason"])
+
+        refused = self.session.call("job.submit", {
+            "kind": "upscale", "capabilityId": "upscale.4x", "params": {}})
+        self.assertEqual(refused["error"]["code"], UNSUPPORTED)
+        self.assertEqual(refused["error"]["data"]["state"], "blocked")
+        self.assertEqual(self.manager.snapshot()["jobs"], [],
+                         "a submission the gate refused left a job behind")
+
+        self.manager.engine = ModelEngine(self.server.catalog)
+        job_id = self.session.call("job.submit",
+                                   {"kind": "upscale", "params": {}})["result"]["job_id"]
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            status = self.session.call("job.status", {"job_id": job_id})["result"]
+            if status["status"] in ("succeeded", "failed", "cancelled"):
+                break
+            time.sleep(0.02)
+        self.assertEqual(status["status"], "succeeded")
+
     def test_failed_job_reports_safe_error(self):
         job_id = self.session.call("job.submit",
                                    {"kind": "boom", "params": {}})["result"]["job_id"]

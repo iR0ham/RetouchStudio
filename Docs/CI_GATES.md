@@ -230,6 +230,12 @@ StudioCore Boundary were also green on that head. The independent review then
 moved the pin to `Ran 120 tests`, which stays unverified until the next macOS
 run prints it.
 
+**2026-11-18.** That sentence is now historical: run `44174322949`, macOS
+Integration job `134361670612`, printed `found: Ran 120 tests` on head
+`54e3e60`. The submission-boundary work of the same day adds two worker tests —
+the named-versus-kind-only pair and the frozen-field tripwire — so the pin moves
+to `Ran 122 tests` for the next run to execute.
+
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
 one operating system, one renderer, no pixel-parity claim: the macOS Core Image

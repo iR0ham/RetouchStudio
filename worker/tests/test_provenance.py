@@ -318,6 +318,32 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(provenance.verify(self.target)["state"], "succeeded")
 
 
+class DocumentTests(unittest.TestCase):
+    """What §3.6 lets into the record, which is not everything a job knows."""
+
+    FROZEN = ("schema", "contractVersion", "capabilityId", "jobId", "createdAt",
+              "model", "adapter", "parameters", "seed", "input", "output",
+              "authorizedRect", "outsidePixelsIdentical", "elapsedSeconds", "state")
+
+    def test_the_record_carries_exactly_the_frozen_fields(self):
+        # The record names the capability a job ran as, and §3.6 gives it no field
+        # for whether a verdict admitted that job: a submission naming only its
+        # kind writes the same name, because W5-0 §3.2 maps the kind to it, with no
+        # admission behind it. That asymmetry is the contract, not an oversight, and
+        # the schema is frozen — so the way to fix it is a contract decision, not a
+        # new key smuggled in here.
+        doc = provenance.document(
+            capability_id="upscale.4x", job_id="job-1", contract_version="1",
+            model={"id": "swin2sr-x4", "version": None},
+            adapter={"platform": "macos", "version": "0.0.0"},
+            parameters={"scale": 4}, seed=None, input={"sha256": "0" * 64},
+            output={"sha256": "1" * 64},
+            authorized_rect={"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0},
+            outside_pixels_identical=None, elapsed_seconds=1.0,
+            state="succeeded")
+        self.assertEqual(tuple(doc), self.FROZEN)
+
+
 class ArtifactDigestTests(unittest.TestCase):
     """The measured fields a published record is built from."""
 
