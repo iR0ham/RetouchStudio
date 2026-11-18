@@ -494,3 +494,43 @@ This architecture covers every capability in AI-01 §3 (A–H), states what
 exists and what is proposed, separates languages from runtimes, keeps W5 as an
 implementation milestone, preserves schema v5 and the existing worker, and
 names the unverified items that must be closed before implementation.
+
+## 16. Addendum (2026-11-18): the host working-copy sweep is wired to both launch paths and now proven
+
+This supersedes, for the host sweep only, the §2.2 row "Working-copy cleanup"
+(line 80) and the §10 "Temporary files" bullet (lines 389-393). Both were
+accurate when written and are quoted here rather than rewritten.
+
+- What was actually true. `cleanStaleWorkingCopies()` has existed since
+  `3b68eda` (2026-11-08), but its only call site was at the end of
+  `ensureRunningLocked()` — the bundled or checkout helper path. Once the
+  runtime is a downloaded v2 package, `ensureRunning()` takes
+  `ensureRunningV2()` instead and never swept, so on the recommended install a
+  crash left `…/RetouchStudioAI/<job-uuid>/` copies in place until something
+  happened to launch a bundled helper. The root being swept is
+  `AIWorker.workingDirectory`, the input-copy root both paths hand to the
+  worker as an allowed root (`AIWorker.swift:673` and `:977`), so one sweep
+  covers both.
+- The change. The sweep moved into the shared success path of `ensureRunning()`
+  (`AIWorker.swift:595-611`): it runs after either branch starts a helper, and
+  `clearWorkingCopies()` — added in `545a23d`, never called, and a blunt
+  `removeItem` of the whole root, entries a live job is using included — was
+  deleted instead of being wired up.
+- Proof. `Tests/RuntimeProcessTests.swift` section J now measures the bound
+  rather than trusting it: a copy older than 24 h goes with its bytes, a copy
+  just inside it survives, a copy a job is using keeps its file, a root that
+  was never created is not an error, the working root itself is never taken,
+  and a link entry is judged by its own date — the bytes it points at survive
+  (Foundation reports a symlink's own modification time, so the sweep cannot be
+  talked into deleting what a link references). Green on arm64.
+- Still open, recorded rather than fixed. The helper's job *output* folders
+  (`…/Retouch Studio/AI/jobs`, and `jobs` under the v1 support directory) are
+  pruned only by the in-process ledger: `_trim` keeps the last `keep_jobs`
+  entries (default 20, `worker/retouch_ai_worker/server.py:41, 213-219`) and
+  forgets everything on restart, so folders from earlier sessions are never
+  revisited and accumulate across them. A disk-level retention bound is an
+  owner decision, not a sweep: a completed but not yet adopted result is
+  user-visible work, and deleting it at launch would destroy the edit the user
+  asked for. Until that decision is taken, §2.2's "the helper's own job cleanup
+  is NOT VERIFIED" stays correct in the cross-restart sense, and the Windows
+  host's equivalent remains unmeasured.
