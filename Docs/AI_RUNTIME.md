@@ -217,21 +217,34 @@ Corrected 2026-11-18: both halves of that sentence are now out of date, and the 
 
 ## 7. Building from source
 
-Prerequisites: macOS 14 or later with Xcode Command Line Tools. The local AI helper is optional and lives in a separate worker checkout with a Python 3.13 virtual environment.
+Prerequisites: macOS 14 or later with Xcode Command Line Tools. The local AI helper is optional; its source is tracked at `worker/` in this repository, and its Python 3.13 environment is created by `Tools/setup-worker-venv.sh` at `worker/.venv`.
 
 ```bash
 ./build.sh release            # compiles, bundles the helper when it is reachable, runs the engine self-test, signs ad-hoc
 RETOUCH_SKIP_WORKER=1 ./build.sh release   # app only; the AI tools report the helper as missing
 RETOUCH_REBUNDLE=1 ./build.sh release      # force a fresh copy of the Python runtime
 ./Tests/run.sh                # Engine, Model, RuntimeProcess and RuntimeV2 suites
-cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python -m unittest discover -s tests   # 60 worker tests
+./Tests/run-worker.sh         # the worker suite (its count is pinned, see the note below)
 ```
 
 `Tests/run.sh` compiles every Swift file under `Sources/RetouchStudio` except `App.swift` and `SelfCheck.swift`, then runs four suites: Engine, Model, RuntimeProcess and RuntimeV2. `RETOUCH_ARCH=x86_64 ./Tests/run.sh` runs the same suites against an x86_64 build (Rosetta on Apple silicon).
 
-The worker checkout is not under version control here. Regression tests that
-must survive a fresh clone are copied into `Docs/worker-regressions/` with their
-own run instructions; they are not part of the Swift suite.
+`Tests/run-worker.sh` discovers `worker/tests` with `unittest`, using
+`worker/.venv/bin/python3` unless `RETOUCH_WORKER_PYTHON` names another
+interpreter that can import the pinned wheels. Its test count is pinned in
+four places — `.github/workflows/ci.yml`, the header comment of
+`Tests/run-worker.sh`, `worker/README.md` and `Docs/W5_ADAPTERS.md` (plus the
+`Docs/worker-regressions/README.md` copy) — so a new test moves them together.
+
+Corrected 2026-11-18: this section used to say the helper "lives in a separate
+worker checkout" and to print `cd "$RETOUCH_WORKER_ROOT" && ../.venv/bin/python
+-m unittest discover -s tests` for 60 tests. Neither described a clone of this
+repository: `worker/` is tracked, the runner is `Tests/run-worker.sh`, and the
+discover path it used is what that script does internally. The superseded note
+at the end of this section records the same correction for the build side.
+`Docs/worker-regressions/` is still kept, but as the historical P0-06 artifact
+its README describes, not as the place a test has to be copied to survive a
+clone.
 
 Overrides used by the bundler:
 
