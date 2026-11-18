@@ -112,7 +112,7 @@ table of its own.
   keep `requires_model` spelling, and check the typed names (11 from W5-3),
   adopt or refuse an upscale artifact against its provenance sidecar (9, W5-4)
   and adopt or refuse an *edit* pair the same way (9, A1). The full `MODEL
-  TESTS` suite reports 117 checks and passes locally on arm64. The live-helper
+  TESTS` suite passes locally on arm64 and x86_64. The live-helper
   suite `Tests/RuntimeV2Tests.swift` carries the crossings a host-only test
   cannot: section N adopts a pair a real shipped worker published, section O
   pins `job.submit`'s field names against the helper's own signature, and
