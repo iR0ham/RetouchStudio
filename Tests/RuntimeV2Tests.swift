@@ -714,7 +714,7 @@ func testStalePreparingReplacementHoldsExclusiveLease() {
 // MARK: - A live helper
 
 /// Why there is no live worker to start, phrased as the check that reports it.
-enum LiveWorkerProblem: String {
+enum LiveWorkerProblem: String, Error {
     case noInterpreter = "a worker interpreter is available"
     case noSource = "the worker source is in this checkout"
 }
@@ -759,7 +759,26 @@ struct LiveHelper {
     let ready: HelperRegistry.Record?
     let client: WorkerClient
     let child: ChildProcess
+    // Held so the lease object cannot be deallocated while the child still
+    // borrows its descriptor number; the lease itself was released at spawn.
     private let lease: RuntimeUsageLease
+
+    /// The memberwise initializer is private because `lease` is, and the
+    /// sections construct this through `launchLiveHelper` anyway.
+    init(support: URL, inputs: URL, jobs: URL, models: URL, socket: URL, log: URL,
+         ready: HelperRegistry.Record?, client: WorkerClient, child: ChildProcess,
+         lease: RuntimeUsageLease) {
+        self.support = support
+        self.inputs = inputs
+        self.jobs = jobs
+        self.models = models
+        self.socket = socket
+        self.log = log
+        self.ready = ready
+        self.client = client
+        self.child = child
+        self.lease = lease
+    }
 
     /// A refusal is only useful if the helper's own log explains it, so a failing
     /// run prints the tail rather than an exit code.
