@@ -41,7 +41,7 @@ are research-only or non-commercial.
 |---|---|---|---|
 | Apple Vision (face landmarks, person segmentation) | OS framework | OS terms | Ships today (macOS only) |
 | FLUX.2 klein 4B (q4) | Apache-2.0 | Apache-2.0 | Ships today (opt-in download) |
-| SAM 2.1 tiny | Apache-2.0 | Apache-2.0 | Ships today; integrity metadata incomplete |
+| SAM 2.1 tiny | Apache-2.0 | Apache-2.0 | Ships today; integrity metadata recorded 2026-11-18, download still refused (`sam2` not a worker dependency) |
 | Swin2SR x4 | Apache-2.0 | Apache-2.0 | Ships today |
 | MI-GAN (512, Places2) | MIT (weights MIT) | MIT | Ships today |
 | MediaPipe Face Landmarker | Apache-2.0 | model-card terms **NOT VERIFIED** | Candidate; needs a written read |
@@ -75,7 +75,7 @@ are research-only or non-commercial.
 | InsightFace (SCRFD + ArcFace) | github.com/deepinsight/insightface | ONNX pack; size not stated | comfortable | ONNX possible | Best identity embeddings; weights non-commercial → blocked |
 | BiSeNet face parsing (zllrunning) | github.com/zllrunning/face-parsing.PyTorch | PyTorch, 224² | comfortable | ONNX export needed | No `LICENSE` file; CelebAMask-HQ classes |
 | SegFormer face parsing (jonathandinu) | huggingface.co/jonathandinu/face-parsing | ONNX + quantized ONNX; 84.6 M ≈ 339 MB fp32 | usable | ONNX Runtime | No licence declared; best parser if terms are cleared |
-| SAM 2.1 tiny | github.com/facebookresearch/sam2 | 39 M params; catalog reports ~298 MB on disk | comfortable | ORT possible; official ONNX **NOT VERIFIED** | Box prompts ship today; point prompts absent |
+| SAM 2.1 tiny | github.com/facebookresearch/sam2 | 39 M params; 148.8 MB (156,008,466 bytes) measured 2026-11-18, against the ~298 MB an unrecorded catalog had been quoted as | comfortable | ORT possible; official ONNX **NOT VERIFIED** | Box prompts ship today; point prompts absent |
 | SAM 3 / 3.1 | github.com/facebookresearch/sam3 | ≈0.85–0.9 B; F32 ≈3.4–3.6 GB | aggressive → impractical | CUDA 12.6+ per repo | Text+box+point; gated custom licence |
 
 ### 3.2 Picks
@@ -384,7 +384,7 @@ preprocessing remain **NOT VERIFIED**.
 | Task | Prompt-guided local/whole-frame edit | Promptable segmentation | 4× super-resolution | Small-hole inpainting |
 | Architecture | Flow/diffusion-class transformer, 4-step distilled as shipped; exact graph NOT VERIFIED | Promptable segmentation transformer with memory attention | SwinV2-based restoration transformer, 12.2 M params | GAN trained on Places2, 512² |
 | Format | q4 weights (safetensors/MLX class) | PyTorch checkpoint (ONNX unofficial) | safetensors | PyTorch/ONNX class (worker NOT VERIFIED) |
-| Download size | 4.6 GB | ≈298 MB on disk per [AI_RUNTIME.md](AI_RUNTIME.md) §1; the worker catalog entry itself has no size field, so download progress is indeterminate | 48.5 MB | 28.1 MB |
+| Download size | 4.6 GB | 148.8 MB (156,008,466 bytes) recorded 2026-11-18; the ≈298 MB this row quoted from [AI_RUNTIME.md](AI_RUNTIME.md) §1 came from a catalog with no size field, which is also why download progress used to be indeterminate | 48.5 MB | 28.1 MB |
 | Code / weights licence | Apache-2.0 / Apache-2.0 | Apache-2.0 / Apache-2.0 | Apache-2.0 / Apache-2.0 | MIT / MIT |
 | Acceleration | PyTorch MPS; MLX/mflux wheels bundled | PyTorch MPS | PyTorch MPS; ONNX exports in the community | PyTorch MPS |
 | Quantization | q4 (shipped) | none applied | none applied | none applied |

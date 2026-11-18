@@ -105,7 +105,9 @@ table of its own.
   boundary in `test_engine`, two at the envelope in `test_server`) and the
   jobs-root claim adds 2 (a running job's `<workdir>/.lock` refused to a second
   descriptor and to a real child process, and `provenance.reconcile` leaving
-  that file alone). 14 of the W5-3 tests are for
+  that file alone) and the SAM 2.1 tiny catalog pin adds 2 (its measured size
+  and digest, and DR-5's branch kept alive with the digests taken back out of
+  an entry). 14 of the W5-3 tests are for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
   kind-only job that must not load a size-mismatched model (`-32019`), and the

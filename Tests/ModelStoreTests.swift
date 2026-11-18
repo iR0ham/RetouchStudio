@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -545,7 +546,35 @@ do {
     check(production.entries.count >= 4, "shipped catalog loads",
           "\(production.entries.count) entries")
     let sam = production.entry(id: "sam2.1-hiera-tiny")
-    check(sam?.isVerifiable == false, "shipped SAM 2.1 is listed but unverifiable")
+    // `Docs/W5_MODEL_MANAGER.md` §2 defines the manifest digest as SHA-256 over
+    // each file's `path + "\n" + sizeBytes + "\n" + sha256 + "\n"`, sorted by
+    // path. Prose alone let SAM 2.1's entry digest be recorded as a fact rather
+    // than guessed at, so the rule is asserted here for every shipped entry.
+    let manifestDigest: (ModelCatalogEntry) -> String? = { entry in
+        guard entry.files.allSatisfy({ $0.sizeBytes != nil && $0.sha256 != nil })
+        else { return nil }
+        let body = entry.files
+            .sorted { $0.path < $1.path }
+            .map { "\($0.path)\n\($0.sizeBytes!)\n\($0.sha256!)\n" }
+            .joined()
+        return SHA256.hash(data: Data(body.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+    check(production.entries.allSatisfy { $0.sha256 != nil },
+          "every shipped entry carries a manifest digest")
+    check(production.entries.allSatisfy { manifestDigest($0) == $0.sha256 },
+          "each manifest digest is the documented derivation over its files")
+    // SAM 2.1 is still not downloadable, and DR-5's flag is the only field the
+    // catalog has to say so; the reason is the missing `sam2` package, which
+    // `requirements.lock` and the `models` extra both omit.
+    let samReason = sam?.unverifiableReason ?? ""
+    check(sam?.isVerifiable == false && samReason.contains("sam2 runtime package"),
+          "shipped SAM 2.1 is listed, verifiable on disk, refused for its runtime",
+          samReason)
+    check(sam?.files.first { $0.path == "sam2.1_hiera_tiny.pt" }?.sizeBytes == 156_008_466
+            && sam?.files.first { $0.path == "sam2.1_hiera_tiny.pt" }?.sha256
+                == "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69",
+          "SAM 2.1's checkpoint size and digest are recorded as measured")
     let swin = production.entry(id: "swin2sr-x4")
     check(swin?.supports(platform: "windows-x64") == false,
           "Swin2SR is not advertised on Windows")

@@ -82,11 +82,15 @@ still decides when a package may start.
 
 ### R0 — Reproducible worker and licence inventory (W5 prerequisite)
 
-**Why first:** the worker is a separate checkout. A fresh clone cannot
-reproduce a single inference, and the catalog's integrity fields are
-incomplete (SAM 2.1 tiny has neither size nor SHA256 — [AI_RUNTIME.md](AI_RUNTIME.md)
+**Why first:** the worker was a separate checkout. A fresh clone could not
+reproduce a single inference, and the catalog's integrity fields were
+incomplete (SAM 2.1 tiny had neither size nor SHA256 — [AI_RUNTIME.md](AI_RUNTIME.md)
 §6.3). No model decision can be verified against a source that is not in the
-repository.
+repository. Both halves moved on 2026-11-18: the worker source is tracked under
+`worker/`, and SAM 2.1 tiny's checkpoint carries a measured size and digest
+([W5_MODEL_MANAGER.md](W5_MODEL_MANAGER.md) §2). What R0 still owes is a lock
+file a fresh clone can install for every model in the catalog — `sam2` loads in
+`engine.py` and appears in neither `requirements.lock` nor the `models` extra.
 
 **Deliverables:** worker source in the repository or a pinned, fetchable
 dependency; `requirements.lock` reproducible; every catalog entry carries

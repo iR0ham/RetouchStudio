@@ -21,7 +21,7 @@ The helper is self-contained. A full build carries it inside the app. Release bu
 | **Whole full app bundle** | | **~1.31 GiB** |
 | Model weights | Not shipped; downloaded by consent | 28 MB – 4.6 GB |
 
-Download sizes from the catalog: FLUX.2 klein 4B q4 — 4.6 GB; SAM 2.1 tiny — ~298 MB on disk; Swin2SR x4 — 48.5 MB; MI-GAN — 28.1 MB. The app works with any subset; a missing model produces a clear “open Manage Models” message instead of a failed job.
+Download sizes from the catalog: FLUX.2 klein 4B q4 — 4.6 GB; SAM 2.1 tiny — 148.8 MB (156,008,466 bytes, measured 2026-11-18); Swin2SR x4 — 48.5 MB; MI-GAN — 28.1 MB. The app works with any subset; a missing model produces a clear “open Manage Models” message instead of a failed job.
 
 The worker is the framework interpreter copied from Homebrew Python 3.13.15, with the Homebrew dylibs it needs (`libssl`, `libcrypto`, `liblzma`, `libmpdec`, `libsqlite3`) relocated into `Worker/lib` and every Mach-O reference rewritten to `@loader_path`. No Homebrew installation is required on the target Mac, and no Mach-O load command in the bundle refers to `/opt/homebrew`. A handful of unused framework scripts (`pip3`, `pydoc3`, `idle3`) and pkg-config files still carry Homebrew shebangs or build paths; the helper never runs them — it is started through the bundled `Python.framework` interpreter.
 
@@ -61,7 +61,7 @@ After the models are installed:
 
 This was measured, not assumed: see [`PRIVACY_AUDIT.md`](PRIVACY_AUDIT.md) §3 — zero TCP/UDP endpoints while idle and during a real upscale job, and exactly two HTTPS connections during an approved download.
 
-If a model file with a catalog SHA256 is damaged, `Manage Models… → Verify` reports the mismatched file and the model can be downloaded again. The SAM 2.1 tiny entry has no SHA256, so Verify has nothing to compare for that file. Launch never re-downloads anything on its own.
+If a model file with a catalog SHA256 is damaged, `Manage Models… → Verify` reports the mismatched file and the model can be downloaded again. SAM 2.1 tiny's checkpoint gained its recorded size and SHA256 on 2026-11-18, so Verify now compares that file too; what its entry still refuses is the download, because the `sam2` runtime package is not part of the bundled worker. Launch never re-downloads anything on its own.
 
 ---
 
@@ -239,6 +239,8 @@ The complete pinned list is `worker/requirements.lock`.
 | MI-GAN (512, Places2) | Small-hole inpainting | MIT (weights) | Yes |
 
 Weights are downloaded, never redistributed inside the app. Each download is verified against the SHA256 in the catalog when the manifest provides one. Inspected on 2026-11-10, the worker catalog (`retouch_ai_worker/catalog.py` in the separate checkout) gives SAM 2.1 tiny neither a size nor a SHA256: that download cannot be checksum-verified and its progress is indeterminate. That checkout is not under version control here, so this describes it as inspected, not a property of the app bundle.
+
+Corrected 2026-11-18: both halves of that sentence are now out of date, and the paragraph is kept as the inspection it was. The worker source lives in this repository under `worker/`, and SAM 2.1 tiny's checkpoint carries a measured size (156,008,466 bytes) and SHA256 (`7402e0d8…be69`, from the installed file, matching the pinned URL's stream and HuggingFace's LFS object id). Downloading that entry is still refused, now for the reason that actually applies: `sam2` is in neither `worker/requirements.lock` nor the `models` extra of `worker/pyproject.toml`, so a machine that fetched the weights would have nothing that could load them. See [`W5_MODEL_MANAGER.md`](W5_MODEL_MANAGER.md) §2 for the manifest-digest rule that also gives the entry its own digest.
 
 ---
 
