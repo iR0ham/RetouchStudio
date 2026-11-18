@@ -37,9 +37,20 @@ sheet; every per-file digest is checked after download.
 Valid metadata requires all of: non-empty `files`, every file's `sizeBytes` and
 `sha256`, and no `unverifiableReason`. An entry without them may be listed with
 its reason but cannot be downloaded, installed, activated or described as
-supported (DR-5). SAM 2.1 tiny is listed that way today: the repository has no
-recorded size or SHA-256 for its checkpoint, and the SAM runtime package is not
-installed in the bundled worker.
+supported (DR-5).
+
+As of 2026-11-18 every shipped entry satisfies the metadata half: SAM 2.1
+tiny's checkpoint carries a measured size (156,008,466 bytes) and SHA-256, and
+its manifest digest is the value the rule above derives from them — the same
+rule that reproduces FLUX, Swin2SR and MI-GAN byte for byte, which
+`Tests/ModelStoreTests.swift` now asserts for all four. SAM 2.1 tiny is still
+listed with an `unverifiableReason`, and it is the only field this schema has
+for refusing a download, so it now carries the reason that applies: the `sam2`
+package is absent from `worker/requirements.lock` and from the `models` extra,
+so a Mac that fetched those weights would have nothing able to load them. What
+the recorded metadata does unlock is everything that is already on disk: `Verify`
+compares the file, `require` checks its length before a submission loads it, and
+a flat install can be adopted into a version.
 
 Source rules: HTTPS only; the file URL must use the same scheme and host as
 the entry's recorded source; no credentials or fragments; the default port

@@ -65,6 +65,20 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(listed["flux2-klein-4b-q4"]["license"], "Apache-2.0")
         self.assertEqual(len(listed), len(CATALOG))
 
+    def test_sam_tiny_weights_are_recorded_as_measured(self):
+        # Measured 2026-11-18 three ways that agree: the pinned URL streams this
+        # many bytes to this digest, HuggingFace's LFS object id for the same
+        # path is the same value, and so is the copy this app installed from
+        # that URL on 2026-11-08. Until they were recorded, the model could not
+        # be verified, could not be adopted into a version, and `require` had no
+        # length to check a submission against.
+        spec = next(entry for entry in CATALOG
+                    if entry.id == "sam2.1-hiera-tiny").files[0]
+        self.assertEqual(spec.bytes, 156_008_466)
+        self.assertEqual(
+            spec.sha256,
+            "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69")
+
     def test_unlicensed_model_is_refused(self):
         catalog = Catalog(self.root, allow_uncleared=False)
         with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (UNCLEARED,)):
@@ -92,7 +106,10 @@ class CatalogTests(unittest.TestCase):
     def test_installed_model_resolves(self):
         target = self.root / "sam2.1-hiera-tiny" / "sam2.1_hiera_tiny.pt"
         target.parent.mkdir(parents=True)
-        target.write_bytes(b"weights")
+        # SAM 2.1 tiny's file has had a recorded length since 2026-11-18, so a
+        # stub of that length is now what an install must look like to resolve.
+        with target.open("wb") as handle:
+            handle.truncate(156_008_466)
         catalog = Catalog(self.root, allow_uncleared=False)
         self.assertEqual(catalog.require("sam2.1-hiera-tiny"), target.parent)
         self.assertTrue(catalog.list()[1]["installed"])
