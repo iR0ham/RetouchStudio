@@ -758,3 +758,19 @@ implied it in §3.6 is bounded by §11's correction.
   retention adoption-aware is a worker-side policy decision for a later milestone;
   this round records it instead of quietly changing a retention rule the model
   manager and the recovery tests both depend on.
+
+2026-11-18, after `480fe88` (the merge of PR #70). The `Ran 122 tests` line
+above is historical: the stacked branch also carries W5-5's two
+acceptance-harness tests, so the merged worker suite is 124 tests and the pins
+move with it, as `Docs/CI_GATES.md` records. Nothing in the §3 resolution
+changed: naming a capability the adapter cannot claim is still refused before
+weights load, a kind-only submission is still admitted, and both halves stay
+pinned by
+`worker/tests/test_server.py::test_a_legacy_install_is_refused_by_name_and_runs_by_kind`
+and
+`worker/tests/test_provenance.py::DocumentTests::test_the_record_carries_exactly_the_frozen_fields`.
+This round additionally recorded in `Docs/CI_GATES.md` that the x86_64
+(Rosetta) `MODEL STORE TESTS` child-process cases fail with the identical 11
+checks at the base commit `40b157f`, where none of W5-4's files exist in the
+diff: the gap belongs to `main` and to this machine's arm64-only CI coverage,
+not to W5-4 or W5-5, and its mechanism is not root-caused here.

@@ -2,7 +2,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # Stacked milestone branches are listed beside the integration branches:
+    # a PR whose base is a feature branch must pass the same five contexts
+    # before it can be judged ready, not only PRs that end on `main` or
+    # `develop`.
+    branches: [main, develop, 'w5-**']
   push:
     # `main` is deliberately absent. With strict required checks the pull
     # request run checks out `refs/pull/N/merge`, whose tree is exactly the
@@ -156,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           for verdict in \
-            'Ran 122 tests' \
+            'Ran 124 tests' \
             'StudioCore: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
             'MODEL TESTS: PASS' \
@@ -205,7 +209,7 @@ jobs:
 
       - name: Build StudioCore and run the core plus C ABI tests
         shell: pwsh
-        run: ./Tests/run-studiocore-windows.ps1
+        run: ./Tests/run-studiocore-windows.ps1 *>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'windows-core.log')
 
       - name: Run the platform-neutral conformance gate
         shell: bash
@@ -217,6 +221,19 @@ jobs:
           PYTHON: python
         run: ./Tests/Conformance/run-conformance.sh
 
+      # A green tee step only means the pipeline ended, not that the script
+      # completed its checks. A script that threw partway simply never prints
+      # its final verdict, so this step is what fails the job; the same
+      # pattern the Windows App job applies.
+      - name: Assert the Windows portability verdict
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'windows-core.log'
+          if (-not (Select-String -Path $log -Pattern 'StudioCore Windows portability check: PASS' -SimpleMatch -Quiet)) {
+            throw 'the Windows StudioCore script never reported its PASS verdict'
+          }
+          Write-Host 'found: StudioCore Windows portability check: PASS'
+
       - name: Upload gate logs
         if: failure()
         uses: actions/upload-artifact@v7
@@ -224,6 +241,7 @@ jobs:
           name: windows-core-log
           path: |
             build/**/*.log
+            ${{ runner.temp }}/windows-core.log
             ${{ runner.temp }}/conformance.log
           if-no-files-found: ignore
 

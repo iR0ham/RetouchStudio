@@ -271,6 +271,35 @@ support claim cites a run; the unverified register is current.
 **Does not:** add a new required CI context or gate without owner approval;
 weaken a tolerance to pass; present shared-runner timings as benchmarks.
 
+Addendum (2026-11-18, branch `w5-5/ci-gates` at `02d7acd`, stacked on PR
+#70): the gate audit found four items and three are implemented —
+`pull_request` now guards `develop` as well as `main` (a PR against the
+integration branch previously ran no CI at all); `Windows StudioCore` tees
+its log and must print its PASS verdict like every other job; the W5-4
+acceptance harness is regression-tested as a subprocess against a
+deterministic fake engine (`worker/tests/test_upscale_acceptance_tool.py`,
+worker suite 120 → 122, pins moved). The fourth finding records the
+deliberate StudioCore/conformance duplications rather than removing them.
+From the PR #70 review: the Windows provider record now explains
+unavailability as `reason` (was `error`), matching macOS and the shared
+fixture convention, and both platforms assert the fixture provider shape.
+NOT VERIFIED: the Windows-side changes compile and pass only on the GitHub
+Windows runners (no local Windows); the moved 122-test pin executes on the
+next macOS job; no new required check context was added, per the constraint
+above.
+
+Addendum (2026-11-18, after PR #70 merged as `480fe88`): the stack was
+synchronised the ordinary way — `origin/main` merged into this branch, no
+rebase, no force-push, no rewritten commit — and PR #71's base is now `main`,
+so its diff carries W5-5 only. The two addenda above are historical: the
+merged worker suite is 124 tests (W5-4's two submission-boundary tests plus
+W5-5's two acceptance-harness tests), the pins move to `Ran 124 tests`, and
+they stay unverified until a macOS job prints them. The gate audit gained a
+fifth finding in `Docs/CI_GATES.md`: no required context builds or runs the
+x86_64 slice, and that slice's `MODEL STORE TESTS` child-process cases already
+fail identically at `40b157f`, which is a property of `main` on this machine
+rather than of W5-5.
+
 ## 4. Retained follow-on milestones
 
 These are approved scope. Ordering after W5 follows V4 with A1/A2 approved;

@@ -236,6 +236,15 @@ Integration job `134361670612`, printed `found: Ran 120 tests` on head
 the named-versus-kind-only pair and the frozen-field tripwire — so the pin moves
 to `Ran 122 tests` for the next run to execute.
 
+**2026-11-18, later.** Also historical: run `44211766326`, macOS Integration
+job `134491776648`, printed `found: Ran 122 tests` on head `6c28281`, and PR
+#70 merged as `480fe88`. This branch now carries both halves of that day's
+work — the two submission-boundary tests and the two acceptance-harness tests —
+so the merged suite is 124 tests and every pin (`ci.yml`,
+`Tests/run-worker.sh`, `Docs/W5_ADAPTERS.md`,
+`Docs/worker-regressions/README.md`, `worker/README.md`) moves to
+`Ran 124 tests` for the next run to execute.
+
 The application lives in `Windows/` and is described in
 [`../Windows/README.md`](../Windows/README.md). Like the portability job, it is
 one operating system, one renderer, no pixel-parity claim: the macOS Core Image
@@ -578,3 +587,90 @@ build and no CI job here validates one.
 
 The GitHub-hosted `macos-14` runner image was retired on 2026-11-02. This
 workflow therefore uses `macos-15` (arm64) instead.
+
+## W5-5 gate audit (2026-11-18)
+
+An audit of the five `CI` jobs against the W5-5 brief ("missing gates,
+duplicated or misleading checks") produced four findings; three are
+implemented here, one is recorded for the owner. Evidence standard: the
+findings below were read from `ci.yml` at `67486d0` plus the scripts the
+jobs invoke, not from memory.
+
+1. **Missing gate — a pull request targeting `develop` ran no CI.**
+   `on.pull_request.branches` listed only `main`, so any stacked or staged PR
+   against the integration branch was unguarded. `develop` is now listed next
+   to `main`. Pushes stay deliberately unlisted for both branches (the merge
+   tree has already been proven by the pull-request run; the comment at the
+   top of `ci.yml` records that reasoning).
+2. **Missing gate — `Windows StudioCore` had no verdict assertion.** Every
+   other job asserts its recorded verdict from the log (macOS asserts the
+   suite lines, Windows App asserts five verdicts), but `windows-core` relied
+   on the script's exit code through a bare invocation. The run step now tees
+   to a log and a new assert step requires `StudioCore Windows portability
+   check: PASS`; the script prints that line only after `if ($failed) { exit
+   1 }` passes, so a partially-run script fails the assert exactly the way
+   the Windows App job's comment describes. The log is added to the failure
+   upload.
+3. **Misleading gap — the acceptance harness was untested.** The W5-4 harness
+   (`worker/tools/upscale_acceptance.py`) existed as a tool with no
+   regression coverage, so a protocol change could silently break the very
+   gate the owner will later trust. `worker/tests/test_upscale_acceptance_tool.py`
+   now drives the harness as a subprocess against a deterministic fake engine
+   over a real socket and judges both outcomes the real approval will
+   produce: exit 2 with the recorded refusal when the capability is not
+   `supported`, and the five-gate pass (dimensions, provenance, cleanup,
+   provider, cancelCleanup) with the cancelled job leaving nothing. The
+   worker suite count moves `120 → 122` and every pin (`Tests/run-worker.sh`,
+   `ci.yml`, `Docs/W5_ADAPTERS.md`, `Docs/worker-regressions/README.md`)
+   moves with it; the new pin is unverified until the next macOS job executes
+   the suite.
+4. **Deliberate duplication, now recorded rather than removed.**
+   `StudioCore Boundary` (macOS, fast PR signal) and the StudioCore step
+   inside `macos-integration` run the same script, and the platform-neutral
+   conformance gate runs on both `ubuntu-24.04` and the Windows image. Both
+   are intentional: the boundary exists for early signal, the integration
+   copy pins the verdict into the full-suite log, and the double-platform
+   conformance is what makes "platform-neutral" a tested claim rather than a
+   name. Removing either would save a minute and lose a proof, so they stay
+   and are recorded here as deliberate.
+
+Also in this branch, from the independent review of PR #70: the Windows
+provider record for an unavailable runtime carried its explanation under
+`error` while macOS and the shared fixture's unavailable-shape convention use
+`reason` (the macOS suite asserts the field). The Windows adapter now emits
+`reason`, and both platforms' contract tests assert the fixture provider
+shape `{id, state, execution_providers}` with the `reason` explanation when
+unavailable. The Windows runner can only observe the available shape live;
+the unavailable branch is exercised by the macOS helper test, and that
+asymmetry is stated in the Windows test's comment.
+
+Follow-up (2026-11-18, `0688fa9`): opening PR #71 (base `w5-4/upscaler`) with
+no checks reported exposed the same unguarded-PR class as finding 1 — the
+filter matched only the two integration branches, so a stacked milestone PR
+ran nothing. `pull_request.branches` now also carries `w5-**`, so every PR in
+the W5 stack passes the same five contexts regardless of where its base
+lands. The audit's finding 1 therefore closes in its general form.
+
+Follow-up (2026-11-18, after `480fe88`): **finding 5 — the Intel slice is not
+a gate, and its local run already fails at the base.** The macOS Integration
+job pins `RETOUCH_ARCH: arm64`, so none of the five required contexts compiles
+or runs an x86_64 test binary; `Docs/CROSS_PLATFORM_COMPATIBILITY.md` has
+always labelled the x86_64 result as Rosetta evidence rather than native Intel
+validation. Measuring it on this head for the W5-4 verification round gave
+`StudioCore: 288 checks passed`, `ABI TESTS: PASS (104 checks)` and
+`ENGINE / MODEL / RUNTIME PROCESS / RUNTIME V2 TESTS: PASS`, but
+`MODEL STORE TESTS: FAIL (11)` — the cases whose *child process* performs the
+install ([10] lease-during-delete, [12] two processes one winner, [13] crash
+injection; in-process fixture installs all pass under the same translation).
+The identical 11 checks fail when the same suite is built and run at the base
+commit `40b157f`, which carries none of W5-4's changes and touches none of
+`ModelStore`, `ModelManager`, `LockFile`, `ModelCatalog` or
+`ModelStoreTests`, so the failure is a property of `main` on this machine that
+this round discovered rather than a finding against either PR. The mechanism
+is **not root-caused here and no claim about it is made.** Options for the
+owner, in order of cost: run the x86_64 suites as a sixth, non-required CI
+context on the `macos-15` runner (`arch -x86_64`, which would have caught this
+before it reached a milestone branch); root-cause the child-process install
+failure in its own slice; or record the arm64-only scope in
+`Docs/CROSS_PLATFORM_COMPATIBILITY.md` and accept it as Rosetta evidence with
+a known gap. Nothing in W5-4 or W5-5 changes this behaviour.
