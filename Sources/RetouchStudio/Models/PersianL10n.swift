@@ -653,6 +653,9 @@ final class PersianL10n: L10n {
     override var capabilityNeedsModel: String { "نیازمند مدل" }
     override var capabilityBlocked: String { "مسدود" }
     override var capabilityUnavailable: String { "در دسترس نیست" }
+    override func capabilityWaitingFor(_ reason: String) -> String {
+        "در انتظارِ: \(reason)"
+    }
     override var capabilityHelperStopped: String {
         "کمک‌یار محلی هوش مصنوعی در حال اجرا نیست، بنابراین فهرست توانایی‌ها خوانده نمی‌شود."
     }
@@ -1216,6 +1219,12 @@ final class PersianL10n: L10n {
     }
     override var aiCapabilityUnsupported: String {
         "این ابزار هوش مصنوعی هنوز برای این نسخهٔ مک در دسترس نیست. «مدیریت مدل‌ها…» نشان می‌دهد این آداپتور چه چیزی را اجرا می‌کند."
+    }
+    override func aiCapabilityBlocked(_ task: String) -> String {
+        "«\(task)» روی این مک نصب است اما هنوز آمادهٔ اجرا نیست. «مدیریت مدل‌ها…» می‌گوید منتظر چیست."
+    }
+    override func aiCapabilityRuntimeMissing(_ task: String, package: String) -> String {
+        "«\(task)» اجرا نمی‌شود، چون این دستیار نمی‌تواند بستهٔ زمان‌اجرای \(package) را که لازم دارد بارگذاری کند. دانلود دوبارهٔ مدل این را تغییر نمی‌دهد."
     }
     override var aiRunEdit: String { "اجرای ویرایش" }
     override var aiCancelEdit: String { "لغو" }

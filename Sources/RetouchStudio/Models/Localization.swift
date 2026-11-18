@@ -640,6 +640,9 @@ class L10n {
     var capabilityNeedsModel: String { "Needs a model" }
     var capabilityBlocked: String { "Blocked" }
     var capabilityUnavailable: String { "Not available" }
+    /// A blocked row already says `Blocked`; the worker's reason says what it
+    /// is waiting for, and the row that needs no hover to be understood.
+    func capabilityWaitingFor(_ reason: String) -> String { "Waiting for: \(reason)" }
     var capabilityHelperStopped: String {
         "The local AI helper is not running, so the capability list cannot be read."
     }
@@ -929,6 +932,14 @@ class L10n {
         case .aiWorking: return aiWorking
         case .aiApplied: return aiApplied
         case .aiAssetsMissing(let count): return aiAssetsMissing(count)
+        case .aiModelMissing: return aiModelMissing
+        case .aiCapabilityBlocked(let capability):
+            return aiCapabilityBlocked(forCapability: capability)
+        case .aiCapabilityRuntimeMissing(let capability, let package):
+            return aiCapabilityRuntimeMissing(forCapability: capability,
+                                              package: package)
+        case .aiCapabilityUnsupported:
+            return aiCapabilityUnsupported
         case .settingsReset: return settingsResetStatus
         case .backdropFailed: return backdropFailed
         case .recentMissing(let name): return recentMissing(name)
@@ -1277,6 +1288,38 @@ class L10n {
     }
     var aiCapabilityUnsupported: String {
         "This AI tool is not available for this Mac build yet. Manage Models… shows what this adapter can run."
+    }
+    /// A capability this adapter *does* offer, whose model is on disk but not
+    /// in an install state the helper will run. `task` is the localized name of
+    /// the task it serves. This is the sentence `-32020` was never true for:
+    /// the build has the feature and the bytes are here. It stays short of
+    /// promising a tap, because `blocked` also covers a state the manager can
+    /// explain but cannot yet settle.
+    func aiCapabilityBlocked(_ task: String) -> String {
+        "\(task) is installed on this Mac but not ready to run yet. Manage Models… says what it is waiting for."
+    }
+    /// The same sentence from the capability id a refusal names, so a status
+    /// line can hold the id instead of the finished wording and survive a
+    /// language switch.
+    func aiCapabilityBlocked(forCapability capability: String) -> String {
+        aiCapabilityBlocked(modelsTaskName(Self.capabilityTaskKey(for: capability)))
+    }
+    /// A capability whose adapter needs a Python runtime package this helper
+    /// cannot load. The weights can be on disk and still have nothing that
+    /// reads them, so the blocked sentence above is false here ("installed on
+    /// this Mac"), and the model manager can only explain it. An import
+    /// failure cannot distinguish an absent package from a broken one, so the
+    /// sentence says what the helper observed, names the package, and keeps
+    /// the one actionable half: a download cannot change the answer.
+    func aiCapabilityRuntimeMissing(_ task: String, package: String) -> String {
+        "\(task) cannot run because this helper cannot load the \(package) runtime package it needs. Downloading the model again will not change that."
+    }
+    /// The same sentence from the capability id a refusal names, as above.
+    func aiCapabilityRuntimeMissing(forCapability capability: String,
+                                    package: String) -> String {
+        aiCapabilityRuntimeMissing(
+            modelsTaskName(Self.capabilityTaskKey(for: capability)),
+            package: package)
     }
     var aiRunEdit: String { "Run edit" }
     var aiCancelEdit: String { "Cancel" }

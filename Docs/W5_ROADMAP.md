@@ -258,6 +258,80 @@ quality corpus + tolerance decision, and the measured bit depth/memory/wall
 time on real jobs. **Windows W5-4 remains BLOCKED**; the recorded finding
 (same date) documents why the community ONNX conversions were not adopted.
 
+**Addendum (2026-11-18, branch `feat/ai-refusal-routing`): the refusal stands,
+the sentence changed.** Nothing here makes a 4× pass run before the owner
+adopts the install — `Docs/W5_ADAPTERS.md` and the decision ledger keep that
+consequence. What changed is what the owner is told and where the app takes
+them next.
+
+- `AIWorkerFailure` now keeps the `capabilityId` and `state` the worker already
+  sends in the error `data` (both wire shapes carry it: `protocol.py`'s
+  `to_dict` is used for the RPC error and for the stored `job["error"]`), so
+  `-32020` can tell an adapter that does not offer a capability from one that
+  offers it and is waiting on a tap.
+- `blocked` gets its own English and Persian sentence, naming the task rather
+  than the build, and the same refusal now opens the model manager the way
+  `-32011` already did. The old wording told the owner of weights already on
+  disk that the feature was not in their build.
+- The export path asks `capability.list` before it renders a 4× pass. It has to
+  ask early because `RenderError` is frozen StudioCore and
+  `MacDocumentRenderer.map` collapses every AI refusal into one case, so an
+  late-reported verdict arrives as "Export failed". Asking first also stops a
+  doomed export before it tiles a photo the helper has already refused.
+  The manager sheet is not opened from the export path: the export sheet is
+  already in front of it, so the status line carries the instruction.
+
+`Docs/AI_REFUSAL_ROUTING_PROPOSAL.md` §5's options C and D are what this
+implements. That document left the wording and the sheet-opening to the owner
+because they are product-visible; under the owner's 2026-11-18 autonomy mandate
+they are routine engineering rather than a boundary item, so they are decided
+here in the shape §5 recommends and recorded for review. Windows parity is NOT
+done: `Windows/RetouchStudio.AI/WorkerClient.cs` keeps the typed-code table
+only, and Windows loads no weights, so no legacy install can reach
+`-32020`/`blocked` there today.
+
+**Addendum (2026-11-18, same branch, review follow-up).** The addendum above
+said both wire shapes carry `capabilityId` and `state`. That was true for
+refusals the capability queue emits, and not yet for the engine-originated one
+the mask path sees: `_ensure_sam` sent `capabilityId` and `package` with no
+`state`, so the host had nothing to route on and printed the build sentence for
+a task the adapter offers. `engine.py` now sends `state: "blocked"` and the
+reason inside `data` beside `package`, so the host routes that refusal the way
+it routes the queue's.
+
+What each `-32020` carries, exactly:
+
+- capability-queue verdict (`server.py:332-334`, a capability reported
+  `blocked` or `unsupported`): `data` is `{capabilityId, state}`; the reason is
+  the error `message`, which is what the host displays.
+- engine mask refusal (`engine.py:872-876`, nothing can import `sam2`): `data`
+  is `{capabilityId, state: "blocked", package, reason}`.
+- a name that is not a capability of the submitted kind (`server.py:326-328`):
+  `data` is `{capabilityId, kind}` and there is no `state`. That is a caller
+  error rather than a capability verdict, so the host keeps the generic build
+  sentence for it.
+
+The host's sentences follow from those shapes:
+
+- A missing runtime package is `blocked` and is still not the model manager's
+  queue: the host gives it its own English and Persian sentence ("… cannot
+  load the sam2 runtime package it needs … Downloading the model again will not
+  change that"), and a refusal that names `package` opens no sheet.
+  The adoption sentence stays for weights waiting for a tap, where it is true.
+- `ModelManager` owns the capability report and re-reads it at the end of
+  `refresh()`, so an adoption, an install, an activation or a removal updates
+  the chips together with the model list instead of leaving them stale against
+  the export pre-flight, which always asks fresh.
+- The export pre-flight checks cancellation before and after its blocking
+  `capability.list` call, so a cancel inside that window reports "Export
+  cancelled" rather than the refusal it was waiting for.
+- `upscale.4x` is spelled once (`AICapabilityReport.upscale4x`) for both the
+  export job and the pre-flight.
+
+Known debt left in this branch and recorded in the pull request only: the
+worker's refusal `message`/`reason` text is not localized, and a latent
+`.unsupported` renderer case still collapses to "Export failed".
+
 ### W5-5 — CI and acceptance
 
 **Depends on:** W5-1..W5-4 as each lands.

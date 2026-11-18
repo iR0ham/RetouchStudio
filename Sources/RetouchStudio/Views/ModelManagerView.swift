@@ -11,8 +11,6 @@ struct ModelManagerView: View {
     @ObservedObject private var activity = ModelActivity.shared
     @ObservedObject private var runtime = AIRuntimeInstaller.shared
     @State private var prompt: Prompt?
-    @State private var capabilities: AICapabilityReport?
-    @State private var capabilityNote: String?
 
     private enum Prompt: Identifiable {
         case install(ModelCatalogEntry)
@@ -81,14 +79,10 @@ struct ModelManagerView: View {
         .environment(\.layoutDirection, editor.language.layoutDirection)
         .task {
             await manager.refresh()
-            await loadCapabilities()
         }
         .onChange(of: runtime.phase) { _, phase in
             if phase == .installed {
-                Task {
-                    await manager.refresh()
-                    await loadCapabilities()
-                }
+                Task { await manager.refresh() }
             }
         }
         .alert(item: $prompt) { item in
@@ -193,7 +187,8 @@ struct ModelManagerView: View {
     }
 
     /// The worker's own answer, not a UI table. Each state carries the reason
-    /// the worker recorded, shown in the tooltip; nothing here guesses support.
+    /// the worker recorded: a blocked one prints it under its chip, the others
+    /// keep it in the tooltip. Nothing here guesses support.
     private var capabilitySection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -202,7 +197,7 @@ struct ModelManagerView: View {
                     .tracking(0.6)
                     .foregroundStyle(Theme.faint)
                 Spacer(minLength: 8)
-                if let capabilities {
+                if let capabilities = manager.capabilities {
                     Text(editor.s.capabilityProvider(capabilities.platform,
                                                      capabilities.provider))
                         .font(Theme.Font.face(size: 10))
@@ -211,7 +206,7 @@ struct ModelManagerView: View {
                         .truncationMode(.middle)
                 }
             }
-            if let capabilities {
+            if let capabilities = manager.capabilities {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
                                         GridItem(.flexible(), spacing: 8)],
@@ -223,7 +218,7 @@ struct ModelManagerView: View {
                 }
                 .frame(maxHeight: 130)
             } else {
-                Text(capabilityNote ?? editor.s.modelsChecking)
+                Text(manager.capabilityNote ?? editor.s.modelsChecking)
                     .font(Theme.Font.caption)
                     .foregroundStyle(Theme.muted)
             }
@@ -249,19 +244,28 @@ struct ModelManagerView: View {
         case .unsupported:
             title = editor.s.capabilityUnavailable
         }
-        return HStack(spacing: 6) {
-            Text(capabilityTitle(capability))
-                .font(Theme.Font.face(size: 10.5))
-                .foregroundStyle(Theme.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Spacer(minLength: 4)
-            Text(title)
-                .font(Theme.Font.face(size: 9, weight: .medium))
-                .foregroundStyle(ink)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule(style: .continuous).fill(fill))
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(capabilityTitle(capability))
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                Text(title)
+                    .font(Theme.Font.face(size: 9, weight: .medium))
+                    .foregroundStyle(ink)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule(style: .continuous).fill(fill))
+            }
+            if capability.state == .blocked, let reason = capability.reason {
+                Text(editor.s.capabilityWaitingFor(reason))
+                    .font(Theme.Font.face(size: 9))
+                    .foregroundStyle(Theme.warning)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .help(capability.reason ?? capability.evidence ?? capability.id)
     }
@@ -270,22 +274,6 @@ struct ModelManagerView: View {
         capability.id.split(separator: ".").map { part in
             part.prefix(1).uppercased() + part.dropFirst()
         }.joined(separator: " · ")
-    }
-
-    @MainActor
-    private func loadCapabilities() async {
-        let stopped = editor.s.capabilityHelperStopped
-        let outcome = await Task.detached(priority: .utility) {
-            Result { try AICapabilityClient.fetch() }
-        }.value
-        switch outcome {
-        case .success(let report):
-            capabilities = report
-            capabilityNote = nil
-        case .failure:
-            capabilities = nil
-            capabilityNote = stopped
-        }
     }
 
     private var runtimeCard: some View {

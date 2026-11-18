@@ -45,6 +45,26 @@ final class ResultBox<T>: @unchecked Sendable {
     var result: Result<T, Error>?
 }
 
+/// Runs a main-actor async body on this thread while pumping the main run
+/// loop, so the actor can make progress between awaits.
+///
+/// `runBlocking` cannot be used for these: it parks the main thread on a
+/// semaphore, and anything that returns to the main actor would deadlock.
+func runOnMain<T>(_ body: @escaping @MainActor () async -> T) -> T {
+    let box = ResultBox<T>()
+    Task { @MainActor in
+        box.result = .success(await body())
+    }
+    let deadline = Date().addingTimeInterval(300)
+    while box.result == nil && Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+    guard let result = box.result else {
+        fatalError("runOnMain timed out")
+    }
+    return try! result.get()
+}
+
 func childExit(_ code: Int32) -> Never {
     fflush(stdout)
     exit(code)
@@ -1491,6 +1511,83 @@ if let python = workerPython() {
     }
 } else {
     check(false, "python3 is available for the legacy lease test")
+}
+
+// MARK: - [19] adoption refreshes the capability report
+
+// The manager used to refresh only the model list, so after the Adopt chip the
+// capability row kept saying the model waits for adoption until the sheet was
+// reopened — and the export pre-flight, which asks fresh, disagreed with it.
+// The report lives on the manager now and every mutation ends in `refresh()`.
+print("\n[19] adopting a flat install refreshes what the app says it can run")
+do {
+    let zeroSha = "6accd17d25cf8d01b9f12d06a0c9d40e1f7ef75bf42d49b31690c91f3355a046"
+    let manifestSha = String(repeating: "0", count: 64)
+    let json = """
+    {"schema":"retouchstudio.model-catalog/1","catalogVersion":"fixture-adopt",
+     "entries":[{"id":"migan","name":"migan adopt fixture",
+     "capabilities":["inpaint"],"version":"1.0.0","format":"fixture",
+     "files":[{"path":"migan_pipeline_v2.onnx","sizeBytes":28079181,"sha256":"\(zeroSha)",
+     "sourceUrl":"https://example.com/migan_pipeline_v2.onnx"}],
+     "sizeBytes":28079181,"sha256":"\(manifestSha)","sourceUrl":"https://example.com/migan",
+     "codeLicense":"MIT","weightsLicense":"MIT",
+     "licenseEvidenceUrl":"https://example.com/migan",
+     "platforms":["macos-arm64"],"requiredProvider":"cpu",
+     "minimumContractVersion":"1","preprocess":{"id":"fixture","version":"1"},
+     "deterministic":true,"notes":"fixture"}]}
+    """
+    let catalog = try! ModelCatalog.load(data: Data(json.utf8))
+    let root = scratchRoot.appendingPathComponent(UUID().uuidString)
+    let flat = root.appendingPathComponent("migan")
+    try! FileManager.default.createDirectory(at: flat, withIntermediateDirectories: true)
+    writeSizedFixture(at: flat.appendingPathComponent("migan_pipeline_v2.onnx"),
+                      bytes: 28_079_181)
+    let store = ModelStore(root: root, catalog: catalog, platform: fixturePlatform)
+
+    // The question `capabilities.report` asks the store, answered here without
+    // starting a worker: a flat install is `requires_model`, an adopted
+    // version is `supported` once a run is recorded.
+    let report: @Sendable () -> AICapabilityReport = {
+        let adopted = store.records().first { $0.id == "migan" }?.activeVersion != nil
+        let records: [[String: Any]] = AICapabilityReport.vocabularyIds.map { id in
+            if id == "inpaint.spot" {
+                return adopted
+                    ? ["capabilityId": id, "state": "supported",
+                       "evidence": "fixture run on this Mac"]
+                    : ["capabilityId": id, "state": "requires_model",
+                       "reason": "migan is installed without a version; adopt it in the model manager"]
+            }
+            return ["capabilityId": id, "state": "unsupported", "reason": "fixture"]
+        }
+        return AICapabilityReport(payload: ["vocabulary": AICapabilityReport.vocabulary,
+                                            "platform": fixturePlatform,
+                                            "provider": "macos-python",
+                                            "capabilities": records])!
+    }
+
+    runOnMain {
+        let manager = ModelManager(store: store, capabilityLoader: report)
+        await manager.refresh()
+        check(manager.capabilities?.find("inpaint.spot")?.state == .requiresModel,
+              "before adoption the capability waits for the model")
+        check(manager.capabilities?.find("inpaint.spot")?.reason?.contains("adopt") == true,
+              "the chip prints the reason the adoption answers")
+
+        guard let record = manager.records.first(where: { $0.id == "migan" }) else {
+            check(false, "the fixture record is listed")
+            return
+        }
+        let adoption = manager.migrateLegacy(record)
+        check(adoption != nil, "the adoption hands back its task")
+        await adoption?.value
+        check(manager.capabilities?.find("inpaint.spot")?.state == .supported,
+              "adoption re-reads the capability report without reopening the sheet")
+        check(manager.capabilities?.find("inpaint.spot")?.evidence == "fixture run on this Mac",
+              "the refreshed chip carries the helper's evidence")
+        check(manager.records.first { $0.id == "migan" }?.activeVersion == "1.0.0",
+              "the model list and the capability list agree after adoption")
+        check(manager.install == nil, "the adoption bar is gone")
+    }
 }
 
 print("\n\(failures.isEmpty ? "✓ all model-store checks passed" : "✗ \(failures.count) checks failed")")

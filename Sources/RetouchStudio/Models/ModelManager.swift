@@ -34,10 +34,26 @@ final class ModelManager: ObservableObject {
     @Published private(set) var availableDisk: Int64?
     @Published private(set) var legacyBytes: [String: Int64] = [:]
     @Published var notice: String?
+    /// The helper's `capability.list`, re-read with every snapshot so the
+    /// chips cannot outlive the install they describe.
+    @Published private(set) var capabilities: AICapabilityReport?
+    /// Why there is no report (the helper is not running); nil while there is
+    /// one or before the first answer.
+    @Published private(set) var capabilityNote: String?
 
     private var store: ModelStore?
     private var installTask: Task<Void, Never>?
     private var lastProgressBytes: Int64 = 0
+    /// Fetches the helper's report off the main thread. Production uses the
+    /// real client; a test hands in a report derived from its own store.
+    private let capabilityLoader: @Sendable () throws -> AICapabilityReport
+
+    init(store: ModelStore? = nil,
+         capabilityLoader: @escaping @Sendable () throws -> AICapabilityReport
+            = { try AICapabilityClient.fetch() }) {
+        self.store = store
+        self.capabilityLoader = capabilityLoader
+    }
 
     var isDownloading: Bool { install != nil }
 
@@ -68,6 +84,20 @@ final class ModelManager: ObservableObject {
             storeError = error.localizedDescription
         }
         loading = false
+        await refreshCapabilities()
+    }
+
+    /// Re-asks the helper. Every mutation in this object ends in `refresh()`,
+    /// so adopting, installing, activating or removing a version all land here
+    /// and the rows, the chips and the export pre-flight (`EditorModel`) read
+    /// the same answer instead of drifting apart until the sheet is reopened.
+    private func refreshCapabilities() async {
+        let loader = capabilityLoader
+        let report = await Task.detached(priority: .utility) {
+            try? loader()
+        }.value
+        capabilities = report
+        capabilityNote = report == nil ? L10n.current.capabilityHelperStopped : nil
     }
 
     /// Runs at app launch, before any model is loaded. It has no UI, so every
@@ -198,21 +228,26 @@ final class ModelManager: ObservableObject {
         await refresh()
     }
 
-    func migrateLegacy(_ record: ModelRecord) {
-        guard installTask == nil else { return }
+    /// Adopts a flat install. Returns the task that does the work so a caller
+    /// (the view's alert, or a test) can await the adoption; the last step is
+    /// always `refresh()`, which re-reads the capability report the chips and
+    /// the export pre-flight use.
+    @discardableResult
+    func migrateLegacy(_ record: ModelRecord) -> Task<Void, Never>? {
+        guard installTask == nil else { return nil }
         let store: ModelStore
         do {
             store = try ensureStore()
         } catch {
             notice = error.localizedDescription
-            return
+            return nil
         }
         lastProgressBytes = 0
         install = InstallState(modelID: record.id, name: record.entry.name,
                                version: record.entry.version, receivedBytes: 0,
                                totalBytes: record.entry.sizeBytes.map { Int64($0) })
         notice = nil
-        installTask = Task { [weak self] in
+        let task = Task { [weak self] in
             do {
                 _ = try await store.migrateLegacy(record.entry) { update in
                     Task { @MainActor [weak self] in self?.apply(update) }
@@ -225,6 +260,8 @@ final class ModelManager: ObservableObject {
             self?.installTask = nil
             await self?.refresh()
         }
+        installTask = task
+        return task
     }
 
     // MARK: - Helpers

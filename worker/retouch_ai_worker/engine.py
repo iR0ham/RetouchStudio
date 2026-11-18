@@ -863,11 +863,19 @@ class Engine:
             from sam2.build_sam import build_sam2
             from sam2.sam2_image_predictor import SAM2ImagePredictor
         except ImportError as error:
+            # The documented refusal shape (`Docs/AI_PROTOCOL_V2.md`): the host
+            # routes on `state`, so an engine-originated refusal carries the
+            # same fields a capability-queue refusal does. `package` is the
+            # extra fact that separates this class from a model waiting to be
+            # adopted: no download can install a runtime.
             raise WorkerError(
                 UNSUPPORTED,
                 "this worker cannot import sam2, so SAM 2.1 tiny has nothing "
                 "to run on",
-                {"capabilityId": "mask.click", "package": "sam2"}) from error
+                {"capabilityId": "mask.click", "state": "blocked",
+                 "package": "sam2",
+                 "reason": "this worker cannot import sam2, so "
+                           "sam2.1-hiera-tiny has nothing to run on"}) from error
         root = self.catalog.require("sam2.1-hiera-tiny")
 
         checkpoint = str(root / "sam2.1_hiera_tiny.pt")
