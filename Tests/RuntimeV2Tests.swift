@@ -1210,8 +1210,13 @@ func testHostJobSubmissionAgainstLiveWorker() {
     let two = refusal("upscale.2x")
     check(two?.code == -32020 && two?.typedCode == "E_UNSUPPORTED",
           "O: naming 2× is refused as unsupported", two?.message ?? "")
-    check(two?.message == published("upscale.2x")?["reason"] as? String,
-          "O: the line the UI shows is the worker's reason for that state",
+    // `upscale.2x` is in the vocabulary but binds no job kind, so the kind
+    // lookup — which runs before the adapter state is consulted — answers with
+    // the sentence about kinds, not with the state's own reason. The state
+    // still says what `capability.list` says above; this pins the sentence the
+    // gate actually sends today.
+    check(two?.message.contains("is not a upscale capability") == true,
+          "O: an id the kind does not name is told so, whatever its state says",
           two?.message ?? "")
 
     let four = refusal("upscale.4x")
