@@ -1223,8 +1223,8 @@ final class PersianL10n: L10n {
     override func aiCapabilityBlocked(_ task: String) -> String {
         "«\(task)» روی این مک نصب است اما هنوز آمادهٔ اجرا نیست. «مدیریت مدل‌ها…» می‌گوید منتظر چیست."
     }
-    override func aiCapabilityRuntimeMissing(_ task: String) -> String {
-        "«\(task)» به یک بستهٔ زمان‌اجرا نیاز دارد که این نسخهٔ برنامه همراه ندارد؛ بنابراین هنوز اجرا نمی‌شود. دانلود دوبارهٔ مدل این را تغییر نمی‌دهد."
+    override func aiCapabilityRuntimeMissing(_ task: String, package: String) -> String {
+        "«\(task)» اجرا نمی‌شود، چون این دستیار نمی‌تواند بستهٔ زمان‌اجرای \(package) را که لازم دارد بارگذاری کند. دانلود دوبارهٔ مدل این را تغییر نمی‌دهد."
     }
     override var aiRunEdit: String { "اجرای ویرایش" }
     override var aiCancelEdit: String { "لغو" }

@@ -62,10 +62,11 @@ table of its own.
   `Docs/PRIVACY_AUDIT.md` §4. A missing or malformed ledger supports nothing.
   `RETOUCH_AI_CAPABILITY_EVIDENCE` points at another ledger for tests only.
 - **Refusal.** `job.submit` with a `capabilityId` refuses a capability that is
-  not runnable: `-32020` with `{capabilityId, state, reason}`, or `-32011`
-  with the missing model for `requires_model`. The macOS host keeps submitting
-  by job kind in W5-3, so existing jobs are unchanged; the refusal path is
-  covered by worker tests.
+  not runnable: `-32020` with `{capabilityId, state}` in `data` and the reason
+  as the error `message` (the engine's mask refusal also carries `reason` and
+  `package` in `data`), or `-32011` with the missing model for
+  `requires_model`. The macOS host keeps submitting by job kind in W5-3, so
+  existing jobs are unchanged; the refusal path is covered by worker tests.
 - **The kind-only path enforces the runnable checks itself.** Every job
   resolves its weights through `Catalog.require`, so a kind-only submission
   still fails before loading on a missing model (`-32011`), an uncleared
@@ -77,9 +78,10 @@ table of its own.
   DR-5 entry without size or SHA-256 — stay runnable on purpose: they describe
   what may be *claimed*, and running them is how evidence gets recorded. The
   missing package is not one of those states: `_ensure_sam` refuses with
-  `-32020` and `{capabilityId, package}` before `Catalog.require` takes a lease,
-  which is also why a `mask.click` evidence run cannot be recorded from a
-  lock-reproducible runtime — nothing there can import `sam2`.
+  `-32020` and `{capabilityId, state, package, reason}` before
+  `Catalog.require` takes a lease, which is also why a `mask.click` evidence
+  run cannot be recorded from a lock-reproducible runtime — nothing there can
+  import `sam2`.
 - **Cancel latency.** The worker records when a cancel was first requested and
   reports `cancelLatencyMs` in the job result. It does not claim instant
   cancellation; the value is what actually happened.

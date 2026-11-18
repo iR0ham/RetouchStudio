@@ -935,8 +935,9 @@ class L10n {
         case .aiModelMissing: return aiModelMissing
         case .aiCapabilityBlocked(let capability):
             return aiCapabilityBlocked(forCapability: capability)
-        case .aiCapabilityRuntimeMissing(let capability):
-            return aiCapabilityRuntimeMissing(forCapability: capability)
+        case .aiCapabilityRuntimeMissing(let capability, let package):
+            return aiCapabilityRuntimeMissing(forCapability: capability,
+                                              package: package)
         case .aiCapabilityUnsupported:
             return aiCapabilityUnsupported
         case .settingsReset: return settingsResetStatus
@@ -1303,17 +1304,22 @@ class L10n {
     func aiCapabilityBlocked(forCapability capability: String) -> String {
         aiCapabilityBlocked(modelsTaskName(Self.capabilityTaskKey(for: capability)))
     }
-    /// A capability whose adapter needs a Python runtime package this build
-    /// does not ship. The weights can be on disk and still have nothing that
+    /// A capability whose adapter needs a Python runtime package this helper
+    /// cannot load. The weights can be on disk and still have nothing that
     /// reads them, so the blocked sentence above is false here ("installed on
-    /// this Mac"), and the model manager can only explain it. Saying so keeps
-    /// the owner from downloading a model that cannot change the answer.
-    func aiCapabilityRuntimeMissing(_ task: String) -> String {
-        "\(task) needs a runtime package this build does not include, so it cannot run yet. Downloading the model again will not change that."
+    /// this Mac"), and the model manager can only explain it. An import
+    /// failure cannot distinguish an absent package from a broken one, so the
+    /// sentence says what the helper observed, names the package, and keeps
+    /// the one actionable half: a download cannot change the answer.
+    func aiCapabilityRuntimeMissing(_ task: String, package: String) -> String {
+        "\(task) cannot run because this helper cannot load the \(package) runtime package it needs. Downloading the model again will not change that."
     }
     /// The same sentence from the capability id a refusal names, as above.
-    func aiCapabilityRuntimeMissing(forCapability capability: String) -> String {
-        aiCapabilityRuntimeMissing(modelsTaskName(Self.capabilityTaskKey(for: capability)))
+    func aiCapabilityRuntimeMissing(forCapability capability: String,
+                                    package: String) -> String {
+        aiCapabilityRuntimeMissing(
+            modelsTaskName(Self.capabilityTaskKey(for: capability)),
+            package: package)
     }
     var aiRunEdit: String { "Run edit" }
     var aiCancelEdit: String { "Cancel" }

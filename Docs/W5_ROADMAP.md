@@ -295,14 +295,28 @@ said both wire shapes carry `capabilityId` and `state`. That was true for
 refusals the capability queue emits, and not yet for the engine-originated one
 the mask path sees: `_ensure_sam` sent `capabilityId` and `package` with no
 `state`, so the host had nothing to route on and printed the build sentence for
-a task the adapter offers. `engine.py` now sends the documented
-`{capabilityId, state, reason}` beside `package`, so the sentence above holds
-for every `-32020` the worker emits, whatever raises it.
+a task the adapter offers. `engine.py` now sends `state: "blocked"` and the
+reason inside `data` beside `package`, so the host routes that refusal the way
+it routes the queue's.
+
+What each `-32020` carries, exactly:
+
+- capability-queue verdict (`server.py:332-334`, a capability reported
+  `blocked` or `unsupported`): `data` is `{capabilityId, state}`; the reason is
+  the error `message`, which is what the host displays.
+- engine mask refusal (`engine.py:872-876`, nothing can import `sam2`): `data`
+  is `{capabilityId, state: "blocked", package, reason}`.
+- a name that is not a capability of the submitted kind (`server.py:326-328`):
+  `data` is `{capabilityId, kind}` and there is no `state`. That is a caller
+  error rather than a capability verdict, so the host keeps the generic build
+  sentence for it.
+
+The host's sentences follow from those shapes:
 
 - A missing runtime package is `blocked` and is still not the model manager's
-  queue: the host gives it its own English and Persian sentence ("… needs a
-  runtime package this build does not include … Downloading the model again
-  will not change that"), and a refusal that names `package` opens no sheet.
+  queue: the host gives it its own English and Persian sentence ("… cannot
+  load the sam2 runtime package it needs … Downloading the model again will not
+  change that"), and a refusal that names `package` opens no sheet.
   The adoption sentence stays for weights waiting for a tap, where it is true.
 - `ModelManager` owns the capability report and re-reads it at the end of
   `refresh()`, so an adoption, an install, an activation or a removal updates

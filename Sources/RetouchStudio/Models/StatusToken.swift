@@ -41,11 +41,14 @@ enum StatusToken: Equatable {
     /// An AI task was refused because its installed model is not in a runnable
     /// state. The payload is the worker's capability id, not a sentence.
     case aiCapabilityBlocked(String)
-    /// An AI task was refused because the helper cannot import the Python
+    /// An AI task was refused because the helper cannot load the Python
     /// runtime package its adapter needs. The payload is the capability id, as
-    /// for `aiCapabilityBlocked`, but nothing the model manager offers settles
-    /// it, so it gets its own sentence.
-    case aiCapabilityRuntimeMissing(String)
+    /// for `aiCapabilityBlocked`, plus the package name the refusal reported:
+    /// an import failure is all the helper can observe, so the host cannot tell
+    /// absent from broken and the package is the only fact worth showing.
+    /// Nothing the model manager offers settles it, so it gets its own
+    /// sentence.
+    case aiCapabilityRuntimeMissing(String, String)
     /// An AI task the adapter does not offer at all: a product answer, not a
     /// queue. Kept as a token so a `-32020` refusal can be routed as data.
     case aiCapabilityUnsupported

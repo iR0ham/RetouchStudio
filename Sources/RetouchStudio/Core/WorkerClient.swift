@@ -71,13 +71,18 @@ struct AIWorkerFailure: LocalizedError, Equatable {
         return capabilityId
     }
 
-    /// The capability id of a refusal whose cause is a runtime package this
-    /// build does not ship. It is reported `blocked` like an install waiting to
-    /// be adopted, and it needs its own sentence: "installed on this Mac" is
-    /// false here, and downloading the model changes nothing.
-    var runtimeRefusedCapabilityId: String? {
-        guard code == -32020, missingPackage != nil, let capabilityId else { return nil }
-        return capabilityId
+    /// The capability and runtime package a refusal names when the helper
+    /// cannot load the package. It is reported `blocked` like an install
+    /// waiting to be adopted, and it needs its own sentence: "installed on this
+    /// Mac" is false here, and downloading the model changes nothing. The
+    /// host never learns whether the package is absent or merely broken — an
+    /// import failure is all the helper can observe — so the sentence says
+    /// "cannot load" and names the package rather than blaming the build.
+    var runtimeRefusal: (capability: String, package: String)? {
+        guard code == -32020, let package = missingPackage, let capabilityId else {
+            return nil
+        }
+        return (capabilityId, package)
     }
 }
 

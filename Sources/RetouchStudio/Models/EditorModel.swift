@@ -1767,17 +1767,19 @@ final class EditorModel: ObservableObject {
 
     /// What a `-32020` refusal should say.
     ///
-    /// Three classes share the code. A runtime package the helper cannot
-    /// import is reported `blocked` like an install waiting to be adopted, but
-    /// it needs its own sentence: no download settles it. A blocked capability
-    /// is not an unsupported one — the adapter offers it and the weights are
-    /// here, so the build sentence is false and the task name is the useful
-    /// half of the answer. Anything else (including a refusal the worker sends
-    /// without data, which is what the mask job produced before the engine
-    /// learned to name its state) keeps the build sentence.
+    /// Three classes share the code. A runtime package the helper cannot load
+    /// is reported `blocked` like an install waiting to be adopted, but it
+    /// needs its own sentence: no download settles it, and the package name
+    /// tells the owner what is actually missing. A blocked capability is not
+    /// an unsupported one — the adapter offers it and the weights are here, so
+    /// the build sentence is false and the task name is the useful half of the
+    /// answer. Anything else (including a refusal the worker sends without
+    /// data, which is what the mask job produced before the engine learned to
+    /// name its state) keeps the build sentence.
     nonisolated static func unsupportedStatus(_ failure: AIWorkerFailure) -> StatusToken {
-        if let capability = failure.runtimeRefusedCapabilityId {
-            return .aiCapabilityRuntimeMissing(capability)
+        if let refusal = failure.runtimeRefusal {
+            return .aiCapabilityRuntimeMissing(refusal.capability,
+                                               refusal.package)
         }
         if let capability = failure.blockedCapabilityId {
             return .aiCapabilityBlocked(capability)

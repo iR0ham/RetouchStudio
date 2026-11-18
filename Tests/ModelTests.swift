@@ -6955,33 +6955,45 @@ func testAIRefusalRouting() {
         message: "this worker cannot import sam2, so SAM 2.1 tiny has nothing to run on",
         data: ["capabilityId": "mask.click", "state": "blocked", "package": "sam2",
                "reason": "this worker cannot import sam2, so sam2.1-hiera-tiny has nothing to run on"])
-    check(runtime.runtimeRefusedCapabilityId == "mask.click",
+    check(runtime.runtimeRefusal?.capability == "mask.click",
           "a runtime-package refusal keeps the capability it blocks")
+    check(runtime.runtimeRefusal?.package == "sam2",
+          "a runtime-package refusal keeps the package the helper could not load")
     check(runtime.blockedCapabilityId == nil && !runtime.opensModelManager,
           "a missing runtime is not the manager's queue: no download installs it")
-    check(EditorModel.unsupportedStatus(runtime) == .aiCapabilityRuntimeMissing("mask.click"),
+    check(EditorModel.unsupportedStatus(runtime) == .aiCapabilityRuntimeMissing("mask.click", "sam2"),
           "the mask refusal routes to its own class instead of the build sentence")
     check(EditorModel.unsupportedStatus(blocked) == .aiCapabilityBlocked("upscale.4x"),
           "a model waiting for adoption keeps the adoption class")
     check(EditorModel.unsupportedStatus(unoffered) == .aiCapabilityUnsupported,
           "a product answer keeps the build sentence")
 
-    let runtimeEnglish = L10n.shared.statusText(.aiCapabilityRuntimeMissing("mask.click"))
-    check(runtimeEnglish == "Selection needs a runtime package this build does not include, "
-          + "so it cannot run yet. Downloading the model again will not change that.",
-          "the runtime sentence names the task and rules out the download advice")
+    let runtimeEnglish = L10n.shared.statusText(.aiCapabilityRuntimeMissing("mask.click", "sam2"))
+    check(runtimeEnglish == "Selection cannot run because this helper cannot load the sam2 "
+          + "runtime package it needs. Downloading the model again will not change that.",
+          "the runtime sentence names the task and package, and rules out the download advice")
+    check(runtimeEnglish.contains("sam2"),
+          "the runtime sentence displays the package the host parsed")
     check(!runtimeEnglish.contains("installed on this Mac"),
           "the runtime sentence does not claim a model that cannot run is installed")
-    check(runtimeEnglish == L10n.shared.aiCapabilityRuntimeMissing(forCapability: "mask.click"),
+    check(!runtimeEnglish.contains("does not include"),
+          "the runtime sentence does not claim the build omits a package it cannot observe")
+    check(runtimeEnglish == L10n.shared.aiCapabilityRuntimeMissing(forCapability: "mask.click",
+                                                                  package: "sam2"),
           "the runtime token and the direct call agree")
 
-    let runtimePersian = PersianL10n.table.statusText(.aiCapabilityRuntimeMissing("mask.click"))
+    let runtimePersian = PersianL10n.table.statusText(.aiCapabilityRuntimeMissing("mask.click", "sam2"))
     check(runtimePersian.contains("انتخاب"), "the Persian runtime line names the same task")
     check(runtimePersian.contains("زمان‌اجرا"),
           "the Persian runtime line names the missing package class")
+    check(runtimePersian.contains("sam2"),
+          "the Persian runtime line displays the package the host parsed")
     check(!runtimePersian.contains("نصب است"),
           "the Persian runtime line does not claim the model is installed")
-    check(runtimePersian == PersianL10n.table.aiCapabilityRuntimeMissing(forCapability: "mask.click"),
+    check(!runtimePersian.contains("همراه ندارد"),
+          "the Persian runtime line does not claim the build omits the package")
+    check(runtimePersian == PersianL10n.table.aiCapabilityRuntimeMissing(forCapability: "mask.click",
+                                                                        package: "sam2"),
           "the Persian runtime token and the direct call agree")
 
     // A cancel that lands while the pre-flight holds the blocking capability
