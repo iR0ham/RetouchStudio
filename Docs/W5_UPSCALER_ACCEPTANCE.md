@@ -930,6 +930,10 @@ bound, not re-read as the shipped cost.
   against the measured 8.21–12.69 s per output megapixel (11.2), so in-app
   ETAs under-report. It is a reserved owner number and no StudioCore or test
   edit is made here.
+  **Superseded 2026-11-19:** the "reserved owner number" label above is not
+  carried forward; the constant is now a fitted 12.0 s base plus 9.0 s per
+  output mega-pixel and `Tests/ModelTests.swift:2022` was updated with it.
+  See §12.9; the sentence above is kept as written.
 
 ### 11.2 Measured worker memory and time on this Mac, pre-band whole-frame path (2026-11-19)
 
@@ -1257,4 +1261,68 @@ evidence behind it.
 - **No setting moved.** The 40 MP ceiling, the 1500 s wait, the 1024-row
   band, the 7.5 GB budget and the 163-test pin are unchanged by this
   section.
+
+### 12.9 The upscale ETA constant, corrected (2026-11-19)
+
+`RenderPolicy.secondsPerOutputMegapixel = 6.5` (11.1) is superseded by a
+two-term estimate fitted to the banded-path timings in 12.5. The old constant
+was not wrong about the fit's arithmetic — it was a number with no measurement
+behind it, and the sheet it fed under-predicted every job that was run.
+
+**The constants now shipped** (`Sources/StudioCore/RenderPolicy.swift`):
+
+- `baseSeconds = 12.0` — fixed per-job cost.
+- `secondsPerOutputMegapixel = 9.0` — rate per output mega-pixel.
+- `estimatedSeconds(for:) = round(base + rate × outputMP)`.
+
+**The fit.** A least-squares fit over the four cold jobs of 12.5 gives
+11.9 s + 8.53 s/MP. The base is rounded up to 12 s. The warm repeat at
+20.070 MP took 189.68 s, which requires the carried rate to be at least
+(189.68 − 12) / 20.070 = 8.85 s/MP, so the rate is rounded up to 9.0. Neither
+rounding direction can under-predict a measured job.
+
+**Measured against projected** (cold jobs unless noted; s):
+
+| output MP | measured | 12.0 + 9.0 × MP |
+|---:|---:|---:|
+| 4.000 | 46.94 | 48 |
+| 9.986 | 100.22 | 102 |
+| 20.070 | 176.48 | 193 |
+| 39.942 | 354.84 | 371 |
+| 20.070 (warm) | 189.68 | 193 |
+
+**The ceiling still fits the wait.** At the 40 MP ceiling the estimate is
+12.0 + 360 = 372 s, against the host's 1500 s timeout
+(`Sources/RetouchStudio/Core/ExportService.swift:225`). As before, the
+sheet's number is a planning estimate; the helper's own tile report is the
+measured truth while a job runs.
+
+**Tier limit.** Every timing above is developer-machine evidence — a 16 GB M3
+under MPS at `77951c3` — not shipped-runtime behaviour.
+`AIRuntime.package` is nil on this head
+(`Sources/RetouchStudio/Core/AIRuntime.swift:40`), so the shipped DMG carries
+no Python runtime, and `.github/workflows/release.yml` sets
+`RETOUCH_SKIP_WORKER` at lines 25, 55 and 113. The estimate constant itself is
+plain arithmetic and does not depend on that runtime.
+
+**Provenance of the change.** 11.1 called this constant "a reserved owner
+number" and stated that no StudioCore or test edit was made here. That label
+was wrong for a value that only feeds a displayed estimate, and the sentence
+stands unedited as the record of the earlier position. The change here is a
+truthfulness fix made under the standing engineering directive: the constant
+moved from an unmeasured 6.5 to the fitted 12.0 s base and 9.0 s/MP, and
+`Tests/ModelTests.swift:2022`'s pinned example (a 4× export of a 800×600
+photo, 7.68 output MP, 12.0 + 69.12 = 81.1 s) moved with it from 50 to 81.
+
+**The test that keeps it honest.** `Tests/UpscaleEtaTests.swift` is compiled
+and run by `Tests/run-studiocore.sh` (both blocks link only Foundation and
+`StudioCore` and pass the same platform-framework `otool` guard as the module
+tests). It asserts that the estimate meets or exceeds each of the four cold
+jobs and the warm repeat in the table above, that the estimate is monotonic
+in output size, that the 40 MP ceiling is still accepted, and that its
+estimate falls inside the 1500 s wait.
+
+**NOT VERIFIED.** The sheet's rendered text in a running app was not
+exercised; only the value the model produces is tested. Nothing here
+re-measures a job — 12.5 is the source of every timing.
 

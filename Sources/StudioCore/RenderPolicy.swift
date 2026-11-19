@@ -24,15 +24,34 @@ public enum RenderUpscale {
         return min(quadrupled, requested)
     }
 
-    /// Measured on a 16 GB M3 with the default 256 px tiles: 28 tiles, 150 s
-    /// for a 900x1600 photo, whose 4x output is 23 MP. This only feeds the
-    /// sheet's estimate; the helper's own tile report is the measured truth
-    /// while a job runs.
-    public static let secondsPerOutputMegapixel = 6.5
+    /// Planning estimate for an upscale pass: a fixed per-job cost plus a
+    /// rate per output mega-pixel.
+    ///
+    /// Measured on a 16 GB M3 (macOS 27.2) with the default 256 px tiles on
+    /// 2026-11-19, on the banded path at `77951c3`: four cold first jobs
+    /// wrote 4.000, 9.986, 20.070 and 39.942 output mega-pixels in 46.94,
+    /// 100.22, 176.48 and 354.84 s (11.74, 10.04, 8.79 and 8.88 s per
+    /// output-MP), and a warm repeat at 20.070 MP took 189.68 s.
+    /// `Docs/W5_UPSCALER_ACCEPTANCE.md` §12.5 records the runs.
+    ///
+    /// A least-squares fit over the cold jobs gives 11.9 s + 8.53 s/MP. The
+    /// base is rounded up to 12 s, and the warm repeat raises the rate the
+    /// base must carry to 8.85 s/MP, so the rate is rounded up to 9.0. The
+    /// estimate therefore never under-predicts a measured job, and the 40 MP
+    /// ceiling projects 372 s against the host's 1500 s wait.
+    ///
+    /// It is a developer-machine measurement, not a shipped build, and only
+    /// feeds the sheet's estimate; the helper's own tile report is the
+    /// measured truth while a job runs.
+    public static let baseSeconds = 12.0
+
+    /// See `baseSeconds`: 9.0 s per output mega-pixel, above the measured
+    /// 8.53–8.88 s/MP so the projection stays conservative.
+    public static let secondsPerOutputMegapixel = 9.0
 
     public static func estimatedSeconds(for size: StudioSize) -> Int {
         let megapixels = (size.width * factor) * (size.height * factor) / 1_000_000
-        return Int((megapixels * secondsPerOutputMegapixel).rounded())
+        return Int((baseSeconds + megapixels * secondsPerOutputMegapixel).rounded())
     }
 }
 

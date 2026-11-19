@@ -242,7 +242,7 @@ size, upscaled, then callouts and watermark are applied
 | Evidence | Value |
 |---|---|
 | 64×64 → 256×256, `mps` | 0.46–2.37 s compute, 5–7 s whole job (MEASURED, [PHASE5_ACCEPTANCE.md](PHASE5_ACCEPTANCE.md) §4) |
-| 900×1600 photo, 256 px tiles | 28 tiles, ~150 s, 23 MP output (MEASURED, recorded in `RenderPolicy.swift:27-31`; also the basis of the 6.5 s/MP UI estimate) |
+| 900×1600 photo, 256 px tiles | 28 tiles, ~150 s, 23 MP output (MEASURED, recorded in `RenderPolicy.swift:27-31`; also the basis of the 6.5 s/MP UI estimate — **superseded 2026-11-19:** the sheet's estimate is now a fitted 12.0 s base plus 9.0 s per output mega-pixel; see `Docs/W5_UPSCALER_ACCEPTANCE.md` §12.9) |
 | 256×256 job, `mps` | 0.55 s compute (MEASURED, [PRIVACY_AUDIT.md](PRIVACY_AUDIT.md) §3) |
 | Swin2SR x4 weights | 48.5 MB, 12.2 M params, Apache-2.0 (VERIFIED, catalog and HF listing agree) |
 
