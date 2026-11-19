@@ -74,4 +74,28 @@ fi
 
 echo "→ اجرای تست‌های StudioCore"
 STUDIOCORE_ROOT="$PWD" "$out"
+
+eta_work="$(mktemp -d)"
+cleanup() { rm -rf "$work" "$eta_work"; }
+trap cleanup EXIT
+cp Tests/UpscaleEtaTests.swift "$eta_work/main.swift"
+eta_out="$eta_work/upscaleetatests"
+
+echo "→ کامپایل تست‌های تخمین زمان آپ‌اسکیل فقط با Foundation و StudioCore"
+swiftc -O -target "${TARGET_ARCH}-apple-macosx14.0" -sdk "$SDK" \
+  -I "$CORE_DIR" -o "$eta_out" \
+  "$eta_work/main.swift" "$CORE_DIR/libStudioCore.a" >"$eta_work/build.log" 2>&1 || {
+  cat "$eta_work/build.log" >&2
+  exit 1
+}
+
+eta_linked=$(otool -L "$eta_out" | grep -E "AppKit|SwiftUI|CoreImage|Vision|ImageIO|CoreGraphics|UIKit|UniformTypeIdentifiers|CoreVideo|Metal|AVFoundation" || true)
+if [ -n "$eta_linked" ]; then
+  fail "the ETA test binary links platform frameworks:"$'\n'"$eta_linked"
+else
+  echo "  ✓ باینری تست تخمین فقط Foundation/StudioCore را لینک می‌کند"
+fi
+
+echo "→ اجرای تست‌های تخمین زمان آپ‌اسکیل"
+"$eta_out"
 [ "$failed" -eq 0 ] || exit 1

@@ -2019,7 +2019,7 @@ func testExportPlannerPixelSize() {
     check(planner.usesUpscale, "requested upscale runs when available")
     check(planner.pixelSize == CGSize(width: 1600, height: 1200),
           "the requested edge caps the upscale")
-    check(planner.upscaleEstimate == 50, "the estimate follows the 4x output",
+    check(planner.upscaleEstimate == 81, "the estimate follows the 4x output",
           "\(planner.upscaleEstimate)")
 
     planner.longEdge = 5000

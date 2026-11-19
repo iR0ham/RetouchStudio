@@ -51,6 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -qE 'StudioCore: [0-9]+ checks passed' "$RUNNER_TEMP/studioscore-boundary.log"
+          grep -qE 'Upscale ETA: [0-9]+ checks passed' "$RUNNER_TEMP/studioscore-boundary.log"
 
       - name: Upload gate log
         if: failure()
@@ -162,6 +163,7 @@ jobs:
           for verdict in \
             'Ran 163 tests' \
             'StudioCore: [0-9]+ checks passed' \
+            'Upscale ETA: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
             'MODEL TESTS: PASS' \
             'MODEL STORE TESTS: PASS' \
