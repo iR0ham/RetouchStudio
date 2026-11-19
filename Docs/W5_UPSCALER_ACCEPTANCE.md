@@ -120,6 +120,32 @@ the catalog notes 6.2 s per 256² tile on MPS (measured earlier on this Mac);
 tile counts are recorded by the harness. Network: none during the run (A1)
 or only the download in step A2.
 
+**Addendum 2026-11-19 — the 7.5 GB figure above is an estimate, not a limit on
+this path.** The paragraph names `RETOUCH_AI_MEMORY_BUDGET_GB` while sizing the
+run; as shipped, that variable never refuses an upscale. It is read once
+(`worker/retouch_ai_worker/engine.py:45`). The only comparative use that can
+refuse a job is in `_generate` (`engine.py:735-739`: `peak = 4.0 + MP * 3.2`,
+refused with `BUDGET_EXCEEDED` when it exceeds the budget); the other use only
+caps the MLX wired limit (`engine.py:961`). `_job_upscale` never reads it, and
+no host sets or passes it (`workerEnvironment`,
+`Sources/RetouchStudio/Core/AIWorker.swift:535-556`; `git grep
+RETOUCH_AI_MEMORY_BUDGET_GB` over `Sources`, `Windows` and `Tests` finds no
+code). The bounds on an upscale are the **40 MP output ceiling**
+(`engine.py:39`, enforced at `:761-765`) mirrored by `RenderUpscale.canHandle`
+(`Sources/StudioCore/RenderPolicy.swift:10-17`), and the **1500 s host wait**
+(`Sources/RetouchStudio/Core/ExportService.swift:224`). §11.3 originally read
+the 7.5 GB figure as a second exclusion; that reading is withdrawn there.
+
+**Addendum 2026-11-19 — a memory refusal would reach the user as a timeout.**
+`-32013` is `BUDGET_EXCEEDED` in the worker
+(`worker/retouch_ai_worker/protocol.py:27`), but both hosts name the same
+number `E_TIMEOUT` (`Sources/RetouchStudio/Core/WorkerClient.swift:37`,
+`Windows/RetouchStudio.AI/WorkerClient.cs:46`) and also emit it for their own
+wait timeouts (`WorkerClient.swift:256`, `WorkerClient.cs:140-141`). A real
+generative memory refusal therefore surfaces as a timeout, and any future
+upscale memory gate would too, until the frozen mapping is corrected — an
+owner-reserved contract change, reported here and not made.
+
 **Local files affected by the run:** `AI/jobs/<job-id>/` grows (two folders;
 the store prunes the oldest beyond its retention); `AI/worker.log` grows;
 `out/w54-acceptance.json` is written in the repository checkout. Recovery,
@@ -784,12 +810,20 @@ a shipped build, and it does not by itself make `upscale.4x` production-ready.
 
 ---
 
-## 11. Memory envelope of the shipped path (2026-11-19): what §§4–10 estimated and what the worker actually costs
+## 11. Memory envelope measured on the pre-band whole-frame path (2026-11-19): what §§4–10 estimated and what a worker actually costs
 
 Status: addendum. §§1–10 stay as written; the estimates this section
 supersedes are cited by location and dated here rather than edited away. The
 only edits made above are the three §10 corrections this section records in
 11.1.
+
+Scope of the measurements: the fits and times in 11.2 were taken on a worker
+whose `engine.py` is the **whole-frame quantiser** — sha256
+`7d591fc6a6696098ea9f5415302404d7ba0b38043e650cca9009dac4f44b38e8`
+(commit `d7d833e`), i.e. before the banded `_quantise` this branch ships. They
+are measurements of *that* path. What was measured of the shipped banded path
+is the call-level `tracemalloc` peak in 11.1; its effect on process-level RSS
+and footprint slope is **not measured** (11.5).
 
 ### 11.1 Corrections recorded this round (2026-11-19)
 
@@ -841,23 +875,26 @@ only edits made above are the three §10 corrections this section records in
     one band plus a row), and an ad hoc run of the same comparison over 37
     rows and the full 4032×2268 frame found no differing byte.
 - **§4's "dominated by the float32 accumulator pair (~0.6 GB) plus torch/MPS
-  overhead"** is superseded as an estimate by the fits in 11.2: the whole
-  worker's resident set is 0.673 GB + 0.0402 GB per output megapixel, and its
-  peak footprint is 2.728 GB + 0.0579 GB per output megapixel, so the
-  accumulator is one term inside a much larger constant.
+  overhead"** is superseded as an estimate by the fits in 11.2 (measured on the
+  pre-band path, per the section scope): the whole worker's resident set is
+  0.673 GB + 0.0402 GB per output megapixel, and its peak footprint is
+  2.728 GB + 0.0579 GB per output megapixel, so the accumulator is one term
+  inside a much larger constant.
 - **`RenderPolicy.secondsPerOutputMegapixel = 6.5`** is 26–95 % optimistic
   against the measured 8.21–12.69 s per output megapixel (11.2), so in-app
   ETAs under-report. It is a reserved owner number and no StudioCore or test
   edit is made here.
 
-### 11.2 Measured worker memory and time on this Mac
+### 11.2 Measured worker memory and time on this Mac, pre-band whole-frame path (2026-11-19)
 
 Measured by the Test Engineer on this MacBook Air M3 (16 GB, macOS 27.2) with
 the headless worker only — no app launch, the production store untouched and
-read-only, no download, install or conversion. Method: `time -l` maximum
-resident set size per first-job, and the process's peak physical footprint,
-over five first jobs on square centre crops of one private fixture; plus one
-warm second job, determinism runs, and throughput per output megapixel.
+read-only, no download, install or conversion — against `engine.py` sha256
+`7d591fc6a669…` (the whole-frame `_quantise`, commit `d7d833e`), **not** the
+banded path this branch ships. Method: `time -l` maximum resident set size per
+first-job, and the process's peak physical footprint, over five first jobs on
+square centre crops of one private fixture; plus one warm second job,
+determinism runs, and throughput per output megapixel.
 
 | output MP | peak RSS GB | peak footprint GB | job s |
 |---:|---:|---:|---:|
@@ -895,11 +932,15 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
   58 B/px slope (the review's summary said 10.8 GB, which is the same fit read
   at ≈ 55 B/px — inside the 30–58 envelope), and 1199–1318 s at the
   ≥ 20 MP rate but **1853 s** at the 12.69 s/MP small-output rate, against the
-  1500 s host wait. The worker's own declared 7.5 GB memory budget
-  (`RETOUCH_AI_MEMORY_BUDGET_GB`, default 7.5) is crossed at about 82 MP, so
-  146 MP is excluded on both axes.
-- **293 MP** is infeasible on both: ≈ 19.7 GB peak footprint (18.9 GB at
-  55 B/px) and 2406–3718 s.
+  1500 s host wait. **The 7.5 GB budget is not a limit on this path:**
+  `RETOUCH_AI_MEMORY_BUDGET_GB` is never consulted by `_job_upscale` (the §4
+  addendum of 2026-11-19 records the code path), so the ceiling and the host
+  wait are the only two limits, and at a raised ceiling 146 MP would be
+  excluded by the wait alone; the fitted footprint against a 16 GB machine is
+  an engineering judgement about headroom, not an enforced check (physical
+  swap behaviour at that size was not measured).
+- **293 MP** is infeasible on footprint and time: ≈ 19.7 GB peak footprint
+  (18.9 GB at 55 B/px) and 2406–3718 s.
 
 ### 11.4 Decision (engineering lead, 2026-11-19)
 
@@ -910,8 +951,10 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
    52.0 to 22–31 B/px at sizes the product allows.
 3. **The largest raise these data would defend on a 16 GB machine is ≈ 100 MP**,
    and only with a proportional host timeout (≈ 820–1270 s at the measured
-   rate, against 1500 s today) **and** measured evidence that the per-pixel
-   cost actually came down. That evidence does not exist.
+   rate, against 1500 s today) **and** measured evidence that the process-level
+   per-pixel cost actually came down. That evidence does not exist: the
+   quantiser's call-level reduction (11.1) is not a measurement of the fits'
+   slope.
 4. **The ceiling value itself is owner-reserved**, because it is shipped user
    copy (`Sources/RetouchStudio/Models/Localization.swift:502-504`,
    `Sources/RetouchStudio/Models/PersianL10n.swift:516`), a pinned test
@@ -930,4 +973,11 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
   benchmark.
 - **No app-launched export** and no export-cancel was exercised; the headless
   worker is the measured path.
-- The 7.5 GB budget crossing at ≈ 82 MP is arithmetic on the fit, not a run.
+- **The banded quantiser's effect on process-level RSS and footprint slope is
+  unmeasured.** 11.2 is the whole-frame path (`engine.py` sha256
+  `7d591fc6a669…`); the shipped path has only the call-level `tracemalloc`
+  peak of 11.1, so the fits must not be quoted as if they describe the banded
+  code.
+- The earlier reading that the 7.5 GB budget "excludes" 146 MP is withdrawn:
+  the budget is never consulted by `_job_upscale` (see the §4 addendum,
+  2026-11-19), so there is no budget-side check at any size to verify.
