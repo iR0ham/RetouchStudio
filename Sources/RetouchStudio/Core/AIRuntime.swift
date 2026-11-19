@@ -107,10 +107,12 @@ enum AIRuntime {
 
     static func install(archive: URL, support: URL, package: Package? = nil,
                         hooks: InstallHooks = InstallHooks(),
+                        cancellation: AIRuntimeInstallCancellation? = nil,
                         lockTimeout: TimeInterval = RuntimeTransactionLock.defaultTimeout,
                         usageTimeout: TimeInterval = 10) throws {
         try AIRuntimeTransaction.install(archive: archive, support: support,
                                          package: package, hooks: hooks,
+                                         cancellation: cancellation,
                                          lockTimeout: lockTimeout,
                                          usageTimeout: usageTimeout)
     }

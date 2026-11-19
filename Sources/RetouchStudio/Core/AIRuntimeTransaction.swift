@@ -161,6 +161,7 @@ enum AIRuntimeTransaction {
 
     static func install(archive: URL, support: URL, package: AIRuntime.Package?,
                         hooks: AIRuntime.InstallHooks,
+                        cancellation: AIRuntimeInstallCancellation? = nil,
                         lockTimeout: TimeInterval = RuntimeTransactionLock.defaultTimeout,
                         usageTimeout: TimeInterval = 10) throws {
         let manager = FileManager.default
@@ -178,10 +179,15 @@ enum AIRuntimeTransaction {
         do {
             try RuntimeTransactionLock.shared.withLock(support: support,
                                                        timeout: lockTimeout) {
+                // A cancel that arrived before the lock was granted must not
+                // stop this app's helper for an install that will not run.
+                try Self.throwIfCancelled(cancellation)
+
                 // Stops this app's helper before the exclusive lease is taken;
                 // a helper owned by a live second app is left alone and shows
                 // up as a bounded busy answer instead.
                 try hooks.beforeInstall()
+                try Self.throwIfCancelled(cancellation)
 
                 // From here through the commit or rollback the exclusive lease
                 // is held continuously: recovery, cleanup, archive verification
@@ -204,12 +210,18 @@ enum AIRuntimeTransaction {
                 if let package {
                     try verifyArchive(archive, matches: package)
                 }
-                try installLocked(archive: archive, support: support, hooks: hooks)
+                try installLocked(archive: archive, support: support, hooks: hooks,
+                                  cancellation: cancellation)
             }
         } catch let failure as AIRuntimeFailure {
             throw failure
         } catch is SimulatedRuntimeCrash {
             throw SimulatedRuntimeCrash()
+        } catch is AIRuntimeInstallCancelled {
+            // Not a failure: the previous runtime is intact because every
+            // cancellation point either precedes the first destructive move or
+            // runs the same rollback a failed install uses.
+            throw AIRuntimeInstallCancelled()
         } catch let busy as AIRuntimeBusyError {
             throw AIRuntimeFailure(code: .busy, previous: previousRuntime(),
                                    detail: busy.description)
@@ -402,7 +414,8 @@ enum AIRuntimeTransaction {
     // MARK: - Install
 
     private static func installLocked(archive: URL, support: URL,
-                                      hooks: AIRuntime.InstallHooks) throws {
+                                      hooks: AIRuntime.InstallHooks,
+                                      cancellation: AIRuntimeInstallCancellation?) throws {
         let manager = FileManager.default
         let previousRecord: RuntimeTransactionRecord?
         switch loadRecord(in: support) {
@@ -433,7 +446,12 @@ enum AIRuntimeTransaction {
         }
 
         do {
+            try Self.throwIfCancelled(cancellation)
             try hooks.extract(archive, paths.staging)
+            // Extraction and the functional probe are not interruptible
+            // mid-step, so the token is read between them: a cancel lands
+            // before the first destructive move, leaving the old runtime live.
+            try Self.throwIfCancelled(cancellation)
             let layout = hooks.validateStructure(paths.staging)
             guard layout.ok else {
                 throw AIRuntimeFailure(code: .validation,
@@ -446,6 +464,11 @@ enum AIRuntimeTransaction {
                                        previous: hadPrevious ? .kept : .none,
                                        detail: functional.logLine)
             }
+            try Self.throwIfCancelled(cancellation)
+        } catch is AIRuntimeInstallCancelled {
+            abandonPreparation(paths: paths, support: support,
+                               record: previousRecord, hooks: hooks)
+            throw AIRuntimeInstallCancelled()
         } catch is SimulatedRuntimeCrash {
             throw SimulatedRuntimeCrash()
         } catch let failure as AIRuntimeFailure {
@@ -465,6 +488,7 @@ enum AIRuntimeTransaction {
                                                      hadPrevious: hadPrevious),
                             in: support)
             try hooks.checkpoint(.beforeBackupMove)
+            try Self.throwIfCancelled(cancellation)
 
             if hadPrevious {
                 guard !manager.fileExists(atPath: paths.backup.path) else {
@@ -475,9 +499,11 @@ enum AIRuntimeTransaction {
                 try hooks.move(paths.install, paths.backup)
             }
             try hooks.checkpoint(.afterBackupMove)
+            try Self.throwIfCancelled(cancellation)
 
             try hooks.move(paths.staging, paths.install)
             try hooks.checkpoint(.afterLiveMove)
+            try Self.throwIfCancelled(cancellation)
 
             let live = try hooks.validateRuntime(paths.install)
             guard live.ok else {
@@ -487,6 +513,7 @@ enum AIRuntimeTransaction {
             }
 
             try hooks.checkpoint(.beforeCommit)
+            try Self.throwIfCancelled(cancellation)
             try writeRecord(RuntimeTransactionRecord(id: id, state: .committed,
                                                      hadPrevious: hadPrevious),
                             in: support)
@@ -498,6 +525,13 @@ enum AIRuntimeTransaction {
             if manager.fileExists(atPath: paths.staging.path) {
                 try? hooks.remove(paths.staging)
             }
+        } catch is AIRuntimeInstallCancelled {
+            // Past the first destructive move, cancellation uses the same
+            // rollback a failed install does, so the backup becomes live again
+            // before the token is reported.
+            _ = try rollback(paths: paths, support: support, id: id,
+                             hadPrevious: hadPrevious, hooks: hooks)
+            throw AIRuntimeInstallCancelled()
         } catch is SimulatedRuntimeCrash {
             throw SimulatedRuntimeCrash()
         } catch let failure as AIRuntimeFailure {
@@ -1017,6 +1051,12 @@ enum AIRuntimeTransaction {
     }
 
     // MARK: - Helpers
+
+    private static func throwIfCancelled(_ cancellation: AIRuntimeInstallCancellation?) throws {
+        if cancellation?.isCancelled == true {
+            throw AIRuntimeInstallCancelled()
+        }
+    }
 
     private static func verifyArchive(_ archive: URL, matches package: AIRuntime.Package) throws {
         if package.bytes > 0 {

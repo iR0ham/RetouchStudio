@@ -169,7 +169,8 @@ jobs:
             'MODEL STORE TESTS: PASS' \
             'RUNTIME PROCESS TESTS: PASS' \
             'RUNTIME V2 TESTS: PASS' \
-            'AI DISCLOSURE TESTS: PASS'; do
+            'AI DISCLOSURE TESTS: PASS' \
+            'RUNTIME INSTALL TESTS: PASS'; do
             grep -qE "$verdict" "$RUNNER_TEMP/macos-integration.log"
             echo "found: $verdict"
           done
