@@ -1293,15 +1293,17 @@ rounding direction can under-predict a measured job.
 
 **The ceiling still fits the wait.** At the 40 MP ceiling the estimate is
 12.0 + 360 = 372 s, against the host's 1500 s timeout
-(`Sources/RetouchStudio/Services/ExportService.swift:225`). As before, the
+(`Sources/RetouchStudio/Core/ExportService.swift:225`). As before, the
 sheet's number is a planning estimate; the helper's own tile report is the
 measured truth while a job runs.
 
 **Tier limit.** Every timing above is developer-machine evidence — a 16 GB M3
-under MPS at `77951c3` — not shipped-runtime behaviour. `AIRuntime.package` is
-nil on this head, so the shipped DMG carries no Python runtime, and
-`release.yml` sets `RETOUCH_SKIP_WORKER` (lines 25, 55, 113). The estimate
-constant itself is plain arithmetic and does not depend on that runtime.
+under MPS at `77951c3` — not shipped-runtime behaviour.
+`AIRuntime.package` is nil on this head
+(`Sources/RetouchStudio/Core/AIRuntime.swift:40`), so the shipped DMG carries
+no Python runtime, and `.github/workflows/release.yml` sets
+`RETOUCH_SKIP_WORKER` at lines 25, 55 and 113. The estimate constant itself is
+plain arithmetic and does not depend on that runtime.
 
 **Provenance of the change.** 11.1 called this constant "a reserved owner
 number" and stated that no StudioCore or test edit was made here. That label
@@ -1315,9 +1317,10 @@ photo, 7.68 output MP, 12.0 + 69.12 = 81.1 s) moved with it from 50 to 81.
 **The test that keeps it honest.** `Tests/UpscaleEtaTests.swift` is compiled
 and run by `Tests/run-studiocore.sh` (both blocks link only Foundation and
 `StudioCore` and pass the same platform-framework `otool` guard as the module
-tests). It asserts that the estimate meets or exceeds each of the five
-measured jobs above, that the estimate is monotonic in output size, and that
-the 40 MP ceiling projects inside the 1500 s wait.
+tests). It asserts that the estimate meets or exceeds each of the four cold
+jobs and the warm repeat in the table above, that the estimate is monotonic
+in output size, that the 40 MP ceiling is still accepted, and that its
+estimate falls inside the 1500 s wait.
 
 **NOT VERIFIED.** The sheet's rendered text in a running app was not
 exercised; only the value the model produces is tested. Nothing here
