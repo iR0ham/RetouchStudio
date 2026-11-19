@@ -689,13 +689,15 @@ These eight are drawn from the same private portrait set as §7.5's eight, with
 no new source material, but they are not the same eight pairs and the labels
 do not denote the same pair across the two sections: §7.5 had six images at
 2268×4032 and two at 3212×5712, this run has seven and one, so
-R1/R2/C1–C3/H1/B1/L1 here and C1–C8 there do not line up. C1 shows why this
-matters — §7.5 measured it at 33.31 dB against a 34.58 dB bicubic control
-(−1.27) under plain bicubic ÷4, while under this section's `lr` degradation
-C1 is 33.32 dB against 31.40 dB (+1.92): the sign of the comparison flipped
-with the degradation, not with the model. The tile totals differ for the same
-reason — 129 here against 138 in §7.5 — and a label must not be quoted across
-the two sections.
+R1/R2/C1–C3/H1/B1/L1 here and C1–C8 there do not line up. The labels are local
+to each section, and the near-coincidence of "C1" at 33.31 dB in §7.5 and
+33.32 dB here is between **different pairs**, not a change in the model's
+standing. Neither record pairs a label with a source path or digest — the
+record's `source` field carries dimensions, mode and ICC only — and §7.5's job
+folders were deleted after measurement, so the two pairs cannot be matched
+after the fact. The tile totals differ for the same reason the pairs do — 129
+here against 138 in §7.5 — and a label must not be quoted across the two
+sections.
 
 Protocol, fixed before the run and not tuned after it:
 
@@ -718,9 +720,16 @@ Protocol, fixed before the run and not tuned after it:
   K1 = 0.01, K2 = 0.03, mean over the valid area; computed after the run on
   the same output files and the same control pairs. The script was ephemeral
   at measurement time; it is committed as `worker/tools/upscale_ssim.py`
-  (2026-11-19, same formulation, inputs as arguments), and rerunning it
-  against this run's record and job folders reproduces every row of §10.2,
-  PSNR cross-check included.
+  (2026-11-19, same formulation, inputs as arguments). Rerunning it needs an
+  interpreter with torch (the AI runtime venv; plain `Tests/run-worker.sh`
+  does not provide it) and the eight private sources, which are not
+  committed, so the numbers are reproducible only on a machine that holds
+  both; on this one the rerun reproduces the rows of §10.2 row for row, to the
+  recorded six decimals on the same interpreter versions (CPython 3.13.15,
+  torch 2.15.0, numpy 2.5.4, Pillow 13.0.0), PSNR cross-check included. The
+  six-decimal digits depend on that float32 `conv2d` accumulation, so an
+  independent float64 recomputation of the same formula on this machine
+  differs at about 1e-5 (C1 0.882322 against the recorded 0.882312).
 
 ### 10.2 Per-image results
 
@@ -836,15 +845,23 @@ and footprint slope is **not measured** (11.5).
   `Tests/run-worker.sh` still runs 163.
 - **§10.1/§10.2 fixture labels.** Added: the eight `lr` fixtures come from the
   same private portrait set as §7.5's eight but are a different selection
-  (7 × 2268×4032 + 1 × 3212×5712 here against 6 + 2 there), the labels do not
-  denote the same pair across sections, and C1 flips from −1.27 dB against its
-  control in §7.5 to +1.92 dB here because the degradation differs. Tile
-  totals differ for the same reason (129 against 138).
+  (7 × 2268×4032 + 1 × 3212×5712 here against 6 + 2 there) and the labels do
+  not denote the same pair across sections. The 33.31 dB of §7.5's C1 and the
+  33.32 dB of this run's C1 are therefore different pairs; neither record
+  carries a source path or digest, so no comparison between them can be made
+  and none is claimed. Tile totals differ for the same reason (129 against
+  138).
 - **§10.1's SSIM provenance.** The script was ephemeral at measurement time.
   It is now `worker/tools/upscale_ssim.py` (a tool, not a test), with the
-  recorded formulation in its docstring and its inputs as arguments. Rerun on
-  this Mac against the run's record and job folders it reproduces all eight
-  rows of §10.2 exactly, PSNR cross-check included.
+  recorded formulation in its docstring and its inputs as arguments. The rerun
+  needs an interpreter with torch (the AI runtime venv) and the eight private
+  sources, which are not committed, so it is reproducible only on a machine
+  that holds both; on this one it reproduces all eight rows of §10.2 row for
+  row, to the recorded six decimals on the same interpreter versions (CPython
+  3.13.15, torch 2.15.0, numpy 2.5.4, Pillow 13.0.0), PSNR cross-check
+  included. An independent float64 recomputation of the same formula differs
+  at about 1e-5 (C1 0.882322 against 0.882312), so the six decimals are
+  interpreter-dependent, not a portable tolerance.
 - **The quantiser's arithmetic** (`worker/retouch_ai_worker/engine.py`,
   `_quantise`). Both figures that circulated were wrong, and the shipped code
   was changed so the claim is true. Measured with `tracemalloc` on the pinned
@@ -892,9 +909,12 @@ the headless worker only — no app launch, the production store untouched and
 read-only, no download, install or conversion — against `engine.py` sha256
 `7d591fc6a669…` (the whole-frame `_quantise`, commit `d7d833e`), **not** the
 banded path this branch ships. Method: `time -l` maximum resident set size per
-first-job, and the process's peak physical footprint, over five first jobs on
-square centre crops of one private fixture; plus one warm second job,
-determinism runs, and throughput per output megapixel.
+first-job, and the process's peak physical footprint, over **four first jobs**
+on square centre crops of one private fixture (the four table rows), **plus one
+warm second job** at 20.070 MP — **five observations in all, and the warm
+point is included in both fits** (dropping it leaves the cold-only
+`0.659 GB / 40.0 B/px` subset) — plus determinism runs and throughput per
+output megapixel.
 
 | output MP | peak RSS GB | peak footprint GB | job s |
 |---:|---:|---:|---:|
@@ -928,19 +948,24 @@ footprint — no accumulation across two jobs.
 stays the executable bound, and the host waits **1500 s** for an upscale job
 (`Sources/RetouchStudio/Core/ExportService.swift:224`).
 
-- **146 MP** (a 9.14 MP source) would need ≈ 11.2 GB of peak footprint on the
-  58 B/px slope (the review's summary said 10.8 GB, which is the same fit read
-  at ≈ 55 B/px — inside the 30–58 envelope), and 1199–1318 s at the
-  ≥ 20 MP rate but **1853 s** at the 12.69 s/MP small-output rate, against the
-  1500 s host wait. **The 7.5 GB budget is not a limit on this path:**
-  `RETOUCH_AI_MEMORY_BUDGET_GB` is never consulted by `_job_upscale` (the §4
-  addendum of 2026-11-19 records the code path), so the ceiling and the host
-  wait are the only two limits, and at a raised ceiling 146 MP would be
-  excluded by the wait alone; the fitted footprint against a 16 GB machine is
-  an engineering judgement about headroom, not an enforced check (physical
-  swap behaviour at that size was not measured).
-- **293 MP** is infeasible on footprint and time: ≈ 19.7 GB peak footprint
-  (18.9 GB at 55 B/px) and 2406–3718 s.
+- **146 MP** (a 9.14 MP source; 16× the area at 4× per axis) would need
+  ≈ 11.2 GB of peak footprint on the 58 B/px slope (the review's summary said
+  10.8 GB, which is the same fit read at ≈ 55 B/px — inside the 30–58
+  envelope), and 1199–1318 s at the measured ≥ 20 MP **output** rate of
+  8.21–9.03 s/output-MP, i.e. **under** the 1500 s host wait with 12–20 %
+  margin. Neither the 7.5 GB budget (`RETOUCH_AI_MEMORY_BUDGET_GB` is never
+  consulted by `_job_upscale`; the §4 addendum of 2026-11-19 records the code
+  path) nor the host wait mechanically excludes 146 MP: **the 40 MP ceiling is
+  the only gate that refuses it today.** The ≈ 11.2 GB fitted footprint on a
+  16 GB machine that is already swapping is an engineering judgement about
+  headroom, not an enforced check, and physical swap behaviour at that size
+  was not measured. The 1853 s figure belongs to the 12.69 s/MP
+  **small-output** regime (4 MP output, 667 px tiles) and must not be quoted
+  as the reason 146 MP is refused: tile side grows with output, so that rate
+  cannot be transferred upward.
+- **293 MP** is infeasible **on time**: 2406–3718 s exceeds the 1500 s wait in
+  every measured regime; its ≈ 19.7 GB fitted footprint (18.9 GB at 55 B/px)
+  is the same kind of engineering judgement, not an enforced gate.
 
 ### 11.4 Decision (engineering lead, 2026-11-19)
 
@@ -953,8 +978,9 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
    and only with a proportional host timeout (≈ 820–1270 s at the measured
    rate, against 1500 s today) **and** measured evidence that the process-level
    per-pixel cost actually came down. That evidence does not exist: the
-   quantiser's call-level reduction (11.1) is not a measurement of the fits'
-   slope.
+   quantiser's call-level reduction (11.1) is a ~21–30 B/px cut at that stage
+   only, so the pre-band envelope is an upper bound for it and not a
+   measurement of the shipped slope.
 4. **The ceiling value itself is owner-reserved**, because it is shipped user
    copy (`Sources/RetouchStudio/Models/Localization.swift:502-504`,
    `Sources/RetouchStudio/Models/PersianL10n.swift:516`), a pinned test
@@ -977,7 +1003,10 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
   unmeasured.** 11.2 is the whole-frame path (`engine.py` sha256
   `7d591fc6a669…`); the shipped path has only the call-level `tracemalloc`
   peak of 11.1, so the fits must not be quoted as if they describe the banded
-  code.
+  code. Direction: the banded quantiser is 21–30 B/px lower at the
+  quantisation stage (52.0 → 22–31 B/px, call-level), so these pre-band fits
+  are an **upper bound for that stage only**; the torch/MPS component is
+  unchanged and unmeasured.
 - The earlier reading that the 7.5 GB budget "excludes" 146 MP is withdrawn:
   the budget is never consulted by `_job_upscale` (see the §4 addendum,
   2026-11-19), so there is no budget-side check at any size to verify.

@@ -23,7 +23,14 @@ Usage:
       --source R1=/path/a.jpg --source C1=/path/b.jpg [...] [--out out.json]
 
 ``--source`` is required for every label in the record; paths are never
-committed and the tool writes nothing but the optional JSON summary.
+committed and the tool writes nothing but the optional JSON summary. It needs
+an interpreter with torch (the AI runtime venv; ``Tests/run-worker.sh`` does
+not provide one) and the private sources, so the numbers are reproducible only
+on a machine that holds both. On the interpreter versions of the recorded run
+(CPython 3.13.15, torch 2.15.0, numpy 2.5.4, Pillow 13.0.0) it reproduces the
+recorded six decimals; the float32 ``conv2d`` accumulation makes the last
+digits interpreter-dependent, and an independent float64 implementation of the
+same formula differs by about 1e-5.
 """
 
 import argparse
