@@ -817,6 +817,25 @@ degradation above, per-image PSNR and SSIM — and **must not be quoted outside
 it**. It says nothing about other degradations, other content, Windows, 2× or
 a shipped build, and it does not by itself make `upscale.4x` production-ready.
 
+### 10.8 Dated addendum (2026-11-19): the SSIM rerun's cost and interpreter
+
+The rerun 10.1 reports was priced on this machine: 58.17 s wall for the eight
+images and their control pairs, CPU only — no model load, no MPS work, one
+process. It reproduced all eight rows, with the model higher on every image;
+the means 10.3 computes from those rows are 0.884823 (model) and 0.836256
+(control), no dimension failure was reported, and the exit code was 0. The
+PSNR cross-check agrees with the recorded values to within 0.01 dB (the
+recorded values are rounded to two decimals; unrounded agreement is within
+0.002 dB).
+
+Environment fact worth recording: the test venv pinned for the worker suite,
+`/private/tmp/rs-worker-venv`, has CPython 3.13.15, numpy 2.5.4 and Pillow
+13.0.0 but **no torch**, so it runs the 163-test suite and cannot run this
+tool. The rerun used
+`~/Library/Application Support/RetouchStudio/AI/runtime/bin/python3` — the
+10.1/11.2 interpreter — and the eight private sources, which are not
+committed.
+
 ---
 
 ## 11. Memory envelope measured on the pre-band whole-frame path (2026-11-19): what §§4–10 estimated and what a worker actually costs
@@ -833,6 +852,11 @@ whose `engine.py` is the **whole-frame quantiser** — sha256
 are measurements of *that* path. What was measured of the shipped banded path
 is the call-level `tracemalloc` peak in 11.1; its effect on process-level RSS
 and footprint slope is **not measured** (11.5).
+
+**Dated pointer (2026-11-19).** That gap is now filled: §12 measures the
+banded path's process-level RSS and footprint on the shipped head. The fits
+in 11.2 remain measurements of the pre-band path and are kept as its upper
+bound, not re-read as the shipped cost.
 
 ### 11.1 Corrections recorded this round (2026-11-19)
 
@@ -963,6 +987,10 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
   **small-output** regime (4 MP output, 667 px tiles) and must not be quoted
   as the reason 146 MP is refused: tile side grows with output, so that rate
   cannot be transferred upward.
+  *Dated pointer (2026-11-19):* the ≈ 11.2 GB fitted footprint here belongs to
+  the pre-band slope and is **superseded** for the shipped banded path by
+  ≈ 6.56 GB (§12.7, fit in §12.1). The time figures and the 1853 s correction
+  in this bullet stand as recorded.
 - **293 MP** is infeasible **on time**: 2406–3718 s exceeds the 1500 s wait in
   every measured regime; its ≈ 19.7 GB fitted footprint (18.9 GB at 55 B/px)
   is the same kind of engineering judgement, not an enforced gate.
@@ -981,6 +1009,10 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
    quantiser's call-level reduction (11.1) is a ~21–30 B/px cut at that stage
    only, so the pre-band envelope is an upper bound for it and not a
    measurement of the shipped slope.
+   **Superseded in basis 2026-11-19:** the banded process-level evidence this
+   item says does not exist now exists (§12), so ≈ 100 MP is no longer a
+   memory-derived ceiling; see §12.7. The ceiling itself stays owner-reserved
+   and unchanged.
 4. **The ceiling value itself is owner-reserved**, because it is shipped user
    copy (`Sources/RetouchStudio/Models/Localization.swift:502-504`,
    `Sources/RetouchStudio/Models/PersianL10n.swift:516`), a pinned test
@@ -1007,6 +1039,217 @@ stays the executable bound, and the host waits **1500 s** for an upscale job
   quantisation stage (52.0 → 22–31 B/px, call-level), so these pre-band fits
   are an **upper bound for that stage only**; the torch/MPS component is
   unchanged and unmeasured.
+  *Dated pointer (2026-11-19):* measured now — §12.1 (slope and intercept),
+  §12.2 (per size) and §12.6 (shipped-head contract).
 - The earlier reading that the 7.5 GB budget "excludes" 146 MP is withdrawn:
   the budget is never consulted by `_job_upscale` (see the §4 addendum,
   2026-11-19), so there is no budget-side check at any size to verify.
+
+---
+
+## 12. Banded path measured on the shipped head (2026-11-19): slope halved, intercept unchanged
+
+Status: addendum. §11 is left as written; each statement this section
+supersedes carries a dated pointer at its own location. §11 measured the
+**pre-band whole-frame quantiser** (`engine.py` sha256 `7d591fc6a669…`,
+commit `d7d833e`). This section measures what `main` actually ships: the
+**banded `_quantise`** — 1024-row bands through one reused float32 buffer —
+at `77951c3`.
+
+Provenance: a headless worker from a separate worktree of `77951c3`, with
+`engine.py` sha256
+`d911594323d085b47c619f73f4ee754649384cd97aab2a7940d5b1882dd5df44`;
+interpreter
+`~/Library/Application Support/RetouchStudio/AI/runtime/bin/python3`
+(CPython 3.13.15, torch 2.15.0 on MPS, numpy 2.5.4, Pillow 13.0.0) — the
+11.2 interpreter; model `swin2sr-x4` 1.0.0, `pytorch_model.bin` sha256
+`4a5f52a20932085557ed115f87c0ee8385e12f2719108c0dfd38c64aedea4710`; the
+same private fixture and square centre crops, the same `time -l` pair (max
+RSS and peak physical footprint), the same four first output sizes and one
+warm second job at 20.070 MP. Machine: this MacBook Air M3, 16 GB,
+macOS 27.2. No app launch, the production store read-only, no download,
+install or conversion. The raw record is
+`/tmp/rs-banded-out/evidence/sweep.json` with its `time -l` logs; like
+11.2's, it lives outside the repository.
+
+### 12.1 Fits on the shipped path: the per-pixel slope halved, the fixed cost did not move
+
+| fit | pre-band whole-frame (11.2) | banded, shipped head | slope change | R² banded |
+|---|---|---|---:|---:|
+| peak footprint | `2.728 GB + 0.0579 GB/MP` (57.9 B/px) | `2.708 GB + 0.02637 GB/MP` (26.4 B/px) | −54 % | 0.9994 |
+| max RSS | `0.673 GB + 0.0402 GB/MP` (40.2 B/px) | `0.558 GB + 0.01842 GB/MP` (18.4 B/px) | −54 % | 0.918 |
+
+Both fits use the same five observations as 11.2 — four cold first jobs
+(4.000, 9.986, 20.070 and 39.942 MP output) plus the warm second job at
+20.070 MP, the warm point included in both fits. The intercept barely moved
+(2.728 → 2.708 GB footprint; 0.673 → 0.558 GB RSS). The roughly 2.7 GB a
+loaded `swin2sr-x4` worker costs — weights, the MPS allocator, the host
+process — is paid per job, not per pixel, and the refactor touched only the
+per-pixel term.
+
+### 12.2 Per-size measurements and pixel identity
+
+| output MP | peak RSS GB | peak footprint GB | job s | 11.2 RSS GB | 11.2 footprint GB | Δ RSS | Δ footprint |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4.000 | 0.629 | 2.803 | 46.94 | 0.773 | 2.940 | −18.6 % | −4.7 % |
+| 9.986 | 0.727 | 2.984 | 100.22 | 1.026 | 3.305 | −29.1 % | −9.7 % |
+| 20.070 | 1.046 | 3.232 | 176.48 | 1.592 | 3.908 | −34.3 % | −17.3 % |
+| 39.942 | 1.284 | 3.760 | 354.84 | 2.204 | 5.023 | −41.7 % | −25.1 % |
+
+One job per size — individual jobs, not medians; the 20.070 MP warm second
+job measured 0.838 GB RSS and 3.241 GB footprint, so two jobs in one process
+show no accumulation, the conclusion 11.2 reached for the whole-frame path.
+The saving grows with size, which is what capping the quantiser's working
+set and recycling it predicts: at 4 MP the whole-frame temporary was
+affordable, at 40 MP it was the dominant term.
+
+**Pixel identity.** For the one size where both files exist, the output is
+not merely similar but byte-identical: the banded 4.000 MP job wrote
+`cf9eb1dabb476b836928d19ad137fe5bd40f2a3a50e1dd9715392c74477acb79`
+(1,824,655 bytes), the digest recorded for the whole-frame output of the
+same input (12.6 records the comparison). The 20.070 MP output,
+`81c7212665c8b014251fa9a7d2fe49ac4dd17b3678e0d86925c96c429db1acce`, was
+identical across its three jobs and carries the `81c7212665c8` prefix 11.2
+recorded for three separate pre-band 4480² jobs. The 9.986 and 39.942 MP
+banded outputs (`1b13a42e89e46efa…`, `69f77ece848e2f34…`) have no pre-band
+counterpart file kept, so their identity rests on the committed equivalence
+test over synthetic heights and the pinned 327-byte artifact, not on a
+side-by-side file.
+
+**Sampler note.** A 100 ms `ps` poller ran during every job as a
+cross-check; it under-reads peaks (0.561 GB against `time -l`'s 0.629 GB at
+4 MP), so this section quotes the `time -l` values — the method 11.2 used —
+and not the poller's.
+
+### 12.3 Why the slope halves although the call-level peak did not predict it
+
+The two models measure different things. The `tracemalloc` figures 11.1
+records are call-level: one thread, Python-allocated numpy buffers, the
+torch/MPS stage and every other thread excluded. The figures here are
+process-level at sample time: model weights, the MPS allocator, every thread
+and every live buffer. 11.1's committed numbers — 52.0 B/px pre-band,
+22.0 / 25.0 / 31.0 B/px banded at 4032 / 2048 / ≤ 1024 output rows
+(`19 + 12·min(1024, H)/H`) — are a 21–30 B/px cut at the quantiser, and that
+is what appears as a halved process-level slope once the whole-frame
+temporary no longer coexists with everything else. The constant cost of
+launching and loading stays where such a cost belongs: in the intercept. A
+call-level peak therefore cannot predict the process slope from either side,
+which is why 11.5 refused to re-read 11.2's fits as the banded cost.
+
+### 12.4 Where the peak call allocates, on the shipped blob
+
+`UPSCALE_BAND_ROWS = 1024` (`worker/retouch_ai_worker/engine.py:44`);
+`_quantise` is `engine.py:216-254`. It allocates the uint8 artifact once
+(`:246`) and a single reusable float32 band of `min(1024, height)` rows
+(`:247`), then per band: `np.multiply(acc[start:stop], 255, out=view)`
+(`:251`), `np.rint(view, out=view)` (`:252`),
+`np.copyto(pixels[start:stop], view, casting="unsafe")` (`:253`). No second
+band temporary is ever live, which is the whole difference from the
+two-temporary version 11.1 also records. Worker `engine.py` sha256
+`d911594323d085…` — the blob the sweep and the contract run share.
+
+11.1's committed call-level peaks stand as measured on this blob and are not
+re-run here; 12.1's process-level figures are the measurement this section
+adds.
+
+### 12.5 Throughput: no attributable regression
+
+Banded job walls, same fixture and crop method as 11.2: 46.94 s at 4.000 MP
+(11.74 s per output megapixel), 100.22 s at 9.986 (10.04), 176.48 s at
+20.070 (8.79), 354.84 s at 39.942 (8.88); the two warm jobs at 20.070 MP
+measured 173.26 and 189.68 s (8.63 and 9.45). Pre-band 11.2 measured
+12.69 / 10.79 / 8.21 / 9.03 s/MP. The banded values sit −7 % to +15 % around
+those, and the spread tracks ambient load rather than the band size: this
+sweep ran at load averages 5.0–29.7 (the 20.070 MP cold job started at
+29.7), against 9.7–19.6 for 11.2, and the warm pair alone differs from its
+cold neighbour by 9 %. At the largest size, where the band loop does the
+most work, the job is marginally faster (8.88 against 9.03 s/MP). No
+regression is attributable, and none is claimed as a speed-up.
+
+### 12.6 Contract end-to-end on the shipped head (2026-11-19)
+
+A headless worker at `77951c3` (the `engine.py` blob of 12.4), driven over
+its socket by a script, on a 500×500 crop (input file sha256
+`bff790015b8c304b4343075de4387739f84b5699d0a90038e0b67cfa64072688`),
+through the real `upscale.4x` path:
+
+- **Claim and status.** The working folder was claimed before the job ran
+  (`lock_held_while_running: true`) and `job.status` was observed `running`
+  (`status_running_observed: true`); a second claim was refused while it
+  ran.
+- **Progress.** 9 `job.progress` events, all stage `upscale`, tiles 1–9:
+  first `1/9`, middle `5/9`, last `9/9`.
+- **Result.** A 2000×2000 RGB PNG, 1,824,655 bytes,
+  `cf9eb1dabb476b836928d19ad137fe5bd40f2a3a50e1dd9715392c74477acb79`,
+  byte-identical to the pre-band output for the same input
+  (`pixel_identity_vs_pre_band: true`), engine `40.13 s`, `device: mps`.
+- **Provenance.** A sidecar (`retouchstudio.ai.provenance/1`) recording
+  capability `upscale.4x`, model `swin2sr-x4` 1.0.0 / `pytorch` / `mps`,
+  `tile` 256, `overlap` 16, `scale` 4, `state: succeeded`, the same output
+  digest, `elapsedSeconds` 40.13.
+- **Release.** `lock_free_after_done: true` (the claim was released when the
+  job ended) and `lock_exists_after_done: true` (the lock file stays);
+  worker exit 0. The record's `result_status` is `null` because the script
+  did not call `job.result`; the terminal state above comes from the
+  sidecar.
+
+This closes the assumption 11.5 listed as unverified — that the shipped
+banded blob still honours `job.status`, `job.progress`, the workdir claim
+and provenance end to end. It does **not** exercise `job.cancel`, and it is
+a headless worker, not an app-launched export.
+
+### 12.7 What it changes for the ceiling question (an owner decision, unchanged here)
+
+The ceiling is unchanged and still owner-reserved; what changes is the
+evidence behind it.
+
+- **Memory stops being the binding constraint on a 16 GB Mac.** At the
+  measured banded slope the 40 MP ceiling is a 3.76 GB footprint — 23.5 % of
+  16 GB. `RETOUCH_AI_MEMORY_BUDGET_GB` (`engine.py:45`) is still never read
+  by `_job_upscale` (`engine.py:752`); its only uses are the Flux pre-flight
+  estimate (`engine.py:736-739`) and the MLX wired cap (`engine.py:961`).
+- **§11.3's ≈ 11.2 GB at 146 MP is superseded** by ≈ 6.56 GB — 41.0 % of
+  16 GB, ≈ 9.4 GB free before swap — on the measured banded slope, for a
+  9.14 MP source at 4× per axis (the executable bound stays
+  `UPSCALE_MAX_OUTPUT = 40_000_000`, `engine.py:39`, mirrored at
+  `Sources/StudioCore/RenderPolicy.swift:10`).
+- **Time is now the binding limit.** 146 MP extrapolates to 1260–1380 s at
+  the measured ≥ 20 MP rate (8.63–9.45 s/output-MP) — 8–16 % under the
+  1500 s host wait (`Sources/RetouchStudio/Core/ExportService.swift:225`),
+  thin against a wait that is itself unmeasured at that size.
+- **≈ 100 MP** keeps both margins comfortably: ≈ 5.35 GB (33.4 % of 16 GB)
+  and 863–945 s (37–42 % under the wait). It is the size these data defend
+  on both axes at once.
+- **293 MP** extrapolates to ≈ 10.43 GB (65.2 % of 16 GB) and 2529–2769 s:
+  outside the host wait by 69–85 %, so no ceiling near it can ship without a
+  larger wait.
+- **The pre-band fits were conservative, not unsafe.** 11.2's fit
+  over-predicts the banded footprint at every measured size (2.96 against
+  2.80 GB at 4 MP; 5.04 against 3.76 GB at 40 MP), as an upper bound should;
+  no §11 conclusion understated the shipped cost.
+- **What would change the answer:** measurements above 40 MP (which would
+  test the ratio, the intercept, and the weaker RSS fit, R² 0.918), a second
+  fixture, and a host wait chosen for the size rather than left at 1500 s.
+
+### 12.8 NOT VERIFIED in this section
+
+- **Nothing above 40 MP was executed.** The 100 / 146 / 293 MP figures are
+  the fit extrapolated 2.5–7.3× past the measured range.
+- **One fixture**, four output sizes; content, chroma and compressibility
+  vary per photo.
+- **The small-output regime's rate at other loads is uncharacterised.**
+- **The fits are process-level but not per-component.** `tracemalloc` is
+  call-level and excludes the torch/MPS stage; it was not re-run here.
+- **Machine-specific.** M3, 16 GB, macOS 27.2, this torch 2.15.0 build; the
+  sweeps ran under ambient load up to 29.7 with swap already in use, so the
+  memory figures are peaks and the times are not a benchmark.
+- **Developer-machine artefacts only.** The shipped DMG carries no Python
+  runtime and the app never launches the worker — `release.yml` sets
+  `RETOUCH_SKIP_WORKER` at lines 25, 55 and 113 — so no app-launched export,
+  batch export or export-cancel was exercised, and nothing here is
+  DMG-level evidence.
+- **`job.cancel` on the shipped head** was not exercised (12.6).
+- **No setting moved.** The 40 MP ceiling, the 1500 s wait, the 1024-row
+  band, the 7.5 GB budget and the 163-test pin are unchanged by this
+  section.
+
