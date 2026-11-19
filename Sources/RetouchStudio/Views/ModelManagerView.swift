@@ -363,6 +363,8 @@ struct ModelManagerView: View {
 
     private func rowView(_ record: ModelRecord) -> some View {
         let entry = record.entry
+        let runState = ModelRunState.resolve(weightsInstalled: !record.versions.isEmpty,
+                                             helperCanRun: AIWorker.isInstalled)
         return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 Text(entry.name)
@@ -381,6 +383,16 @@ struct ModelManagerView: View {
                 .font(Theme.Font.face(size: 10))
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
+
+            // Weights on disk and a helper that can run them are two facts.
+            // The row states the second when it is missing instead of letting
+            // "Installed" and "Active" imply a runnable model.
+            if runState == .installedNotRunnable {
+                Text(editor.s.modelsInstalledNoRuntimeNote)
+                    .font(Theme.Font.face(size: 10.5))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if case .unverifiable(let reason) = record.availability {
                 Text(editor.s.modelsUnverifiable(reason))
@@ -431,6 +443,7 @@ struct ModelManagerView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
                     .background(Capsule().fill(Theme.accent))
+                    .help(editor.s.modelsActiveChipHint)
             }
             if !version.manifestOK {
                 Text(editor.s.modelsUnverified("manifest"))
@@ -513,13 +526,22 @@ struct ModelManagerView: View {
             text = editor.s.modelsUnavailablePlatform
             ink = Theme.warning
         case .ready, .notInstalled:
-            if record.activeVersion != nil {
-                text = editor.s.modelsInstalled
-                fill = Theme.accent
-                ink = Theme.accentInk
-            } else if !record.versions.isEmpty {
-                text = editor.s.modelsInstalled
-            } else {
+            let runState = ModelRunState.resolve(
+                weightsInstalled: !record.versions.isEmpty,
+                helperCanRun: AIWorker.isInstalled)
+            switch runState {
+            case .installedNotRunnable:
+                text = editor.s.modelsInstalledNoRuntime
+                ink = Theme.warning
+            case .runnable:
+                if record.activeVersion != nil {
+                    text = editor.s.modelsInstalled
+                    fill = Theme.accent
+                    ink = Theme.accentInk
+                } else {
+                    text = editor.s.modelsInstalled
+                }
+            case .missing:
                 text = editor.s.modelsMissing
             }
         }

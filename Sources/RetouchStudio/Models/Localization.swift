@@ -506,10 +506,17 @@ class L10n {
         let minutes = max(1, Int((Double(seconds) / 60).rounded()))
         return "About \(Digits.num(minutes)) min on this Mac."
     }
+    /// No fallback runs today, so this must not promise one. It names the
+    /// cause, says nothing was written, and points at the action that can
+    /// still save the photo.
     var exportUpscaleUnavailable: String {
-        "The local AI helper is not installed, so the standard resampler is used."
+        "AI upscale could not run, so nothing was exported. The local AI helper is not available on this Mac or in this build; turn off AI upscale to save the photo without it."
     }
-    var exportUpscaleFailed: String { "The upscaler could not finish." }
+    /// The helper ran and the pass failed: a different class from a helper
+    /// that never started, and from a generic write failure.
+    var exportUpscaleFailed: String {
+        "AI upscale failed before any file was written. Nothing was exported; try again, or turn off AI upscale to save without it."
+    }
     var cancel: String { "Cancel" }
     var save: String { "Save…" }
     var saveExport: String { "Save Export…" }
@@ -650,6 +657,14 @@ class L10n {
         "\(platform) · \(provider)"
     }
     var modelsInstalled: String { "Installed" }
+    /// Weights on disk, helper unable to execute them: one chip, two facts.
+    var modelsInstalledNoRuntime: String { "Installed · can't run" }
+    var modelsInstalledNoRuntimeNote: String {
+        "The model files are on disk, but the local AI helper cannot run on this Mac, so this model cannot run. Installing, verifying and removing still work."
+    }
+    var modelsActiveChipHint: String {
+        "The version the AI helper loads when it can run."
+    }
     var modelsMissing: String { "Not installed" }
     var modelsDownload: String { "Download…" }
     var modelsDownloadAgain: String { "Download again…" }
@@ -947,6 +962,8 @@ class L10n {
         case .upscaling(let done, let total): return upscaling(done, total)
         case .saved(let name): return saved(name)
         case .exportFailed: return exportFailed
+        case .exportUpscaleUnavailable: return exportUpscaleUnavailable
+        case .exportUpscaleFailed: return exportUpscaleFailed
         case .exportRefusedOriginal: return exportRefusedOriginal
         case .exportCancelled: return exportCancelled
         case .operationBusy: return operationBusy
