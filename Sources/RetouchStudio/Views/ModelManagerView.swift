@@ -81,7 +81,7 @@ struct ModelManagerView: View {
             await manager.refresh()
         }
         .onChange(of: runtime.phase) { _, phase in
-            if phase == .installed {
+            if phase == .ready {
                 Task { await manager.refresh() }
             }
         }
@@ -136,7 +136,9 @@ struct ModelManagerView: View {
                     primaryButton: .default(Text(editor.s.modelsDownloadAction)) {
                         runtime.install(package)
                     },
-                    secondaryButton: .cancel(Text(editor.s.modelsCancel)))
+                    secondaryButton: .cancel(Text(editor.s.modelsCancel)) {
+                        runtime.declineConsent()
+                    })
             }
         }
     }
@@ -146,7 +148,16 @@ struct ModelManagerView: View {
     }
 
     private var runtimeNeedsSetup: Bool {
-        showsRuntimeCard && runtime.phase != .installed
+        showsRuntimeCard && runtime.phase != .ready
+    }
+
+    private var runtimeReady: Bool {
+        runtime.phase == .ready
+    }
+
+    private var runtimeDownloading: Bool {
+        if case .downloading = runtime.phase { return true }
+        return false
     }
 
     private var busy: Bool {
@@ -282,24 +293,26 @@ struct ModelManagerView: View {
                 Text(editor.s.aiRuntimeTitle)
                     .font(Theme.Font.face(size: 12.5, weight: .semibold))
                     .foregroundStyle(Theme.text)
-                Text(runtime.phase == .installed
+                Text(runtimeReady
                      ? editor.s.aiRuntimeInstalledChip
                      : editor.s.aiRuntimeMissingChip)
                     .font(Theme.Font.face(size: 9.5, weight: .medium))
-                    .foregroundStyle(runtime.phase == .installed ? Theme.accentInk : Theme.muted)
+                    .foregroundStyle(runtimeReady ? Theme.accentInk : Theme.muted)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(
                         Capsule(style: .continuous)
-                            .fill(runtime.phase == .installed ? Theme.accent : Theme.inset))
+                            .fill(runtimeReady ? Theme.accent : Theme.inset))
                 Spacer(minLength: 8)
-                if !runtime.isBusy && runtime.phase != .installed,
+                if !runtime.isBusy && !runtimeReady,
                    let package = runtime.package {
-                    chipButton(editor.s.aiRuntimeInstall) { prompt = .runtime(package) }
-                        .disabled(busy)
+                    chipButton(editor.s.aiRuntimeInstall) {
+                        if runtime.requestConsent() { prompt = .runtime(package) }
+                    }
+                    .disabled(busy)
                 }
             }
-            if runtime.phase == .installed {
+            if runtimeReady {
                 Text(editor.s.aiRuntimeInstalledNote)
                     .font(Theme.Font.face(size: 10.5))
                     .foregroundStyle(Theme.positive)
@@ -309,8 +322,8 @@ struct ModelManagerView: View {
                     .foregroundStyle(Theme.faint)
                     .fixedSize(horizontal: false, vertical: true)
                 if runtime.isBusy { runtimeBar }
-                if case .failed(let message) = runtime.phase {
-                    Text(message)
+                if case .failed(let failure) = runtime.phase {
+                    Text(failure.message)
                         .font(Theme.Font.face(size: 10.5))
                         .foregroundStyle(Theme.warning)
                         .fixedSize(horizontal: false, vertical: true)
@@ -331,7 +344,7 @@ struct ModelManagerView: View {
                     .font(Theme.Font.label)
                     .foregroundStyle(Theme.text)
                 Spacer(minLength: 8)
-                if runtime.phase == .downloading {
+                if runtimeDownloading {
                     Text("\(sizeText(Int(runtime.received))) / \(sizeText(Int(runtime.total)))")
                         .font(Theme.Font.value)
                         .foregroundStyle(Theme.muted)
@@ -340,7 +353,7 @@ struct ModelManagerView: View {
                     ProgressView().controlSize(.small)
                 }
             }
-            if runtime.phase == .downloading && runtime.total > 0 {
+            if runtimeDownloading && runtime.total > 0 {
                 ProgressView(value: Double(runtime.percent), total: 100)
                     .tint(Theme.accent)
             } else {
