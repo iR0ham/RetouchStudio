@@ -3304,6 +3304,18 @@ final class EditorModel: ObservableObject {
                 case .refused(let refusal): return .refused(refusal)
                 case .proceed: break
                 }
+                // Starting the helper here is what keeps a launch refusal
+                // distinguishable: inside the renderer the thrown
+                // `AIWorkerFailure` becomes `RenderError.renderFailed`, which
+                // reads to the owner as a generic save error. The helper is
+                // the same one the render is about to use, so this starts
+                // nothing extra; it only moves the failure ahead of the
+                // tiling.
+                do {
+                    try AIWorker.ensureRunning()
+                } catch {
+                    return .refused(.exportUpscaleUnavailable)
+                }
             }
             let renderer = MacDocumentRenderer()
             let report: (RenderProgress) -> Void = { event in
@@ -3344,14 +3356,7 @@ final class EditorModel: ObservableObject {
                 // other.
                 self.statusToken = refusal
             case .render(let error):
-                switch error {
-                case .cancelled:
-                    self.statusToken = .exportCancelled
-                case .sourceIsDestination:
-                    self.statusToken = .exportRefusedOriginal
-                default:
-                    self.statusToken = .exportFailed
-                }
+                self.statusToken = Self.exportFailureStatus(error)
             }
         }
     }
@@ -3367,10 +3372,33 @@ final class EditorModel: ObservableObject {
     /// helper has already decided it cannot upscale. A report that cannot be
     /// fetched answers nil, and the render proceeds on its own terms.
     nonisolated private static func exportUpscaleRefusal() -> StatusToken? {
-        guard let capability = try? AICapabilityClient.fetch()
+        // The layout answer first: without an interpreter or a worker package
+        // the fetch below can only fail, and that failure used to read as "no
+        // refusal", so a doomed export tiled and then failed as a save error.
+        guard AIWorker.isInstalled else { return .exportUpscaleUnavailable }
+        let capability = try? AICapabilityClient.fetch()
             .find(AICapabilityReport.upscale4x)
-        else { return nil }
-        return exportUpscaleRefusal(state: capability.state)
+        return exportUpscaleRefusal(state: capability?.state)
+    }
+
+    /// The same decision with both facts lifted out, so the unavailable class
+    /// can be asserted without a machine that lacks the helper.
+    nonisolated static func exportUpscaleRefusal(helperInstalled: Bool,
+                                                 state: AICapability.State?) -> StatusToken? {
+        guard helperInstalled else { return .exportUpscaleUnavailable }
+        return exportUpscaleRefusal(state: state)
+    }
+
+    /// The status line for an export that did not write. The two AI classes
+    /// stay distinct from a generic save failure, which is what the renderer's
+    /// port cannot carry on its own.
+    nonisolated static func exportFailureStatus(_ error: RenderError) -> StatusToken {
+        switch error {
+        case .cancelled: return .exportCancelled
+        case .sourceIsDestination: return .exportRefusedOriginal
+        case .upscaleFailed: return .exportUpscaleFailed
+        default: return .exportFailed
+        }
     }
 
     /// What the export should do with the state the helper reported for its

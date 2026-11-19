@@ -521,9 +521,11 @@ final class PersianL10n: L10n {
         return "حدود \(Digits.num(minutes)) دقیقه روی این مک."
     }
     override var exportUpscaleUnavailable: String {
-        "دستیار هوش مصنوعی محلی نصب نیست، بنابراین از بازنمونه‌برداری استاندارد استفاده می‌شود."
+        "بزرگ‌نمایی هوش مصنوعی اجرا نشد و هیچ فایلی ذخیره نشد. دستیار هوش مصنوعی روی این مک یا در این نسخه در دسترس نیست؛ برای ذخیرهٔ عکس بدون آن، بزرگ‌نمایی هوش مصنوعی را خاموش کن."
     }
-    override var exportUpscaleFailed: String { "بزرگ‌نمایی کامل نشد." }
+    override var exportUpscaleFailed: String {
+        "بزرگ‌نمایی هوش مصنوعی پیش از نوشتن فایل متوقف شد. چیزی ذخیره نشد؛ دوباره تلاش کن یا بزرگ‌نمایی هوش مصنوعی را خاموش کن تا بدون آن ذخیره شود."
+    }
     override var cancel: String { "انصراف" }
     override var save: String { "ذخیره…" }
     override var saveExport: String { "ذخیرهٔ خروجی…" }
@@ -663,6 +665,13 @@ final class PersianL10n: L10n {
         "\(platform) · \(provider)"
     }
     override var modelsInstalled: String { "نصب‌شده" }
+    override var modelsInstalledNoRuntime: String { "نصب‌شده · قابل اجرا نیست" }
+    override var modelsInstalledNoRuntimeNote: String {
+        "فایل‌های مدل روی دیسک هستند، اما دستیار هوش مصنوعی روی این مک اجرا نمی‌شود، بنابراین این مدل اجرا نمی‌شود. نصب، بررسی و حذف همچنان کار می‌کند."
+    }
+    override var modelsActiveChipHint: String {
+        "نسخه‌ای که دستیار هوش مصنوعی در صورت اجرا بارگذاری می‌کند."
+    }
     override var modelsMissing: String { "نصب نشده" }
     override var modelsDownload: String { "دانلود…" }
     override var modelsDownloadAgain: String { "دانلود دوباره…" }

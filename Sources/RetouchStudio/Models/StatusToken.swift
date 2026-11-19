@@ -59,6 +59,13 @@ enum StatusToken: Equatable {
     case upscaling(Int, Int)
     case saved(String)
     case exportFailed
+    /// The requested 4× pass never started because the local AI helper cannot
+    /// run on this machine, so nothing was written. A distinct fact from
+    /// `exportFailed`: the photo was never rendered, not lost while saving.
+    case exportUpscaleUnavailable
+    /// The helper started and ran the 4× pass, but it did not produce a usable
+    /// artifact. Nothing was written, and this is not a generic save failure.
+    case exportUpscaleFailed
     case exportRefusedOriginal
     case exportCancelled
     case operationBusy
