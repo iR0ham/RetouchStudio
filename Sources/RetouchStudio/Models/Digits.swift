@@ -19,6 +19,13 @@ enum Digits {
     /// every other character alone, so a mixed string keeps its punctuation.
     static func convert(_ text: String) -> String {
         guard AppLanguage.current == .persian else { return text }
+        return persian(text)
+    }
+
+    /// The same conversion without asking the interface language, for a string
+    /// that is already written in Persian (the Persian table speaks for
+    /// itself, even when a test runs under the English default).
+    static func persian(_ text: String) -> String {
         var out = ""
         out.reserveCapacity(text.count)
         for character in text {

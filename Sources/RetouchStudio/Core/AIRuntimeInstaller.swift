@@ -1,16 +1,35 @@
 import Foundation
 
-/// Downloads the optional AI runtime for the light build. Nothing is fetched
-/// until the owner approves the exact archive, its size and its SHA256; the
-/// downloaded file is verified before it is extracted.
+/// The optional runtime arrives as one approved archive. This type owns the
+/// transfer, the retained resume state, the disk preflight and the state
+/// machine; extraction and the swap stay in `AIRuntimeTransaction`.
 ///
 /// The published `phase` is the explicit state machine in
 /// `AIRuntimeInstallPhase`: every move goes through its reducer, so a late
-/// URLSession callback cannot resurrect a cancelled or finished install.
+/// transfer callback cannot resurrect a cancelled or finished install.
 @MainActor
 final class AIRuntimeInstaller: ObservableObject {
 
     static let shared = AIRuntimeInstaller()
+
+    /// Everything the installer reaches outside itself, in one injectable
+    /// value so the transfer suites run offline against a local directory.
+    struct Environment {
+        var support: URL = AIWorker.runtimeSupportDirectory
+        var makeEngine: () -> AIRuntimeTransferEngine = { URLSessionTransferEngine() }
+        var availableCapacity: (URL) -> Int64? = AIRuntimeDiskPreflight.availableCapacity
+        var makeHooks: (AIRuntime.Package) -> AIRuntime.InstallHooks = { _ in
+            var hooks = AIRuntime.InstallHooks()
+            hooks.beforeInstall = {
+                try AIWorker.prepareForRuntimeReplacement(
+                    support: AIWorker.runtimeSupportDirectory)
+            }
+            return hooks
+        }
+        var runtimeChanged: () -> Void = { AIWorker.runtimeDidChange() }
+        var runtimeValidated: () -> Void = { AIWorker.noteRuntimeValidated() }
+        var startsRecovered: Bool = true
+    }
 
     @Published private(set) var phase: AIRuntimeInstallPhase
     @Published private(set) var received: Int64 = 0
@@ -25,22 +44,35 @@ final class AIRuntimeInstaller: ObservableObject {
         return max(0, min(100, Int((Double(received) / Double(total) * 100).rounded())))
     }
 
-    private var session: URLSession?
-    private var task: URLSessionDownloadTask?
-    private var downloader: DownloadDelegate?
+    private let environment: Environment
+    private var engine: AIRuntimeTransferEngine?
     /// One token per attempt; a cancel during `.installing` reaches the
     /// transaction through this and nothing else.
     private var cancellation: AIRuntimeInstallCancellation?
+    private var attempt: AIRuntime.Package?
+    /// Bytes already on disk when the current attempt started. A resumed
+    /// transfer that fails without passing this mark let the stored state
+    /// down, so it is discarded instead of being forced through.
+    private var attemptBaseline: Int64 = 0
 
-    private init() {
+    init(environment: Environment = Environment()) {
+        self.environment = environment
         // A previous installation may have been interrupted after the old
         // runtime was moved aside. Recovery can run the functional contract, so
         // it stays off the main actor; the card shows the structural state
         // until the result arrives.
         phase = AIRuntime.isStructurallyInstalled ? .ready : .notInstalled
+        guard environment.startsRecovered else { return }
+        let support = environment.support
         Task.detached(priority: .utility) {
             let result = AIWorker.recoverRuntimeIfNeeded(force: true)
             let installed = AIRuntime.isStructurallyInstalled
+            // A completed runtime makes any retained partial useless, and a
+            // crash between a finished transfer and its install can leave the
+            // store behind: sweep it once the machine is known to be whole.
+            if result.isSuccess && installed {
+                AIRuntimeResumeStore(support: support).clear()
+            }
             await MainActor.run {
                 guard !self.phase.isBusy else { return }
                 if !result.isSuccess {
@@ -68,97 +100,108 @@ final class AIRuntimeInstaller: ObservableObject {
         return apply(.consentRequested)
     }
 
-    /// The consent alert was dismissed without approving a download.
+    /// The consent alert was dismissed without approving a download. A
+    /// retained partial transfer survives this: the owner may come back.
     func declineConsent() {
         guard apply(.consentDeclined) else { return }
-        resetTransport()
+        engine = nil
         received = 0
         total = 0
     }
 
     func install(_ package: AIRuntime.Package) {
-        guard !isBusy else { return }
+        guard !isBusy, phase == .awaitingConsent else { return }
+
+        // The preflight runs while consent is still the current phase: a
+        // refusal lands in `failed(.insufficientDisk)` without ever entering
+        // `.downloading`, so nothing is fetched and nothing is staged.
+        let needed = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: package.bytes)
+        if let free = environment.availableCapacity(environment.support), free < needed {
+            apply(.failed(AIRuntimeInstallFailure(
+                kind: .insufficientDisk,
+                message: L10n.current.aiRuntimeInsufficientDisk(neededBytes: needed,
+                                                                freeBytes: free))))
+            return
+        }
+
         // Consent is a transition, not a comment: a download cannot start from
         // any phase the owner has not approved.
         guard apply(.consentGranted(totalBytes: package.bytes)) else { return }
-        received = 0
-        total = max(0, package.bytes)
+        cancellation = AIRuntimeInstallCancellation()
+        attempt = package
 
-        let cancellation = AIRuntimeInstallCancellation()
-        self.cancellation = cancellation
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 6 * 60 * 60
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-
-        let downloader = DownloadDelegate()
-        downloader.onProgress = { [weak self] written, expected in
-            Task { @MainActor [weak self] in
-                self?.noteProgress(written, expected)
-            }
-        }
-        downloader.onFinish = { [weak self] result in
-            Task { @MainActor [weak self] in
-                self?.finish(result, package: package, cancellation: cancellation)
-            }
-        }
-
-        let session = URLSession(configuration: configuration,
-                                 delegate: downloader, delegateQueue: nil)
-        let task = session.downloadTask(with: package.url)
-        self.downloader = downloader
-        self.session = session
-        self.task = task
-        task.resume()
+        // A retained transfer is only usable for exactly this archive; a stale
+        // or mismatched one is discarded by the store before this returns.
+        let resume = AIRuntimeResumeStore(support: environment.support).load(for: package)
+        begin(package: package, resume: resume, allowFreshFallback: resume != nil)
     }
 
     func cancel() {
         guard phase.isCancellable else { return }
-        // The token is what a transaction in `.installing` reads; the URLSession
-        // ones stop a transfer. Both are set before the phase moves so no
-        // callback can win the race and report progress afterwards.
+        let downloading = phase.isDownloading
         cancellation?.cancel()
-        task?.cancel()
-        session?.invalidateAndCancel()
-        resetTransport()
+        if downloading, let package = attempt {
+            let support = environment.support
+            engine?.cancel(producingResumeData: { data, partial in
+                // Without resume data there is nothing a later retry could
+                // continue; the store stays as it was (empty at this point).
+                guard let data else { return }
+                _ = AIRuntimeResumeStore(support: support)
+                    .save(resumeData: data, partial: partial, package: package)
+                // The store now owns the bytes. The engine's own temporary copy
+                // is either redundant (saved) or unusable (not saved), so it is
+                // removed rather than left in the process temporary directory.
+                if let partial,
+                   partial.deletingLastPathComponent().standardizedFileURL
+                    == FileManager.default.temporaryDirectory.standardizedFileURL {
+                    try? FileManager.default.removeItem(at: partial)
+                }
+            })
+        }
+        engine = nil
         received = 0
         total = 0
         apply(.cancelRequested)
+    }
+
+    // MARK: - Transfer
+
+    private func begin(package: AIRuntime.Package, resume: AIRuntimeTransferResume?,
+                       allowFreshFallback: Bool) {
+        let retained = resume.map { AIRuntimeResumeStore.size(of: $0.partial) } ?? 0
+        attemptBaseline = min(max(0, retained), max(0, package.bytes))
+        received = attemptBaseline
+        total = max(0, package.bytes)
+        if attemptBaseline > 0 {
+            apply(.downloadProgress(receivedBytes: attemptBaseline, totalBytes: total))
+        }
+
+        let engine = environment.makeEngine()
+        self.engine = engine
+        engine.start(
+            package: package,
+            resume: resume,
+            onProgress: { [weak self] written, expected in
+                Task { @MainActor [weak self] in
+                    self?.noteProgress(written, expected)
+                }
+            },
+            onFinish: { [weak self] result in
+                Task { @MainActor [weak self] in
+                    self?.finish(result, package: package,
+                                 allowFreshFallback: allowFreshFallback)
+                }
+            })
     }
 
     private func noteProgress(_ written: Int64, _ expected: Int64) {
         apply(.downloadProgress(receivedBytes: written, totalBytes: expected))
     }
 
-    private func resetTransport() {
-        session?.finishTasksAndInvalidate()
-        task = nil
-        session = nil
-        downloader = nil
-    }
-
-    @discardableResult
-    private func apply(_ event: AIRuntimeInstallEvent) -> Bool {
-        guard AIRuntimeInstallReducer.reduce(current: phase, into: &phase, event: event) else {
-            return false
-        }
-        switch phase {
-        case .downloading(let written, let expected):
-            received = written
-            total = expected
-        case .ready:
-            received = total
-        default:
-            break
-        }
-        return true
-    }
-
-    private func finish(_ result: Result<URL, Error>,
-                        package: AIRuntime.Package,
-                        cancellation: AIRuntimeInstallCancellation) {
-        resetTransport()
+    private func finish(_ result: Result<URL, Error>, package: AIRuntime.Package,
+                        allowFreshFallback: Bool) {
+        engine = nil
+        guard let cancellation else { return }
         if cancellation.isCancelled {
             if case .success(let archive) = result {
                 try? FileManager.default.removeItem(at: archive)
@@ -168,23 +211,37 @@ final class AIRuntimeInstaller: ObservableObject {
         switch result {
         case .failure(let error):
             if (error as NSError).code == NSURLErrorCancelled {
-                // The session was torn down without our token: report the same
+                // The engine was torn down without our token: report the same
                 // stop instead of leaving the phase stuck in `.downloading`.
                 apply(.cancelRequested)
-            } else {
-                apply(.failed(AIRuntimeInstallFailure.classify(error)))
+                return
             }
+            // A stored resume that never moved past its baseline is unusable
+            // (the partial was purged, or the server would not continue it).
+            // Discard it and restart cleanly once — never continue a transfer
+            // that cannot be verified against the approved archive.
+            if allowFreshFallback, received <= attemptBaseline {
+                AIRuntimeResumeStore(support: environment.support).clear()
+                begin(package: package, resume: nil, allowFreshFallback: false)
+                return
+            }
+            apply(.failed(AIRuntimeInstallFailure.classify(error)))
         case .success(let archive):
-            verify(archive, package: package, cancellation: cancellation)
+            // The transfer is done; nothing here is resumable any more, and a
+            // failed verification must not leave a partial a retry could trust.
+            AIRuntimeResumeStore(support: environment.support).clear()
+            verify(archive, package: package)
         }
     }
 
-    private func verify(_ archive: URL, package: AIRuntime.Package,
-                        cancellation: AIRuntimeInstallCancellation) {
+    // MARK: - Verification and install
+
+    private func verify(_ archive: URL, package: AIRuntime.Package) {
         guard apply(.downloaded) else {
             try? FileManager.default.removeItem(at: archive)
             return
         }
+        guard let cancellation else { return }
         Task.detached(priority: .userInitiated) {
             do {
                 let digest = try AIRuntime.sha256(of: archive)
@@ -196,7 +253,7 @@ final class AIRuntimeInstaller: ObservableObject {
                         try? FileManager.default.removeItem(at: archive)
                         return
                     }
-                    self.extract(archive, cancellation: cancellation)
+                    self.extract(archive, package: package, cancellation: cancellation)
                 }
             } catch {
                 await MainActor.run {
@@ -208,36 +265,38 @@ final class AIRuntimeInstaller: ObservableObject {
         }
     }
 
-    private func extract(_ archive: URL, cancellation: AIRuntimeInstallCancellation) {
+    private func extract(_ archive: URL, package: AIRuntime.Package,
+                         cancellation: AIRuntimeInstallCancellation) {
         guard apply(.verified) else {
             try? FileManager.default.removeItem(at: archive)
             return
         }
+        // Values are read on the main actor and captured; the transaction runs
+        // off it under its own lock.
+        let support = environment.support
+        let hooks = environment.makeHooks(package)
+        let runtimeChanged = environment.runtimeChanged
+        let runtimeValidated = environment.runtimeValidated
         Task.detached(priority: .userInitiated) {
             let outcome: Result<Void, Error>
             do {
-                var hooks = AIRuntime.InstallHooks()
-                hooks.beforeInstall = {
-                    try AIWorker.prepareForRuntimeReplacement(
-                        support: AIWorker.runtimeSupportDirectory)
-                }
                 // The transaction verifies the archive again, under its own
                 // lock, so a file swapped between download and install is
                 // rejected rather than extracted. It also reads the token at
                 // every point where a stop leaves a consistent tree.
                 try AIRuntime.install(archive: archive,
-                                      support: AIWorker.runtimeSupportDirectory,
-                                      package: AIRuntime.package,
+                                      support: support,
+                                      package: package,
                                       hooks: hooks,
                                       cancellation: cancellation)
-                AIWorker.runtimeDidChange()
-                AIWorker.noteRuntimeValidated()
+                runtimeChanged()
+                runtimeValidated()
                 outcome = .success(())
             } catch {
                 // A failed attempt may have left a different live directory, so
                 // the cached "validated" answer for this process is no longer
                 // trustworthy.
-                AIWorker.runtimeDidChange()
+                runtimeChanged()
                 outcome = .failure(error)
             }
             try? FileManager.default.removeItem(at: archive)
@@ -256,16 +315,246 @@ final class AIRuntimeInstaller: ObservableObject {
             }
         }
     }
+
+    @discardableResult
+    private func apply(_ event: AIRuntimeInstallEvent) -> Bool {
+        guard AIRuntimeInstallReducer.reduce(current: phase, into: &phase, event: event) else {
+            return false
+        }
+        switch phase {
+        case .downloading(let written, let expected):
+            received = written
+            total = expected
+        case .ready:
+            received = total
+        default:
+            break
+        }
+        return true
+    }
 }
 
-/// URLSession hands downloads to its delegate on a private queue. This object
-/// keeps the callbacks out of the main actor and forwards them there.
-private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    var onProgress: ((Int64, Int64) -> Void)?
-    var onFinish: ((Result<URL, Error>) -> Void)?
+// MARK: - The transfer seam
+
+/// A resumable transfer of one package. Production uses URLSession; the
+/// suites substitute an engine that writes a local file, so no test opens a
+/// connection.
+protocol AIRuntimeTransferEngine: AnyObject {
+    /// Starts, or continues from `resume`. Progress is the bytes written so
+    /// far (including already-retained bytes) and the expected total.
+    func start(package: AIRuntime.Package,
+               resume: AIRuntimeTransferResume?,
+               onProgress: @escaping (Int64, Int64) -> Void,
+               onFinish: @escaping (Result<URL, Error>) -> Void)
+    /// Stops the transfer and produces the data a later `start` can continue
+    /// from, plus the partial file the data refers to (when the engine keeps
+    /// one) so the caller can retain both.
+    func cancel(producingResumeData: @escaping (Data?, URL?) -> Void)
+}
+
+/// The two pieces of a retained transfer: the engine's opaque resume data and
+/// the partial archive it continues.
+struct AIRuntimeTransferResume: Equatable {
+    let data: Data
+    let partial: URL?
+}
+
+// MARK: - Retained resume state
+
+/// Keeps one interrupted transfer on disk, keyed to the exact package identity
+/// (file name, SHA256 and byte count) so a resume can only ever finish the
+/// archive the owner approved. Anything else is discarded before a download
+/// starts, never activated.
+struct AIRuntimeResumeStore {
+
+    struct Identity: Codable, Equatable {
+        let fileName: String
+        let sha256: String
+        let bytes: Int64
+
+        init(package: AIRuntime.Package) {
+            fileName = package.fileName
+            sha256 = package.sha256.lowercased()
+            bytes = package.bytes
+        }
+    }
+
+    /// One fixed directory beside the runtime: it cannot grow per attempt, and
+    /// every path below clears it.
+    static let directoryName = "protocol-v2-download"
+
+    let support: URL
+
+    var directory: URL {
+        support.appendingPathComponent(Self.directoryName, isDirectory: true)
+    }
+
+    var partialURL: URL { directory.appendingPathComponent("partial.zip") }
+    private var resumeDataURL: URL { directory.appendingPathComponent("resume.data") }
+    private var identityURL: URL { directory.appendingPathComponent("identity.json") }
+
+    static func size(of url: URL?) -> Int64 {
+        guard let url,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return 0 }
+        return size.int64Value
+    }
+
+    /// Persists the pair. Returns false when either piece did not land, in
+    /// which case nothing is left behind.
+    @discardableResult
+    func save(resumeData: Data, partial: URL?, package: AIRuntime.Package) -> Bool {
+        let manager = FileManager.default
+        do {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? manager.removeItem(at: partialURL)
+            if let partial, manager.fileExists(atPath: partial.path) {
+                try manager.copyItem(at: partial, to: partialURL)
+            }
+            try resumeData.write(to: resumeDataURL, options: .atomic)
+            let identity = try JSONEncoder().encode(Identity(package: package))
+            try identity.write(to: identityURL, options: .atomic)
+            guard Self.size(of: partialURL) > 0 else {
+                clear()
+                return false
+            }
+            return true
+        } catch {
+            clear()
+            return false
+        }
+    }
+
+    /// The retained transfer, only when every piece is present and belongs to
+    /// this package. A mismatch is discarded, not reported: the caller simply
+    /// starts a clean download.
+    func load(for package: AIRuntime.Package) -> AIRuntimeTransferResume? {
+        guard let identityData = try? Data(contentsOf: identityURL),
+              let stored = try? JSONDecoder().decode(Identity.self, from: identityData)
+        else {
+            clear()
+            return nil
+        }
+        let expected = Identity(package: package)
+        guard stored == expected,
+              let data = try? Data(contentsOf: resumeDataURL), !data.isEmpty,
+              Self.size(of: partialURL) > 0,
+              Self.size(of: partialURL) <= package.bytes
+        else {
+            clear()
+            return nil
+        }
+        return AIRuntimeTransferResume(data: data, partial: partialURL)
+    }
+
+    func clear() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+// MARK: - Disk preflight
+
+/// How much free space an install needs before the first byte is fetched.
+///
+/// Evidence: `Docs/RELEASING.md:186` records the approved runtime shape as an
+/// optional ~390 MB Apple-silicon download that unpacks to about 1.3 GB. The
+/// archive and the extracted tree are on the same volume at the same time
+/// during the swap, so the estimate charges the archive plus 3.5× its size
+/// (3.33× measured, rounded up as headroom) plus 64 MiB for the transaction
+/// records and staging directories.
+enum AIRuntimeDiskPreflight {
+
+    static let unpackedNumerator: Int64 = 7
+    static let unpackedDenominator: Int64 = 2   // 3.5 × archive
+    static let bookkeepingHeadroomBytes: Int64 = 64 << 20
+
+    static func requiredBytes(archiveBytes: Int64) -> Int64 {
+        guard archiveBytes > 0 else { return 0 }
+        let unpacked = archiveBytes / unpackedDenominator * unpackedNumerator
+            + archiveBytes % unpackedDenominator * unpackedNumerator / unpackedDenominator
+        return archiveBytes + unpacked + bookkeepingHeadroomBytes
+    }
+
+    /// Free space the system is willing to give this process, which is the
+    /// number the install can actually use. A destination that does not exist
+    /// yet is measured on its nearest existing parent, because the volume is
+    /// the same one the transfer will write to. `nil` means "could not tell":
+    /// the caller proceeds and lets the transfer report a real failure rather
+    /// than blocking an install on a failed probe.
+    static func availableCapacity(at url: URL) -> Int64? {
+        let manager = FileManager.default
+        var target = url
+        var hops = 0
+        while !manager.fileExists(atPath: target.path), hops < 16,
+              target.pathComponents.count > 1 {
+            target.deleteLastPathComponent()
+            hops += 1
+        }
+        guard manager.fileExists(atPath: target.path),
+              let values = try? target.resourceValues(
+                forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        else { return nil }
+        return values.volumeAvailableCapacityForImportantUsage
+    }
+}
+
+// MARK: - Production engine
+
+/// URLSession implementation of the seam. Cancellation produces the session's
+/// resume data; the partial archive the data refers to is copied out so the
+/// store can retain both. Persisting a partial across launches is best effort:
+/// if the session cannot continue a stored transfer, the installer discards it
+/// and starts a clean download.
+final class URLSessionTransferEngine: NSObject, AIRuntimeTransferEngine,
+                                      URLSessionDownloadDelegate {
+
+    private var session: URLSession?
+    private var task: URLSessionDownloadTask?
+    private var onProgress: ((Int64, Int64) -> Void)?
+    private var onFinish: ((Result<URL, Error>) -> Void)?
 
     private let lock = NSLock()
     private var finished = false
+
+    func start(package: AIRuntime.Package,
+               resume: AIRuntimeTransferResume?,
+               onProgress: @escaping (Int64, Int64) -> Void,
+               onFinish: @escaping (Result<URL, Error>) -> Void) {
+        self.onProgress = onProgress
+        self.onFinish = onFinish
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 6 * 60 * 60
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+
+        let session = URLSession(configuration: configuration,
+                                 delegate: self, delegateQueue: nil)
+        self.session = session
+
+        if let resume {
+            Self.restorePartial(resume.partial, describedBy: resume.data)
+            task = session.downloadTask(withResumeData: resume.data)
+        } else {
+            task = session.downloadTask(with: package.url)
+        }
+        task?.resume()
+    }
+
+    func cancel(producingResumeData: @escaping (Data?, URL?) -> Void) {
+        guard let task else {
+            producingResumeData(nil, nil)
+            return
+        }
+        task.cancel { [weak self] data in
+            self?.session?.invalidateAndCancel()
+            guard let data else {
+                producingResumeData(nil, nil)
+                return
+            }
+            producingResumeData(data, Self.partialFile(describedBy: data))
+        }
+    }
 
     private func complete(_ result: Result<URL, Error>) {
         lock.lock()
@@ -274,7 +563,10 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unc
         lock.unlock()
         guard first else { return }
         onFinish?(result)
+        session?.finishTasksAndInvalidate()
     }
+
+    // MARK: URLSessionDownloadDelegate
 
     func urlSession(_ session: URLSession,
                     downloadTask: URLSessionDownloadTask,
@@ -301,5 +593,39 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unc
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         if let error { complete(.failure(error)) }
+    }
+
+    // MARK: Resume data
+
+    /// The resume data is a property list whose temp-file entry names the
+    /// partial inside the session's temporary directory. Reading it is how the
+    /// partial can be retained next to the data; if the format ever changes,
+    /// the key is missing, the partial is not retained, and the next attempt
+    /// starts cleanly.
+    private static let partialKey = "NSURLSessionResumeInfoTempFileName"
+
+    private static func tempName(describedBy data: Data) -> String? {
+        guard let plist = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil) as? [String: Any]
+        else { return nil }
+        return plist[partialKey] as? String
+    }
+
+    private static func partialFile(describedBy data: Data) -> URL? {
+        guard let name = tempName(describedBy: data), !name.contains("/") else {
+            return nil
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private static func restorePartial(_ partial: URL?, describedBy data: Data) {
+        guard let partial, let name = tempName(describedBy: data),
+              !name.contains("/") else { return }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: destination)
+        try? FileManager.default.copyItem(at: partial, to: destination)
     }
 }

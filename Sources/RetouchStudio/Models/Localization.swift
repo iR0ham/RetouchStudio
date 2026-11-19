@@ -752,6 +752,16 @@ class L10n {
     var aiRuntimeVerifying: String { "Verifying the download…" }
     var aiRuntimeInstalling: String { "Installing the runtime…" }
     var aiRuntimeDownloadFailed: String { "The runtime did not download. Nothing was installed." }
+    /// The disk preflight's refusal. Sizes are formatted in the table so the
+    /// Persian override can write the digits itself.
+    func aiRuntimeInsufficientDisk(neededBytes: Int64, freeBytes: Int64) -> String {
+        "Not enough free disk space: installing the AI runtime needs about \(L10n.byteSize(neededBytes)) free to download and unpack, and \(L10n.byteSize(freeBytes)) is available. Nothing was installed."
+    }
+    /// One size formatter for both tables, so the same number is written the
+    /// same way in either language.
+    static func byteSize(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
+    }
     var aiRuntimeChecksumFailed: String {
         "The downloaded file did not match its SHA256. Nothing was installed."
     }
