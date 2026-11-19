@@ -430,12 +430,15 @@ struct ExportSheet: View {
                              value: Binding(get: { model.watermark.opacity },
                                             set: { model.watermark.opacity = $0 }),
                              range: 0.05...1,
+                             valueFormat: .fractionAsPercent,
+                             step: 0.05,
                              onReset: { model.watermark.opacity = 0.65 })
                 ParameterRow(title: model.s.watermarkSize,
                              hint: model.s.sliderHint(.watermarkSize),
                              value: Binding(get: { model.watermark.sizePercent },
                                             set: { model.watermark.sizePercent = $0 }),
                              range: 1...10,
+                             valueFormat: .percent,
                              onReset: { model.watermark.sizePercent = 3 })
 
                 Text(model.s.watermarkNote)

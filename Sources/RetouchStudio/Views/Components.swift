@@ -91,6 +91,10 @@ struct BipolarSlider: View {
     /// Runs once when the pointer is released. Controls that re-render the
     /// source, such as straighten, commit there instead of on every tick.
     var onEditingEnded: (() -> Void)? = nil
+    /// The scale the accessibility representation speaks in when the row shows
+    /// a value in a different unit (an opacity stored 0…1 but shown as 65).
+    /// Nil keeps the slider's own range and value.
+    var accessibilityScale: ParameterAccessibilityScale? = nil
 
     @State private var isHovering = false
     @State private var isDragging = false
@@ -174,7 +178,15 @@ struct BipolarSlider: View {
         .animation(Motion.snappy, value: isHovering || isDragging)
         .animation(Motion.snappy, value: value)
         .accessibilityRepresentation {
-            Slider(value: $value, in: range)
+            if let accessibilityScale {
+                Slider(value: Binding(
+                        get: { accessibilityScale.display(value) },
+                        set: { value = accessibilityScale.stored($0) }),
+                       in: accessibilityScale.range,
+                       step: accessibilityScale.step)
+            } else {
+                Slider(value: $value, in: range)
+            }
         }
         // The fill and the drag maths are drawn from the left edge. A mirrored
         // slider would invert the handle without inverting the numbers, so the
@@ -200,6 +212,62 @@ struct BipolarSlider: View {
     }
 }
 
+/// The scale a row's accessibility slider speaks in when its stored value and
+/// its visible number are not the same number (0.65 held, "65%" shown). The
+/// representation reports the shown number, so assistive technology reads the
+/// value the label names instead of a scale the sheet never displays.
+struct ParameterAccessibilityScale {
+    let range: ClosedRange<Double>
+    let step: Double
+    let display: (Double) -> Double
+    let stored: (Double) -> Double
+}
+
+/// How a parameter row writes the number beside its slider.
+///
+/// The row must never guess the unit or the precision from the magnitude: a
+/// watermark opacity holds a 0…1 fraction, a watermark size holds a number
+/// already in percent, and every strength row holds a bare amount. Each call
+/// site states which one it is, so giving a percentage its unit cannot repaint
+/// the rows that mean something else.
+enum ParameterValueFormat: Equatable {
+    /// The number the setting holds, rounded to whole units: 45, 70, 360.
+    case whole
+    /// A 0…1 fraction written as whole percent, the fewest digits that still
+    /// name every 0.05 step: 0.65 reads "65%".
+    case fractionAsPercent
+    /// A number already measured in percent: 3 reads "3%".
+    case percent
+
+    /// The text the row shows.
+    func text(for value: Double) -> String {
+        switch self {
+        case .whole:
+            return Digits.convert(String(format: "%.0f", value))
+        case .fractionAsPercent:
+            return Digits.percent(Int((value * 100).rounded()))
+        case .percent:
+            return Digits.percent(Int(value.rounded()))
+        }
+    }
+
+    /// The value the slider reports to assistive technology. A whole row keeps
+    /// the slider's native numeric value (45); a row that shows a converted
+    /// unit reports the same converted number the text shows (65 for "65%"),
+    /// stepping by the same 0.05 the drag and the readout share.
+    var accessibilityScale: ParameterAccessibilityScale? {
+        switch self {
+        case .whole, .percent:
+            return nil
+        case .fractionAsPercent:
+            return ParameterAccessibilityScale(
+                range: 5...100, step: 5,
+                display: { ($0 * 100).rounded() },
+                stored: { $0 / 100 })
+        }
+    }
+}
+
 /// One slider with its label, live value and a modified marker.
 struct ParameterRow: View {
     let title: String
@@ -208,6 +276,12 @@ struct ParameterRow: View {
     @Binding var value: Double
     var range: ClosedRange<Double> = -100...100
     var tint: Color = Theme.accent
+    /// The unit and precision this row's setting actually has. The default is
+    /// the bare whole number every strength slider has always shown.
+    var valueFormat: ParameterValueFormat = .whole
+    /// The smallest change a drag can make; it matches the precision the
+    /// readout can distinguish.
+    var step: Double = 1
     var onReset: (() -> Void)? = nil
 
     @State private var isHovering = false
@@ -239,7 +313,7 @@ struct ParameterRow: View {
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
 
-                Text(Digits.convert(String(format: "%.0f", value)))
+                Text(valueFormat.text(for: value))
                     .font(Theme.Font.value)
                     .foregroundStyle(isModified ? tint : Theme.faint)
                     .frame(minWidth: 26, alignment: .trailing)
@@ -247,7 +321,8 @@ struct ParameterRow: View {
                     .animation(Motion.snappy, value: value)
             }
 
-            BipolarSlider(value: $value, range: range, tint: tint)
+            BipolarSlider(value: $value, range: range, step: step, tint: tint,
+                          accessibilityScale: valueFormat.accessibilityScale)
         }
         .contentShape(Rectangle())
         .help(hint.isEmpty ? title : "\(title) — \(hint)")

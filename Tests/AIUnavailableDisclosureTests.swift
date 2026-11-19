@@ -119,6 +119,83 @@ check(english.modelsInstalledNoRuntime.contains("can't run")
         && persian.modelsInstalledNoRuntime.contains("قابل اجرا نیست"),
       "the chip says the model cannot run")
 
+// MARK: - A slider row states the number its control actually holds
+
+// The watermark opacity holds 0.05…1. The shared row used to print "%.0f", so
+// 0.65 read "1": a label naming a value the control did not hold. The row now
+// takes its unit and precision from the call site instead of guessing from the
+// magnitude, so every strength row keeps its bare number and only the rows
+// that mean a percentage say so.
+let previousLanguage = AppLanguage.current
+
+AppLanguage.current = .english
+
+check(ParameterValueFormat.whole.text(for: 45) == "45"
+        && ParameterValueFormat.whole.text(for: 70) == "70"
+        && ParameterValueFormat.whole.text(for: 360) == "360"
+        && ParameterValueFormat.whole.text(for: -12) == "-12",
+      "a strength row keeps the bare whole number it always showed")
+check(!ParameterValueFormat.whole.text(for: 45).contains("%")
+        && ParameterValueFormat.whole.accessibilityScale == nil
+        && ParameterValueFormat.percent.accessibilityScale == nil,
+      "and gains neither a unit nor a changed accessibility scale")
+
+check(ParameterValueFormat.fractionAsPercent.text(for: 0.65) == "65%",
+      "an opacity of 0.65 reads 65%",
+      ParameterValueFormat.fractionAsPercent.text(for: 0.65))
+check(ParameterValueFormat.fractionAsPercent.text(for: 0.05) == "5%"
+        && ParameterValueFormat.fractionAsPercent.text(for: 1) == "100%",
+      "the ends of the opacity range read 5% and 100%")
+
+check(ParameterValueFormat.percent.text(for: 3) == "3%"
+        && ParameterValueFormat.percent.text(for: 10) == "10%",
+      "the size row carries the percent unit its setting means")
+
+// The opacity row steps in 0.05. Whole percent is the fewest digits that still
+// names every reachable step, so the readout can never collapse two positions
+// onto one number.
+let opacitySteps = (1...20).map { Double($0) * 0.05 }
+let opacityTexts = opacitySteps.map { ParameterValueFormat.fractionAsPercent.text(for: $0) }
+check(opacityTexts == (1...20).map { "\($0 * 5)%" },
+      "every 0.05 step has its own text",
+      "\(opacityTexts.first ?? "?")…\(opacityTexts.last ?? "?")")
+check(Set(opacityTexts).count == opacitySteps.count,
+      "and no two steps share a text")
+
+let opacityScale = ParameterValueFormat.fractionAsPercent.accessibilityScale
+check(opacityScale?.display(0.65) == 65
+        && opacityScale?.stored(65) == 0.65
+        && opacityScale?.range == 5...100
+        && opacityScale?.step == 5,
+      "the slider exposes the number the row shows — 65, on the same 5-point step")
+check(opacityScale.map { scale in
+        opacitySteps.allSatisfy { scale.display($0) == ($0 * 100).rounded() }
+      } ?? false,
+      "every opacity step reports the same number its text names")
+
+// Persian follows the table's own convention: Persian-Indic digits and the
+// Persian percent sign, with no Latin character left to reorder inside an RTL
+// run. The code points below are what the app draws; the QA capture in the PR
+// shows the rendered line.
+AppLanguage.current = .persian
+let persianOpacity = ParameterValueFormat.fractionAsPercent.text(for: 0.65)
+check(persianOpacity == "۶۵٪",
+      "the Persian opacity reads ۶۵٪",
+      persianOpacity)
+check(ParameterValueFormat.percent.text(for: 3) == "۳٪",
+      "the Persian size reads ۳٪",
+      ParameterValueFormat.percent.text(for: 3))
+check(ParameterValueFormat.whole.text(for: 45) == "۴۵",
+      "a strength row still converts its digits in Persian")
+check(persianOpacity.allSatisfy { !$0.isASCII }
+        && !persianOpacity.contains("%")
+        && persianOpacity.last == "٪",
+      "the Persian readout has Persian digits and the Persian unit, no Latin run")
+check(opacityScale?.display(0.65) == 65 && opacityScale?.stored(65) == 0.65,
+      "the slider value and the visible text cannot drift apart in scale")
+
+AppLanguage.current = previousLanguage
+
 print("")
 if failures.isEmpty {
     print("AI DISCLOSURE TESTS: PASS (\(checks) checks)")
