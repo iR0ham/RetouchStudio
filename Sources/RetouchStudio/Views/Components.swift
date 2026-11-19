@@ -165,7 +165,7 @@ struct BipolarSlider: View {
                         isDragging = true
                         let raw = min(1, max(0, (gesture.location.x - knob / 2) / usable))
                         let fraction = mirrored ? 1 - raw : raw
-                        commit(range.lowerBound + Double(fraction) * span, span: span)
+                        commit(range.lowerBound + Double(fraction) * span)
                     }
                     .onEnded { _ in
                         isDragging = false
@@ -195,8 +195,14 @@ struct BipolarSlider: View {
     }
 
     /// Quantizes to the slider's step and pulls values that land near zero onto
-    /// zero, so the knob settles exactly on the neutral mark.
-    private func commit(_ newValue: Double, span: Double) {
+    /// zero, so the knob settles exactly on the neutral mark. Returns nil when
+    /// the move is no larger than half a step: pointer jitter must not rewrite
+    /// the document. Pure and static so a test drives the maths a drag uses
+    /// instead of a copy of it.
+    static func committed(_ newValue: Double, from current: Double,
+                          in range: ClosedRange<Double>,
+                          step: Double) -> Double? {
+        let span = max(0.0001, range.upperBound - range.lowerBound)
         let spansZero = range.lowerBound <= 0 && range.upperBound > 0
         let snapped: Double
         if spansZero && abs(newValue) <= span * 0.02 {
@@ -206,8 +212,12 @@ struct BipolarSlider: View {
         } else {
             snapped = newValue
         }
-        if abs(snapped - value) > step / 2 {
-            value = snapped
+        return abs(snapped - current) > step / 2 ? snapped : nil
+    }
+
+    private func commit(_ newValue: Double) {
+        if let next = Self.committed(newValue, from: value, in: range, step: step) {
+            value = next
         }
     }
 }
@@ -263,7 +273,10 @@ enum ParameterValueFormat: Equatable {
             return ParameterAccessibilityScale(
                 range: 5...100, step: 5,
                 display: { ($0 * 100).rounded() },
-                stored: { $0 / 100 })
+                // The drag's own grid expression (`k * 0.05`), so a value
+                // assistive technology writes back is the same double a drag
+                // would commit at that position.
+                stored: { ($0 / 5) * 0.05 })
         }
     }
 }
