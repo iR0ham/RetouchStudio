@@ -821,12 +821,17 @@ a shipped build, and it does not by itself make `upscale.4x` production-ready.
 
 The rerun 10.1 reports was priced on this machine: 58.17 s wall for the eight
 images and their control pairs, CPU only — no model load, no MPS work, one
-process. It reproduced all eight rows, with the model higher on every image;
-the means 10.3 computes from those rows are 0.884823 (model) and 0.836256
-(control), no dimension failure was reported, and the exit code was 0. The
-PSNR cross-check agrees with the recorded values to within 0.01 dB (the
-recorded values are rounded to two decimals; unrounded agreement is within
-0.002 dB).
+process. The wall time is the rerun's own console measurement, not a field of
+its record: `ssim.log` holds the eight JSON lines, `done` and `exit=0`, and
+no timing. It reproduced all eight rows, with the model higher on every
+image; the means 10.3 computes from those rows are 0.884823 (model) and
+0.836256 (control), and the rerun printed `exit=0`. The harness record behind
+10.2 marks the dimensions exact for all eight rows. The PSNR cross-check
+agrees with the recorded values to within 0.01 dB: the largest residual over
+the 16 model-plus-control comparisons is 0.005 dB — the rounding half-width
+of the recorded two-decimal values (for example L1 31.785 recomputed against
+31.79 recorded) — and the harness stores PSNR already rounded to two
+decimals, so no unrounded cross-check is possible.
 
 Environment fact worth recording: the test venv pinned for the worker suite,
 `/private/tmp/rs-worker-venv`, has CPython 3.13.15, numpy 2.5.4 and Pillow
