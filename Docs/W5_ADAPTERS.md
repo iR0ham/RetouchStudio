@@ -114,7 +114,7 @@ table of its own.
 
 ## Tests
 
-- Worker: 140 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+- Worker: 163 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
   of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15, the
   gate's admitting half adds 1, the independent review's fixes add 4, the
   submission-boundary pins add 2, W5-5 adds 2 (the acceptance harness
@@ -127,7 +127,15 @@ table of its own.
   and digest, and DR-5's branch kept alive with the digests taken back out of
   an entry) and the runtime-package condition adds 3 (the gate refuses a bound
   model, the ungated report tracks this interpreter, and a mask job with no
-  `sam2` refuses by name before any lease). 14 of the W5-3 tests are for
+  `sam2` refuses by name before any lease); the A1 corpus-harness logic adds
+  14 (engine tile boundaries, the `lr` degradation order, the median, and the
+  0/1/2/3 exit-code mapping; W5-7 review follow-up), the harness-minor
+  follow-up adds 7 (a provenance failure and an unreadable fixture are
+  unmeasured rows that exit 2, the bar compares the unrounded value, `inf`
+  meets the bar and is written as `null`, and the control note is built from
+  this run), and the band quantiser
+  adds 2 (a pinned artifact digest and equivalence with the whole-frame
+  quantiser over every band boundary). 14 of the W5-3 tests are for
   the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
   kind-only job that must not load a size-mismatched model (`-32019`), and the

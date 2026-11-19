@@ -15,7 +15,8 @@ from retouch_ai_worker import __version__, provenance
 from retouch_ai_worker.capabilities import current_platform
 from retouch_ai_worker.catalog import ModelEntry, ModelFile
 from retouch_ai_worker.engine import (Cancelled, Context, Engine, _axis_plan,
-                                      _axis_tiles, _pad_to_window, SWIN_WINDOW,
+                                      _axis_tiles, _pad_to_window, _quantise,
+                                      SWIN_WINDOW, UPSCALE_BAND_ROWS,
                                       UPSCALE_MAX_OUTPUT)
 from retouch_ai_worker.protocol import INTERNAL_ERROR, WorkerError
 
@@ -198,6 +199,33 @@ class _StubCatalog:
         return self.model_root
 
 
+class QuantiseTests(unittest.TestCase):
+    """The band boundary is a loop boundary, never a value boundary."""
+
+    def test_banded_quantiser_equals_the_whole_frame_expression(self):
+        # Heights cover the empty and single-row cases, a value below one
+        # band, exactly one band and a trailing partial band; the values run
+        # outside [0, 1] so both sides exercise the clip.
+        rng = np.random.default_rng(20261118)
+        band = 7
+        for rows in (0, 1, 6, 7, 8, 15):
+            acc = rng.random((rows, 5, 3), dtype=np.float32) * 1.4 - 0.2
+            weights = rng.random((rows, 5), dtype=np.float32) + 0.1
+            expected = (np.clip(acc / weights[..., None], 0, 1) * 255
+                        ).round().astype(np.uint8)
+            actual = _quantise(acc.copy(), weights.copy(), band_rows=band)
+            self.assertTrue(np.array_equal(actual, expected), rows)
+
+        # The production band itself, with a trailing one-row band.
+        rows = UPSCALE_BAND_ROWS + 1
+        acc = rng.random((rows, 3, 3), dtype=np.float32) * 1.4 - 0.2
+        weights = rng.random((rows, 3), dtype=np.float32) + 0.1
+        expected = (np.clip(acc / weights[..., None], 0, 1) * 255
+                    ).round().astype(np.uint8)
+        self.assertTrue(np.array_equal(
+            _quantise(acc.copy(), weights.copy()), expected))
+
+
 class UpscaleJobTests(unittest.TestCase):
     """The upscale job against a fake torch: no models, no downloads, no GPU."""
 
@@ -349,6 +377,19 @@ class UpscaleJobTests(unittest.TestCase):
         self.assertEqual(doc["capabilityId"], "upscale.4x")
         self.assertEqual(doc["output"]["sha256"],
                          provenance.digest_file(artifact))
+
+    def test_artifact_bytes_are_pinned_by_sha256(self):
+        # Captured by running the whole-frame quantiser at 689946a before the
+        # banded rewrite (327 bytes). The rewrite changes where the temporaries
+        # live, not what they compute, so the produced PNG must keep these
+        # exact bytes; a pixel-level drift would change the digest.
+        _, _, _, result, error = self._run()
+        self.assertIsNone(error)
+        data = Path(result["output"]).read_bytes()
+        self.assertEqual(len(data), 327)
+        self.assertEqual(
+            hashlib.sha256(data).hexdigest(),
+            "8e35b0c06dc7f3cb678b80c3bd3f6656de7246997593c044bf0ae3384c1da1c4")
 
     def test_a_publication_failure_reports_internal_error_and_publishes_nothing(
             self):

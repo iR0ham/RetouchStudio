@@ -106,9 +106,15 @@ verified is not installable or supportable (DR-5). See
 
 `job.submit` accepts an optional `capabilityId`. When a caller names one, a job
 for a capability that the adapter cannot run is refused before any work starts:
-`-32020` with `{capabilityId, state, reason}` data, or `-32011` with the missing
-model when the capability is only `requires_model`. It is never accepted and
-silently dropped. The macOS host names the capability for `upscale` (W5-4) and
+`-32020` with a queue verdict, or `-32011` with the missing model when the
+capability is only `requires_model`. It is never accepted and silently dropped.
+The `-32020` error data has three shapes, each emitted by a different check:
+the queue verdict carries `{capabilityId, state}` and states the reason in the
+error `message`; a `capabilityId` that is not a capability of that job kind
+carries `{capabilityId, kind}` and no `state`; and the engine's refusal of a
+mask job whose runtime package cannot be imported carries
+`{capabilityId, state: "blocked", package, reason}`. A host must not assume a
+`reason` member is always present. The macOS host names the capability for `upscale` (W5-4) and
 still submits the older job types by kind alone, so those take the unchanged
 path; the refusal is the contract for hosts that name capabilities (the Windows
 adapter requires the id).

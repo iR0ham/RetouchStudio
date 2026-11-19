@@ -152,8 +152,10 @@ no patch files.
    and mflux's VAE attention builds an MLX array as its attention scale, so a
    model loaded on one thread cannot be used from another. Every job therefore
    runs on the engine's own thread, no matter which connection submitted it.
-9. **Memory budget.** A render is refused with `BUDGET_EXCEEDED` when its
-   estimated peak exceeds `RETOUCH_AI_MEMORY_BUDGET_GB` (default 7.5).
+9. **Memory budget (generative renders).** A generative render is refused with
+   `BUDGET_EXCEEDED` when its estimated peak exceeds
+   `RETOUCH_AI_MEMORY_BUDGET_GB` (default 7.5). The upscale path never reads
+   it: upscale is bounded by the 40 MP output ceiling and the host's own wait.
 10. **Digests are checked where a model is loaded.** `Catalog.require_verified`
     runs `require` and then hashes every file the catalog gives a SHA-256 for,
     before the loader receives a path; a mismatch releases the lease so the
@@ -197,7 +199,7 @@ no patch files.
 |---|---|---|
 | `RETOUCH_AI_MODELS` | `~/Library/Application Support/RetouchStudio/AI/models` | model root |
 | `RETOUCH_AI_EVAL_MODELS` | unset | `1` allows evaluation-only models (never ship with it) |
-| `RETOUCH_AI_MEMORY_BUDGET_GB` | `7.5` | refuse renders above this estimate |
+| `RETOUCH_AI_MEMORY_BUDGET_GB` | `7.5` | refuse generative renders above this estimate (upscale is bounded by the 40 MP output ceiling) |
 | `RETOUCH_AI_MLX_CACHE_GB` | `4.0` | MLX buffer-cache cap; `0` uncaps |
 | `RETOUCH_AI_MLX_WIRED_GB` | `6.0` | wire weights so the system cannot page them mid-job |
 
@@ -207,7 +209,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-140 tests, no GPU and no model download: framing, contract versioning, request
+163 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing
