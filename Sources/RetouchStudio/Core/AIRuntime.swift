@@ -134,10 +134,22 @@ enum AIRuntime {
         let unzip = Process()
         unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         unzip.arguments = ["-x", "-k", archive.path, staging.path]
+        // ditto says why it stopped on stderr, and a destination that filled
+        // up is only visible there. The pipe is drained before waiting so a
+        // long message cannot fill the buffer and stall the child.
+        let errors = Pipe()
+        unzip.standardError = errors
         try unzip.run()
+        let data = errors.fileHandleForReading.readDataToEndOfFile()
         unzip.waitUntilExit()
         guard unzip.terminationStatus == 0 else {
-            throw AIRuntimeFailure(code: .extract)
+            let stderr = String(decoding: data, as: UTF8.self)
+            throw AIRuntimeFailure(
+                code: .extract,
+                detail: stderr.isEmpty ? nil : stderr.trimmingCharacters(
+                    in: .whitespacesAndNewlines),
+                underlying: AIRuntimeUnpackDiagnostics(
+                    exitStatus: unzip.terminationStatus, stderr: stderr))
         }
     }
 }
@@ -206,4 +218,40 @@ struct AIRuntimeFailure: LocalizedError {
             }
         }
     }
+}
+
+/// What `/usr/bin/ditto` said about an unpack that failed.
+///
+/// The text is kept verbatim because the lines disagree with each other: a
+/// destination that fills up mid-expansion produces
+/// `ditto: <path>: No space left on device` followed by
+/// `ditto: Couldn't read pkzip signature.` (measured on a real bounded HFS+
+/// volume). The second line alone reads as a corrupt archive, which is the
+/// wrong answer and an invitation to retry the same file forever.
+struct AIRuntimeUnpackDiagnostics: Error, Equatable, CustomStringConvertible {
+    let exitStatus: Int32
+    let stderr: String
+
+    /// The phrase ditto writes for ENOSPC (the `strerror` text). Matched
+    /// case-insensitively so a localised system message cannot hide it.
+    static let outOfSpacePhrase = "No space left on device"
+
+    var isOutOfSpace: Bool {
+        stderr.range(of: Self.outOfSpacePhrase, options: .caseInsensitive) != nil
+    }
+
+    var description: String {
+        "ditto exited \(exitStatus): "
+            + stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// The destination volume was at or under the unpack safety margin when an
+/// unpack failed. Attached after the failure from a fresh capacity probe, so a
+/// volume that lost its last space while ditto was writing still ends in the
+/// disk answer even when ditto's own message names something else. A probe
+/// that cannot answer produces no such error: judgement is withheld instead.
+struct AIRuntimeLowDiskSpace: Error, Equatable {
+    let freeBytes: Int64
+    let marginBytes: Int64
 }

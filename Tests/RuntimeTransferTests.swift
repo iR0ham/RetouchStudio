@@ -744,6 +744,123 @@ transferRun {
     installer.cancel()
 }
 
+// MARK: - The later gates do not charge the archive twice
+
+print("\n[RT] the later gates charge only what the transfer has not already spent")
+
+check(AIRuntimeDiskPreflight.remainingAfterDownload(requiredBytes: 1_000,
+                                                    archiveBytes: 400) == 600,
+      "the archive already on the volume is subtracted from the later need")
+check(AIRuntimeDiskPreflight.remainingAfterDownload(requiredBytes: 1_000,
+                                                    archiveBytes: 1_400) == 0,
+      "an archive larger than the reservation cannot make the need negative")
+check(AIRuntimeDiskPreflight.remainingAfterDownload(requiredBytes: 1_000,
+                                                    archiveBytes: -5) == 1_000,
+      "a negative measurement cannot shrink the later need")
+
+transferRun {
+    // The exact case the real volume caught: a free space equal to the
+    // reservation minus the downloaded archive must pass the later gates.
+    let support = transferSupport("gate2-exact")
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    let fullNeed = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: goodPackage.bytes)
+    let remainder = AIRuntimeDiskPreflight.remainingAfterDownload(
+        requiredBytes: fullNeed, archiveBytes: goodPackage.bytes)
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        return calls == 1 ? fullNeed : remainder
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    check(engine.starts.count == 1, "the transfer starts with exactly the reservation")
+    engine.succeed(goodArchiveBytes)
+    let ready = pump { if case .ready = installer.phase { return true }
+                       return false }
+    check(ready,
+          "free space equal to the reservation minus the archive passes both later gates",
+          String(describing: installer.phase))
+    check(calls >= 3, "both later gates were consulted", "\(calls) checks")
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "new",
+          "and the install completes")
+}
+
+transferRun {
+    // One byte below the remaining need is a real refusal, before verifying, so
+    // the sentence quotes the remainder rather than the full reservation.
+    let support = transferSupport("gate2-short")
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    let fullNeed = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: goodPackage.bytes)
+    let remainder = AIRuntimeDiskPreflight.remainingAfterDownload(
+        requiredBytes: fullNeed, archiveBytes: goodPackage.bytes)
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        return calls == 1 ? fullNeed : remainder - 1
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    engine.succeed(goodArchiveBytes)
+    let failed = pump { if case .failed = installer.phase { return true }
+                        return false }
+    var failure: AIRuntimeInstallFailure?
+    if case .failed(let value) = installer.phase { failure = value }
+    check(failed && failure?.kind == .insufficientDisk,
+          "one byte below the remainder is refused",
+          String(describing: installer.phase))
+    check(failure?.message
+            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: remainder,
+                                                     freeBytes: remainder - 1),
+          "the sentence quotes the remaining need, not the reservation")
+    check(!transferHasDirectory(in: support, prefix: "protocol-v2-installing-"),
+          "no staging tree was written")
+}
+
+transferRun {
+    // The same remainder applies to the last gate: verification passes, the
+    // transaction is still not allowed to start when the volume dropped.
+    let support = transferSupport("gate3-short")
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    let fullNeed = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: goodPackage.bytes)
+    let remainder = AIRuntimeDiskPreflight.remainingAfterDownload(
+        requiredBytes: fullNeed, archiveBytes: goodPackage.bytes)
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        switch calls {
+        case 1: return fullNeed
+        case 2: return remainder
+        default: return remainder - 1
+        }
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    engine.succeed(goodArchiveBytes)
+    let failed = pump { if case .failed = installer.phase { return true }
+                        return false }
+    var failure: AIRuntimeInstallFailure?
+    if case .failed(let value) = installer.phase { failure = value }
+    check(failed && failure?.kind == .insufficientDisk,
+          "the pre-install gate compares against the same remainder",
+          String(describing: installer.phase))
+    check(calls == 3, "the third gate is the one that refused", "\(calls) checks")
+    check(failure?.message
+            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: remainder,
+                                                     freeBytes: remainder - 1),
+          "and quotes it")
+    check(!transferHasDirectory(in: support, prefix: "protocol-v2-installing-"),
+          "nothing was staged")
+}
+
 // MARK: - Capacity is rechecked at the later gates
 
 print("\n[RT] capacity is rechecked before verification and before installation")
@@ -770,6 +887,10 @@ transferRun {
         archiveBytes: goodPackage.bytes,
         existingInstallBytes: AIRuntimeDiskPreflight.size(
             of: AIRuntime.installDirectory(in: support)))
+    // After the transfer the archive is already on the volume, so the second
+    // gate asks only for what is left to unpack.
+    let remaining = AIRuntimeDiskPreflight.remainingAfterDownload(
+        requiredBytes: needed, archiveBytes: goodPackage.bytes)
     capacity = 0
     engine.succeed(goodArchiveBytes)
     let failed = pump { if case .failed = installer.phase { return true }
@@ -781,7 +902,7 @@ transferRun {
           String(describing: installer.phase))
     check(calls >= 2, "the gate ran again after the transfer", "\(calls) checks")
     check(failure?.message
-            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: needed, freeBytes: 0),
+            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: remaining, freeBytes: 0),
           "with the shipped sentence and the real numbers")
     check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "old",
           "the previous runtime is still live")
@@ -821,8 +942,10 @@ transferRun {
 }
 
 transferRun {
-    // The system reports ENOSPC while unpacking: the transaction keeps the
-    // error, and the card names the disk instead of blaming the archive.
+    // An injected POSIX ENOSPC from the extract hook — a shape the production
+    // extractor cannot produce (it reports ditto's stderr instead; the real
+    // shape is covered below). This pins that a system error of that shape is
+    // still classified as the disk when some future hook throws one.
     let support = transferSupport("extract-enospc")
     transferSeedLive(support)
     let engine = ScriptedTransfer()
@@ -872,6 +995,154 @@ check(AIRuntimeInstallFailure.classify(wrappedFailure).message
 check(!PersianL10n.table.aiRuntimeDiskFull.isEmpty
         && PersianL10n.table.aiRuntimeDiskFull != L10n.shared.aiRuntimeDiskFull,
       "the Persian table has its own disk sentence")
+
+// MARK: - The real ditto failure, not an injected one
+
+print("\n[RT] the production unpacker's own ENOSPC text names the disk")
+
+// Captured verbatim from `/usr/bin/ditto -x -k` into a 3 MB HFS+ image that
+// filled mid-expansion (exit status 1). The second line alone would read as a
+// corrupt archive; the first is the fact that decides the class.
+let capturedDittoStderr = """
+ditto: /private/tmp/rs-bounded-mnt/big.bin: No space left on device
+ditto: Couldn't read pkzip signature.
+"""
+let dittoDiagnosis = AIRuntimeUnpackDiagnostics(exitStatus: 1,
+                                                stderr: capturedDittoStderr)
+check(dittoDiagnosis.isOutOfSpace,
+      "the verbatim line from a real bounded-volume run is recognised")
+check(!AIRuntimeUnpackDiagnostics(
+        exitStatus: 1, stderr: "ditto: Couldn't read pkzip signature.\n").isOutOfSpace,
+      "a corrupt-archive line without the space line stays a bad archive")
+check(AIRuntimeUnpackDiagnostics(exitStatus: 1, stderr: "").isOutOfSpace == false,
+      "an empty message is not guessed to be a full disk")
+
+let dittoFailure = AIRuntimeFailure(code: .extract, detail: "ditto",
+                                    underlying: dittoDiagnosis)
+check(AIRuntimeInstallFailure.classify(dittoFailure).kind == .insufficientDisk,
+      "a .extract failure carrying ditto's space line is a disk refusal")
+check(AIRuntimeInstallFailure.classify(dittoFailure).message
+        == L10n.shared.aiRuntimeDiskFull,
+      "with the disk sentence, not the unpack sentence")
+check(AIRuntimeInstallFailure.classify(dittoFailure).message
+        != L10n.shared.aiRuntimeExtractFailed,
+      "and never 'the runtime could not be unpacked'")
+
+// A probe below the margin decides the same way when the message does not.
+let marginVerdict = AIRuntimeLowDiskSpace(
+    freeBytes: AIRuntimeDiskPreflight.unpackSafetyMarginBytes,
+    marginBytes: AIRuntimeDiskPreflight.unpackSafetyMarginBytes)
+check(AIRuntimeInstallFailure.classify(
+        AIRuntimeFailure(code: .extract, underlying: marginVerdict)).kind
+        == .insufficientDisk,
+      "free space at the margin after a failed unpack is a disk refusal")
+// A failure with no disk signal keeps the archive's own class. (The low-disk
+// verdict is only ever attached below the margin, so its presence is the fact;
+// this pins that an ordinary extract error is still an unpack failure.)
+check(AIRuntimeInstallFailure.classify(
+        AIRuntimeFailure(code: .extract, detail: "not a zip",
+                         underlying: NSError(domain: NSCocoaErrorDomain, code: 1)))
+        .kind == .incompatibleRuntime,
+      "an extract failure without a disk signal stays a bad archive")
+
+// Drive the real extractor with no network and no stub. A bounded HFS+ image
+// is created and mounted here; when the environment refuses to create one the
+// run is reported as not performed rather than as a pass.
+struct TransferTool {
+    static func run(_ path: String, _ arguments: [String]) -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+        } catch {
+            return (-1, "\(error)")
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+    }
+}
+
+func transferBoundedVolume() -> (image: URL, mount: URL)? {
+    let image = transferRoot.appendingPathComponent("bounded-\(UUID().uuidString).dmg")
+    let mount = transferRoot.appendingPathComponent("mount-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
+    guard TransferTool.run("/usr/bin/hdiutil",
+                           ["create", "-quiet", "-size", "3m", "-fs", "HFS+",
+                            "-volname", "RSBounded", image.path]).status == 0 else {
+        return nil
+    }
+    guard TransferTool.run("/usr/bin/hdiutil",
+                           ["attach", "-quiet", "-nobrowse", "-mountpoint",
+                            mount.path, image.path]).status == 0 else {
+        try? FileManager.default.removeItem(at: image)
+        return nil
+    }
+    return (image, mount)
+}
+
+func transferFillingArchive() -> URL? {
+    let source = transferRoot.appendingPathComponent("filling-\(UUID().uuidString)")
+    let archive = transferRoot.appendingPathComponent("filling-\(UUID().uuidString).zip")
+    try? FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    var bytes = Data(count: 8 << 20)
+    bytes.withUnsafeMutableBytes { buffer in
+        if let base = buffer.baseAddress { arc4random_buf(base, buffer.count) }
+    }
+    guard (try? bytes.write(to: source.appendingPathComponent("big.bin"))) != nil,
+          TransferTool.run("/usr/bin/ditto", ["-c", "-k", source.path, archive.path])
+            .status == 0 else { return nil }
+    return archive
+}
+
+print("\n[RT] the real extractor reports a full volume as a disk refusal")
+
+if let volume = transferBoundedVolume() {
+    let archive = transferFillingArchive()
+    if let archive {
+        do {
+            try AIRuntime.install(archive: archive, support: volume.mount, package: nil)
+            check(false, "the bounded volume refuses the real unpack",
+                  "install returned")
+        } catch let failure as AIRuntimeFailure {
+            check(failure.code == .extract,
+                  "the real ditto failure stays an extract failure",
+                  "\(failure.code)")
+            check((failure.underlying as? AIRuntimeUnpackDiagnostics)?.isOutOfSpace == true,
+                  "and keeps the ditto text that names the space")
+            let classified = AIRuntimeInstallFailure.classify(failure)
+            check(classified.kind == .insufficientDisk,
+                  "so the real-disk failure classifies as insufficient disk",
+                  "\(classified.kind)")
+            check(classified.message == L10n.shared.aiRuntimeDiskFull,
+                  "with the disk sentence")
+            check(classified.message
+                    == "The disk filled up while installing the AI runtime. Nothing was installed.",
+                  "the English sentence is the shipped one")
+        } catch {
+            check(false, "the real unpack reports an AIRuntimeFailure", "\(error)")
+        }
+        check(!transferHasDirectory(in: volume.mount, prefix: "protocol-v2-installing-"),
+              "the aborted staging tree is removed from the real volume")
+        try? FileManager.default.removeItem(at: archive)
+    } else {
+        print("  ! the filling archive could not be built; real-volume unpack NOT run")
+    }
+    _ = TransferTool.run("/usr/bin/hdiutil",
+                         ["detach", "-quiet", "-force", volume.mount.path])
+    try? FileManager.default.removeItem(at: volume.image)
+} else {
+    print("  ! a bounded volume could not be created here; real-volume unpack NOT run")
+}
+
+check(PersianL10n.table.aiRuntimeDiskFull
+        == "دیسک در حین نصب دستیار هوش مصنوعی پر شد. چیزی نصب نشد.",
+      "the Persian disk sentence is the shipped one",
+      PersianL10n.table.aiRuntimeDiskFull)
 
 // MARK: - The production engine's resume helpers (offline)
 
@@ -937,6 +1208,108 @@ check(restoredText == "restored-bytes",
 try? FileManager.default.removeItem(at: restoreDestination)
 try? FileManager.default.removeItem(at: validPartial)
 try? FileManager.default.removeItem(at: tempMarker)
+
+// N1: an engine given a pair whose partial cannot be restored must start a
+// clean download, not a resume the session would answer with a CFNetwork error.
+let usableName = "retouch-usable-\(UUID().uuidString).tmp"
+let usableSource = transferPartialSource(Data("usable-bytes".utf8))
+let usableResume = AIRuntimeTransferResume(
+    data: resumePlist(name: usableName), partial: usableSource)
+check(URLSessionTransferEngine.usableResume(usableResume) != nil,
+      "a restorable pair is offered to the session")
+check((try? Data(contentsOf: tempDirectory.appendingPathComponent(usableName)))
+        == Data("usable-bytes".utf8),
+      "and its partial is put back for the session")
+check(URLSessionTransferEngine.usableResume(
+        AIRuntimeTransferResume(data: resumePlist(name: usableName), partial: nil)) == nil,
+      "a pair without its partial is not offered, so the download starts clean")
+check(URLSessionTransferEngine.usableResume(
+        AIRuntimeTransferResume(data: resumePlist(name: ".."),
+                                partial: usableSource)) == nil,
+      "an escaping name is not offered either")
+check(URLSessionTransferEngine.usableResume(nil) == nil,
+      "no retained pair means a clean download")
+try? FileManager.default.removeItem(
+    at: tempDirectory.appendingPathComponent(usableName))
+
+// MARK: - A support directory reached through a symlink
+
+print("\n[RT] containment resolves the existing parents on both sides")
+
+let containReal = transferSupport("contain-real")
+let containOutside = transferSupport("contain-outside")
+let containLink = transferRoot.appendingPathComponent("contain-link-\(UUID().uuidString)")
+try? FileManager.default.createSymbolicLink(at: containLink,
+                                            withDestinationURL: containReal)
+
+check(AIRuntimeTransaction.isContained(containLink, in: containLink),
+      "a support directory is contained in itself")
+check(AIRuntimeTransaction.isContained(
+        containLink.appendingPathComponent("protocol-v2-installing-abc"),
+        in: containLink),
+      "a missing staging name under a symlinked support is contained")
+check(AIRuntimeTransaction.isContained(
+        containReal.appendingPathComponent("protocol-v2"),
+        in: containLink),
+      "the target spelling of the same directory is contained too")
+check(!AIRuntimeTransaction.isContained(
+        URL(fileURLWithPath: containLink.path + "-sibling"), in: containLink),
+      "a sibling whose name shares the prefix is not contained")
+
+try? FileManager.default.createSymbolicLink(
+    at: containReal.appendingPathComponent("escape"),
+    withDestinationURL: containOutside)
+check(!AIRuntimeTransaction.isContained(
+        containReal.appendingPathComponent("escape"), in: containReal),
+      "a symlink that leaves the support is still refused")
+check(!AIRuntimeTransaction.isContained(
+        containReal.appendingPathComponent("escape/missing"), in: containReal),
+      "and so is a missing child under that link")
+
+transferRun {
+    // End to end: the transaction's own paths accept a symlinked support and
+    // install into the real directory the link names.
+    let real = transferSupport("contain-install-real")
+    let link = transferRoot.appendingPathComponent("contain-install-link-\(UUID().uuidString)")
+    try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+    do {
+        try AIRuntime.install(archive: goodArchiveURL, support: link, package: nil,
+                              hooks: transferHooks())
+        check(transferMarker(at: AIRuntime.installDirectory(in: real)) == "new",
+              "a transaction through a symlinked support installs into the target")
+        check(!FileManager.default.fileExists(atPath: real.appendingPathComponent("escape").path),
+              "and writes nothing outside it")
+    } catch {
+        check(false, "a symlinked support is accepted by the transaction paths",
+              "\(error)")
+    }
+}
+
+// MARK: - A system error at the catch-all keeps its cause
+
+print("\n[RT] a hook failure outside the extract step keeps its system error")
+
+transferRun {
+    let support = transferSupport("catch-all-underlying")
+    var hooks = transferHooks()
+    hooks.beforeInstall = {
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO),
+                      userInfo: [NSLocalizedDescriptionKey: "injected I/O failure"])
+    }
+    do {
+        try AIRuntime.install(archive: goodArchiveURL, support: support, package: nil,
+                              hooks: hooks)
+        check(false, "the failing hook refuses the install", "install returned")
+    } catch let failure as AIRuntimeFailure {
+        check(failure.code == .install, "the failure is the install class",
+              "\(failure.code)")
+        check(failure.underlying != nil, "and the system error is attached")
+        check("\(String(describing: failure.underlying))".contains("injected I/O failure"),
+              "with its own message")
+    } catch {
+        check(false, "the catch-all reports an AIRuntimeFailure", "\(error)")
+    }
+}
 
 // MARK: - The English size formatter is pinned
 

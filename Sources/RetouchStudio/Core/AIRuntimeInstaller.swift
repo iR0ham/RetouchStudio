@@ -56,6 +56,11 @@ final class AIRuntimeInstaller: ObservableObject {
     /// re-checked before verification and before installation, so a volume that
     /// filled during the transfer is caught before it can half-install a tree.
     private var attemptRequiredBytes: Int64 = 0
+    /// What the later gates still need free once the archive is on the volume.
+    /// The reservation charges the archive because gate 1 runs before it exists;
+    /// by the time the transfer has finished those bytes are already spent, so
+    /// the later gates must not charge them a second time.
+    private var attemptRemainderBytes: Int64 = 0
     /// Bytes already on disk when the current attempt started. A resumed
     /// transfer that fails without passing this mark let the stored state
     /// down, so it is discarded instead of being forced through.
@@ -131,6 +136,8 @@ final class AIRuntimeInstaller: ObservableObject {
             apply(.failed(failure))
             return
         }
+        attemptRemainderBytes = AIRuntimeDiskPreflight.remainingAfterDownload(
+            requiredBytes: attemptRequiredBytes, archiveBytes: package.bytes)
 
         // Consent is a transition, not a comment: a download cannot start from
         // any phase the owner has not approved.
@@ -145,10 +152,11 @@ final class AIRuntimeInstaller: ObservableObject {
     }
 
     /// The one capacity gate, used before the transfer, before verification and
-    /// before installation. The reservation is a floor, not a prediction: free
-    /// space can change while the transfer runs, which is why the later gates
-    /// exist. An unreadable capacity withholds judgement and lets the failing
-    /// operation report what actually happened.
+    /// before installation. The number it is given differs by call: the
+    /// reservation (archive included) before the transfer, the remaining need
+    /// after it. Free space can change while the transfer runs, which is why
+    /// the later gates exist. An unreadable capacity withholds judgement and
+    /// lets the failing operation report what actually happened.
     private func insufficientDiskFailure(required: Int64) -> AIRuntimeInstallFailure? {
         guard let free = environment.availableCapacity(environment.support),
               free < required else { return nil }
@@ -265,10 +273,13 @@ final class AIRuntimeInstaller: ObservableObject {
     // MARK: - Verification and install
 
     private func verify(_ archive: URL, package: AIRuntime.Package) {
-        // The transfer took room of its own; the unpack needs the rest. The
-        // check runs before `.verifying`, so a volume that filled during the
-        // download never reaches a stage that looks like progress.
-        if let failure = insufficientDiskFailure(required: attemptRequiredBytes) {
+        // The transfer took room of its own, so by now only the unpack, the
+        // bookkeeping margin and an existing tree still have to fit. Charging
+        // the archive again would refuse a volume that is in fact large enough
+        // — after a complete download. The check runs before `.verifying`, so a
+        // volume that filled during the download never reaches a stage that
+        // looks like progress.
+        if let failure = insufficientDiskFailure(required: attemptRemainderBytes) {
             try? FileManager.default.removeItem(at: archive)
             apply(.failed(failure))
             return
@@ -305,8 +316,9 @@ final class AIRuntimeInstaller: ObservableObject {
                          cancellation: AIRuntimeInstallCancellation) {
         // Last gate before the transaction is allowed to write a staging tree:
         // the archive is on disk now, so this is the check that catches a
-        // volume that lost space while the download was verified.
-        if let failure = insufficientDiskFailure(required: attemptRequiredBytes) {
+        // volume that lost space while the download was verified. Like the
+        // verification gate it charges only what is left to unpack.
+        if let failure = insufficientDiskFailure(required: attemptRemainderBytes) {
             try? FileManager.default.removeItem(at: archive)
             apply(.failed(failure))
             return
@@ -513,6 +525,12 @@ enum AIRuntimeDiskPreflight {
     static let unpackedDenominator: Int64 = 2   // 3.5 × archive
     static let bookkeepingHeadroomBytes: Int64 = 64 << 20
 
+    /// The free space below which a failed unpack is treated as a full disk
+    /// even when the unpacker's own message names something else. It is the
+    /// bookkeeping margin the reservation already carries, so the refusal
+    /// sentence and the post-failure verdict cannot disagree.
+    static let unpackSafetyMarginBytes: Int64 = bookkeepingHeadroomBytes
+
     static func requiredBytes(archiveBytes: Int64,
                               existingInstallBytes: Int64 = 0) -> Int64 {
         let existing = max(0, existingInstallBytes)
@@ -520,6 +538,13 @@ enum AIRuntimeDiskPreflight {
         let unpacked = archiveBytes / unpackedDenominator * unpackedNumerator
             + archiveBytes % unpackedDenominator * unpackedNumerator / unpackedDenominator
         return archiveBytes + unpacked + bookkeepingHeadroomBytes + existing
+    }
+
+    /// What still has to fit once the archive itself is already on the volume.
+    /// Gate 1 charges the archive because it has not been written yet; gates 2
+    /// and 3 run after a complete transfer, when those bytes are already spent.
+    static func remainingAfterDownload(requiredBytes: Int64, archiveBytes: Int64) -> Int64 {
+        max(0, requiredBytes - max(0, archiveBytes))
     }
 
     /// Bytes an existing directory occupies, or the size of a single file.
@@ -604,10 +629,13 @@ final class URLSessionTransferEngine: NSObject, AIRuntimeTransferEngine,
                                  delegate: self, delegateQueue: nil)
         self.session = session
 
-        if let resume {
-            Self.restorePartial(resume.partial, describedBy: resume.data)
-            task = session.downloadTask(withResumeData: resume.data)
+        if let usable = Self.usableResume(resume) {
+            task = session.downloadTask(withResumeData: usable.data)
         } else {
+            // A retained pair whose partial could not be restored cannot be
+            // continued: `downloadTask(withResumeData:)` would fail with a
+            // CFNetwork error the owner cannot act on. A clean attempt is the
+            // only transfer that can finish.
             task = session.downloadTask(with: package.url)
         }
         task?.resume()
@@ -718,5 +746,15 @@ final class URLSessionTransferEngine: NSObject, AIRuntimeTransferEngine,
             return nil
         }
         return destination
+    }
+
+    /// The retained resume an engine may actually continue, or nil when the
+    /// partial could not be restored. The decision belongs to the engine that
+    /// owns the session, so it is one function the tests can pin offline.
+    static func usableResume(_ resume: AIRuntimeTransferResume?) -> AIRuntimeTransferResume? {
+        guard let resume,
+              restorePartial(resume.partial, describedBy: resume.data) != nil
+        else { return nil }
+        return resume
     }
 }

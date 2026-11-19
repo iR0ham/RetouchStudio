@@ -193,11 +193,18 @@ struct AIRuntimeInstallFailure: Equatable {
     /// A full disk during the download arrives as either a POSIX error or an
     /// `NSError` that wraps one — and the transaction wraps whatever it caught
     /// in an `AIRuntimeFailure` to keep its own detail text — so every layer is
-    /// unwrapped before the class is decided.
+    /// unwrapped before the class is decided. An unpack that failed also
+    /// arrives as ditto's own diagnostics (the phrase is on stderr, not in an
+    /// NSError), or as the transaction's low-disk verdict from the re-probe.
     private static func isInsufficientDisk(_ error: Error) -> Bool {
         if let failure = error as? AIRuntimeFailure, let underlying = failure.underlying {
             return isInsufficientDisk(underlying)
         }
+        if let diagnosis = error as? AIRuntimeUnpackDiagnostics,
+           diagnosis.isOutOfSpace {
+            return true
+        }
+        if error is AIRuntimeLowDiskSpace { return true }
         let ns = error as NSError
         if ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOSPC) { return true }
         if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
