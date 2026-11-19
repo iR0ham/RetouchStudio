@@ -478,9 +478,12 @@ enum AIRuntimeTransaction {
         } catch {
             abandonPreparation(paths: paths, support: support,
                                record: previousRecord, hooks: hooks)
+            // Keep the system error: a disk that filled during the unpack is a
+            // space problem, not an archive that could not be unpacked.
             throw AIRuntimeFailure(code: .extract,
                                    previous: hadPrevious ? .kept : .none,
-                                   detail: "\(error)")
+                                   detail: "\(error)",
+                                   underlying: error)
         }
 
         do {
@@ -538,20 +541,23 @@ enum AIRuntimeTransaction {
             let previous = try rollback(paths: paths, support: support, id: id,
                                         hadPrevious: hadPrevious, hooks: hooks)
             throw AIRuntimeFailure(code: failure.code, previous: previous,
-                                   detail: failure.detail)
+                                   detail: failure.detail,
+                                   underlying: failure.underlying)
         } catch {
             do {
                 let previous = try rollback(paths: paths, support: support, id: id,
                                             hadPrevious: hadPrevious, hooks: hooks)
                 throw AIRuntimeFailure(code: .install, previous: previous,
-                                       detail: "\(error)")
+                                       detail: "\(error)",
+                                       underlying: error)
             } catch is SimulatedRuntimeCrash {
                 throw SimulatedRuntimeCrash()
             } catch let failure as AIRuntimeFailure {
                 throw failure
             } catch {
                 throw AIRuntimeFailure(code: .install, previous: .preserved,
-                                       detail: "\(error)")
+                                       detail: "\(error)",
+                                       underlying: error)
             }
         }
     }

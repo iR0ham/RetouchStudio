@@ -757,10 +757,33 @@ class L10n {
     func aiRuntimeInsufficientDisk(neededBytes: Int64, freeBytes: Int64) -> String {
         "Not enough free disk space: installing the AI runtime needs about \(L10n.byteSize(neededBytes)) free to download and unpack, and \(L10n.byteSize(freeBytes)) is available. Nothing was installed."
     }
+    /// The disk spilling over during an operation, where no capacity figures
+    /// are available to quote (the unpack or swap noticed it, not a probe).
+    var aiRuntimeDiskFull: String {
+        "The disk filled up while installing the AI runtime. Nothing was installed."
+    }
     /// One size formatter for both tables, so the same number is written the
-    /// same way in either language.
+    /// same way in either language. `ByteCountFormatter` reads the process
+    /// locale and exposes no way to pin it, so this table formats the number
+    /// itself: decimal units with English unit names, and the Persian table
+    /// converts the digits afterwards.
     static func byteSize(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
+        let value = max(0, bytes)
+        guard value >= 1000 else { return "\(value) bytes" }
+        let units = ["KB", "MB", "GB", "TB", "PB"]
+        var scaled = Double(value)
+        var unit = -1
+        // Promote at 999.5 so a value that rounds to 1000 still reads "1 MB",
+        // not "1000 KB".
+        while scaled >= 999.5 && unit < units.count - 1 {
+            scaled /= 1000
+            unit += 1
+        }
+        let tenths = Int((scaled * 10).rounded())
+        let whole = tenths / 10
+        let fraction = tenths % 10
+        let amount = fraction == 0 ? "\(whole)" : "\(whole).\(fraction)"
+        return "\(amount) \(units[unit])"
     }
     var aiRuntimeChecksumFailed: String {
         "The downloaded file did not match its SHA256. Nothing was installed."

@@ -148,6 +148,12 @@ struct AIRuntimeInstallFailure: Equatable {
     }
 
     static func classify(_ error: Error, l10n: L10n = .current) -> AIRuntimeInstallFailure {
+        // A full disk outranks the step that noticed it. Without this, an
+        // ENOSPC raised while unpacking is reported as an archive that "could
+        // not be unpacked", and retrying the same archive looks reasonable.
+        if isInsufficientDisk(error) {
+            return .init(kind: .insufficientDisk, message: l10n.aiRuntimeDiskFull)
+        }
         if let failure = error as? AIRuntimeFailure {
             switch failure.code {
             case .checksum:
@@ -168,10 +174,6 @@ struct AIRuntimeInstallFailure: Equatable {
                 return .init(kind: .install, message: l10n.aiRuntimeBusy)
             }
         }
-        if isInsufficientDisk(error) {
-            return .init(kind: .insufficientDisk,
-                         message: l10n.aiRuntimeDownloadFailed)
-        }
         if isTransferFailure(error) {
             return .init(kind: .network, message: l10n.aiRuntimeDownloadFailed)
         }
@@ -189,9 +191,13 @@ struct AIRuntimeInstallFailure: Equatable {
     }
 
     /// A full disk during the download arrives as either a POSIX error or an
-    /// `NSError` that wraps one, so both are unwrapped before the class is
-    /// decided; the transfer check below must not swallow it.
+    /// `NSError` that wraps one — and the transaction wraps whatever it caught
+    /// in an `AIRuntimeFailure` to keep its own detail text — so every layer is
+    /// unwrapped before the class is decided.
     private static func isInsufficientDisk(_ error: Error) -> Bool {
+        if let failure = error as? AIRuntimeFailure, let underlying = failure.underlying {
+            return isInsufficientDisk(underlying)
+        }
         let ns = error as NSError
         if ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOSPC) { return true }
         if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError,

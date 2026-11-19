@@ -178,11 +178,17 @@ struct AIRuntimeFailure: LocalizedError {
     let code: Kind
     var previous: PreviousRuntime
     var detail: String?
+    /// The system error this failure wrapped, when one exists. Classification
+    /// reads it to keep a full disk a disk problem instead of blaming the
+    /// archive that could not be unpacked.
+    var underlying: Error?
 
-    init(code: Kind, previous: PreviousRuntime = .none, detail: String? = nil) {
+    init(code: Kind, previous: PreviousRuntime = .none, detail: String? = nil,
+         underlying: Error? = nil) {
         self.code = code
         self.previous = previous
         self.detail = detail
+        self.underlying = underlying
     }
 
     var errorDescription: String? {

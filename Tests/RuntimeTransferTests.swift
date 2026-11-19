@@ -222,7 +222,7 @@ func transferEnvironment(support: URL,
     environment.startsRecovered = false
     environment.availableCapacity = capacity
     environment.makeEngine = { engine ?? ScriptedTransfer() }
-    environment.makeHooks = { _ in hooks ?? transferHooks() }
+    environment.makeHooks = { _, _ in hooks ?? transferHooks() }
     environment.runtimeChanged = {}
     environment.runtimeValidated = {}
     return environment
@@ -397,12 +397,16 @@ transferRun {
 }
 
 transferRun {
-    // Exactly the required amount passes (the comparison is "at least").
+    // Exactly the required amount passes (the comparison is "at least"). The
+    // seeded live tree is part of the reservation, exactly as in the installer.
     let support = transferSupport("exact")
     transferSeedLive(support)
     let engine = ScriptedTransfer()
     engine.outcome = .succeed(goodArchiveBytes)
-    let needed = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: goodPackage.bytes)
+    let needed = AIRuntimeDiskPreflight.requiredBytes(
+        archiveBytes: goodPackage.bytes,
+        existingInstallBytes: AIRuntimeDiskPreflight.size(
+            of: AIRuntime.installDirectory(in: support)))
     let installer = AIRuntimeInstaller(
         environment: transferEnvironment(support: support, engine: engine,
                                          capacity: { _ in needed }))
@@ -685,6 +689,288 @@ check(Digits.persian("12 MB") == "۱۲ MB",
       "the digit converter does not wait for the interface language")
 
 // MARK: - The phase machine's part in this slice
+
+// MARK: - The reservation counts the live tree
+
+print("\n[RT] the reservation includes a runtime that is already installed")
+
+transferRun {
+    let liveSize = AIRuntimeDiskPreflight.size(of: fixtureOld)
+    check(liveSize > 0, "an existing tree is measured", "\(liveSize) bytes")
+    check(AIRuntimeDiskPreflight.size(
+            of: transferRoot.appendingPathComponent("missing-\(UUID().uuidString)")) == 0,
+          "a missing tree reserves nothing")
+    let base = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: 1_000)
+    check(AIRuntimeDiskPreflight.requiredBytes(archiveBytes: 1_000,
+                                               existingInstallBytes: 5_000)
+            == base + 5_000,
+          "the live tree is added to the archive and unpack estimates")
+    check(AIRuntimeDiskPreflight.requiredBytes(archiveBytes: 1_000,
+                                               existingInstallBytes: -10) == base,
+          "a negative measurement cannot shrink the reservation")
+}
+
+transferRun {
+    // An upgrade under-reserves if the live tree is ignored: exactly enough
+    // for the archive alone must still be refused while the old tree exists.
+    let support = transferSupport("reserve-live")
+    transferSeedLive(support)
+    let tree = AIRuntimeDiskPreflight.size(of: AIRuntime.installDirectory(in: support))
+    let base = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: goodPackage.bytes)
+    let needed = base + tree
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    var capacity = needed - 1
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in capacity }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    var refusal: AIRuntimeInstallFailure?
+    if case .failed(let failure) = installer.phase { refusal = failure }
+    check(engine.starts.isEmpty, "the under-reserved upgrade did not start")
+    check(refusal?.kind == .insufficientDisk,
+          "the old tree is charged against the new install",
+          String(describing: installer.phase))
+    check(refusal?.message
+            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: needed,
+                                                     freeBytes: needed - 1),
+          "and the sentence quotes the reservation that includes it")
+
+    capacity = needed
+    check(installer.requestConsent(), "the retry asks for consent")
+    installer.install(goodPackage)
+    check(engine.starts.count == 1, "with the tree counted, the same install proceeds")
+    installer.cancel()
+}
+
+// MARK: - Capacity is rechecked at the later gates
+
+print("\n[RT] capacity is rechecked before verification and before installation")
+
+transferRun {
+    // The volume fills during the transfer: the check before verifying catches
+    // it, so the stage never claims to be verifying a file it cannot unpack.
+    let support = transferSupport("recheck-verify")
+    transferSeedLive(support)
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    var capacity: Int64? = Int64.max
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        return capacity
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    check(engine.starts.count == 1, "the transfer started with room to spare")
+    let needed = AIRuntimeDiskPreflight.requiredBytes(
+        archiveBytes: goodPackage.bytes,
+        existingInstallBytes: AIRuntimeDiskPreflight.size(
+            of: AIRuntime.installDirectory(in: support)))
+    capacity = 0
+    engine.succeed(goodArchiveBytes)
+    let failed = pump { if case .failed = installer.phase { return true }
+                        return false }
+    var failure: AIRuntimeInstallFailure?
+    if case .failed(let value) = installer.phase { failure = value }
+    check(failed && failure?.kind == .insufficientDisk,
+          "a volume that filled during the transfer is a disk refusal",
+          String(describing: installer.phase))
+    check(calls >= 2, "the gate ran again after the transfer", "\(calls) checks")
+    check(failure?.message
+            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: needed, freeBytes: 0),
+          "with the shipped sentence and the real numbers")
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "old",
+          "the previous runtime is still live")
+    check(!transferHasDirectory(in: support, prefix: "protocol-v2-installing-"),
+          "nothing was staged")
+}
+
+transferRun {
+    // The volume fills after verification: the claim to install is refused
+    // before the transaction may write a staging tree.
+    let support = transferSupport("recheck-install")
+    transferSeedLive(support)
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        return calls <= 2 ? Int64.max : 0
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    engine.succeed(goodArchiveBytes)
+    let failed = pump { if case .failed = installer.phase { return true }
+                        return false }
+    var failure: AIRuntimeInstallFailure?
+    if case .failed(let value) = installer.phase { failure = value }
+    check(failed && failure?.kind == .insufficientDisk,
+          "a volume that filled before installation is a disk refusal",
+          String(describing: installer.phase))
+    check(calls == 3, "the third gate is the one that refused", "\(calls) checks")
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "old",
+          "the previous runtime is still live")
+    check(!transferHasDirectory(in: support, prefix: "protocol-v2-installing-"),
+          "no staging tree was written")
+}
+
+transferRun {
+    // The system reports ENOSPC while unpacking: the transaction keeps the
+    // error, and the card names the disk instead of blaming the archive.
+    let support = transferSupport("extract-enospc")
+    transferSeedLive(support)
+    let engine = ScriptedTransfer()
+    engine.outcome = .succeed(goodArchiveBytes)
+    var hooks = transferHooks()
+    hooks.extract = { _, _ in
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC))
+    }
+    let installer = AIRuntimeInstaller(
+        environment: transferEnvironment(support: support, engine: engine,
+                                         hooks: hooks))
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    let failed = pump { if case .failed = installer.phase { return true }
+                        return false }
+    var failure: AIRuntimeInstallFailure?
+    if case .failed(let value) = installer.phase { failure = value }
+    check(failed && failure?.kind == .insufficientDisk,
+          "ENOSPC while unpacking is a disk failure, not a bad archive",
+          String(describing: installer.phase))
+    check(failure?.message == L10n.shared.aiRuntimeDiskFull,
+          "the sentence names the disk, not the archive")
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "old",
+          "the previous runtime is still live")
+    check(!transferHasDirectory(in: support, prefix: "protocol-v2-installing-"),
+          "the aborted staging tree is removed")
+}
+
+print("\n[RT] a wrapped disk error keeps its class through the transaction")
+
+let enospc = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC))
+for code in [AIRuntimeFailure.Kind.extract, .install] {
+    let wrapped = AIRuntimeFailure(code: code, previous: .kept, detail: "disk",
+                                   underlying: enospc)
+    check(AIRuntimeInstallFailure.classify(wrapped).kind == .insufficientDisk,
+          "a .\(code) failure with an ENOSPC underneath is disk full")
+}
+let wrappedURL = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotWriteToFile,
+                         userInfo: [NSUnderlyingErrorKey: enospc])
+let wrappedFailure = AIRuntimeFailure(code: .extract, detail: "disk",
+                                      underlying: wrappedURL)
+check(AIRuntimeInstallFailure.classify(wrappedFailure).kind == .insufficientDisk,
+      "the ENOSPC signal survives a URL error inside the wrapper")
+check(AIRuntimeInstallFailure.classify(wrappedFailure).message
+        == L10n.shared.aiRuntimeDiskFull,
+      "the wrapper's sentence is the disk sentence")
+check(!PersianL10n.table.aiRuntimeDiskFull.isEmpty
+        && PersianL10n.table.aiRuntimeDiskFull != L10n.shared.aiRuntimeDiskFull,
+      "the Persian table has its own disk sentence")
+
+// MARK: - The production engine's resume helpers (offline)
+
+print("\n[RT] resume data parsing and restoration are exercised without a network")
+
+func resumePlist(name: String?) -> Data {
+    var dictionary: [String: Any] = ["NSURLSessionResumeInfoVersion": 2]
+    if let name { dictionary["NSURLSessionResumeInfoTempFileName"] = name }
+    return (try? PropertyListSerialization.data(fromPropertyList: dictionary,
+                                                format: .xml, options: 0)) ?? Data()
+}
+
+let tempDirectory = FileManager.default.temporaryDirectory
+let validName = "retouch-resume-\(UUID().uuidString).tmp"
+let validPartial = tempDirectory.appendingPathComponent(validName)
+try? Data("partial-bytes".utf8).write(to: validPartial)
+check(URLSessionTransferEngine.tempName(describedBy: resumePlist(name: validName))
+        == validName,
+      "a plain temp-file name is read out of the plist")
+check(URLSessionTransferEngine.partialFile(describedBy: resumePlist(name: validName))?
+        .standardizedFileURL == validPartial.standardizedFileURL,
+      "and the partial is found inside the temporary directory")
+check(URLSessionTransferEngine.partialFile(
+        describedBy: resumePlist(name: "retouch-absent-\(UUID().uuidString).tmp")) == nil,
+      "a name whose file is gone yields nil, so the clean restart is taken")
+check(URLSessionTransferEngine.tempName(describedBy: resumePlist(name: nil)) == nil,
+      "a plist without the temp-file key yields nil")
+check(URLSessionTransferEngine.tempName(describedBy: Data("not a plist".utf8)) == nil,
+      "unreadable resume data yields nil")
+
+let escapingNames = ["..", ".", "sub/partial.tmp", "/tmp/escape.tmp", "a/../b"]
+for name in escapingNames {
+    check(URLSessionTransferEngine.resumeTempName(name) == nil,
+          "the name '\(name)' is not a plain component")
+    check(URLSessionTransferEngine.tempName(describedBy: resumePlist(name: name)) == nil,
+          "and is rejected inside resume data")
+}
+
+// An escaping name must not let restoration delete the temporary directory.
+let tempMarker = tempDirectory.appendingPathComponent("retouch-marker-\(UUID().uuidString)")
+try? Data("keep".utf8).write(to: tempMarker)
+let escapeSource = transferPartialSource(Data("escape".utf8))
+check(URLSessionTransferEngine.restorePartial(
+        escapeSource, describedBy: resumePlist(name: "..")) == nil,
+      "an escaping name restores nothing")
+check(FileManager.default.fileExists(atPath: tempMarker.path),
+      "and the temporary directory is untouched")
+check(URLSessionTransferEngine.restorePartial(
+        nil, describedBy: resumePlist(name: validName)) == nil,
+      "restoration without a retained partial is a no-op")
+
+let restoreName = "retouch-restore-\(UUID().uuidString).tmp"
+let restoreSource = transferPartialSource(Data("restored-bytes".utf8))
+let restored = URLSessionTransferEngine.restorePartial(
+    restoreSource, describedBy: resumePlist(name: restoreName))
+let restoreDestination = tempDirectory.appendingPathComponent(restoreName)
+check(restored?.standardizedFileURL == restoreDestination.standardizedFileURL,
+      "a valid name restores the partial to the temporary directory")
+let restoredText = (try? Data(contentsOf: restoreDestination))
+    .flatMap { String(data: $0, encoding: .utf8) }
+check(restoredText == "restored-bytes",
+      "with the retained bytes")
+try? FileManager.default.removeItem(at: restoreDestination)
+try? FileManager.default.removeItem(at: validPartial)
+try? FileManager.default.removeItem(at: tempMarker)
+
+// MARK: - The English size formatter is pinned
+
+print("\n[RT] the English size keeps Latin units")
+
+let latinSize = L10n.byteSize(500_000_000)
+check(latinSize.range(of: #"^[0-9.,]+ (bytes|KB|MB|GB|TB)$"#,
+                      options: .regularExpression) != nil,
+      "an English size is digits plus a Latin unit", latinSize)
+check(!latinSize.unicodeScalars.contains { $0.value >= 0x06F0 && $0.value <= 0x06F9 },
+      "with no Persian-Indic digit")
+check(Digits.persian(latinSize).unicodeScalars.contains {
+        $0.value >= 0x06F0 && $0.value <= 0x06F9
+      },
+      "and the Persian table can convert it afterwards")
+
+// MARK: - An engine that stops without our token
+
+print("\n[RT] an engine cancelled outside the token is not a failure")
+
+transferRun {
+    let support = transferSupport("engine-cancel")
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    let installer = AIRuntimeInstaller(
+        environment: transferEnvironment(support: support, engine: engine))
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    engine.fail(URLError(.cancelled))
+    let cancelled = pump { installer.phase == .cancelled }
+    check(cancelled, "an engine torn down without the token reports cancelled",
+          String(describing: installer.phase))
+    check(!installer.phase.isBusy, "and leaves no work running")
+}
 
 print("\n[RT] a preflight refusal never looks like a download")
 
