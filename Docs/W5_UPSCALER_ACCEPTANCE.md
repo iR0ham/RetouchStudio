@@ -659,6 +659,18 @@ EXIF orientation 1, Display P3. 129 tiles in total; every tile ran on `mps`;
 every output was exactly the reference size; every sidecar named model
 version 1.0.0; every succeeded job folder held only its published pair.
 
+These eight are drawn from the same private portrait set as §7.5's eight, with
+no new source material, but they are not the same eight pairs and the labels
+do not denote the same pair across the two sections: §7.5 had six images at
+2268×4032 and two at 3212×5712, this run has seven and one, so
+R1/R2/C1–C3/H1/B1/L1 here and C1–C8 there do not line up. C1 shows why this
+matters — §7.5 measured it at 33.31 dB against a 34.58 dB bicubic control
+(−1.27) under plain bicubic ÷4, while under this section's `lr` degradation
+C1 is 33.32 dB against 31.40 dB (+1.92): the sign of the comparison flipped
+with the degradation, not with the model. The tile totals differ for the same
+reason — 129 here against 138 in §7.5 — and a label must not be quoted across
+the two sections.
+
 Protocol, fixed before the run and not tuned after it:
 
 - **Colour first:** Display P3 → sRGB (Pillow `ImageCms.profileToProfile`,
@@ -678,9 +690,15 @@ Protocol, fixed before the run and not tuned after it:
   never to the mean; the bar was not moved.
 - **SSIM:** 8-bit sRGB luma (Rec.601), 11×11 Gaussian window σ = 1.5,
   K1 = 0.01, K2 = 0.03, mean over the valid area; computed after the run on
-  the same output files and the same control pairs.
+  the same output files and the same control pairs. The script was ephemeral
+  at measurement time; it is committed as `worker/tools/upscale_ssim.py`
+  (2026-11-19, same formulation, inputs as arguments), and rerunning it
+  against this run's record and job folders reproduces every row of §10.2,
+  PSNR cross-check included.
 
 ### 10.2 Per-image results
+
+Labels are local to this run; they are not the §7.5 identifiers (§10.1).
 
 | image | reference px | tiles | job s | PSNR dB | seam band dB | bicubic control dB | Δ vs control | SSIM model | SSIM control |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -721,9 +739,15 @@ seam difference is a band diagnostic only, and no threshold depends on it.
 Real inference on this Mac's MPS (MacBook Air M3, 16 GB, macOS 27.2), through
 the worker socket, against the adopted production store `swin2sr-x4` 1.0.0.
 The harness logic is unit-tested on synthetic pixels
-(`worker/tests/test_upscale_quality_corpus.py`, 14 tests: crop, PSNR, seam
-mask, degradation order, verdict and exit mapping), so CI proves the tool's
-logic.
+(`worker/tests/test_upscale_quality_corpus.py`, 21 tests on the merged tree at
+2026-11-19; this section first cited 14, and §11 records the correction): the
+engine's tile boundaries and an edge-only band, the seam mask, the median, the
+bar-versus-control separation and the unrounded bar, the `lr` degradation
+order and per-seed determinism, the descriptor, the 0/1/2/3 exit mapping with
+a bad input and an unreachable worker at 2 and an unexpected failure at 3, a
+provenance failure and an unreadable fixture recorded as unmeasured rows,
+non-finite values written as `null`, and the control note built from the run's
+own numbers. CI proves that logic.
 
 It is **not** shipped-build evidence: the installed bundle carries no
 `Contents/Resources/Worker` and `AIRuntime.package` is nil. No product-path
@@ -757,3 +781,153 @@ this documented protocol** — these eight private portraits, the `lr`
 degradation above, per-image PSNR and SSIM — and **must not be quoted outside
 it**. It says nothing about other degradations, other content, Windows, 2× or
 a shipped build, and it does not by itself make `upscale.4x` production-ready.
+
+---
+
+## 11. Memory envelope of the shipped path (2026-11-19): what §§4–10 estimated and what the worker actually costs
+
+Status: addendum. §§1–10 stay as written; the estimates this section
+supersedes are cited by location and dated here rather than edited away. The
+only edits made above are the three §10 corrections this section records in
+11.1.
+
+### 11.1 Corrections recorded this round (2026-11-19)
+
+- **§10.5's test count.** It said 14;
+  `worker/tests/test_upscale_quality_corpus.py` has **21** `def test_` functions
+  on the merged tree (the count in §10.5 is corrected, and the coverage list
+  now names the follow-up's additions: provenance failure and unreadable
+  fixture as unmeasured rows, the unrounded bar, non-finite values as `null`,
+  the run's own control note). This is a test-file count, not a pin:
+  `Tests/run-worker.sh` still runs 163.
+- **§10.1/§10.2 fixture labels.** Added: the eight `lr` fixtures come from the
+  same private portrait set as §7.5's eight but are a different selection
+  (7 × 2268×4032 + 1 × 3212×5712 here against 6 + 2 there), the labels do not
+  denote the same pair across sections, and C1 flips from −1.27 dB against its
+  control in §7.5 to +1.92 dB here because the degradation differs. Tile
+  totals differ for the same reason (129 against 138).
+- **§10.1's SSIM provenance.** The script was ephemeral at measurement time.
+  It is now `worker/tools/upscale_ssim.py` (a tool, not a test), with the
+  recorded formulation in its docstring and its inputs as arguments. Rerun on
+  this Mac against the run's record and job folders it reproduces all eight
+  rows of §10.2 exactly, PSNR cross-check included.
+- **The quantiser's arithmetic** (`worker/retouch_ai_worker/engine.py`,
+  `_quantise`). Both figures that circulated were wrong, and the shipped code
+  was changed so the claim is true. Measured with `tracemalloc` on the pinned
+  interpreter (CPython 3.13.15, numpy 2.5.4), whole-call peak per output
+  pixel, with the accumulator (12 B/px), the weight plane (4) and the uint8
+  artifact (3) counted:
+  - The old whole-frame expression peaks at **52.0 B/px** at every height.
+    Its stage trace is 16 (inputs) → 28 (divide) → **40 (clip)** → 28 (the
+    divide temporary is freed only after the clip returns) → 40 (`× 255`) →
+    **52 (`round`)**; the cast adds 3 more while the clip result and the
+    rounded array are alive, which stays below the round stage. The review's
+    **40.0** is the clip stage read as the peak; the earlier **~55** (in this
+    PR's body and in the arithmetic behind it) assumed the `× 255` array was
+    still alive during the cast, which Python frees after `round`. The true
+    peak is 52.0.
+  - The banded version merged on 4bd90bb (two band temporaries) measures
+    **25.1 / 31.0 / 43.0 B/px** at 4032 / 2048 / ≤1024 output rows — the
+    review's model `19 + 24·min(1024, H)/H` reproduces these exactly, so its
+    banded numbers were right even though its old-path number was not.
+  - The shipped version removes the second band temporary: one reusable
+    float32 band buffer takes the `× 255` and the rounding in place and the
+    cast writes straight into the artifact slice. Measured **22.0 / 25.0 /
+    31.0 B/px** at the same heights, i.e. `19 + 12·min(1024, H)/H`, **below
+    the 52.0 of the expression it replaced at every height**. Byte identity
+    holds: the pinned job artifact is still 327 bytes with SHA-256
+    `8e35b0c06dc7f3cb678b80c3bd3f6656de7246997593c044bf0ae3384c1da1c4`, the
+    committed equivalence test passes at its heights (0, 1, 6, 7, 8, 15 and
+    one band plus a row), and an ad hoc run of the same comparison over 37
+    rows and the full 4032×2268 frame found no differing byte.
+- **§4's "dominated by the float32 accumulator pair (~0.6 GB) plus torch/MPS
+  overhead"** is superseded as an estimate by the fits in 11.2: the whole
+  worker's resident set is 0.673 GB + 0.0402 GB per output megapixel, and its
+  peak footprint is 2.728 GB + 0.0579 GB per output megapixel, so the
+  accumulator is one term inside a much larger constant.
+- **`RenderPolicy.secondsPerOutputMegapixel = 6.5`** is 26–95 % optimistic
+  against the measured 8.21–12.69 s per output megapixel (11.2), so in-app
+  ETAs under-report. It is a reserved owner number and no StudioCore or test
+  edit is made here.
+
+### 11.2 Measured worker memory and time on this Mac
+
+Measured by the Test Engineer on this MacBook Air M3 (16 GB, macOS 27.2) with
+the headless worker only — no app launch, the production store untouched and
+read-only, no download, install or conversion. Method: `time -l` maximum
+resident set size per first-job, and the process's peak physical footprint,
+over five first jobs on square centre crops of one private fixture; plus one
+warm second job, determinism runs, and throughput per output megapixel.
+
+| output MP | peak RSS GB | peak footprint GB | job s |
+|---:|---:|---:|---:|
+| 4.000 | 0.773 | 2.940 | 50.76 |
+| 9.986 | 1.026 | 3.305 | 107.75 |
+| 20.070 | 1.592 | 3.908 | 164.76 |
+| 39.942 | 2.204 | 5.023 | 360.62 |
+
+The 20.070 MP point's warm second job measured 1.546 GB RSS and 3.909 GB
+footprint — no accumulation across two jobs.
+
+- **RSS fit:** `0.673 GB + 0.0402 GB/MP` (b ≈ 40 B/px, slope SE 3.6, R² 0.977,
+  RMSE 0.097 GB); the cold-only subset is unchanged at `0.659 / 40.0`.
+- **Peak-footprint fit:** `2.728 GB + 0.0579 GB/MP` (b ≈ 58 B/px, R² 0.9994,
+  RMSE 0.022 GB).
+- **Throughput:** 8.21–9.03 s per output megapixel at ≥ 20 MP, 12.69 s/MP at
+  4 MP — the small-input penalty, because the tile side grows 667 → 903 px and
+  the overlap amortises worse. Planning envelope for a 16 GB machine:
+  **b = 30–58 B/px, a = 2.7 GB, 8.2–12.7 s/output-MP**.
+- **Determinism:** three separate 4480² jobs across two processes produced
+  byte-identical output (`81c7212665c8`).
+- **Caveats:** ambient load was 9.7–19.6 from a concurrent build, swap already
+  stood at 14.29 GB, one fixture was used, crops were square centre crops, and
+  nothing above 40 MP can be executed — the 40 MP ceiling is still in force,
+  so the upper points are the largest the product permits and the fit is an
+  extrapolation beyond them.
+
+### 11.3 What that means for the ceiling
+
+`RenderUpscale.maxOutputPixels = 40_000_000` (`Sources/StudioCore/RenderPolicy.swift:10`)
+stays the executable bound, and the host waits **1500 s** for an upscale job
+(`Sources/RetouchStudio/Core/ExportService.swift:224`).
+
+- **146 MP** (a 9.14 MP source) would need ≈ 11.2 GB of peak footprint on the
+  58 B/px slope (the review's summary said 10.8 GB, which is the same fit read
+  at ≈ 55 B/px — inside the 30–58 envelope), and 1199–1318 s at the
+  ≥ 20 MP rate but **1853 s** at the 12.69 s/MP small-output rate, against the
+  1500 s host wait. The worker's own declared 7.5 GB memory budget
+  (`RETOUCH_AI_MEMORY_BUDGET_GB`, default 7.5) is crossed at about 82 MP, so
+  146 MP is excluded on both axes.
+- **293 MP** is infeasible on both: ≈ 19.7 GB peak footprint (18.9 GB at
+  55 B/px) and 2406–3718 s.
+
+### 11.4 Decision (engineering lead, 2026-11-19)
+
+1. **`maxOutputPixels = 40_000_000` is kept for 1.1.** No ceiling change is
+   made in this PR, and none is proposed by these data.
+2. **The banded quantiser is retained for headroom at the permitted sizes**,
+   not as an enabler of a raise: it lowers the quantisation stage's peak from
+   52.0 to 22–31 B/px at sizes the product allows.
+3. **The largest raise these data would defend on a 16 GB machine is ≈ 100 MP**,
+   and only with a proportional host timeout (≈ 820–1270 s at the measured
+   rate, against 1500 s today) **and** measured evidence that the per-pixel
+   cost actually came down. That evidence does not exist.
+4. **The ceiling value itself is owner-reserved**, because it is shipped user
+   copy (`Sources/RetouchStudio/Models/Localization.swift:502-504`,
+   `Sources/RetouchStudio/Models/PersianL10n.swift:516`), a pinned test
+   (`Tests/ModelTests.swift:3262-3285`) and recorded product behaviour
+   (`Docs/W5_IMPLEMENTATION_DECISION_RECORD.md:387`). No such change is made
+   or requested here.
+
+### 11.5 NOT VERIFIED in this section
+
+- The fits are from **one fixture** and four output sizes; content, chroma and
+  compressibility vary per photo.
+- **Nothing above 40 MP was executed**, so the 146 MP and 293 MP figures are
+  the fit extrapolated, not measured.
+- The runs were under **heavy ambient load** with swap already in use; the
+  memory figures are peak measurements, the timing figures are not a
+  benchmark.
+- **No app-launched export** and no export-cancel was exercised; the headless
+  worker is the measured path.
+- The 7.5 GB budget crossing at ≈ 82 MP is arithmetic on the fit, not a run.
