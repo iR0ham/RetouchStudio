@@ -274,9 +274,20 @@ class ServerTests(unittest.TestCase):
                                    {"kind": "slow", "params": {"ticks": 200}})["result"]["job_id"]
         workdir = Path(self.manager.jobs_root) / job_id
         lock_file = workdir / JOB_LOCK_NAME
+        # Wait for the job to be observably running, not for `.lock` to appear:
+        # `JobManager._run` opens the file and takes the flock before it writes
+        # `status="running"`, so a running status means the lock is already
+        # held. Waiting on the path instead races that open -> flock window,
+        # where the file exists but nobody has locked it yet.
         deadline = time.time() + 5
-        while time.time() < deadline and not lock_file.exists():
+        status = None
+        while time.time() < deadline:
+            status = self.session.call("job.status", {"job_id": job_id})["result"]
+            if status["status"] == "running":
+                break
             time.sleep(0.02)
+        self.assertEqual(status["status"], "running",
+                         "the job is observably running before its claim is probed")
         self.assertTrue(lock_file.exists(),
                         "the running job created the lock its workdir is claimed with")
         self.assertIsNone(acquire_folder_lock(workdir),
