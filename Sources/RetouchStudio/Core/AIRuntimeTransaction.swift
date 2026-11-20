@@ -226,7 +226,11 @@ enum AIRuntimeTransaction {
             throw AIRuntimeFailure(code: .busy, previous: previousRuntime(),
                                    detail: busy.description)
         } catch {
-            throw AIRuntimeFailure(code: .install, previous: previousRuntime())
+            // Keep the system error: without it a refusal at the lock or in a
+            // hook cannot say whether the disk, a permission or the archive was
+            // the cause.
+            throw AIRuntimeFailure(code: .install, previous: previousRuntime(),
+                                   detail: "\(error)", underlying: error)
         }
     }
 
@@ -447,7 +451,22 @@ enum AIRuntimeTransaction {
 
         do {
             try Self.throwIfCancelled(cancellation)
-            try hooks.extract(archive, paths.staging)
+            do {
+                try hooks.extract(archive, paths.staging)
+            } catch is SimulatedRuntimeCrash {
+                throw SimulatedRuntimeCrash()
+            } catch is AIRuntimeInstallCancelled {
+                throw AIRuntimeInstallCancelled()
+            } catch {
+                // The unpack has its own catch so a failed extract is shaped
+                // here, where the destination volume is known: the production
+                // extractor's ditto diagnostics are kept, and the volume is
+                // re-probed so a disk that filled mid-unpack is still named as
+                // the disk instead of as the archive.
+                throw unpackFailure(error, staging: paths.staging,
+                                    previous: hadPrevious ? .kept : .none,
+                                    probe: hooks.probeCapacity)
+            }
             // Extraction and the functional probe are not interruptible
             // mid-step, so the token is read between them: a cancel lands
             // before the first destructive move, leaving the old runtime live.
@@ -478,9 +497,12 @@ enum AIRuntimeTransaction {
         } catch {
             abandonPreparation(paths: paths, support: support,
                                record: previousRecord, hooks: hooks)
+            // Keep the system error: a disk that filled during the unpack is a
+            // space problem, not an archive that could not be unpacked.
             throw AIRuntimeFailure(code: .extract,
                                    previous: hadPrevious ? .kept : .none,
-                                   detail: "\(error)")
+                                   detail: "\(error)",
+                                   underlying: error)
         }
 
         do {
@@ -529,8 +551,17 @@ enum AIRuntimeTransaction {
             // Past the first destructive move, cancellation uses the same
             // rollback a failed install does, so the backup becomes live again
             // before the token is reported.
-            _ = try rollback(paths: paths, support: support, id: id,
-                             hadPrevious: hadPrevious, hooks: hooks)
+            do {
+                _ = try rollback(paths: paths, support: support, id: id,
+                                 hadPrevious: hadPrevious, hooks: hooks)
+            } catch is SimulatedRuntimeCrash {
+                throw SimulatedRuntimeCrash()
+            } catch {
+                // The rollback itself hit a real system error. Reporting a bare
+                // cancellation would hide it, so the failure keeps the cause.
+                throw AIRuntimeFailure(code: .install, previous: .preserved,
+                                       detail: "\(error)", underlying: error)
+            }
             throw AIRuntimeInstallCancelled()
         } catch is SimulatedRuntimeCrash {
             throw SimulatedRuntimeCrash()
@@ -538,20 +569,23 @@ enum AIRuntimeTransaction {
             let previous = try rollback(paths: paths, support: support, id: id,
                                         hadPrevious: hadPrevious, hooks: hooks)
             throw AIRuntimeFailure(code: failure.code, previous: previous,
-                                   detail: failure.detail)
+                                   detail: failure.detail,
+                                   underlying: failure.underlying)
         } catch {
             do {
                 let previous = try rollback(paths: paths, support: support, id: id,
                                             hadPrevious: hadPrevious, hooks: hooks)
                 throw AIRuntimeFailure(code: .install, previous: previous,
-                                       detail: "\(error)")
+                                       detail: "\(error)",
+                                       underlying: error)
             } catch is SimulatedRuntimeCrash {
                 throw SimulatedRuntimeCrash()
             } catch let failure as AIRuntimeFailure {
                 throw failure
             } catch {
                 throw AIRuntimeFailure(code: .install, previous: .preserved,
-                                       detail: "\(error)")
+                                       detail: "\(error)",
+                                       underlying: error)
             }
         }
     }
@@ -1071,6 +1105,38 @@ enum AIRuntimeTransaction {
         }
     }
 
+    /// Shapes a failed unpack into the transaction's `.extract` failure.
+    ///
+    /// The production extractor already attaches ditto's own stderr, which names
+    /// a full destination. Anything else — a replaced hook, a step that failed
+    /// without a message — still gets the destination volume re-probed through
+    /// the hooks: at or under the safety margin the answer is the disk, not the
+    /// archive. A probe that cannot answer withholds judgement and keeps the
+    /// original error. The probe is a hook so a suite can drive the 0-answer
+    /// and no-answer paths without filling a real volume.
+    private static func unpackFailure(_ error: Error, staging: URL,
+                                      previous: AIRuntimeFailure.PreviousRuntime,
+                                      probe: (URL) -> Int64?)
+        -> AIRuntimeFailure {
+        let margin = AIRuntimeDiskPreflight.unpackSafetyMarginBytes
+        let reportedFree = probe(staging)
+        let lowDisk: Error? = reportedFree.flatMap { (free: Int64) -> Error? in
+            free <= margin
+                ? AIRuntimeLowDiskSpace(freeBytes: free, marginBytes: margin)
+                : nil
+        }
+        if let failure = error as? AIRuntimeFailure {
+            // Never attach the wrapper to itself: classification unwraps the
+            // underlying error and would recurse forever.
+            return AIRuntimeFailure(code: failure.code, previous: previous,
+                                    detail: failure.detail,
+                                    underlying: failure.underlying ?? lowDisk)
+        }
+        return AIRuntimeFailure(code: .extract, previous: previous,
+                                detail: "\(error)",
+                                underlying: lowDisk ?? error)
+    }
+
     private static func runtimeIsValid(_ root: URL,
                                        hooks: AIRuntime.InstallHooks) -> Bool {
         guard FileManager.default.fileExists(atPath: root.path),
@@ -1095,10 +1161,36 @@ enum AIRuntimeTransaction {
         return result == 0 && (info.st_mode & S_IFMT) == S_IFLNK
     }
 
-    private static func isContained(_ candidate: URL, in base: URL) -> Bool {
-        let path = candidate.standardizedFileURL.resolvingSymlinksInPath().path
-        let root = base.standardizedFileURL.resolvingSymlinksInPath().path
+    /// Whether `candidate` stays inside `base` once symlinks are resolved.
+    ///
+    /// Foundation resolves symlinks only along the part of a path that exists:
+    /// a staging name that has not been created yet keeps the link text, while
+    /// its existing parent resolves to the target. Comparing those two spellings
+    /// refused a transaction path that never left the support directory. Both
+    /// sides are resolved down to their nearest existing ancestor and the
+    /// missing tail is re-appended, so the comparison is between the same
+    /// representation — and a real link that leaves the base still resolves
+    /// outside it.
+    static func isContained(_ candidate: URL, in base: URL) -> Bool {
+        let path = containmentPath(candidate)
+        let root = containmentPath(base)
         return path == root || path.hasPrefix(root + "/")
+    }
+
+    static func containmentPath(_ url: URL) -> String {
+        let manager = FileManager.default
+        var existing = url.standardizedFileURL
+        var tail: [String] = []
+        var hops = 0
+        while !manager.fileExists(atPath: existing.path), hops < 32,
+              existing.pathComponents.count > 1 {
+            tail.insert(existing.lastPathComponent, at: 0)
+            existing.deleteLastPathComponent()
+            hops += 1
+        }
+        let resolved = existing.resolvingSymlinksInPath().path
+        guard !tail.isEmpty else { return resolved }
+        return ([resolved] + tail).joined(separator: "/")
     }
 
     private struct RuntimePathError: Error, CustomStringConvertible {
