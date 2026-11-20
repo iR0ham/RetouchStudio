@@ -100,6 +100,22 @@ struct ExportSheet: View {
     /// 0 keeps the photo's own size; the rest downscale the longest edge.
     private static let longEdgeChoices: [Int] = [0, 4096, 2048, 1080]
 
+    /// What one parameter row of the watermark section holds, declared as values
+    /// so the sheet and the tests read one declaration. The opacity may only
+    /// move in the 0.05 its readout names: with the default 1-point step a drag
+    /// across 0.05…1 can commit only 0 and 1 — the released 1.0.0 defect.
+    struct WatermarkRow {
+        let range: ClosedRange<Double>
+        let valueFormat: ParameterValueFormat
+        let step: Double
+        let reset: Double
+    }
+
+    static let opacityRow = WatermarkRow(range: 0.05...1, valueFormat: .fractionAsPercent,
+                                         step: 0.05, reset: 0.65)
+    static let sizeRow = WatermarkRow(range: 1...10, valueFormat: .percent,
+                                      step: 1, reset: 3)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 10) {
@@ -429,14 +445,18 @@ struct ExportSheet: View {
                              hint: model.s.sliderHint(.watermarkOpacity),
                              value: Binding(get: { model.watermark.opacity },
                                             set: { model.watermark.opacity = $0 }),
-                             range: 0.05...1,
-                             onReset: { model.watermark.opacity = 0.65 })
+                             range: Self.opacityRow.range,
+                             valueFormat: Self.opacityRow.valueFormat,
+                             step: Self.opacityRow.step,
+                             onReset: { model.watermark.opacity = Self.opacityRow.reset })
                 ParameterRow(title: model.s.watermarkSize,
                              hint: model.s.sliderHint(.watermarkSize),
                              value: Binding(get: { model.watermark.sizePercent },
                                             set: { model.watermark.sizePercent = $0 }),
-                             range: 1...10,
-                             onReset: { model.watermark.sizePercent = 3 })
+                             range: Self.sizeRow.range,
+                             valueFormat: Self.sizeRow.valueFormat,
+                             step: Self.sizeRow.step,
+                             onReset: { model.watermark.sizePercent = Self.sizeRow.reset })
 
                 Text(model.s.watermarkNote)
                     .font(Theme.Font.face(size: 10.5))
