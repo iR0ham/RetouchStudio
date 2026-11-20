@@ -527,6 +527,66 @@ check(!installTestHasDirectory(in: probeSupport,
                                    .lastPathComponent + "-installing-"),
       "F: the rejected staging tree is removed")
 
+// H. An unpack failure re-probes the destination through the install hooks.
+//     A 0 answer names the disk; a probe that cannot answer keeps the
+//     unpacker's own error, so an unreadable volume is never guessed full.
+let lowDiskSupport = installTestSupport("unpack-lowdisk")
+installTestInjectLive(lowDiskSupport)
+var lowDiskHooks = installTestHooks()
+lowDiskHooks.extract = { _, _ in throw NSError(domain: "test", code: 7) }
+var lowDiskProbed: [URL] = []
+lowDiskHooks.probeCapacity = { url in
+    lowDiskProbed.append(url)
+    return 0
+}
+var lowDiskError: Error?
+do {
+    try AIRuntime.install(archive: archiveNew, support: lowDiskSupport,
+                          hooks: lowDiskHooks)
+} catch {
+    lowDiskError = error
+}
+if let failure = lowDiskError as? AIRuntimeFailure {
+    check(failure.code == .extract, "H: the failed unpack is still an extract failure",
+          "\(failure.code)")
+    check(AIRuntimeInstallFailure.classify(failure).kind == .insufficientDisk,
+          "H: a 0 from the re-probe says the disk filled, not the archive")
+    check((failure.underlying as? AIRuntimeLowDiskSpace)?.freeBytes == 0,
+          "H: and the low-disk wrapper keeps the probe's numbers")
+} else {
+    check(false, "H: the failed unpack reports an AIRuntimeFailure",
+          "\(String(describing: lowDiskError))")
+}
+check(lowDiskProbed.contains {
+        $0.lastPathComponent.contains("-installing-")
+      },
+      "H: the re-probe asked about the staging destination")
+check(installTestMarker(at: AIRuntime.installDirectory(in: lowDiskSupport)) == "old",
+      "H: the old runtime is untouched")
+
+let unknownSupport = installTestSupport("unpack-unknown")
+installTestInjectLive(unknownSupport)
+var unknownHooks = installTestHooks()
+unknownHooks.extract = { _, _ in throw NSError(domain: "test", code: 7) }
+unknownHooks.probeCapacity = { _ in nil }
+var unknownError: Error?
+do {
+    try AIRuntime.install(archive: archiveNew, support: unknownSupport,
+                          hooks: unknownHooks)
+} catch {
+    unknownError = error
+}
+if let failure = unknownError as? AIRuntimeFailure {
+    check(failure.code == .extract, "H: with no capacity answer the unpack stays an extract failure")
+    check(AIRuntimeInstallFailure.classify(failure).kind == .incompatibleRuntime,
+          "H: an unreadable re-probe never invents an insufficient-disk verdict")
+    check(!(failure.underlying is AIRuntimeLowDiskSpace),
+          "H: and attaches no low-disk wrapper")
+} else {
+    check(false, "H: an unreadable re-probe still reports the unpack failure",
+          "\(String(describing: unknownError))")
+}
+
 // G. The whole cancellation cycle as the installer would drive it: a cancel
 //    during installing is `.cancelled`, and a retry goes back through consent.
 var cycle = AIRuntimeInstallPhase.notInstalled
