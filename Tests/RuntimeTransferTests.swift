@@ -17,6 +17,10 @@ import StudioCore
 
 var failures: [String] = []
 var checks = 0
+/// Required work this run could not perform (a bounded volume that refuses to
+/// be created, an archive that cannot be built). Never a pass: the verdict
+/// line carries the count so a skipped run cannot look green.
+var skipped = 0
 
 func check(_ condition: Bool, _ label: String, _ detail: String = "") {
     checks += 1
@@ -277,6 +281,42 @@ let ancestorCapacity = AIRuntimeDiskPreflight.availableCapacity(at: missingDesti
 check(ancestorCapacity != nil && (ancestorCapacity ?? 0) > 0,
       "a destination that does not exist yet is measured on its parent volume",
       String(describing: ancestorCapacity))
+
+// A volume whose important-usage reading is 0 (or absent) is not a full
+// volume: the probe falls through to the volume's own statvfs counters. This
+// pins both the fallback number and its unit (f_bavail × f_frsize). The test
+// reads the same counters independently, bracketing its own reading either
+// side of the probe so a concurrent write cannot make the comparison flaky.
+func transferStatvfsFree(_ url: URL) -> Int64? {
+    var info = statvfs()
+    guard statvfs(url.path, &info) == 0, info.f_frsize > 0 else { return nil }
+    let (product, overflow) = UInt64(info.f_bavail)
+        .multipliedReportingOverflow(by: UInt64(info.f_frsize))
+    guard !overflow, product <= UInt64(Int64.max) else { return nil }
+    return Int64(product)
+}
+
+let fallbackBefore = transferStatvfsFree(probeDirectory)
+let zeroFallback = AIRuntimeDiskPreflight.capacity(at: probeDirectory,
+                                                  importantUsage: { _ in 0 })
+let fallbackAfter = transferStatvfsFree(probeDirectory)
+if let zeroFallback, let fallbackBefore, let fallbackAfter {
+    check(zeroFallback > 0,
+          "a 0 from the important-usage probe is not a measurement: it falls back to free space",
+          "\(zeroFallback) bytes")
+    check(zeroFallback >= min(fallbackBefore, fallbackAfter)
+            && zeroFallback <= max(fallbackBefore, fallbackAfter),
+          "and the fallback is the same volume's f_bavail × f_frsize",
+          "\(fallbackBefore)…\(fallbackAfter)")
+} else {
+    check(false, "the destination volume answers statvfs when the first probe says 0",
+          "\(String(describing: zeroFallback))")
+}
+let absentFallback = AIRuntimeDiskPreflight.capacity(at: probeDirectory,
+                                                     importantUsage: { _ in nil })
+check(absentFallback != nil && (absentFallback ?? 0) > 0,
+      "an absent important-usage reading falls back the same way",
+      String(describing: absentFallback))
 
 // MARK: - Retained state
 
@@ -690,9 +730,9 @@ check(Digits.persian("12 MB") == "۱۲ MB",
 
 // MARK: - The phase machine's part in this slice
 
-// MARK: - The reservation counts the live tree
+// MARK: - The pre-download floor counts the live tree
 
-print("\n[RT] the reservation includes a runtime that is already installed")
+print("\n[RT] the pre-download floor includes a runtime that is already installed")
 
 transferRun {
     let liveSize = AIRuntimeDiskPreflight.size(of: fixtureOld)
@@ -704,15 +744,18 @@ transferRun {
     check(AIRuntimeDiskPreflight.requiredBytes(archiveBytes: 1_000,
                                                existingInstallBytes: 5_000)
             == base + 5_000,
-          "the live tree is added to the archive and unpack estimates")
+          "the floor adds the live tree to the archive and unpack estimates")
     check(AIRuntimeDiskPreflight.requiredBytes(archiveBytes: 1_000,
                                                existingInstallBytes: -10) == base,
-          "a negative measurement cannot shrink the reservation")
+          "a negative measurement cannot shrink the floor")
 }
 
 transferRun {
-    // An upgrade under-reserves if the live tree is ignored: exactly enough
-    // for the archive alone must still be refused while the old tree exists.
+    // The floor deliberately errs high: a volume holding exactly the strict
+    // need (archive + unpack + margin) is refused on an upgrade while the old
+    // tree exists. That margin is a pre-download cushion, not a measurement —
+    // the later gates deduct the tree and compare only staging's need (pinned
+    // in "the later gates" section below).
     let support = transferSupport("reserve-live")
     transferSeedLive(support)
     let tree = AIRuntimeDiskPreflight.size(of: AIRuntime.installDirectory(in: support))
@@ -728,14 +771,14 @@ transferRun {
     installer.install(goodPackage)
     var refusal: AIRuntimeInstallFailure?
     if case .failed(let failure) = installer.phase { refusal = failure }
-    check(engine.starts.isEmpty, "the under-reserved upgrade did not start")
+    check(engine.starts.isEmpty, "the conservatively under-reserved upgrade did not start")
     check(refusal?.kind == .insufficientDisk,
-          "the old tree is charged against the new install",
+          "the pre-download floor charges the live tree as well",
           String(describing: installer.phase))
     check(refusal?.message
             == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: needed,
                                                      freeBytes: needed - 1),
-          "and the sentence quotes the reservation that includes it")
+          "and the sentence quotes that conservative floor")
 
     capacity = needed
     check(installer.requestConsent(), "the retry asks for consent")
@@ -757,6 +800,10 @@ check(AIRuntimeDiskPreflight.remainingAfterDownload(requiredBytes: 1_000,
 check(AIRuntimeDiskPreflight.remainingAfterDownload(requiredBytes: 1_000,
                                                     archiveBytes: -5) == 1_000,
       "a negative measurement cannot shrink the later need")
+check(AIRuntimeDiskPreflight.remainingAfterDownload(requiredBytes: 1_000,
+                                                    archiveBytes: 400,
+                                                    existingInstallBytes: 300) == 300,
+      "the live tree already holding its space is subtracted as well")
 
 transferRun {
     // The exact case the real volume caught: a free space equal to the
@@ -861,6 +908,164 @@ transferRun {
           "nothing was staged")
 }
 
+transferRun {
+    // An upgrade at the later gates: the live tree already holds its space and
+    // the swap is a rename, so free space equal to the strict remainder (unpack
+    // plus margin, no tree) must pass even though an old tree is present.
+    let support = transferSupport("gate2-upgrade")
+    transferSeedLive(support)
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    let tree = AIRuntimeDiskPreflight.size(of: AIRuntime.installDirectory(in: support))
+    let strict = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: goodPackage.bytes)
+    let remainder = AIRuntimeDiskPreflight.remainingAfterDownload(
+        requiredBytes: strict, archiveBytes: goodPackage.bytes)
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        return calls == 1 ? strict + tree : remainder
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    check(engine.starts.count == 1, "the upgrade passes the pre-download floor")
+    engine.succeed(goodArchiveBytes)
+    let ready = pump { if case .ready = installer.phase { return true }
+                       return false }
+    check(ready,
+          "free space equal to the strict remainder passes both later gates",
+          String(describing: installer.phase))
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "new",
+          "and the upgrade completes")
+}
+
+transferRun {
+    // One byte under the strict remainder is refused without charging the tree
+    // a second time: the sentence quotes what staging still needs.
+    let support = transferSupport("gate2-upgrade-short")
+    transferSeedLive(support)
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    let tree = AIRuntimeDiskPreflight.size(of: AIRuntime.installDirectory(in: support))
+    let strict = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: goodPackage.bytes)
+    let remainder = AIRuntimeDiskPreflight.remainingAfterDownload(
+        requiredBytes: strict, archiveBytes: goodPackage.bytes)
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        return calls == 1 ? strict + tree : remainder - 1
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    engine.succeed(goodArchiveBytes)
+    let failed = pump { if case .failed = installer.phase { return true }
+                        return false }
+    var failure: AIRuntimeInstallFailure?
+    if case .failed(let value) = installer.phase { failure = value }
+    check(failed && failure?.kind == .insufficientDisk,
+          "one byte under the strict remainder is refused",
+          String(describing: installer.phase))
+    check(failure?.message
+            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: remainder,
+                                                     freeBytes: remainder - 1),
+          "and the sentence does not charge the live tree again")
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "old",
+          "the previous runtime is still live")
+    check(!transferHasDirectory(in: support, prefix: "protocol-v2-installing-"),
+          "nothing was staged")
+}
+
+transferRun {
+    // A volume whose important-usage probe answers 0 still starts: the unified
+    // probe falls back to statvfs, so gate 1 sees real space instead of
+    // refusing with "0 bytes is available" forever.
+    let support = transferSupport("capacity-zero")
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    var observed: Int64?
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { url in
+        let free = AIRuntimeDiskPreflight.capacity(at: url,
+                                                   importantUsage: { _ in 0 })
+        if observed == nil { observed = free }
+        return free
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    check(engine.starts.count == 1, "a 0-answering volume is not refused at gate 1")
+    check((observed ?? 0) > 0,
+          "because the probe answered with the fallback number",
+          String(describing: observed))
+    engine.succeed(goodArchiveBytes)
+    let ready = pump { if case .ready = installer.phase { return true }
+                       return false }
+    check(ready, "and the install completes through the same fallback",
+          String(describing: installer.phase))
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "new",
+          "with the new runtime live")
+}
+
+transferRun {
+    // A genuine shortage under the fallback is still a refusal, and it quotes
+    // the fallback number — never a fabricated 0.
+    let support = transferSupport("capacity-zero-refusal")
+    let huge = AIRuntime.Package(version: "test-huge", fileName: "runtime-test.zip",
+                                 url: URL(fileURLWithPath: "/nonexistent-runtime.zip"),
+                                 bytes: 1 << 40, sha256: goodSHA256)
+    let need = AIRuntimeDiskPreflight.requiredBytes(archiveBytes: huge.bytes)
+    var observed: Int64?
+    var environment = transferEnvironment(support: support, engine: ScriptedTransfer())
+    environment.availableCapacity = { url in
+        let free = AIRuntimeDiskPreflight.capacity(at: url,
+                                                   importantUsage: { _ in 0 })
+        if observed == nil { observed = free }
+        return free
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(huge)
+    var failure: AIRuntimeInstallFailure?
+    if case .failed(let value) = installer.phase { failure = value }
+    check(failure?.kind == .insufficientDisk,
+          "a real shortage under the fallback is still refused",
+          String(describing: installer.phase))
+    check(observed != nil && failure?.message
+            == L10n.shared.aiRuntimeInsufficientDisk(neededBytes: need,
+                                                     freeBytes: observed!),
+          "and the sentence quotes the fallback number, not 0")
+}
+
+transferRun {
+    // A probe that cannot answer withholds judgement at every gate: nothing is
+    // invented as "0 bytes", and the install proceeds to the transaction.
+    let support = transferSupport("capacity-unknown")
+    let engine = ScriptedTransfer()
+    engine.outcome = .hold
+    var calls = 0
+    var environment = transferEnvironment(support: support, engine: engine)
+    environment.availableCapacity = { _ in
+        calls += 1
+        return nil
+    }
+    let installer = AIRuntimeInstaller(environment: environment)
+    _ = installer.requestConsent()
+    installer.install(goodPackage)
+    check(engine.starts.count == 1, "an unreadable capacity does not refuse gate 1")
+    engine.succeed(goodArchiveBytes)
+    let ready = pump { if case .ready = installer.phase { return true }
+                       return false }
+    check(ready, "the install completes; no gate turned nil into a refusal",
+          String(describing: installer.phase))
+    check(calls >= 3, "all three gates asked and all three withheld judgement",
+          "\(calls) checks")
+    check(transferMarker(at: AIRuntime.installDirectory(in: support)) == "new",
+          "with the new runtime live")
+}
+
 // MARK: - Capacity is rechecked at the later gates
 
 print("\n[RT] capacity is rechecked before verification and before installation")
@@ -883,14 +1088,16 @@ transferRun {
     _ = installer.requestConsent()
     installer.install(goodPackage)
     check(engine.starts.count == 1, "the transfer started with room to spare")
+    let tree = AIRuntimeDiskPreflight.size(
+        of: AIRuntime.installDirectory(in: support))
     let needed = AIRuntimeDiskPreflight.requiredBytes(
-        archiveBytes: goodPackage.bytes,
-        existingInstallBytes: AIRuntimeDiskPreflight.size(
-            of: AIRuntime.installDirectory(in: support)))
-    // After the transfer the archive is already on the volume, so the second
-    // gate asks only for what is left to unpack.
+        archiveBytes: goodPackage.bytes, existingInstallBytes: tree)
+    // After the transfer the archive is already on the volume, and the live
+    // tree already holds its space, so the second gate asks only for what is
+    // left to unpack.
     let remaining = AIRuntimeDiskPreflight.remainingAfterDownload(
-        requiredBytes: needed, archiveBytes: goodPackage.bytes)
+        requiredBytes: needed, archiveBytes: goodPackage.bytes,
+        existingInstallBytes: tree)
     capacity = 0
     engine.succeed(goodArchiveBytes)
     let failed = pump { if case .failed = installer.phase { return true }
@@ -1130,12 +1337,14 @@ if let volume = transferBoundedVolume() {
               "the aborted staging tree is removed from the real volume")
         try? FileManager.default.removeItem(at: archive)
     } else {
+        skipped += 1
         print("  ! the filling archive could not be built; real-volume unpack NOT run")
     }
     _ = TransferTool.run("/usr/bin/hdiutil",
                          ["detach", "-quiet", "-force", volume.mount.path])
     try? FileManager.default.removeItem(at: volume.image)
 } else {
+    skipped += 1
     print("  ! a bounded volume could not be created here; real-volume unpack NOT run")
 }
 
@@ -1367,7 +1576,7 @@ try? FileManager.default.removeItem(at: transferRoot)
 
 print("")
 if failures.isEmpty {
-    print("RUNTIME TRANSFER TESTS: PASS (\(checks) checks)")
+    print("RUNTIME TRANSFER TESTS: PASS (\(checks) checks, \(skipped) skipped)")
     exit(0)
 } else {
     print("RUNTIME TRANSFER TESTS: FAIL (\(failures.count))")

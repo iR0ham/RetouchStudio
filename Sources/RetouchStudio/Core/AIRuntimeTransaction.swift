@@ -464,7 +464,8 @@ enum AIRuntimeTransaction {
                 // re-probed so a disk that filled mid-unpack is still named as
                 // the disk instead of as the archive.
                 throw unpackFailure(error, staging: paths.staging,
-                                    previous: hadPrevious ? .kept : .none)
+                                    previous: hadPrevious ? .kept : .none,
+                                    probe: hooks.probeCapacity)
             }
             // Extraction and the functional probe are not interruptible
             // mid-step, so the token is read between them: a cancel lands
@@ -1108,14 +1109,17 @@ enum AIRuntimeTransaction {
     ///
     /// The production extractor already attaches ditto's own stderr, which names
     /// a full destination. Anything else — a replaced hook, a step that failed
-    /// without a message — still gets the destination volume re-probed: at or
-    /// under the safety margin the answer is the disk, not the archive. A probe
-    /// that cannot answer withholds judgement and keeps the original error.
+    /// without a message — still gets the destination volume re-probed through
+    /// the hooks: at or under the safety margin the answer is the disk, not the
+    /// archive. A probe that cannot answer withholds judgement and keeps the
+    /// original error. The probe is a hook so a suite can drive the 0-answer
+    /// and no-answer paths without filling a real volume.
     private static func unpackFailure(_ error: Error, staging: URL,
-                                      previous: AIRuntimeFailure.PreviousRuntime)
+                                      previous: AIRuntimeFailure.PreviousRuntime,
+                                      probe: (URL) -> Int64?)
         -> AIRuntimeFailure {
         let margin = AIRuntimeDiskPreflight.unpackSafetyMarginBytes
-        let reportedFree = AIRuntimeDiskPreflight.availableCapacity(at: staging)
+        let reportedFree = probe(staging)
         let lowDisk: Error? = reportedFree.flatMap { (free: Int64) -> Error? in
             free <= margin
                 ? AIRuntimeLowDiskSpace(freeBytes: free, marginBytes: margin)

@@ -171,10 +171,19 @@ jobs:
             'RUNTIME V2 TESTS: PASS' \
             'AI DISCLOSURE TESTS: PASS' \
             'RUNTIME INSTALL TESTS: PASS' \
-            'RUNTIME TRANSFER TESTS: PASS'; do
+            'RUNTIME TRANSFER TESTS: PASS \([0-9]+ checks, [0-9]+ skipped\)'; do
             grep -qE "$verdict" "$RUNNER_TEMP/macos-integration.log"
             echo "found: $verdict"
           done
+          # A required check that skipped itself prints "NOT run" and still
+          # exits 0. That is not a pass: the transfer suite's real-volume
+          # unpack must actually run on this runner.
+          if grep -qE 'NOT run' "$RUNNER_TEMP/macos-integration.log"; then
+            echo "a required transfer test did not run:" >&2
+            grep -E 'NOT run' "$RUNNER_TEMP/macos-integration.log" >&2
+            exit 1
+          fi
+          echo "no transfer test reported NOT run"
 
       - name: Upload suite log
         if: failure()

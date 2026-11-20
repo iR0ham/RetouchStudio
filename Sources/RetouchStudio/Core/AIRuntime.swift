@@ -81,6 +81,10 @@ enum AIRuntime {
             AIRuntimeValidation.functional(root: root)
         }
         var checkpoint: (RuntimeInstallCheckpoint) throws -> Void = { _ in }
+        /// How the failed-unpack path re-probes the destination volume.
+        /// Production reads the same capacity the installer's gates read; a
+        /// test replaces it to model a volume that answers 0 or nothing.
+        var probeCapacity: (URL) -> Int64? = AIRuntimeDiskPreflight.availableCapacity
         /// Runs under the transaction lock before any file is touched. The app
         /// uses it to stop a running helper that still reads the old runtime.
         var beforeInstall: () throws -> Void = {}

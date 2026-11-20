@@ -125,19 +125,25 @@ final class AIRuntimeInstaller: ObservableObject {
 
         // The preflight runs while consent is still the current phase: a
         // refusal lands in `failed(.insufficientDisk)` without ever entering
-        // `.downloading`, so nothing is fetched and nothing is staged. The
-        // reservation includes an existing live tree, because an upgrade keeps
-        // it on the volume while the new tree is unpacked beside it.
+        // `.downloading`, so nothing is fetched and nothing is staged.
+        //
+        // The floor deliberately charges an existing live tree even though the
+        // tree already occupies the space this probe compares against. That is
+        // a margin, not an estimate: the pre-download answer errs high by up to
+        // one tree, while the later gates deduct both the archive and the tree
+        // and compare only what the staging tree still needs (the swap itself
+        // is a rename and asks for no new space).
+        let existingBytes = AIRuntimeDiskPreflight.size(
+            of: AIRuntime.installDirectory(in: environment.support))
         attemptRequiredBytes = AIRuntimeDiskPreflight.requiredBytes(
-            archiveBytes: package.bytes,
-            existingInstallBytes: AIRuntimeDiskPreflight.size(
-                of: AIRuntime.installDirectory(in: environment.support)))
+            archiveBytes: package.bytes, existingInstallBytes: existingBytes)
         if let failure = insufficientDiskFailure(required: attemptRequiredBytes) {
             apply(.failed(failure))
             return
         }
         attemptRemainderBytes = AIRuntimeDiskPreflight.remainingAfterDownload(
-            requiredBytes: attemptRequiredBytes, archiveBytes: package.bytes)
+            requiredBytes: attemptRequiredBytes, archiveBytes: package.bytes,
+            existingInstallBytes: existingBytes)
 
         // Consent is a transition, not a comment: a download cannot start from
         // any phase the owner has not approved.
@@ -543,8 +549,17 @@ enum AIRuntimeDiskPreflight {
     /// What still has to fit once the archive itself is already on the volume.
     /// Gate 1 charges the archive because it has not been written yet; gates 2
     /// and 3 run after a complete transfer, when those bytes are already spent.
-    static func remainingAfterDownload(requiredBytes: Int64, archiveBytes: Int64) -> Int64 {
-        max(0, requiredBytes - max(0, archiveBytes))
+    ///
+    /// The live tree is deducted for the same reason: the later gates compare
+    /// against free space that already excludes it, and the swap only renames
+    /// directories, so keeping the tree alive while staging is unpacked beside
+    /// it asks the volume for no further free space. Charging it again would
+    /// over-reserve an upgrade by up to one tree size.
+    static func remainingAfterDownload(requiredBytes: Int64, archiveBytes: Int64,
+                                       existingInstallBytes: Int64 = 0) -> Int64 {
+        max(0, requiredBytes
+                - max(0, archiveBytes)
+                - max(0, existingInstallBytes))
     }
 
     /// Bytes an existing directory occupies, or the size of a single file.
@@ -575,10 +590,25 @@ enum AIRuntimeDiskPreflight {
     /// Free space the system is willing to give this process, which is the
     /// number the install can actually use. A destination that does not exist
     /// yet is measured on its nearest existing parent, because the volume is
-    /// the same one the transfer will write to. `nil` means "could not tell":
-    /// the caller proceeds and lets the transfer report a real failure rather
-    /// than blocking an install on a failed probe.
+    /// the same one the transfer will write to.
+    ///
+    /// Two probes, in order: the system's "important usage" answer, then the
+    /// volume's own `statvfs` counters. A zero from the first is not a
+    /// measurement — some volumes answer 0 while holding real space, and
+    /// treating that as truth would refuse every install on them forever — so
+    /// it falls through to `f_bavail × f_frsize` for the same volume. `nil`
+    /// means "could not tell" from either probe: the caller proceeds and lets
+    /// the transfer report a real failure rather than blocking an install on a
+    /// failed measurement.
     static func availableCapacity(at url: URL) -> Int64? {
+        capacity(at: url, importantUsage: systemImportantUsage)
+    }
+
+    /// The probe pair with the first answer replaceable, so a suite can model a
+    /// volume whose important-usage reading is 0 or absent without touching the
+    /// real one. The second probe is always the real volume.
+    static func capacity(at url: URL,
+                         importantUsage: (URL) -> Int64?) -> Int64? {
         let manager = FileManager.default
         var target = url
         var hops = 0
@@ -587,11 +617,31 @@ enum AIRuntimeDiskPreflight {
             target.deleteLastPathComponent()
             hops += 1
         }
-        guard manager.fileExists(atPath: target.path),
-              let values = try? target.resourceValues(
+        guard manager.fileExists(atPath: target.path) else { return nil }
+        if let reported = importantUsage(target), reported > 0 {
+            return reported
+        }
+        return posixCapacity(at: target)
+    }
+
+    private static func systemImportantUsage(at url: URL) -> Int64? {
+        guard let values = try? url.resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         else { return nil }
         return values.volumeAvailableCapacityForImportantUsage
+    }
+
+    /// The volume's own counters through `statvfs`: `f_bavail` blocks of
+    /// `f_frsize` bytes are what this process may still write. A failed
+    /// syscall, a zero block size or an overflowing product is "could not
+    /// tell", never a full disk.
+    private static func posixCapacity(at url: URL) -> Int64? {
+        var info = statvfs()
+        guard statvfs(url.path, &info) == 0, info.f_frsize > 0 else { return nil }
+        let (product, overflow) = UInt64(info.f_bavail)
+            .multipliedReportingOverflow(by: UInt64(info.f_frsize))
+        guard !overflow, product <= UInt64(Int64.max) else { return nil }
+        return Int64(product)
     }
 }
 
