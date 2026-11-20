@@ -51,18 +51,25 @@ class CompositeTests(unittest.TestCase):
         self.assertTrue(np.array_equal(out, original))
 
     def test_alpha_never_exceeds_the_dilated_mask(self):
-        import cv2
-
+        # Behaviour, not a second copy of the filter: a pixel further than the
+        # dilation radius (plus the half-pixel the rounded element may reach)
+        # from the mask can carry no alpha, whatever the feather does.
         mask = np.zeros((64, 64), dtype=np.uint8)
         mask[28:36, 28:36] = 255
         dilate = 3
         alpha = region_alpha(mask, dilate=dilate, feather=2)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                          (dilate * 2 + 1, dilate * 2 + 1))
-        dilated = cv2.dilate((mask > 127).astype(np.uint8), kernel).astype(bool)
-        self.assertEqual(float(alpha[~dilated].max()), 0.0)
+        yy, xx = np.mgrid[0:64, 0:64]
+        dy = np.maximum(0, np.maximum(28 - yy, yy - 35)).astype(float)
+        dx = np.maximum(0, np.maximum(28 - xx, xx - 35)).astype(float)
+        outside = np.hypot(dy, dx) > dilate + 0.5
+        self.assertTrue(outside.any())
+        self.assertEqual(float(alpha[outside].max()), 0.0)
         self.assertGreater(float(alpha.max()), 0.9)
         self.assertTrue(np.all(alpha >= 0.0) and np.all(alpha <= 1.0))
+        for d, f in ((4, 2), (0, 0), (1, 3.5)):
+            covered = region_alpha(mask, dilate=d, feather=f)
+            self.assertTrue(np.all(covered[28:36, 28:36] > 0.0),
+                            f"dilate={d} feather={f}")
 
 
 class BoxTests(unittest.TestCase):
