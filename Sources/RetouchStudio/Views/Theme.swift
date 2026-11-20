@@ -36,7 +36,7 @@ enum Theme {
     static let muted = Color(red: 0.639, green: 0.639, blue: 0.639)
     /// Caption grey. Raised from #6E6E6E (3.30:1 on the shell, 2.66:1 on an
     /// inset) to #969696, the nearest neutral reaching 4.5:1 on every surface
-    /// the 10.5–12 pt captions sit on: 5.70:1 shell, 5.25:1 panel, 4.59:1 inset.
+    /// the 10.5–12 pt captions sit on: 5.69:1 shell, 5.25:1 panel, 4.59:1 inset.
     static let faint = Color(red: 0.588, green: 0.588, blue: 0.588)
 
     // MARK: Accent — chartreuse
