@@ -277,6 +277,7 @@ final class PersianL10n: L10n {
     override func projectSaved(_ name: String) -> String { "پروژهٔ \(name) ذخیره شد" }
     override var projectSaveFailed: String { "پروژه ذخیره نشد." }
     override var projectOpened: String { "پروژه بازیابی شد." }
+    override var sessionRestored: String { "ویرایش‌ها بازیابی شد." }
     override var projectOpenFailed: String { "این پروژه باز نشد." }
     override var projectPhotoMissing: String {
         "عکسی که این پروژه به آن اشاره می‌کند دیگر در آن مسیر نیست."
@@ -610,6 +611,7 @@ final class PersianL10n: L10n {
     // MARK: - Settings, About, Help
 
     override var settingsTitle: String { "تنظیمات" }
+    override var settingsMenu: String { "تنظیمات…" }
     override var settingsWindowTitle: String { "\(settingsTitle) \(appName)" }
     override var settingsLanguage: String { "زبان" }
     override var settingsLanguageHelp: String { "زبان رابط برنامه را انتخاب کن." }
@@ -706,7 +708,7 @@ final class PersianL10n: L10n {
 
     // Versioned model store (W5-2)
     override func modelsVersionLabel(_ version: String) -> String {
-        "نسخهٔ \(version)"
+        "نسخهٔ \(Digits.convert(version))"
     }
     override var modelsActiveChip: String { "فعال" }
     override var modelsUseVersion: String { "استفاده" }

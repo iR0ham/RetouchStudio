@@ -273,6 +273,8 @@ class L10n {
     func projectSaved(_ name: String) -> String { "Saved project \(name)" }
     var projectSaveFailed: String { "Could not save the project." }
     var projectOpened: String { "Project restored." }
+    /// A crash-recovery candidate is an unsaved photo session, not a project.
+    var sessionRestored: String { "Edits restored." }
     var projectOpenFailed: String { "Could not open that project." }
     var projectPhotoMissing: String {
         "The photo this project refers to is no longer at that path."
@@ -600,6 +602,9 @@ class L10n {
     // MARK: - Settings, About, Help
 
     var settingsTitle: String { "Settings" }
+    /// The app-menu item. SwiftUI's default title follows the system language,
+    /// so the app supplies its own.
+    var settingsMenu: String { "Settings…" }
     /// macOS titles this window itself, in the system language. The app writes
     /// its own so the title bar follows the switch like the rest of the text.
     var settingsWindowTitle: String { "\(appName) \(settingsTitle)" }
@@ -959,6 +964,7 @@ class L10n {
         case .readingImage: return readingImage
         case .couldNotRead: return couldNotRead
         case .projectOpened: return projectOpened
+        case .sessionRestored: return sessionRestored
         case .applyingCrop: return applyingCrop
         case .cropReset: return cropReset
         case .cropApplied: return cropApplied

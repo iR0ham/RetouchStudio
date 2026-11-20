@@ -15,6 +15,21 @@ enum Digits {
         return "\(num(value))٪"
     }
 
+    /// A width × height readout. The unit is a word in the interface language;
+    /// in Persian the numeric run is isolated left-to-right, because without the
+    /// isolation the paragraph direction moves the unit in front of the numbers
+    /// and swaps the two values ("px ۴۰۳۲ × ۲۲۶۸").
+    static func pixelSize(_ width: Int, _ height: Int) -> String {
+        let run = "\(num(width)) × \(num(height))"
+        guard AppLanguage.current == .persian else { return "\(run) px" }
+        return "\u{2066}\(run)\u{2069} پیکسل"
+    }
+
+    /// One pixel count, such as a brush diameter.
+    static func pixels(_ value: Int) -> String {
+        AppLanguage.current == .persian ? "\(num(value)) پیکسل" : "\(value) px"
+    }
+
     /// Converts the Latin digits inside an already-formatted string and leaves
     /// every other character alone, so a mixed string keeps its punctuation.
     static func convert(_ text: String) -> String {

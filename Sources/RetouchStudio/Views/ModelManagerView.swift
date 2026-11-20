@@ -621,7 +621,9 @@ struct ModelManagerView: View {
     private func sourceLine(_ entry: ModelCatalogEntry) -> String {
         let host = sourceHost(entry) ?? "—"
         let sha = String((entry.sha256 ?? "").prefix(16))
-        return "\(host) · \(entry.codeLicense) / \(entry.weightsLicense) · SHA-256 \(sha)…"
+        // The hex run stays Latin and is isolated: inside a right-to-left
+        // paragraph an unisolated run can move out of place next to the label.
+        return "\(host) · \(entry.codeLicense) / \(entry.weightsLicense) · SHA-256 \u{2066}\(sha)\u{2069}…"
     }
 
     private func sourceHost(_ entry: ModelCatalogEntry) -> String? {
@@ -630,12 +632,27 @@ struct ModelManagerView: View {
 
     private func sizeText(_ bytes: Int?) -> String {
         guard let bytes, bytes > 0 else { return editor.s.modelsSizeUnknown }
-        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return Self.size(Int64(bytes))
     }
 
     private func sizeText(_ bytes: Int64?) -> String {
         guard let bytes, bytes > 0 else { return editor.s.modelsSizeUnknown }
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        return Self.size(bytes)
+    }
+
+    /// English keeps the system formatter untouched. Persian writes the number
+    /// in Persian digits and turns the unit into a word, so the row reads in
+    /// place instead of showing "MB 48.5" in a right-to-left paragraph.
+    private static func size(_ bytes: Int64) -> String {
+        let base = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        guard AppLanguage.current == .persian else { return base }
+        let parts = base.split(separator: " ", maxSplits: 1)
+        guard parts.count == 2 else { return Digits.convert(base) }
+        let units = ["bytes": "بایت", "byte": "بایت", "KB": "کیلوبایت", "kB": "کیلوبایت",
+                     "MB": "مگابایت", "GB": "گیگابایت", "TB": "ترابایت"]
+        let unit = units[String(parts[1])] ?? String(parts[1])
+        let number = Digits.convert(String(parts[0])).replacingOccurrences(of: ".", with: "٫")
+        return "\(number) \(unit)"
     }
 
     private func chipButton(_ title: String, action: @escaping () -> Void) -> some View {

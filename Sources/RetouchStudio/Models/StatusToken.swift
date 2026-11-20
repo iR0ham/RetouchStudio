@@ -14,6 +14,9 @@ enum StatusToken: Equatable {
     case readingImage
     case couldNotRead
     case projectOpened
+    /// A crash-recovery candidate was restored. It has no project file, so it
+    /// must not reuse the project sentence.
+    case sessionRestored
     case applyingCrop
     case cropReset
     case cropApplied
