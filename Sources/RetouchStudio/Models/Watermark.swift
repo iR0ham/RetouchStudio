@@ -12,6 +12,13 @@ enum WatermarkRenderer {
     static func apply(_ settings: WatermarkSettings, to image: CIImage) -> CIImage {
         let text = settings.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard settings.isActive else { return image }
+        // A stored zero is a true no-op, not a transparent draw. Compositing
+        // an all-transparent tile still runs the photo through a second colour
+        // conversion: a source without alpha gains an alpha channel in the
+        // written file, and every sample can move by a step. The same clamp
+        // turns a negative value, or a NaN, into zero, so neither can draw.
+        let opacity = CGFloat(min(1, max(0, settings.opacity)))
+        guard opacity > 0 else { return image }
         let extent = image.extent
         guard extent.width >= 1, extent.height >= 1 else { return image }
 
@@ -38,7 +45,7 @@ enum WatermarkRenderer {
               let tile = drawTile(line, width: tileWidth, height: tileHeight,
                                   baseline: padding + descent,
                                   pointSize: pointSize,
-                                  opacity: CGFloat(min(1, max(0, settings.opacity))),
+                                  opacity: opacity,
                                   padding: padding)
         else { return image }
 

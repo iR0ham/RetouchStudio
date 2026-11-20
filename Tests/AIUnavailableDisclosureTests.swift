@@ -1,5 +1,6 @@
 import Foundation
 import CoreImage
+import ImageIO
 import StudioCore
 
 // The export path used to collapse every AI failure into
@@ -366,6 +367,100 @@ if let offGrid = watermarkExportBytes(opacity: 0.63),
           "an off-grid 0.63 exports its own strength, not the nearest step")
 } else {
     check(false, "off-grid render")
+}
+
+// The canvas above carries alpha, so a fully transparent tile composited over
+// it changed nothing in memory. The live acceptance exported a real photo
+// through the app instead and found the guarantee false: a stored 0.0 drew an
+// all-transparent tile, the compositor ran the photo through a second colour
+// conversion, and the written file gained an alpha channel with its samples
+// moved by a step. A JPEG has no alpha channel; this helper writes through the
+// same `ExportService` writer the app uses, at the smallest tested size where
+// the tile fits inside the frame (120x90), and returns the file's bytes.
+func watermarkWritten(opacity: Double,
+                      enabled: Bool = true) -> (bytes: Data, hasAlpha: Bool)? {
+    let width = 120, height = 90
+    guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    for y in 0..<height {
+        for x in 0..<width {
+            let i = (y * width + x) * 4
+            pixels[i] = UInt8((x * 255) / (width - 1))
+            pixels[i + 1] = UInt8((y * 255) / (height - 1))
+            pixels[i + 2] = UInt8(((x &* 7) &+ y) % 256)
+            pixels[i + 3] = 255
+        }
+    }
+    // `.noneSkipLast` is a JPEG's shape: four bytes per pixel, no alpha.
+    guard let provider = CGDataProvider(data: Data(pixels) as CFData),
+          let cgImage = CGImage(width: width, height: height, bitsPerComponent: 8,
+                                bitsPerPixel: 32, bytesPerRow: width * 4, space: space,
+                                bitmapInfo: CGBitmapInfo(rawValue:
+                                    CGImageAlphaInfo.noneSkipLast.rawValue),
+                                provider: provider, decode: nil,
+                                shouldInterpolate: false, intent: .defaultIntent)
+    else { return nil }
+    let source = ExportSource(image: CIImage(cgImage: cgImage), masks: nil, faces: [],
+                              photoAspect: CGFloat(width) / CGFloat(height),
+                              colorSpace: space, metadata: [:])
+    var snapshot = ExportSnapshot()
+    snapshot.format = .png
+    snapshot.includeAnalysis = false
+    snapshot.watermark = WatermarkSettings(enabled: enabled, text: "Retouch Studio",
+                                           position: .bottomRight, opacity: opacity,
+                                           sizePercent: 3.0)
+    guard let rendered = (try? ExportService.renderFinal(snapshot, source: source)) ?? nil
+    else { return nil }
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("aidisclosure-watermark-\(UUID().uuidString)")
+    guard (try? FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true))
+            != nil else { return nil }
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("export.png")
+    guard ExportService.write(rendered, snapshot: snapshot, to: url,
+                              colorSpace: space, metadata: [:]) else { return nil }
+    guard let data = try? Data(contentsOf: url),
+          let file = CGImageSourceCreateWithData(data as CFData, nil),
+          let properties = CGImageSourceCopyPropertiesAtIndex(file, 0, nil)
+            as? [CFString: Any] else { return nil }
+    let hasAlpha = (properties[kCGImagePropertyHasAlpha] as? NSNumber)?.boolValue ?? false
+    return (data, hasAlpha)
+}
+
+if let zero = watermarkWritten(opacity: 0),
+   let never = watermarkWritten(opacity: 0, enabled: false) {
+    check(zero.bytes == never.bytes,
+          "a 0.0 export is byte-identical to a watermark that never drew",
+          "\(zero.bytes.count) vs \(never.bytes.count) bytes")
+    check(!zero.hasAlpha && !never.hasAlpha,
+          "a 0.0 export keeps the source's channel layout",
+          "alpha \(zero.hasAlpha) / \(never.hasAlpha)")
+} else {
+    check(false, "0.0 export writes through the real writer")
+    check(false, "0.0 export keeps the source's channel layout")
+}
+
+if let negative = watermarkWritten(opacity: -0.3),
+   let notANumber = watermarkWritten(opacity: .nan),
+   let never = watermarkWritten(opacity: 0, enabled: false) {
+    check(negative.bytes == never.bytes && notANumber.bytes == never.bytes,
+          "a negative or non-finite opacity cannot draw")
+} else {
+    check(false, "negative and non-finite opacity export")
+}
+
+if let faint = watermarkWritten(opacity: 0.02),
+   let light = watermarkWritten(opacity: 0.07),
+   let offGrid = watermarkWritten(opacity: 0.63),
+   let never = watermarkWritten(opacity: 0, enabled: false) {
+    check(faint.bytes != never.bytes && light.bytes != never.bytes
+            && offGrid.bytes != never.bytes,
+          "0.02, 0.07 and 0.63 still draw through the real writer")
+    check(faint.bytes != light.bytes && light.bytes != offGrid.bytes,
+          "small opacities keep their own strength, none snapped to zero")
+} else {
+    check(false, "small positive opacities export")
 }
 
 // MARK: - The other 63 rows still print exactly what they printed before #98
