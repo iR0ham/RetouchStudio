@@ -7,6 +7,41 @@ import ImageIO
 import UniformTypeIdentifiers
 import StudioCore
 
+/// The distinct reasons an AI request can fail.
+///
+/// These were collapsed into one sentence before: the message asked about the
+/// model package first, so a helper that shipped with the app and failed to
+/// launch was announced as "not available in this build". Each case is a
+/// different fact, and each has its own copy in `AIFailureCopy`.
+///
+/// The first three are the facts a startup failure can produce, and the only
+/// ones the app reaches today. `inferenceFailed` and `exportFailed` describe
+/// what happens after a helper ran; their copy exists so both languages agree,
+/// but no code path produces them yet (a failed job surfaces the helper's own
+/// error, and a failed export uses `StatusToken.exportUpscaleFailed`).
+enum AIFailureState: String, CaseIterable, Equatable {
+    /// No runtime exists for this build or for this machine.
+    case runtimeUnavailable
+    /// A runtime is on disk but cannot be used: it failed validation or
+    /// recovery, or another window holds it.
+    case runtimeInstallFailed
+    /// The helper is on disk, but starting it or reaching it failed.
+    case workerLaunchFailed
+    /// Taxonomy only, no producer: the helper ran, and the job failed before
+    /// producing an edit.
+    case inferenceFailed
+    /// Taxonomy only, no producer: an edit was produced, and saving it failed.
+    case exportFailed
+}
+
+/// What the app knows when a startup fails, captured as a value.
+struct AIFailureEvidence: Equatable {
+    var runtimePackageAvailable: Bool
+    var runtimeOnDisk: Bool
+    var runtimeProblem: String?
+    var launchFailure: String?
+}
+
 /// Launches and talks to the local AI helper.
 ///
 /// The helper is a separate process on purpose: it can be killed without
@@ -571,30 +606,130 @@ enum AIWorker {
     /// downloaded runtime. `ensureRunning` runs the functional contract first.
     static var isInstalled: Bool { interpreter() != nil && repositoryRoot() != nil }
 
-    /// The message an AI tool shows when it cannot start the helper. A light
-    /// build points at the runtime download; Intel has no runtime to offer.
-    /// A runtime that is present but failed its contract says so instead of
-    /// pretending it is missing or usable.
+    /// What the app knows at the moment a startup fails. A value, not a probe,
+    /// so the decision below can be exercised without a runtime on disk.
+    static var helperFailureEvidence: AIFailureEvidence {
+        AIFailureEvidence(
+            runtimePackageAvailable: AIRuntime.package != nil,
+            runtimeOnDisk: bundledRoot != nil || installedRoot != nil
+                || interpreter() != nil || repositoryRoot() != nil,
+            runtimeProblem: installedRuntimeProblem,
+            launchFailure: lastLaunchFailure)
+    }
+
+    /// Decides which fact a startup failure is.
+    ///
+    /// The order is the fix for the old message, which asked
+    /// `AIRuntime.package == nil` first and therefore called a helper that
+    /// shipped here and refused to start "not available in this build". A
+    /// helper on disk can only fail to start, and that answer is true whichever
+    /// way the model package looks. The package is consulted last, and only to
+    /// choose between "this build has no runtime" and "the runtime is not
+    /// installed yet".
+    ///
+    /// A recorded runtime problem is an install fact only in a build that can
+    /// offer the download. With no package, the recovery pass at launch can
+    /// still write a problem for a leftover `runtimes/protocol-v2` tree, and
+    /// treating it as an installation failure would send the owner to a
+    /// download this build cannot offer.
+    static func failureState(_ evidence: AIFailureEvidence) -> AIFailureState {
+        if evidence.runtimePackageAvailable,
+           let problem = evidence.runtimeProblem, !problem.isEmpty {
+            return .runtimeInstallFailed
+        }
+        if evidence.runtimeOnDisk || evidence.launchFailure != nil {
+            return .workerLaunchFailed
+        }
+        return .runtimeUnavailable
+    }
+
+    /// The message an AI tool shows when it cannot start the helper. Each state
+    /// has its own sentence, so a launch failure can never borrow the sentence
+    /// for a build that has no AI at all.
     static var missingHelperMessage: String {
-        if AIRuntime.package == nil {
+        missingHelperMessage(for: helperFailureEvidence)
+    }
+
+    /// The sentence for a captured evidence value. The language and the build
+    /// architecture are explicit so both languages, and the Intel branch, can
+    /// be exercised on whichever machine runs the suite.
+    static func missingHelperMessage(
+        for evidence: AIFailureEvidence,
+        language: AIFailureCopy.Language = .current,
+        architecture: BuildArchitecture = .host) -> String {
+        switch failureState(evidence) {
+        case .runtimeUnavailable:
+            if evidence.runtimePackageAvailable && !evidence.runtimeOnDisk {
+                return AIFailureCopy.runtimeNotInstalled(language)
+            }
+            return architecture == .intel
+                ? AIFailureCopy.runtimeUnavailableIntel(language)
+                : AIFailureCopy.runtimeUnavailable(language)
+        case .runtimeInstallFailed:
+            let problem = evidence.runtimeProblem ?? ""
+            // Recovery and a held runtime fail for different reasons and point
+            // at different actions, so each keeps its own sentence instead of
+            // borrowing "did not pass its startup check".
+            if problem.hasPrefix("busy:") { return AIFailureCopy.runtimeBusy(language) }
+            if problem.hasPrefix("recovery:") {
+                return AIFailureCopy.runtimeRecoveryFailed(language)
+            }
+            return AIFailureCopy.runtimeInstallFailed(language)
+        case .workerLaunchFailed:
+            return AIFailureCopy.text(for: .workerLaunchFailed, language)
+        case .inferenceFailed:
+            return AIFailureCopy.text(for: .inferenceFailed, language)
+        case .exportFailed:
+            return AIFailureCopy.text(for: .exportFailed, language)
+        }
+    }
+
+    /// The architectures whose helper support differs. Tests pass this
+    /// explicitly so the Intel sentence is exercised on any host; the app uses
+    /// the compile-time answer.
+    enum BuildArchitecture {
+        case appleSilicon
+        case intel
+
+        static var host: BuildArchitecture {
             #if arch(x86_64)
-            return L10n.current.aiRuntimeIntelUnavailable
+            return .intel
             #else
-            return L10n.current.aiRuntimeUnavailable
+            return .appleSilicon
             #endif
         }
-        if let problem = installedRuntimeProblem {
-            return problem.hasPrefix("busy:")
-                ? L10n.current.aiRuntimeBusy
-                : L10n.current.aiRuntimeValidationFailed
+    }
+
+    /// Why a start attempt stopped without a helper to run. It is recorded at
+    /// the throw site, where the reason is known, and it is deliberately not a
+    /// launch failure: nothing was launched.
+    enum StartRefusal: Equatable {
+        /// No interpreter or helper repository in this build or checkout.
+        case noHelperOnDisk
+        /// The selected downloaded runtime cannot be used here.
+        case runtimeUnusable
+    }
+
+    /// The launch fact one start attempt leaves for the next request.
+    /// `.started` and a refusal leave none; only an attempt that had a helper
+    /// to start can be a launch failure.
+    enum StartOutcome {
+        case started
+        case refused(StartRefusal)
+        case failed(Error)
+    }
+
+    static func launchFact(after outcome: StartOutcome) -> String? {
+        switch outcome {
+        case .started, .refused: return nil
+        case .failed(let error): return error.localizedDescription
         }
-        if installedRoot == nil && bundledRoot == nil { return L10n.current.aiRuntimeNotInstalled }
-        return L10n.current.aiHelperMissing
     }
 
     static func ensureRunning() throws {
         launchLock.lock()
         defer { launchLock.unlock() }
+        pendingRefusal = nil
         do {
             if selectedRuntimeIsDownloaded {
                 try ensureRunningV2()
@@ -607,19 +742,48 @@ enum AIWorker {
             // start without ever sweeping, so copies left by a crash stayed until
             // something else launched a bundled helper.
             cleanStaleWorkingCopies()
-            noteLaunchProblem(nil)
+            noteLaunchFailure(launchFact(after: .started))
         } catch {
-            noteLaunchProblem(error.localizedDescription)
+            // A refusal recorded its typed cause where the reason was known, so
+            // a build with nothing to start never leaves a launch failure for
+            // the next request to misread as a crash.
+            let outcome = pendingRefusal.map(StartOutcome.refused)
+                ?? StartOutcome.failed(error)
+            noteLaunchFailure(launchFact(after: outcome))
             throw error
         }
     }
 
     /// A transport retry that cannot restart the helper needs the reason the
     /// launch was refused (a busy runtime reads differently from a crash).
-    private static func noteLaunchProblem(_ message: String?) {
+    static func noteLaunchFailure(_ message: String?) {
         runtimeStateLock.lock()
         lastLaunchProblem = message
         runtimeStateLock.unlock()
+    }
+
+    /// Set by `startRefused` on the thread holding the launch lock, read by the
+    /// catch in `ensureRunning` and cleared at the start of every attempt.
+    private static var pendingRefusal: StartRefusal? {
+        get {
+            runtimeStateLock.lock()
+            defer { runtimeStateLock.unlock() }
+            return stagedRefusal
+        }
+        set {
+            runtimeStateLock.lock()
+            stagedRefusal = newValue
+            runtimeStateLock.unlock()
+        }
+    }
+    private static var stagedRefusal: StartRefusal?
+
+    /// Records a refusal and builds the failure the caller throws. The message
+    /// is computed with the refusal already recorded, so it stays the sentence
+    /// for the state the app is in instead of inventing a crash.
+    private static func startRefused(_ refusal: StartRefusal) -> AIWorkerFailure {
+        pendingRefusal = refusal
+        return AIWorkerFailure(code: -32000, message: missingHelperMessage)
     }
 
     static var lastLaunchFailure: String? {
@@ -654,7 +818,7 @@ enum AIWorker {
             }
         }
         guard let python = interpreter(), let root = repositoryRoot() else {
-            throw AIWorkerFailure(code: -32000, message: missingHelperMessage)
+            throw startRefused(.noHelperOnDisk)
         }
         let manager = FileManager.default
         try manager.createDirectory(at: jobsDirectory, withIntermediateDirectories: true)
@@ -762,12 +926,12 @@ enum AIWorker {
     /// replaces a helper whose identity or progress cannot be disproved.
     private static func ensureRunningV2() throws {
         guard AIRuntime.package != nil else {
-            throw AIWorkerFailure(code: -32000, message: missingHelperMessage)
+            throw startRefused(.runtimeUnusable)
         }
         let endpoint = try v2Endpoint()
         try RuntimeTransactionLock.shared.withLock(support: endpoint.support) {
             guard downloadedRuntimeUsable(support: endpoint.support) else {
-                throw AIWorkerFailure(code: -32000, message: missingHelperMessage)
+                throw startRefused(.runtimeUnusable)
             }
             let launch = try LockFile.open(
                 endpoint.support.appendingPathComponent("launch.lock"))

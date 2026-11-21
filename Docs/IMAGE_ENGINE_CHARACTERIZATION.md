@@ -332,6 +332,10 @@ existing effect results (`reshape` and `teethWhiten` regressions in
 keeps its P3 profile. What is *not* proven: the preview surface, the PDF/print
 path, and any wide-gamut display path beyond the encoded file.
 
+> **Superseded 2026-11-15 (W4-4):** the sentence above about a P3 photo keeping
+> its P3 profile is historical. The correction immediately below replaced that
+> output decision; see `Docs/OUTPUT_COLOR_POLICY.md`.
+
 **Correction (2026-11-15, W4-4 Option A, owner-approved).** Exports no longer
 carry the source profile. `RenderPolicy.plan` names sRGB for every export, so
 a Display P3 photo is converted to sRGB and colours outside the sRGB gamut are

@@ -82,7 +82,7 @@ app. `Windows` = the WPF host in `Windows/`. Evidence is in §5.
 | Semantic segmentation of skin/regions | — | geometric regions + YCbCr/luma gates | ABSENT | engine suite | VERIFIED macOS; not a learned segmentation model |
 | Masks (preview 1024 px, export 4096 px) | — | Core Image, feather + gates | ABSENT | engine suite, corpus | VERIFIED macOS |
 | Heal stamps, stickers, watermarks | values | yes | ABSENT | corpus references | VERIFIED macOS |
-| AI edits (composite, patch lifecycle) | values | yes, needs worker | ABSENT | engine/model suites | VERIFIED macOS; worker source outside repo |
+| AI edits (composite, patch lifecycle) | values | yes, needs worker | ABSENT | engine/model suites | VERIFIED macOS for the record and patch lifecycle only; no inference has been run from the app, because this build ships no approved runtime package (`AIRuntime.package` is nil), and the worker source is tracked under `worker/` in this repository |
 | Export JPEG/PNG | contract | 8-bit | 8-bit JPEG; 16-bit PNG | host checks, run 43557855311 | VERIFIED per host; Windows PNG depth VERIFIED |
 | Export TIFF | contract | 16-bit | 16-bit pixels, header-read | host checks, run 43557855311 | macOS VERIFIED; Windows VERIFIED per host |
 | Export HEIC | contract | 8-bit, alpha flattened | explicit refusal | corpus `F01_export_256.heic` | macOS VERIFIED; Windows ABSENT by design |

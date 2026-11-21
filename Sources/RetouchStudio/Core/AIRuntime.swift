@@ -137,7 +137,13 @@ enum AIRuntime {
     private static func extract(_ archive: URL, into staging: URL) throws {
         let unzip = Process()
         unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        unzip.arguments = ["-x", "-k", archive.path, staging.path]
+        // A downloaded archive carries `com.apple.quarantine`, and ditto copies
+        // that flag onto every file it writes. A quarantined ad-hoc-signed
+        // interpreter is killed by AMFI the moment the functional probe runs it,
+        // so the runtime would install "successfully" and never start. `--noqtn`
+        // unpacks without carrying the flag across; it does not change what is
+        // extracted, or any hash, containment or validation check.
+        unzip.arguments = ["-x", "-k", "--noqtn", archive.path, staging.path]
         // ditto says why it stopped on stderr, and a destination that filled
         // up is only visible there. The pipe is drained before waiting so a
         // long message cannot fill the buffer and stall the child.
