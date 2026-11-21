@@ -13,7 +13,7 @@ These are the values for the first public release:
 | Version / build | `1.0.0` / `1` | `Resources/Info.plist` |
 | Developer | iRoham — Design and development (localized) | `Sources/RetouchStudio/Models/DeveloperProfile.swift` |
 | Contact, website | blank (rows stay hidden) | `DeveloperProfile.swift` |
-| Licence | MIT | `LICENSE` |
+| Licence | MIT, alongside the bundled third-party notice | `LICENSE`, `Resources/THIRD_PARTY_NOTICES.txt` → `Contents/Resources/` |
 
 The bundle identifier appears in `Info.plist`, the UTI appears in both `Info.plist` and `Project.swift`, and the recovery path falls back to the identifier in `Recovery.swift`. Change all of them together; changing the identifier after a release changes the app's identity for macOS, saved state and the recovery file. The version in `Info.plist` is what the About window, Settings and export dialogs display at runtime.
 
@@ -46,7 +46,7 @@ lipo -archs "Retouch Studio.app/Contents/MacOS/RetouchStudio"   # arm64 x86_64
 "Retouch Studio.app/Contents/MacOS/RetouchStudio" --selftest --out /tmp/rs-selftest
 ```
 
-The build runs the self-test on the executable **inside the bundle** (not the loose `build/bin` copy) natively and, on an Apple-silicon machine with Rosetta, again on the Intel slice (`build/selftest-intel/`). A failure in either stops the build. `build.sh` finishes with `codesign --verify --deep --strict` and `Tools/validate-bundle.sh`, which checks the plist keys, the architecture set, the signature kind and the bundled helper layout; a validation failure stops the build. Use `RETOUCH_ARCH=arm64` or `RETOUCH_ARCH=x86_64` only for a deliberate single-architecture build.
+The build runs the self-test on the executable **inside the bundle** (not the loose `build/bin` copy) natively and, on an Apple-silicon machine with Rosetta, again on the Intel slice (`build/selftest-intel/`). A failure in either stops the build. `build.sh` finishes with `codesign --verify --deep --strict` and `Tools/validate-bundle.sh`, which checks the plist keys, the architecture set, the signature kind and the bundled helper layout; a validation failure stops the build. It also fails a bundle with no `Contents/Resources/LICENSE`, no `Contents/Resources/THIRD_PARTY_NOTICES.txt`, or an `NSHumanReadableCopyright` that still says "All rights reserved" or does not name the MIT licence, and runs `Tools/audit-bundle-notices.sh`, which fails on any bundle file the notice does not account for. Use `RETOUCH_ARCH=arm64` or `RETOUCH_ARCH=x86_64` only for a deliberate single-architecture build.
 
 Check the bundle contents:
 
@@ -54,6 +54,10 @@ Check the bundle contents:
 du -sh "Retouch Studio.app"                                # ~16 MB light universal; ~1.3–1.6 GB with the helper
 ls "Retouch Studio.app/Contents/Resources/Worker"          # only if the helper was bundled; Apple-silicon runtime
 find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only
+cat "Retouch Studio.app/Contents/Resources/LICENSE"        # MIT notice travels with the app
+cat "Retouch Studio.app/Contents/Resources/THIRD_PARTY_NOTICES.txt"
+plutil -extract NSHumanReadableCopyright raw "Retouch Studio.app/Contents/Info.plist"
+./Tools/audit-bundle-notices.sh "Retouch Studio.app"       # every file must have an owner
 ```
 
 Model weights must not appear inside the bundle. They belong in `~/Library/Application Support/RetouchStudio/AI/models` after the owner approves a download. The on-demand protocol-v2 runtime installs under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`; the installer is currently disabled because `AIRuntime.package` is nil, so this build does not install a runtime.

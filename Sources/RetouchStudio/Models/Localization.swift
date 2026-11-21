@@ -892,7 +892,7 @@ class L10n {
     var aboutContact: String { "Contact" }
     var aboutWebsite: String { "Website" }
     var aboutCopyright: String { "Copyright" }
-    var aboutRights: String { "All rights reserved." }
+    var aboutRights: String { "Released under the MIT License; provided as is, without warranty." }
     var aboutEngine: String {
         "Everything runs on this Mac — no account, no upload and no telemetry. Built with SwiftUI, Core Image and Vision; the optional AI helper runs on Apple silicon."
     }

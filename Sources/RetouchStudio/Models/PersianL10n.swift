@@ -865,7 +865,7 @@ final class PersianL10n: L10n {
     override var aboutContact: String { "تماس" }
     override var aboutWebsite: String { "وب‌سایت" }
     override var aboutCopyright: String { "کپی‌رایت" }
-    override var aboutRights: String { "تمامی حقوق محفوظ است." }
+    override var aboutRights: String { "تحت مجوز MIT منتشر شده است؛ همان‌گونه که هست، بدون هیچ ضمانتی." }
     override var aboutEngine: String {
         "همه‌چیز روی همین مک اجرا می‌شود — بدون حساب، بدون آپلود و بدون جمع‌آوری آمار. ساخته‌شده با SwiftUI، Core Image و Vision؛ دستیار اختیاری هوش مصنوعی روی Apple silicon کار می‌کند."
     }
