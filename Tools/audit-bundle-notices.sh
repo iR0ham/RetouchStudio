@@ -6,8 +6,13 @@
 #
 # This is an ownership audit, not an existence check: a font can be present
 # while the notice never names it, and a notice can name a component the
-# bundle does not carry. Both are failures here. The checker only reads the
-# bundle; it never modifies or signs it.
+# bundle does not carry. Both are failures here. Its scope is deliberate:
+# Contents/MacOS/** is claimed wholesale as this project's own source without a
+# per-file content check, and the Contents/Resources/Worker/** tree gets one
+# owner row per file — for that tree the audit only requires the helper's own
+# non-empty LICENSE and THIRD_PARTY_NOTICES.md, plus a requirements.lock whose
+# every pinned distribution the helper notice names by its exact name. The
+# checker only reads the bundle; it never modifies or signs it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -68,16 +73,50 @@ if [ -f "$NOTICES" ]; then
   if grep -qi 'Vazirmatn' "$NOTICES" && [ "$fonts" -eq 0 ]; then
     fail "the notice names Vazirmatn, but the bundle carries no Vazirmatn font"
   fi
+  # Check each of this project's four tracked fonts individually: naming all
+  # four must not pass when the bundle carries only some of them.
+  NAMED_FONTS=$(sed -n 's#.*Contents/Resources/Fonts/\(Vazirmatn-[A-Za-z]*\.ttf\).*#\1#p' "$NOTICES" | sort -u)
+  while IFS= read -r named_font; do
+    [ -n "$named_font" ] || continue
+    [ -f "$RES/Fonts/$named_font" ] \
+      || fail "the notice names Contents/Resources/Fonts/$named_font, but the bundle does not carry it"
+  done <<EOF
+$NAMED_FONTS
+EOF
   if [ "$fonts" -gt 0 ] && [ ! -f "$RES/Fonts/OFL.txt" ]; then
     fail "the Vazirmatn fonts ship without Contents/Resources/Fonts/OFL.txt"
   fi
 fi
 
 if [ -d "$RES/Worker" ]; then
-  [ -f "$RES/Worker/LICENSE" ] \
-    || fail "the bundled AI helper carries no Contents/Resources/Worker/LICENSE"
-  [ -f "$RES/Worker/THIRD_PARTY_NOTICES.md" ] \
-    || fail "the bundled AI helper carries no Contents/Resources/Worker/THIRD_PARTY_NOTICES.md"
+  WORKER_LICENSE="$RES/Worker/LICENSE"
+  WORKER_NOTICES="$RES/Worker/THIRD_PARTY_NOTICES.md"
+  [ -s "$WORKER_LICENSE" ] \
+    || fail "the bundled AI helper carries no non-empty Contents/Resources/Worker/LICENSE"
+  [ -s "$WORKER_NOTICES" ] \
+    || fail "the bundled AI helper carries no non-empty Contents/Resources/Worker/THIRD_PARTY_NOTICES.md"
+  # The blanket Worker/* owner above only says the helper brings its own
+  # notices; it must not excuse a lock pinning a distribution nothing names.
+  # Matching is case-sensitive on the exact distribution name, so a notice that
+  # writes only a display name (e.g. "Pillow" for the `pillow` distribution)
+  # fails until it also carries the pinned name.
+  if [ -f "$RES/Worker/requirements.lock" ]; then
+    PINS=$(sed -n 's/^\([A-Za-z0-9_.-]*\)==.*/\1/p' "$RES/Worker/requirements.lock" | sort -u)
+    [ -n "$PINS" ] || fail "Contents/Resources/Worker/requirements.lock pins no distribution"
+    MISSING_PINS=""
+    while IFS= read -r pin; do
+      [ -n "$pin" ] || continue
+      grep -qF -- "$pin" "$WORKER_NOTICES" \
+        || MISSING_PINS="${MISSING_PINS} ${pin}"
+    done <<EOF
+$PINS
+EOF
+    if [ -n "$MISSING_PINS" ]; then
+      fail "Contents/Resources/Worker/THIRD_PARTY_NOTICES.md does not name the pinned distributions:${MISSING_PINS}"
+    fi
+  else
+    fail "the bundled AI helper carries no Contents/Resources/Worker/requirements.lock, so its pinned distributions cannot be checked"
+  fi
 fi
 
 if [ "$failures" -ne 0 ]; then

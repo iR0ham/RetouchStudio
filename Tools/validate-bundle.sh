@@ -118,9 +118,11 @@ else
   echo "  · helper runtime not bundled (AI tools unavailable)"
 fi
 
-# Ownership audit: every file in the bundle must have a name on it. Existence
-# alone is not enough — a font the notice never names, or a notice naming a
-# component the bundle does not carry, fails here.
+# Ownership audit: every app file in the bundle must have a name on it, and a
+# notice may not claim a font the bundle does not carry. Existence alone is not
+# enough. The helper tree under Contents/Resources/Worker is covered by its own
+# notices — the audit requires those files to exist, be non-empty and name every
+# pinned distribution; see Tools/audit-bundle-notices.sh for the full scope.
 echo "  · notice ownership:"
 if ! ./Tools/audit-bundle-notices.sh "$APP"; then
   failures=$((failures + 1))
