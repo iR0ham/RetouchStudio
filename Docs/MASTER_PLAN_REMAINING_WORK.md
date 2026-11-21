@@ -111,7 +111,7 @@ recorded in the addendum §4.
 |---|---|---|---|---|
 | W5-1 | Approved runtime package, packaging/versioning | BLOCKED | `AIRuntime.package` is nil by design; no approved protocol-v2 package | owner-approved package URL, size, SHA-256 |
 | W5-2 | Model discovery, download, checksum, install, load, inference, cancellation, recovery | IMPLEMENTED infrastructure only; real inference BLOCKED | test doubles exist for infrastructure tests; real weights absent | W5-1 and model licences |
-| W5-3 | Worker source in the repository or reproducible dependency | BLOCKED | worker source lives outside the repository; regression corpus preserved in `Docs/worker-regressions` | owner decision to publish or vendor |
+| W5-3 | Worker source in the repository or reproducible dependency | MET for the source and the dependency lock; real inference still blocked by W5-1 | none for the source — `worker/retouch_ai_worker` is tracked here and `worker/requirements.lock` / `requirements-test.lock` are hash-pinned (closed 2026-11-18, recorded in `Docs/AI_11_ROADMAP.md`); the regression corpus stays in `Docs/worker-regressions` | W5-1 for inference, not for the source |
 | W5-4 | DirectML / Core ML provider integration | NOT IMPLEMENTED | evaluate after W5-1 | W5-1 |
 
 ## WS-5 — Reliability, performance, recovery
@@ -151,7 +151,6 @@ recorded in the addendum §4.
 |---|---|---|
 | No Apple Developer membership | notarization, warning-free macOS distribution | owner credentials |
 | No approved AI runtime package or weights | W5 real inference | owner approval |
-| Worker source outside the repository | fresh-clone AI builds | publish or vendor |
 | No approved face-landmark model | W3 on Windows | a measured Lead decision on a distributable model |
 | No HEIF decoder on `windows-2025` | HEIC read on CI | CI image change or documented gap |
 | No physical Windows machine | interactive UI acceptance | CI-only evidence remains the standard |
