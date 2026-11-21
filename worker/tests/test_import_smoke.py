@@ -10,6 +10,7 @@ They need no torch, no download and no GPU: the planner reads source, and the
 import step takes an injected importer.
 """
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -152,10 +153,12 @@ class ImportSmokePlanTest(unittest.TestCase):
         result = smoke.plan(self.package, lock, fixed=())
         self.assertEqual(result.unpinned, [])
         self.assertEqual([target.module for target in result.targets],
-                         ["google"])
+                         ["google.protobuf"])
 
-        # The `from` form records the bare module name as well; it is the
-        # namespace, not a second distribution, and stays pinned.
+        # The `from` form records the bare namespace too, and that is what a
+        # `from x import y` statement really imports: `google`, then `protobuf`
+        # out of it. It stays pinned either way — the namespace is not a second
+        # distribution — and the target follows the recorded dotted name.
         write_package(self.package,
                       {"engine.py": "from google import protobuf\n"})
         result = smoke.plan(self.package, lock, fixed=())
@@ -179,14 +182,15 @@ class ImportSmokePlanTest(unittest.TestCase):
         result = smoke.plan(self.package, lock, fixed=())
         self.assertEqual(result.unpinned, [])
         self.assertEqual([target.module for target in result.targets],
-                         ["google"])
+                         ["google._upb._message"])
         self.assertEqual([target.module for target in result.derived],
-                         ["google"], "the fixed floor does not name google")
+                         ["google._upb._message"],
+                         "the fixed floor does not name google")
         self.assertIn("engine.py", result.derived[0].why)
 
         imported: list[str] = []
         failures, _seconds = smoke.run(result.targets, imported.append)
-        self.assertEqual(imported, ["google"])
+        self.assertEqual(imported, ["google._upb._message"])
         self.assertEqual(
             failures, [],
             "if protobuf is installed its own extension module must load; a "
@@ -198,7 +202,7 @@ class ImportSmokePlanTest(unittest.TestCase):
         result = smoke.plan(self.package, lock, fixed=())
         self.assertEqual(result.unpinned, [])
         self.assertEqual([target.module for target in result.targets],
-                         ["google"])
+                         ["google._upb"])
 
         # Outside every shipped prefix the namespace stays unpinned and is not
         # imported, so the broadened alias cannot smuggle a foreign tree in.
@@ -261,6 +265,68 @@ class ImportSmokePlanTest(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("cannot read", violations[0])
 
+    def test_a_newly_pinned_submodule_is_a_dotted_target(self):
+        """The derived target is the recorded dotted name, not its top level.
+
+        `lock_closure` keeps every full dotted name it sees so a reader can go
+        deeper than the first component, but the planner used to build its target
+        from the top-level key alone. A worker that newly did
+        `import yaml.nodes` against a pinned `pyyaml` therefore produced the
+        target `yaml`, and the submodule that breaks on someone's machine — the
+        one whose own import statement fails — was never exercised here. The
+        measured case: `import yaml.nodes` used to plan `['yaml']`.
+        """
+        write_package(self.package, {"engine.py": "import yaml.nodes\n"})
+        result = smoke.plan(self.package, self.lock, fixed=())
+        self.assertEqual([target.module for target in result.targets],
+                         ["yaml.nodes"])
+        self.assertEqual([target.module for target in result.derived],
+                         ["yaml.nodes"])
+        self.assertEqual(result.unpinned, [])
+        self.assertEqual(result.stale, [])
+
+        imported: list[str] = []
+        failures, _seconds = smoke.run(result.targets, imported.append)
+        self.assertEqual(imported, ["yaml.nodes"],
+                         "the submodule itself must reach the importer")
+        self.assertEqual(failures, [])
+
+        # A `from` form records both the module and the attribute; only real
+        # modules may be imported, and the deepest module is the point.
+        write_package(self.package,
+                      {"engine.py": "from yaml.nodes import ScalarNode\n"})
+        result = smoke.plan(self.package, self.lock, fixed=())
+        self.assertEqual([target.module for target in result.derived],
+                         ["yaml.nodes"])
+
+    def test_one_target_per_distribution_when_only_top_levels_are_imported(self):
+        """Dotted derivation must not multiply targets for nothing.
+
+        Two pinned packages imported at their top level yield two targets, not a
+        target per recorded name: `numpy` also records `numpy.core.multiarray`
+        style attribute names through other spellings, and importing a package
+        runs its `__init__`, so a parent already covers its children. The fixed
+        floor counts as coverage too — a recorded submodule inside an existing
+        target adds no import.
+        """
+        write_package(self.package, {
+            "engine.py": "import numpy\nimport yaml\n",
+        })
+        result = smoke.plan(self.package, self.lock, fixed=())
+        self.assertEqual([target.module for target in result.targets],
+                         ["numpy", "yaml"])
+
+        write_lock(self.lock_path, {"pillow": "1.0"})
+        lock = lock_closure.read_lock(self.lock_path)
+        write_package(self.package, {
+            "engine.py": "import PIL\nfrom PIL.Image import open as op\n",
+        })
+        result = smoke.plan(self.package, lock, fixed=(("PIL", "imaging"),))
+        self.assertEqual([target.module for target in result.fixed], ["PIL"])
+        self.assertEqual(result.derived, [],
+                         "the fixed parent already imports PIL.Image")
+        self.assertEqual(result.stale, [])
+
     def test_the_shipped_package_has_no_stale_targets(self):
         """The real TARGETS still describe the real worker."""
         real_lock = lock_closure.read_lock(WORKER / "requirements.lock")
@@ -268,6 +334,30 @@ class ImportSmokePlanTest(unittest.TestCase):
         self.assertEqual(result.stale, [])
         self.assertEqual([module for module, _files, _guard in result.unpinned],
                          ["sam2"])
+        # Every dotted name the shipped code imports is already inside a target,
+        # so the derivation adds no import cost here. If a future import site
+        # names a deeper submodule it becomes one more target — which is the
+        # point — and this assertion documents that today's tree costs the same
+        # to smoke before and after.
+        imported, _dynamic = lock_closure.imported_modules(
+            WORKER / "retouch_ai_worker")
+        names: set[str] = set()
+        for entry in imported.values():
+            names |= entry["names"]
+        modules = [target.module for target in result.targets]
+        third_party = sorted(
+            name for name in names
+            if name.split(".")[0] not in sys.stdlib_module_names
+            and name.split(".")[0] not in lock_closure.FIRST_PARTY
+            and name.split(".")[0] not in {m for m, _f, _g in result.unpinned})
+        uncovered = sorted(name for name in third_party
+                           if not any(name == module
+                                      or name.startswith(module + ".")
+                                      or module.startswith(name + ".")
+                                      for module in modules))
+        self.assertEqual(uncovered, [],
+                         "a recorded third-party import name reaches neither a "
+                         "target nor the unpinned list")
 
     def test_a_broken_import_is_a_failure(self):
         """Seeded defect E3: the module imports and the interpreter cannot load it."""

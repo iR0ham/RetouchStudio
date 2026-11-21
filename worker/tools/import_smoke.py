@@ -38,6 +38,8 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+from collections.abc import Iterable, Sequence
+
 WORKER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKER_ROOT / "tools"))
 import lock_closure  # noqa: E402  (sibling tool; resolves after the insert)
@@ -99,6 +101,71 @@ def _stdlib() -> frozenset[str]:
         return frozenset()
 
 
+def _covered(name: str, others: Iterable[str]) -> bool:
+    """Is `name` already exercised by some other target?
+
+    Importing a package runs its `__init__`, so a parent covers its children and
+    a child proves its parent was reachable. That is what keeps the derived set
+    at one target per distribution when the code only imports top-level names,
+    instead of importing `numpy` and then `numpy` again under another spelling.
+    """
+    for other in others:
+        if other == name or other.startswith(name + ".") \
+                or name.startswith(other + "."):
+            return True
+    return False
+
+
+def derive_targets(imported: dict[str, dict[str, set]], lock: lock_closure.Lock,
+                   fixed: Sequence[str]
+                   ) -> tuple[list[Target], list[tuple[str, str, str]]]:
+    """The targets the shipped code earns, plus the imports it cannot vouch for.
+
+    A derived target is built from a recorded dotted name, never from the
+    top-level module alone. `lock_closure` keeps every full dotted name it sees
+    precisely so a reader can go deeper than the first component, and using only
+    the top level loses that: a worker that newly does `import yaml.nodes`
+    against a pinned `pyyaml` produced the target `yaml`, so the submodule that
+    actually broke on someone's machine was never imported here. Each distinct
+    pinned dotted name becomes its own target, deduplicated against the fixed
+    floor and against each other by `_covered`.
+
+    The cost is bounded by design — the real tree yields exactly one derived
+    target per distribution today, because every dotted name it records is
+    already inside a fixed target — but an import site naming a deep submodule
+    now costs one more `importlib.import_module` call, which is a cheap
+    `sys.modules` hit after the parent has run. An unpinned name, or a functional
+    import whose name this walk cannot read, is returned as an "unpinned" entry
+    instead of a target: neither is imported here, and both are
+    `lock_closure.audit`'s failure.
+    """
+    targets: list[Target] = []
+    unpinned: list[tuple[str, str, str]] = []
+    claimed: list[str] = list(fixed)
+    for module in sorted(imported):
+        if module in _stdlib():
+            continue
+        if module in lock_closure.FIRST_PARTY:
+            continue
+        entry = imported[module]
+        names = sorted(entry["names"])
+        distribution = lock_closure.distribution_for(module, entry["names"])
+        if lock_closure.canonical(distribution) not in lock.pins:
+            files = ", ".join(sorted(entry["files"])[:2])
+            guard = (", ".join(sorted(entry["guards"]))
+                     if entry["guarded"] == {True} else "")
+            unpinned.append((module, files, guard))
+            continue
+        files = ", ".join(sorted(entry["files"])[:2])
+        why = f"imported by {files}"
+        for name in names:
+            if _covered(name, claimed):
+                continue
+            claimed.append(name)
+            targets.append(Target(name, why, True))
+    return targets, unpinned
+
+
 def plan(package: Path, lock: lock_closure.Lock,
          fixed: tuple[tuple[str, str], ...] = TARGETS) -> Plan:
     """Combine the fixed floor with the imports the code actually has."""
@@ -123,26 +190,11 @@ def plan(package: Path, lock: lock_closure.Lock,
     for module in sorted(imported):
         if module in stdlib:
             result.skipped_stdlib.append(module)
-            continue
-        if module in lock_closure.FIRST_PARTY:
+        elif module in lock_closure.FIRST_PARTY:
             result.skipped_local.append(module)
-            continue
-        # A fixed submodule already imports its parent package.
-        if any(module == name or name.startswith(module + ".")
-               for name in fixed_modules):
-            continue
-        distribution = lock_closure.distribution_for(
-            module, imported[module]["names"])
-        if lock_closure.canonical(distribution) not in lock.pins:
-            files = ", ".join(sorted(imported[module]["files"])[:2])
-            entry = imported[module]
-            guard = (", ".join(sorted(entry["guards"]))
-                     if entry["guarded"] == {True} else "")
-            result.unpinned.append((module, files, guard))
-            continue
-        files = ", ".join(sorted(imported[module]["files"])[:2])
-        result.targets.append(
-            Target(module, f"imported by {files}", True))
+    derived, unpinned = derive_targets(imported, lock, fixed_modules)
+    result.unpinned.extend(unpinned)
+    result.targets.extend(derived)
     return result
 
 
