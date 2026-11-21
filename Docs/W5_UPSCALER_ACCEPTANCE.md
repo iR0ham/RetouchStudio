@@ -1226,6 +1226,36 @@ evidence behind it.
   the measured ≥ 20 MP rate (8.63–9.45 s/output-MP) — 8–16 % under the
   1500 s host wait (`Sources/RetouchStudio/Core/ExportService.swift:225`),
   thin against a wait that is itself unmeasured at that size.
+
+---
+
+## 13. Dated addendum (2026-11-21): the worker suite count is derived, not copied
+
+Status: addendum. §§9 and 12 stay as written; the two "five pinned places"
+sentences in §9.1 (`:545`) and §9.2 (`:661`) describe the arrangement that
+existed when they were recorded, and are left unedited as the record of it.
+
+On the fail-closed worker-gate branch (`w5-worker-gates-failclosed`, PR #110)
+the expected worker-suite size lives in exactly one place,
+`Tests/expected-worker-tests.txt`. Three readers compare against that file
+and none carries a second copy of the number:
+
+- `Tests/run-worker.sh` reads the file, runs the suite, extracts the
+  runner's own `Ran N tests` line and exits non-zero when the two disagree,
+  naming both numbers in the message;
+- `worker/tests/test_suite_count.py` re-discovers the suite in-process and
+  compares the discovered count with the same file, so a stale value fails
+  the suite itself;
+- the `macOS Integration` job's "Assert every suite reported a verdict" step
+  builds its `Ran ${expected_worker_tests} tests` pattern from the file.
+
+The divergence was observed while adding tests for this addendum: with the
+file still holding `188`, discovery found `190` and
+`test_suite_count` failed with
+`AssertionError: 190 != 188 : the discovered suite and
+Tests/expected-worker-tests.txt disagree`; after the file was set to `190`,
+the runner reported `Ran 190 tests ... OK` and exited 0. Adding, removing or
+renaming a worker test now means editing one value, not five.
 - **≈ 100 MP** keeps both margins comfortably: ≈ 5.35 GB (33.4 % of 16 GB)
   and 863–945 s (37–42 % under the wait). It is the size these data defend
   on both axes at once.

@@ -18,7 +18,10 @@ seeded below because treating them as exempt was the fail-open path: the
 idiom is common around a hard import, and a missing pin behind it would have
 passed CI.
 """
+import contextlib
 import importlib.util
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -200,6 +203,87 @@ class ImportClosureTest(unittest.TestCase):
         self.assertEqual(len(violations), 1)  # B4
         self.assertIn("cv2", violations[0])
         self.assertNotIn("cv2", optional)
+
+    def test_resolver_report_is_compared_with_the_lock_exactly(self):
+        """A4: a pip `--dry-run --report` document against the lock.
+
+        A report that matches the pins is evidence the lock resolves on its
+        own; an extra distribution means pip picked something the lock does
+        not pin, an omitted pin means the lock names something pip never
+        installs, and a different version means the report and the lock
+        describe different environments. The same comparison runs through
+        `main`, because that is the command the CI step uses.
+        """
+        pins = {"numpy": "2.5.4", "pillow": "12.0.0"}
+
+        def entry(name, version):
+            wheel = (f"{name}-{version}-cp311-cp311-macosx_11_0_arm64.whl")
+            return {
+                "metadata": {"name": name, "version": version},
+                "download_info": {
+                    "url": f"https://files.pythonhosted.org/packages/{wheel}"},
+                "is_direct": False,
+            }
+
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            lock_path = scratch / "requirements.lock"
+            lines = []
+            for name, version in pins.items():
+                lines.append(f"{name}=={version} \\")
+                lines.append(f"    --hash=sha256:{'0' * 64}")
+            lock_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            lock = closure.read_lock(lock_path)
+            self.assertEqual(lock.violations, [])
+            package = scratch / "pkg"
+            package.mkdir()
+            report = scratch / "report.json"
+
+            def write_report(entries):
+                report.write_text(json.dumps({"install": entries}),
+                                  encoding="utf-8")
+
+            def run_main():
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), \
+                        contextlib.redirect_stderr(err):
+                    code = closure.main([
+                        "--lock", str(lock_path),
+                        "--package", str(package),
+                        "--test-lock", str(lock_path),
+                        "--report", str(report)])
+                return code, out.getvalue(), err.getvalue()
+
+            exact = [entry("numpy", "2.5.4"), entry("pillow", "12.0.0")]
+            write_report(exact)
+            violations, notes = closure.audit_report(report, lock)
+            self.assertEqual(violations, [])
+            self.assertEqual(notes[0], "2 distributions: 2 wheels, 0 sdists")
+            code, stdout, _stderr = run_main()
+            self.assertEqual(code, 0)
+            self.assertIn("WORKER LOCK CLOSURE: PASS (2 distributions, "
+                          "0 imported modules)", stdout)
+
+            write_report(exact + [entry("evilpkg", "1.0")])
+            violations, _notes = closure.audit_report(report, lock)
+            self.assertEqual(len(violations), 1)
+            self.assertIn("the resolver added evilpkg, which the lock does "
+                          "not pin", violations[0])
+            code, _stdout, stderr = run_main()
+            self.assertEqual(code, 1)
+            self.assertIn("WORKER LOCK CLOSURE: FAIL (1 problem(s))", stderr)
+
+            write_report([entry("numpy", "2.5.4")])
+            violations, _notes = closure.audit_report(report, lock)
+            self.assertEqual(len(violations), 1)
+            self.assertIn("the lock pins pillow, the resolver did not pick it",
+                          violations[0])
+
+            write_report([entry("numpy", "9.9.9"), entry("pillow", "12.0.0")])
+            violations, _notes = closure.audit_report(report, lock)
+            self.assertEqual(len(violations), 1)
+            self.assertIn("numpy resolved to 9.9.9, the lock pins 2.5.4",
+                          violations[0])
 
     def test_lock_is_exact_hashed_and_covers_the_test_lock(self):
         lock = closure.read_lock(WORKER / "requirements.lock")
