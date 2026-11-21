@@ -208,9 +208,10 @@ The corresponding license texts ship inside each wheel's `.dist-info` directory 
 
 ### 6.2 Python wheels
 
-68 packages are pinned by `worker/requirements.lock`, and every one of them is
+67 packages are pinned by `worker/requirements.lock`, and every one of them is
 bundled. The count is the number of distinct names in that file, counted
-2026-11-18; the table gives the principal ones:
+2026-11-21, after the `opencv-python` pin left the lock; the table gives the
+principal ones:
 
 | Package | Version | License |
 |---|---|---|
@@ -221,7 +222,6 @@ bundled. The count is the number of distinct names in that file, counted
 | pillow | 13.0.0 | MIT-CMU |
 | mlx, mlx-metal | 0.32.4 | MIT |
 | mflux | 0.24.0 | MIT |
-| opencv-python | 5.0.0.93 | Apache-2.0 |
 | huggingface-hub | 1.33.0 | Apache-2.0 |
 | tokenizers | 0.23.3 | Apache-2.0 |
 | safetensors | 0.8.0 | Apache-2.0 |
