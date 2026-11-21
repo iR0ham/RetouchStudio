@@ -722,3 +722,41 @@ was taken and the cause was in the harness, not in Rosetta.**
   (`ModelStore.swift:247`). That is consistent with the recorded arm64-only AI
   packaging decision, so nothing was changed here; making models available on
   Intel is a catalog, measurement and licensing decision, not a string edit.
+
+## Worker payload and lock jobs — advisory (2026-11-21)
+
+**Correction to the status line and to "What each check proves" above, which
+describe the gate set as it stood on 2026-11-14.** PR #104 (merged as
+`80b23eea7` on 2026-11-21, "Prove the shipping worker lock and payload in CI")
+added two jobs to `.github/workflows/ci.yml`; neither is a required context.
+The five contexts in the table at the top of this document remain the required
+set, and the branch protection check confirms it (the required list still names
+only `StudioCore Boundary`, `Platform-neutral Conformance`, `macOS Integration`,
+`Windows StudioCore` and `Windows App`).
+
+| Job | Runner | What it runs | Gate state |
+|---|---|---|---|
+| `Worker Lock Closure` | `macos-15` | Resolves `worker/requirements.lock` with `pip --dry-run --report`, then `worker/tools/lock_closure.py --report` proves the resolver picked exactly the locked set and that the shipped package's third-party imports are pinned | Advisory: not a required context. The job itself has no `continue-on-error`, so a failure marks the run failed even though it cannot block a merge |
+| `Worker Payload Bundle` | `macos-15` | Builds the pinned runtime, installs the full lock, runs `pip_check_gate.py`, bundles `Tools/bundle-worker.sh`, packages with `Tools/make-runtime.sh`, verifies the archive's distribution set with `worker/tools/verify_payload.py`, then imports from the extracted runtime | Advisory: `continue-on-error: true` and not a required context |
+
+**Owner ruling (2026-11-21).** Both jobs stay advisory until the fail-open
+paths in their first version are closed and the checks are shown to fail when a
+defect is seeded. That work is on the `w5-worker-gates-failclosed` branch and
+does not promote either job: the three holes were
+
+1. the import guard accepted `except Exception:`, a bare `except:` and
+   `BaseException` as proof that an import was optional, so a missing pin
+   behind the common defensive idiom passed;
+2. the `pip check` step discarded the exit status and stderr, so a crashed
+   check with empty stdout passed;
+3. the archive check compared dist-info *counts*, so a duplicated, renamed or
+   wrong-version distribution passed while the count stayed at 68 for 67 pins.
+
+The promotion criteria are: (a) those three checks judge identity and status,
+not presence or count; (b) each seeding runs in the required macOS job, not
+only by hand; (c) a deliberately seeded defect is shown to fail the job it
+targets; (d) a green streak on `main` long enough to show the jobs are not
+flaky on the hosted runners. Only then should the two names be added to the
+required contexts, and `continue-on-error` removed from `Worker Payload
+Bundle`. This addendum records the state; it does not change branch
+protection.
