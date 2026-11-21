@@ -1,171 +1,124 @@
 #!/usr/bin/env python3
-"""Adds the recorded weights-licence evidence to Resources/model-catalog.json.
+"""Writes each catalogue entry's permitted-use record into the host catalog.
 
-Every value here is transcribed from /private/tmp/rs-model-licences/MODEL_LICENSES.md
-(sections 0.1, 2.1, 3.1, 6, 7.1 and Appendix A). All reads are dated 2026-11-21.
-The script only ever adds keys: it asserts that no pre-existing key changes.
+The records are the worker catalogue's own (`retouch_ai_worker.catalog`), field
+for field, so the host resource and the worker table cannot state different
+licence positions. Every value there traces to the repository-owned dossier
+`Docs/MODEL_LICENCES.md` (sections 0.1, 2.1, 3.1, 6, 7.1 and Appendix A); the
+reads were made on 2026-11-21 and each record carries that read date.
+
+The transform is idempotent on purpose: it parses the catalogue, replaces the
+superseded `weightsEvidence` block (or appends `permitted_use`), re-serialises
+in the file's own JSON style, and writes only when the bytes would change. A
+second run therefore reports zero changes, which is what CI checks.
+
+Run:  python3 Docs/licence-evidence-apply.py [--check]
+
+`--check` writes nothing and exits 1 when the file is out of date, so CI can
+prove the resource was regenerated from the catalogue instead of hand-edited.
 """
+from __future__ import annotations
+
+import argparse
+import collections
+import hashlib
 import json
 import pathlib
-import collections
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CATALOG = ROOT / "Resources" / "model-catalog.json"
+sys.path.insert(0, str(ROOT / "worker"))
 
-READ_ON = "2026-11-21"
+from retouch_ai_worker.catalog import CATALOG as WORKER_CATALOG  # noqa: E402
 
-EVIDENCE = collections.OrderedDict([
-    ("flux2-klein-4b-q4", collections.OrderedDict([
-        ("licenseUrl", "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4"),
-        ("readOn", READ_ON),
-        ("explicit", True),
-        ("commercialOk", True),
-        ("noticeText",
-         "Apache-2.0. Redistributing or mirroring these weights requires a copy of the "
-         "Apache-2.0 licence, the retained copyright and licence notices, a statement of "
-         "changes, and any NOTICE text from the source repository."),
-        ("verdict", "usable"),
-        ("verdictReason",
-         "The FLUX.2-klein-4B card states the weights are open for commercial use under "
-         "Apache-2.0, so the grant is explicit rather than inferred from a repository tag."),
-        ("datasetNote", None),
-    ])),
-    ("sam2.1-hiera-tiny", collections.OrderedDict([
-        ("licenseUrl", "https://huggingface.co/facebook/sam2.1-hiera-tiny"),
-        ("readOn", READ_ON),
-        ("explicit", True),
-        ("commercialOk", True),
-        ("noticeText",
-         "Apache-2.0. Redistributing or mirroring this checkpoint requires a copy of the "
-         "Apache-2.0 licence, the retained copyright and licence notices, a statement of "
-         "changes, and any NOTICE text from facebookresearch/sam2."),
-        ("verdict", "usable"),
-        ("verdictReason",
-         "The SAM 2 README explicitly licenses the model checkpoints under Apache-2.0, "
-         "separately from the repository licence."),
-        # The dossier records the SAM 2 training set as NOT CONFIRMED, so no
-        # residual-risk statement is asserted here.
-        ("datasetNote", None),
-    ])),
-    ("swin2sr-x4", collections.OrderedDict([
-        ("licenseUrl", "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"),
-        ("readOn", READ_ON),
-        ("explicit", False),
-        ("commercialOk", True),
-        ("noticeText",
-         "Apache-2.0. Redistributing or mirroring pytorch_model.bin requires a copy of the "
-         "Apache-2.0 licence, the retained copyright notices, a statement of changes, and "
-         "any NOTICE text; the upstream code licence carries \u201cCopyright [2021] [SwinIR "
-         "Authors]\u201d."),
-        ("verdict", "usable-with-conditions"),
-        ("verdictReason",
-         "The only weights statement is the repository-level license:apache-2.0 tag on the "
-         "Hugging Face repo whose sole payload is the checkpoint, so the grant is inferred "
-         "rather than authored about the weights."),
-        ("datasetNote",
-         "Swin2SR's own training set is not confirmed; DIV2K, the usual corpus in this "
-         "family, is made available for academic research purposes only, which is a "
-         "residual dataset risk and not a term of the recorded weight grant."),
-    ])),
-    ("migan", collections.OrderedDict([
-        ("licenseUrl",
-         "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/LICENSE-WEIGHTS"),
-        ("readOn", READ_ON),
-        ("explicit", True),
-        ("commercialOk", True),
-        ("noticeText",
-         "MIT. Redistributing or mirroring this ONNX requires the copyright line and the "
-         "full permission notice from LICENSE-WEIGHTS (Picsart AI Research, 2024)."),
-        ("verdict", "usable"),
-        ("verdictReason",
-         "The authors ship a dedicated MIT LICENSE-WEIGHTS next to the MIT code licence, "
-         "and the ONNX is their own pipeline export."),
-        # Places2 terms could not be fetched (dossier section 9 item 1), so the
-        # dataset position stays unconfirmed instead of being stamped with a claim.
-        ("datasetNote", None),
-    ])),
-])
+REPLACED_KEY = "weightsEvidence"
+RECORD_KEY = "permitted_use"
 
 
-def main() -> int:
-    before_text = CATALOG.read_text(encoding="utf-8")
-    catalog = json.loads(before_text, object_pairs_hook=collections.OrderedDict)
+def snapshot(node, prefix=""):
+    out = {}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            out.update(snapshot(value, f"{prefix}/{key}"))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            out.update(snapshot(value, f"{prefix}[{index}]"))
+    else:
+        out[prefix] = node
+    return out
 
-    def snapshot(node, prefix=""):
-        out = {}
-        if isinstance(node, dict):
-            for k, v in node.items():
-                out.update(snapshot(v, f"{prefix}/{k}"))
-        elif isinstance(node, list):
-            for i, v in enumerate(node):
-                out.update(snapshot(v, f"{prefix}[{i}]"))
-        else:
-            out[prefix] = node
-        return out
 
-    old = snapshot(catalog)
+def records() -> dict[str, dict]:
+    return {entry.id: entry.permitted_use.to_json() for entry in WORKER_CATALOG}
 
-    ids = [e["id"] for e in catalog["entries"]]
-    missing = [i for i in ids if i not in EVIDENCE]
-    extra = [i for i in EVIDENCE if i not in ids]
-    assert not missing, f"no evidence drafted for {missing}"
-    assert not extra, f"evidence drafted for unknown entries {extra}"
 
-    # The edit is textual on purpose: re-dumping the whole file would rewrite
-    # every entry's closing brace to add a comma and re-order nothing else, so a
-    # reviewer could not see that this gate only ever adds keys. Each entry's
-    # last recorded key is located and the evidence block appended after it.
-    text = before_text
-    for entry_id, evidence in EVIDENCE.items():
-        body = collections.OrderedDict(
-            (k, v) for k, v in evidence.items() if v is not None)
-        # The inner object is dumped at depth 1 (member indent 6, its keys at
-        # 8) to match the file, then hung off the previous last key with a
-        # comma. Dumping it bare and wrapping avoids fiddling with brace lines.
-        inner = json.dumps(body, indent=2, ensure_ascii=False).splitlines()
-        # inner[0] is "{" and inner[-1] is "}"; drop both and write our own.
-        shape = ["      \"weightsEvidence\": {"]
-        shape += ["      " + ln for ln in inner[1:-1]]
-        shape.append("      }")
-        block = ",\n" + "\n".join(shape)
-        start = text.index(f'"id": "{entry_id}"')
-        end = text.index("\n    }", start)
-        (last_key, last_value), = entry_last_key(text, entry_id)
-        # Re-parse the entry body and confirm the insertion point really is the
-        # entry's final recorded key, so the block can only ever be appended.
-        reparsed = json.loads("{" + text[start:end] + "\n}")
-        assert list(reparsed)[-1] == last_key, (entry_id, list(reparsed)[-3:])
-        assert reparsed[last_key] == last_value, entry_id
-        text = text[:end] + block + text[end:]
+def rebuild(data) -> None:
+    """Replaces or appends each entry's permitted-use record, in place."""
+    known = records()
+    ids = [entry["id"] for entry in data["entries"]]
+    missing = [model_id for model_id in ids if model_id not in known]
+    extra = [model_id for model_id in known if model_id not in ids]
+    if missing:
+        raise SystemExit(f"no permitted-use record for {missing}")
+    if extra:
+        raise SystemExit(f"permitted-use record for unknown entries {extra}")
+    for entry in data["entries"]:
+        rebuilt = collections.OrderedDict()
+        for key, value in entry.items():
+            if key == REPLACED_KEY:
+                rebuilt[RECORD_KEY] = known[entry["id"]]
+            elif key == RECORD_KEY:
+                continue
+            else:
+                rebuilt[key] = value
+        if RECORD_KEY not in rebuilt:
+            rebuilt[RECORD_KEY] = known[entry["id"]]
+        entry.clear()
+        entry.update(rebuilt)
 
-    CATALOG.write_text(text, encoding="utf-8")
 
-    new_catalog = json.loads(CATALOG.read_text(encoding="utf-8"),
-                             object_pairs_hook=collections.OrderedDict)
-    after = snapshot(new_catalog)
-    changed = {k: (v, after[k]) for k, v in old.items() if after.get(k) != v}
-    assert not changed, f"pre-existing values changed: {changed}"
-    added = sorted(set(after) - set(old))
-    removed = sorted(set(old) - set(after))
-    assert not removed, f"keys removed: {removed}"
-    for entry in new_catalog["entries"]:
-        assert set(entry["weightsEvidence"]) == set(
-            k for k, v in EVIDENCE[entry["id"]].items() if v is not None)
-    print(f"OK: {len(added)} keys added, 0 changed, 0 removed")
-    print("byte-for-byte outside additions:",
-          CATALOG.read_text(encoding="utf-8").endswith("\n") == before_text.endswith("\n"))
+def render(text: str) -> str:
+    data = json.loads(text, object_pairs_hook=collections.OrderedDict)
+    # The two licence keys are the ones this tool owns; every other value in
+    # the file must survive untouched, and that is what the snapshots prove.
+    before = {key: value for key, value in snapshot(data).items()
+              if f"/{REPLACED_KEY}" not in key and f"/{RECORD_KEY}" not in key}
+    rebuild(data)
+    after = snapshot(data)
+    changed = {key: (before[key], after[key])
+               for key in before
+               if key in after and after[key] != before[key]}
+    if changed:
+        raise SystemExit(f"pre-existing values changed: {changed}")
+    removed = sorted(set(before) - set(after))
+    if removed:
+        raise SystemExit(f"keys removed: {removed}")
+    return json.dumps(data, indent=2, ensure_ascii=True) + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--check", action="store_true",
+                        help="verify the file is current; write nothing")
+    args = parser.parse_args(argv)
+
+    text = CATALOG.read_text(encoding="utf-8")
+    rendered = render(text)
+    digest = hashlib.sha256(rendered.encode()).hexdigest()
+    if args.check:
+        if rendered != text:
+            print(f"{CATALOG} is stale; run Docs/licence-evidence-apply.py",
+                  file=sys.stderr)
+            return 1
+        print(f"OK: catalogue current, sha256 {digest}")
+        return 0
+    if rendered == text:
+        print(f"OK: no change, sha256 {digest}")
+        return 0
+    CATALOG.write_text(rendered, encoding="utf-8")
+    print(f"OK: catalogue updated, sha256 {digest}")
     return 0
-
-
-def entry_last_key(text: str, entry_id: str):
-    """Returns the single key/value pair that ends the entry, as a JSON probe."""
-    start = text.index(f'"id": "{entry_id}"')
-    end = text.index("\n    }", start)
-    lines = [ln for ln in text[start:end].splitlines() if ln.strip()]
-    last = lines[-1].strip()
-    obj = json.loads("{" + last + "}")
-    assert len(obj) == 1, obj
-    return list(obj.items())
 
 
 if __name__ == "__main__":

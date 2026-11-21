@@ -94,122 +94,232 @@ struct ModelCatalogFile: Codable, Equatable {
 }
 
 struct ModelCatalogEntry: Codable, Equatable, Identifiable {
-    /// The closed set of release verdicts a licence dossier can assign.
-    ///
-    /// A verdict is recorded evidence, never a gate: nothing in this version of
-    /// the codebase branches on it. Keeping it an enum rather than a free-text
-    /// string is what makes a later reviewed change able to trust the field.
-    enum ModelLicenseVerdict: String, Codable, Equatable {
-        case usable
-        case usableWithConditions = "usable-with-conditions"
-        case excluded
+    struct ModelUseCondition: Codable, Equatable {
+        let text: String
+        let met: Bool
     }
 
-    /// Where a licence claim came from, as delivered by the model licence
-    /// dossier.
+    /// What the recorded evidence says about one artefact: the model's code, its
+    /// weight files, or its training data.
     ///
-    /// Every field is optional in the Codable representation for two reasons:
-    /// `ModelCatalog.load` decodes with a strict `JSONDecoder`, so a required
-    /// key would make every older catalog file unreadable; and a fact that has
-    /// not been confirmed must be stored as absent rather than guessed at. A
-    /// value that was inferred from a repository-level tag instead of being
-    /// stated about the weights keeps `explicit == false`, which is the whole
-    /// point of the field.
-    struct WeightsLicenseEvidence: Codable, Equatable {
-        /// URL of the grant itself, which may differ from the entry's
-        /// `licenseEvidenceUrl` when the author ships a dedicated file.
-        let licenseUrl: String?
-        /// ISO-8601 calendar date the grant was actually read. Never defaulted:
-        /// a stamp invented here would defeat rot detection.
-        let readOn: String?
-        /// Did the author state the grant *about the weights*?
-        let explicit: Bool?
-        let commercialOk: Bool?
-        /// Attribution that would have to be reproduced if a file were ever
-        /// mirrored or bundled.
-        let noticeText: String?
-        let verdict: ModelLicenseVerdict?
-        let verdictReason: String?
-        /// Dataset provenance statement, or nil when it is not confirmed.
-        let datasetNote: String?
-        /// The verdict exactly as written in the file, so `validate()` can
-        /// reject a word outside the closed set instead of dropping it. Only the
-        /// flat spelling can carry a word here that `verdict` refused to parse;
-        /// a nested record keeps the two in step by construction.
-        let verdictRaw: String?
-        /// Set only when the file spells the grant with the flat top-level keys
-        /// instead of the nested object. It exists to carry those values into
-        /// `init(from:)`; no production catalog writes it, and encoding omits it.
-        let flatSpelling: Bool?
-
-        enum CodingKeys: String, CodingKey {
-            case licenseUrl
-            case readOn
-            case explicit
-            case commercialOk
-            case noticeText
-            case verdict
-            case verdictReason
-            case datasetNote
+    /// The worker's `permitted_use` record is the source of this shape
+    /// (`worker/retouch_ai_worker/catalog.py`), and the host mirrors it field for
+    /// field: these JSON names are exactly what `ArtefactTerms.to_json()` writes,
+    /// so the cross-surface check can compare the two without a translation table.
+    ///
+    /// `verdict` and `statedBy` are decoded as text, not as enums, for the same
+    /// reason every other recorded fact here is: a word this build does not know
+    /// must reach `validate()` and be reported, instead of failing the strict
+    /// decode for the whole catalog.
+    struct ModelArtefactTerms: Codable, Equatable {
+        /// The owner's four statuses. Nothing outside this set is a verdict.
+        enum Verdict: String, Codable, Equatable {
+            case approved
+            case approvedWithConditions = "approved-with-conditions"
+            case unknown
+            case excluded
         }
 
-        init(licenseUrl: String?, readOn: String?, explicit: Bool?, commercialOk: Bool?,
-             noticeText: String?, verdict: ModelLicenseVerdict?, verdictRaw: String?,
-             verdictReason: String?, datasetNote: String?, flatSpelling: Bool? = nil) {
-            self.licenseUrl = licenseUrl
-            self.readOn = readOn
-            self.explicit = explicit
-            self.commercialOk = commercialOk
-            self.noticeText = noticeText
-            self.verdict = verdict
-            self.verdictRaw = verdictRaw
-            self.verdictReason = verdictReason
-            self.datasetNote = datasetNote
-            self.flatSpelling = flatSpelling
+        /// Who made the statement. `notEstablished` records that the search
+        /// happened and produced no usable statement; it is how a record that
+        /// cannot survive this schema says "not yet established".
+        enum StatedBy: String, Codable, Equatable {
+            case rightsHolder = "rights-holder"
+            case inferred
+            case notEstablished = "not-established"
         }
 
-        /// Equality is the recorded licence position. `verdictRaw` and
-        /// `flatSpelling` say how a file was spelled, not what it claims, so an
-        /// unknown verdict word and a flat spelling must not make two otherwise
-        /// identical records compare unequal.
-        static func == (lhs: WeightsLicenseEvidence, rhs: WeightsLicenseEvidence) -> Bool {
-            lhs.licenseUrl == rhs.licenseUrl && lhs.readOn == rhs.readOn
-                && lhs.explicit == rhs.explicit && lhs.commercialOk == rhs.commercialOk
-                && lhs.noticeText == rhs.noticeText && lhs.verdict == rhs.verdict
-                && lhs.verdictReason == rhs.verdictReason
-                && lhs.datasetNote == rhs.datasetNote
+        /// The one use class this product needs (owner mandate, 2026-11-22).
+        static let requiredUse = "public-non-commercial-use-and-distribution"
+
+        let use: String
+        /// The end user may obtain this file from `evidenceUrl`.
+        let canAcquire: Bool?
+        /// The project may publish that URL, the recorded size and SHA-256 and
+        /// install from it. No bytes are mirrored, so this says nothing about
+        /// mirroring.
+        let canRedistribute: Bool?
+        /// The recorded use class is permitted.
+        let canUse: Bool?
+        let statedBy: String
+        let evidenceUrl: String
+        let readOn: String
+        let verdict: String
+        let conditions: [ModelUseCondition]
+        /// Attribution that would have to be reproduced if a file were mirrored or
+        /// bundled. Recorded evidence, not a claim that mirroring happens.
+        let notice: String?
+        /// Why the verdict is what it is, or what the search could not establish.
+        let note: String?
+
+        var verdictValue: Verdict? { Verdict(rawValue: verdict) }
+        var statedByValue: StatedBy? { StatedBy(rawValue: statedBy) }
+
+        /// True only when every permission axis is granted; nil when any answer is
+        /// missing. A single refusal makes it false: "we know one answer and not the
+        /// others" is still not a permission.
+        var permitted: Bool? {
+            let axes = [canAcquire, canRedistribute, canUse]
+            if axes.contains(false) { return false }
+            if axes.allSatisfy({ $0 == true }) { return true }
+            return nil
         }
 
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            licenseUrl = try container.decodeIfPresent(String.self, forKey: .licenseUrl)
-            readOn = try container.decodeIfPresent(String.self, forKey: .readOn)
-            explicit = try container.decodeIfPresent(Bool.self, forKey: .explicit)
-            commercialOk = try container.decodeIfPresent(Bool.self, forKey: .commercialOk)
-            noticeText = try container.decodeIfPresent(String.self, forKey: .noticeText)
-            // Read as text rather than as the enum: a word outside the closed
-            // set must reach `validate()` and be reported, instead of failing
-            // the whole strict decode for a catalog this version cannot know.
-            let written = try container.decodeIfPresent(String.self, forKey: .verdict)
-            verdictRaw = written
-            verdict = written.flatMap(ModelLicenseVerdict.init(rawValue:))
-            verdictReason = try container.decodeIfPresent(String.self, forKey: .verdictReason)
-            datasetNote = try container.decodeIfPresent(String.self, forKey: .datasetNote)
-            flatSpelling = nil
+        /// Whether this artefact alone satisfies the admission rule.
+        var isAdmitted: Bool {
+            guard let verdictValue,
+                  verdictValue == .approved || verdictValue == .approvedWithConditions,
+                  permitted == true else { return false }
+            return conditions.allSatisfy(\.met)
         }
 
+        /// Writes every field, including the nulls. The worker's `to_json()` emits
+        /// `null` for an absent answer rather than omitting the key, and the
+        /// cross-surface test compares the two encodings exactly, so "absent" must
+        /// have one spelling on the wire.
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encodeIfPresent(licenseUrl, forKey: .licenseUrl)
-            try container.encodeIfPresent(readOn, forKey: .readOn)
-            try container.encodeIfPresent(explicit, forKey: .explicit)
-            try container.encodeIfPresent(commercialOk, forKey: .commercialOk)
-            try container.encodeIfPresent(noticeText, forKey: .noticeText)
-            // The written word is what came in, so an unknown verdict round
-            // trips instead of being silently normalised away.
-            try container.encodeIfPresent(verdictRaw, forKey: .verdict)
-            try container.encodeIfPresent(verdictReason, forKey: .verdictReason)
-            try container.encodeIfPresent(datasetNote, forKey: .datasetNote)
+            try container.encode(use, forKey: .use)
+            try container.encode(canAcquire, forKey: .canAcquire)
+            try container.encode(canRedistribute, forKey: .canRedistribute)
+            try container.encode(canUse, forKey: .canUse)
+            try container.encode(statedBy, forKey: .statedBy)
+            try container.encode(evidenceUrl, forKey: .evidenceUrl)
+            try container.encode(readOn, forKey: .readOn)
+            try container.encode(verdict, forKey: .verdict)
+            try container.encode(conditions, forKey: .conditions)
+            try container.encode(notice, forKey: .notice)
+            try container.encode(note, forKey: .note)
+        }
+
+        /// Rejects every record the mandate would otherwise have to infer. Called
+        /// for each shipped entry at load time, so an edited resource cannot admit
+        /// a model by accident — the same rules the worker applies to its table.
+        func validate(model: String, artefact: String) throws {
+            let subject = "\(model) \(artefact)"
+            guard use == Self.requiredUse else {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records use \(use.debugDescription), not the required "
+                    + "\(Self.requiredUse)")
+            }
+            guard statedByValue != nil else {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) has an unknown statement source \(statedBy.debugDescription)")
+            }
+            guard verdictValue != nil else {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) has an unknown licence verdict \(verdict.debugDescription)")
+            }
+            guard !evidenceUrl.isEmpty else {
+                throw ModelCatalog.LoadError.unsafe("\(subject) has no evidence URL")
+            }
+            try ModelCatalogEntry.requireHttps(evidenceUrl, model: model,
+                                               field: "\(artefact) evidence")
+            guard !readOn.isEmpty else {
+                throw ModelCatalog.LoadError.unsafe("\(subject) has no evidence read date")
+            }
+            try ModelCatalogEntry.requireReadOnDate(readOn, model: model)
+
+            let axes = [canAcquire, canRedistribute, canUse]
+            if statedByValue == .inferred, axes.contains(true) {
+                // The central rule: an inference is never a grant.
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records a permitted axis from inferred evidence")
+            }
+            if statedByValue == .notEstablished,
+               verdictValue != .unknown || !axes.allSatisfy({ $0 == nil }) {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) marks the statement not established but records a decision")
+            }
+            if axes.contains(false), verdictValue != .excluded {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records a refused permission without the excluded verdict")
+            }
+            if verdictValue == .excluded, axes.contains(true) {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) is excluded but records a granted permission")
+            }
+            let approving = verdictValue == .approved || verdictValue == .approvedWithConditions
+            if permitted == true, !approving {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records every permission without an approving verdict")
+            }
+            if approving, permitted != true {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) approves the artefact without every permission granted")
+            }
+            if verdictValue == .approved, !conditions.isEmpty {
+                throw ModelCatalog.LoadError.unsafe("\(subject) is approved but carries conditions")
+            }
+            if verdictValue == .approvedWithConditions {
+                guard !conditions.isEmpty else {
+                    throw ModelCatalog.LoadError.unsafe(
+                        "\(subject) is approved with conditions but lists none")
+                }
+                guard conditions.allSatisfy(\.met) else {
+                    throw ModelCatalog.LoadError.unsafe(
+                        "\(subject) is approved with conditions but a condition is unmet")
+                }
+            }
+            if verdictValue == .unknown,
+               (note ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records an unknown verdict without saying what is missing")
+            }
+        }
+    }
+
+    /// The three artefact records one catalogue entry carries.
+    struct ModelPermittedUse: Codable, Equatable {
+        let code: ModelArtefactTerms
+        let weights: ModelArtefactTerms
+        let trainingData: ModelArtefactTerms
+        /// The admission flag the worker writes beside the record. Decoded only so
+        /// `validate()` can refuse a file whose flag disagrees with its own facts.
+        let claimedAdmitted: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case code
+            case weights
+            case trainingData
+            case claimedAdmitted = "admitted"
+        }
+
+        /// Artefacts whose verdict is `excluded`, in record order.
+        var excludedArtefacts: [String] {
+            var names: [String] = []
+            let records = [("code", code), ("weights", weights), ("training data", trainingData)]
+            for (name, terms) in records where terms.verdictValue == .excluded {
+                names.append(name)
+            }
+            return names
+        }
+
+        /// The load gate, as the worker applies it: the weight file's record, and no
+        /// excluded code or dataset.
+        var isAdmitted: Bool {
+            weights.isAdmitted && excludedArtefacts.isEmpty
+        }
+
+        /// Emits the flag under the wire name the worker writes, so a re-encoded
+        /// record compares equal to `PermittedUse.to_json()` in both directions.
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(code, forKey: .code)
+            try container.encode(weights, forKey: .weights)
+            try container.encode(trainingData, forKey: .trainingData)
+            try container.encode(claimedAdmitted, forKey: .claimedAdmitted)
+        }
+
+        func validate(model: String) throws {
+            try code.validate(model: model, artefact: "code")
+            try weights.validate(model: model, artefact: "weights")
+            try trainingData.validate(model: model, artefact: "training data")
+            if let claimedAdmitted, claimedAdmitted != isAdmitted {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(model) records admitted: \(claimedAdmitted) while its record "
+                    + "\(isAdmitted ? "admits" : "refuses") the model")
+            }
         }
     }
 
@@ -225,11 +335,11 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
     let codeLicense: String
     let weightsLicense: String
     let licenseEvidenceUrl: String
-    /// Recorded weights-licence evidence. Absent for a catalog written before
-    /// this field existed, which must keep decoding unchanged. Declared `var`
-    /// only so a test can freeze the remaining fields against an older file;
-    /// nothing in production writes it, and every accessor above it stays `let`.
-    var weightsEvidence: WeightsLicenseEvidence?
+    /// The recorded licence position for this model's code, weights and training
+    /// data. Absent for a catalog written before this field existed, which must
+    /// keep decoding unchanged. Declared `var` only so a test can freeze the
+    /// remaining fields against an older file; every accessor stays `let`.
+    var permittedUse: ModelPermittedUse?
     let platforms: [String]
     let requiredProvider: String
     let minimumContractVersion: String
@@ -251,7 +361,7 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
         case codeLicense
         case weightsLicense
         case licenseEvidenceUrl
-        case weightsEvidence
+        case permittedUse = "permitted_use"
         case platforms
         case requiredProvider
         case minimumContractVersion
@@ -275,17 +385,11 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
         codeLicense = try container.decode(String.self, forKey: .codeLicense)
         weightsLicense = try container.decode(String.self, forKey: .weightsLicense)
         licenseEvidenceUrl = try container.decode(String.self, forKey: .licenseEvidenceUrl)
-        // Two spellings decode into one record: the nested `weightsEvidence`
-        // object, which is what this repository ships and what encoding writes,
-        // and the flat top-level keys named by the release gate. A file may use
-        // either; only the nested form round-trips.
-        if let nested = try container.decodeIfPresent(WeightsLicenseEvidence.self,
-                                                      forKey: .weightsEvidence) {
-            weightsEvidence = nested
-        } else {
-            let flat = try FlatWeightsEvidence(from: decoder)
-            weightsEvidence = flat.isEmpty ? nil : flat.asEvidence()
-        }
+        // Optional, so a catalog written before the four-status record existed
+        // still loads under the strict decoder; the store then shows the entry
+        // without a recorded position rather than inventing one.
+        permittedUse = try container.decodeIfPresent(ModelPermittedUse.self,
+                                                     forKey: .permittedUse)
         platforms = try container.decode([String].self, forKey: .platforms)
         requiredProvider = try container.decode(String.self, forKey: .requiredProvider)
         minimumContractVersion = try container.decode(String.self,
@@ -297,45 +401,10 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
                                                            forKey: .unverifiableReason)
     }
 
-    /// Mirrors `weightsEvidence` for the flat spelling. `isEmpty` means "no
-    /// evidence key at all", which is how an old catalog file is recognised.
-    private struct FlatWeightsEvidence: Decodable {
-        let weightsLicenseUrl: String?
-        let weightsLicenseReadOn: String?
-        let commercialOk: Bool?
-        let weightsLicenseExplicit: Bool?
-        let noticeText: String?
-        let verdict: String?
-        let verdictReason: String?
-        let datasetNote: String?
-
-        var isEmpty: Bool {
-            weightsLicenseUrl == nil && weightsLicenseReadOn == nil && commercialOk == nil
-                && weightsLicenseExplicit == nil && noticeText == nil && verdict == nil
-                && verdictReason == nil && datasetNote == nil
-        }
-
-        func asEvidence() -> WeightsLicenseEvidence {
-            WeightsLicenseEvidence(
-                licenseUrl: weightsLicenseUrl,
-                readOn: weightsLicenseReadOn,
-                explicit: weightsLicenseExplicit,
-                commercialOk: commercialOk,
-                noticeText: noticeText,
-                // An unrecognised verdict string must not discard the rest of
-                // the record; `validate()` is what rejects it.
-                verdict: verdict.flatMap(ModelLicenseVerdict.init(rawValue:)),
-                verdictRaw: verdict,
-                verdictReason: verdictReason,
-                datasetNote: datasetNote,
-                flatSpelling: true)
-        }
-    }
-
     init(id: String, name: String, capabilities: [String], version: String, format: String,
          files: [ModelCatalogFile], sizeBytes: Int?, sha256: String?, sourceUrl: String,
          codeLicense: String, weightsLicense: String, licenseEvidenceUrl: String,
-         weightsEvidence: WeightsLicenseEvidence? = nil, platforms: [String],
+         permittedUse: ModelPermittedUse? = nil, platforms: [String],
          requiredProvider: String, minimumContractVersion: String,
          preprocess: ModelPreprocess, deterministic: Bool, notes: String,
          unverifiableReason: String?) {
@@ -351,7 +420,7 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
         self.codeLicense = codeLicense
         self.weightsLicense = weightsLicense
         self.licenseEvidenceUrl = licenseEvidenceUrl
-        self.weightsEvidence = weightsEvidence
+        self.permittedUse = permittedUse
         self.platforms = platforms
         self.requiredProvider = requiredProvider
         self.minimumContractVersion = minimumContractVersion
@@ -406,25 +475,8 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
                     "\(id)/\(file.path) does not come from the recorded HTTPS source")
             }
         }
-        if var evidence = weightsEvidence {
-            try Self.requireHttps(evidence.licenseUrl, model: id, field: "weights licence URL")
-            try Self.requireReadOnDate(evidence.readOn, model: id)
-            if let verdict = evidence.verdictRaw {
-                guard ModelLicenseVerdict(rawValue: verdict) != nil else {
-                    throw ModelCatalog.LoadError.unsafe(
-                        "\(id) has an unknown weights licence verdict \(verdict.debugDescription)")
-                }
-            }
-            // The two are recorded separately on purpose — a verdict never
-            // implies commercial permission — but they may not contradict each
-            // other, and the only contradiction expressible here is an entry
-            // declared usable while its grant forbids commercial use.
-            if evidence.commercialOk == false,
-               evidence.verdict == .usable || evidence.verdict == .usableWithConditions {
-                throw ModelCatalog.LoadError.unsafe(
-                    "\(id) records a verdict of \(evidence.verdict!.rawValue) without a "
-                    + "commercial grant")
-            }
+        if let permittedUse {
+            try permittedUse.validate(model: id)
         }
         if unverifiableReason == nil,
            let sizeBytes, sizeBytes > 0,
@@ -523,11 +575,29 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
         let isDate = parts.count == 3
             && parts[0].count == 4 && parts[1].count == 2 && parts[2].count == 2
             && parts.allSatisfy { $0.allSatisfy(\.isNumber) }
-        guard isDate, let day = Int(parts[2]), let month = Int(parts[1]),
-              (1...12).contains(month), (1...31).contains(day) else {
+        guard isDate, let year = Int(parts[0]), let month = Int(parts[1]),
+              let day = Int(parts[2]), (1...12).contains(month), (1...31).contains(day)
+        else {
             throw ModelCatalog.LoadError.unsafe(
-                "\(model) records a weights licence read date that is not an "
+                "\(model) records a licence read date that is not an "
                 + "ISO-8601 calendar date")
+        }
+        // A day the month does not have is a typo, not a date: 2026-11-31 must
+        // be refused before anyone compares it with a later re-read.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        guard let date = calendar.date(from: components) else {
+            throw ModelCatalog.LoadError.unsafe(
+                "\(model) records an impossible licence read date \(value)")
+        }
+        let round = calendar.dateComponents([.year, .month, .day], from: date)
+        guard round.year == year, round.month == month, round.day == day else {
+            throw ModelCatalog.LoadError.unsafe(
+                "\(model) records an impossible licence read date \(value)")
         }
     }
 

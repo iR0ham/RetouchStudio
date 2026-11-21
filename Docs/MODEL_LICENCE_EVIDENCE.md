@@ -1,5 +1,7 @@
 # G-CAT — Model licence evidence in the shipped catalog
 
+**§2–§3 describe a schema that §9 (2026-11-22) supersedes; read §9 first.**
+
 Status: **data layer only**. This gate records licence evidence; it changes no
 install, download or refusal decision. Acting on the evidence is a separate,
 later, reviewed change.
@@ -169,3 +171,98 @@ machine. CI provisions it.
 `Docs/licence-evidence-apply.py` adds the blocks to `Resources/model-catalog.json`
 textually and asserts afterwards that no pre-existing value changed and no key was
 removed, so the diff stays provably additions-only.
+
+## 9. Addendum, 2026-11-22: the permitted-use record supersedes §2–§3
+
+The owner's model-ecosystem mandate of 2026-11-22 retired the rule this document
+was written under. The product is a free application for public non-commercial
+use with no commercialisation plan, so "commercially usable" is no longer the
+question. The question is now, per artefact (code, weights, training data):
+may it be obtained, may its URL/size/SHA-256 be published and installed, is the
+recorded use class permitted, and are any conditions actually satisfiable.
+
+Accordingly `weightsEvidence` (and its flat spelling) is gone. Each catalogue
+entry carries `permitted_use`, an object of three artefact records plus the
+derived `admitted` flag. One artefact record is:
+
+| Key | Meaning |
+|---|---|
+| `use` | The one class this product needs: `public-non-commercial-use-and-distribution`. |
+| `canAcquire` | `true` / `false` / `null` — may the end user obtain the file from `evidenceUrl`. |
+| `canRedistribute` | `true` / `false` / `null` — may the project publish that URL, size and SHA-256 and install from it. No bytes are mirrored. |
+| `canUse` | `true` / `false` / `null` — is the recorded use class permitted. |
+| `statedBy` | `rights-holder` \| `inferred` \| `not-established`. |
+| `evidenceUrl` | Where the statement was read. Required, HTTPS, no credentials. |
+| `readOn` | ISO-8601 calendar date it was read. Required; a day the month lacks is refused. |
+| `verdict` | `approved` \| `approved-with-conditions` \| `unknown` \| `excluded`. |
+| `conditions` | List of `{text, met}`. Required non-empty and fully met for `approved-with-conditions`. |
+| `notice` | Attribution to reproduce if bytes were ever mirrored. |
+| `note` | Why the verdict is what it is, or what could not be established. Required for `unknown`. |
+
+The rules, each with a negative test in `Tests/ModelStoreTests.swift` [19] and in
+`worker/tests/test_catalog.py`:
+
+1. A tri-state axis may not be `true` when `statedBy` is `inferred` — an
+   inference is never a grant.
+2. `not-established` may only carry `unknown` with every axis blank.
+3. A `false` axis requires the `excluded` verdict; `excluded` may not carry a
+   `true` axis.
+4. `approved` needs all three axes `true`, no conditions; `approved-with-conditions`
+   needs all three `true` and at least one condition, all met.
+5. `unknown` needs a note saying what is missing.
+6. Every record needs an evidence URL and a read date.
+7. The claimed `admitted` flag must equal the record's own derivation
+   (weights admitted and no excluded artefact).
+
+### What happened to the four rows
+
+No evidence was re-read and no new status was assigned. The mapping below is the
+old record translated into the new vocabulary, and nothing else was touched:
+
+| Entry | Old | New weights record |
+|---|---|---|
+| `flux2-klein-4b-q4` | `explicit: true`, `usable` | `approved`, `rights-holder`, all axes `true` |
+| `sam2.1-hiera-tiny` | `explicit: true`, `usable` | `approved`, `rights-holder`, all axes `true` |
+| `migan` | `explicit: true`, `usable` | `approved`, `rights-holder`, all axes `true` |
+| `swin2sr-x4` | `explicit: false`, `usable-with-conditions` | `unknown`, `inferred`, axes blank — **not admitted** |
+
+The swin2sr row is the one that could not survive. The old record claimed
+"usable with conditions" from a repository-level `license:apache-2.0` tag and
+recorded no condition list, so under the new schema it is exactly what the
+mandate calls an unestablished permission: the tag is an inference, and an
+inference may not be admitted. Its notice and note text are preserved. Whether
+the dossier should upgrade it is the owner's decision, not this change's.
+
+Code and training-data records for all four entries mirror the dossier's
+sections: code is `approved` where a licence file was read (sam2, swin2sr,
+migan) and `not-established` where the dossier records no separate code read
+(FLUX); training data is `not-established` everywhere, because the dossier
+records no confirmed dataset terms. The word "unknown" in those notes is the
+dossier's, not a new finding.
+
+### Surfaces
+
+The worker table is the source: `worker/retouch_ai_worker/catalog.py` holds the
+records and `Catalog.public()` returns the whole `permitted_use` object, not a
+summary. `Docs/licence-evidence-apply.py` regenerates
+`Resources/model-catalog.json` from that table, writes only when the bytes change,
+and `--check` exits 1 when the resource is stale; `.github/workflows/ci.yml`
+runs `--check`, then two full runs whose output digests must match, so the
+resource is provably the table's own record and the write is idempotent. The app
+decodes the same eleven fields per artefact and re-encodes them to the same key
+set and the same values ([19] (f)), in both directions; the worker test that
+reads `models.list` pins the same object.
+
+### Still not done
+
+- No per-model status was raised or lowered by this change; the swin2sr verdict
+  needs an owner decision.
+- The consent sheet and model row still do not render the record; that wording
+  belongs to the UI ticket and to PR #99's files, both out of scope here.
+- The app does not refuse a distribution at runtime on its own: the worker's
+  `require()`/`manifest()` refuse with `LICENSE_BLOCKED` and `capability.list`
+  reports `blocked`. The host-side admission flag is recorded and validated, and
+  a build compiled without a record still loads (old-format compatibility), which
+  is deliberate.
+- `worker/README.md` invariant 3 was updated with this addendum; nothing was
+  measured against a downloaded model.

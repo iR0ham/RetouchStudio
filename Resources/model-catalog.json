@@ -61,14 +61,47 @@
       },
       "deterministic": false,
       "notes": "Distilled; 4 steps, guidance 1.0. Sampling is not deterministic. KV cache rejected on M3 (16.7 GB peak).",
-      "weightsEvidence": {
-        "licenseUrl": "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
-        "readOn": "2026-11-21",
-        "explicit": true,
-        "commercialOk": true,
-        "noticeText": "Apache-2.0. Redistributing or mirroring these weights requires a copy of the Apache-2.0 licence, the retained copyright and licence notices, a statement of changes, and any NOTICE text from the source repository.",
-        "verdict": "usable",
-        "verdictReason": "The FLUX.2-klein-4B card states the weights are open for commercial use under Apache-2.0, so the grant is explicit rather than inferred from a repository tag."
+      "permitted_use": {
+        "code": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": null,
+          "canRedistribute": null,
+          "canUse": null,
+          "statedBy": "not-established",
+          "evidenceUrl": "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+          "readOn": "2026-11-21",
+          "verdict": "unknown",
+          "conditions": [],
+          "notice": null,
+          "note": "The dossier records the FLUX.2-klein-4B weights grant at this repository and no separate code-licence read for this entry. The entry's codeLicense string is preserved unchanged."
+        },
+        "weights": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": true,
+          "canRedistribute": true,
+          "canUse": true,
+          "statedBy": "rights-holder",
+          "evidenceUrl": "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+          "readOn": "2026-11-21",
+          "verdict": "approved",
+          "conditions": [],
+          "notice": "Apache-2.0. Redistributing or mirroring these weights requires a copy of the Apache-2.0 licence, the retained copyright and licence notices, a statement of changes, and any NOTICE text from the source repository.",
+          "note": "The FLUX.2-klein-4B card states the weights are open for commercial use under Apache-2.0, so the grant is explicit rather than inferred from a repository tag."
+        },
+        "trainingData": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": null,
+          "canRedistribute": null,
+          "canUse": null,
+          "statedBy": "not-established",
+          "evidenceUrl": "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+          "readOn": "2026-11-21",
+          "verdict": "unknown",
+          "conditions": [],
+          "notice": null,
+          "note": "The dossier records no training-data row for this entry, so no dataset terms are asserted."
+        },
+        "admitted": true
       }
     },
     {
@@ -105,14 +138,47 @@
       "deterministic": true,
       "notes": "Point/box prompts; 21 ms warm at 1024\u00b2. Checkpoint size and SHA-256 measured from the installed file on 2026-11-18.",
       "unverifiableReason": "Downloading is refused: the sam2 runtime package is not installed in the bundled worker, so these weights would have nothing to run on. The checkpoint's size and SHA-256 are recorded, so an install that is already on disk can be verified and adopted into a version.",
-      "weightsEvidence": {
-        "licenseUrl": "https://huggingface.co/facebook/sam2.1-hiera-tiny",
-        "readOn": "2026-11-21",
-        "explicit": true,
-        "commercialOk": true,
-        "noticeText": "Apache-2.0. Redistributing or mirroring this checkpoint requires a copy of the Apache-2.0 licence, the retained copyright and licence notices, a statement of changes, and any NOTICE text from facebookresearch/sam2.",
-        "verdict": "usable",
-        "verdictReason": "The SAM 2 README explicitly licenses the model checkpoints under Apache-2.0, separately from the repository licence."
+      "permitted_use": {
+        "code": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": true,
+          "canRedistribute": true,
+          "canUse": true,
+          "statedBy": "rights-holder",
+          "evidenceUrl": "https://github.com/facebookresearch/sam2",
+          "readOn": "2026-11-21",
+          "verdict": "approved",
+          "conditions": [],
+          "notice": null,
+          "note": "Apache-2.0, recorded pin @2b90b9f in Docs/AI_RUNTIME.md \u00a76 (dossier \u00a73.1)."
+        },
+        "weights": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": true,
+          "canRedistribute": true,
+          "canUse": true,
+          "statedBy": "rights-holder",
+          "evidenceUrl": "https://huggingface.co/facebook/sam2.1-hiera-tiny",
+          "readOn": "2026-11-21",
+          "verdict": "approved",
+          "conditions": [],
+          "notice": "Apache-2.0. Redistributing or mirroring this checkpoint requires a copy of the Apache-2.0 licence, the retained copyright and licence notices, a statement of changes, and any NOTICE text from facebookresearch/sam2.",
+          "note": "The SAM 2 README explicitly licenses the model checkpoints under Apache-2.0, separately from the repository licence."
+        },
+        "trainingData": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": null,
+          "canRedistribute": null,
+          "canUse": null,
+          "statedBy": "not-established",
+          "evidenceUrl": "https://huggingface.co/facebook/sam2.1-hiera-tiny",
+          "readOn": "2026-11-21",
+          "verdict": "unknown",
+          "conditions": [],
+          "notice": null,
+          "note": "SAM 2's training data is described in the paper, not as a licence term; the position is not confirmed (dossier \u00a73.1)."
+        },
+        "admitted": true
       }
     },
     {
@@ -160,15 +226,47 @@
       },
       "deterministic": true,
       "notes": "12.05 M params; 6.2 s per 256\u00b2 tile on MPS (measured, M3 16 GB). Windows ONNX artifact remains unapproved (W5-4 BLOCKED).",
-      "weightsEvidence": {
-        "licenseUrl": "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
-        "readOn": "2026-11-21",
-        "explicit": false,
-        "commercialOk": true,
-        "noticeText": "Apache-2.0. Redistributing or mirroring pytorch_model.bin requires a copy of the Apache-2.0 licence, the retained copyright notices, a statement of changes, and any NOTICE text; the upstream code licence carries “Copyright [2021] [SwinIR Authors]”.",
-        "verdict": "usable-with-conditions",
-        "verdictReason": "The only weights statement is the repository-level license:apache-2.0 tag on the Hugging Face repo whose sole payload is the checkpoint, so the grant is inferred rather than authored about the weights.",
-        "datasetNote": "Swin2SR's own training set is not confirmed; DIV2K, the usual corpus in this family, is made available for academic research purposes only, which is a residual dataset risk and not a term of the recorded weight grant."
+      "permitted_use": {
+        "code": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": true,
+          "canRedistribute": true,
+          "canUse": true,
+          "statedBy": "rights-holder",
+          "evidenceUrl": "https://raw.githubusercontent.com/mv-lab/swin2sr/main/LICENSE",
+          "readOn": "2026-11-21",
+          "verdict": "approved",
+          "conditions": [],
+          "notice": null,
+          "note": "Apache-2.0 LICENSE, SwinIR Authors 2021 (dossier Appendix A A27)."
+        },
+        "weights": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": null,
+          "canRedistribute": null,
+          "canUse": null,
+          "statedBy": "inferred",
+          "evidenceUrl": "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+          "readOn": "2026-11-21",
+          "verdict": "unknown",
+          "conditions": [],
+          "notice": "Apache-2.0. Redistributing or mirroring pytorch_model.bin requires a copy of the Apache-2.0 licence, the retained copyright notices, a statement of changes, and any NOTICE text; the upstream code licence carries \u201cCopyright [2021] [SwinIR Authors]\u201d.",
+          "note": "The only weights statement is the repository-level license:apache-2.0 tag on the Hugging Face repo whose sole payload is the checkpoint, so the grant is inferred rather than authored about the weights. The dossier's usable-with-conditions verdict does not survive the new schema's inference rule; no permission axis is recorded."
+        },
+        "trainingData": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": null,
+          "canRedistribute": null,
+          "canUse": null,
+          "statedBy": "not-established",
+          "evidenceUrl": "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+          "readOn": "2026-11-21",
+          "verdict": "unknown",
+          "conditions": [],
+          "notice": null,
+          "note": "Swin2SR's own training set is not confirmed; DIV2K, the usual corpus in this family, is made available for academic research purposes only, which is a residual dataset risk and not a term of the recorded weight grant (dossier \u00a71, \u00a72.1)."
+        },
+        "admitted": false
       }
     },
     {
@@ -204,14 +302,47 @@
       },
       "deterministic": true,
       "notes": "Weights are MIT (LICENSE-WEIGHTS); the ONNX pipeline is the author's own export. Spot healing only, and only on macOS: the worker refuses holes above 25 % of the frame and routes object removal to flux2-klein-4b-q4. No Windows runtime executes a submitted job (W5-3), so the entry is not advertised on windows-x64.",
-      "weightsEvidence": {
-        "licenseUrl": "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/LICENSE-WEIGHTS",
-        "readOn": "2026-11-21",
-        "explicit": true,
-        "commercialOk": true,
-        "noticeText": "MIT. Redistributing or mirroring this ONNX requires the copyright line and the full permission notice from LICENSE-WEIGHTS (Picsart AI Research, 2024).",
-        "verdict": "usable",
-        "verdictReason": "The authors ship a dedicated MIT LICENSE-WEIGHTS next to the MIT code licence, and the ONNX is their own pipeline export."
+      "permitted_use": {
+        "code": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": true,
+          "canRedistribute": true,
+          "canUse": true,
+          "statedBy": "rights-holder",
+          "evidenceUrl": "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/LICENSE",
+          "readOn": "2026-11-21",
+          "verdict": "approved",
+          "conditions": [],
+          "notice": null,
+          "note": "MIT, Picsart AI Research 2024 (dossier Appendix A A26)."
+        },
+        "weights": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": true,
+          "canRedistribute": true,
+          "canUse": true,
+          "statedBy": "rights-holder",
+          "evidenceUrl": "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/LICENSE-WEIGHTS",
+          "readOn": "2026-11-21",
+          "verdict": "approved",
+          "conditions": [],
+          "notice": "MIT. Redistributing or mirroring this ONNX requires the copyright line and the full permission notice from LICENSE-WEIGHTS (Picsart AI Research, 2024).",
+          "note": "The authors ship a dedicated MIT LICENSE-WEIGHTS next to the MIT code licence, and the ONNX is their own pipeline export."
+        },
+        "trainingData": {
+          "use": "public-non-commercial-use-and-distribution",
+          "canAcquire": null,
+          "canRedistribute": null,
+          "canUse": null,
+          "statedBy": "not-established",
+          "evidenceUrl": "https://huggingface.co/andraniksargsyan/migan",
+          "readOn": "2026-11-21",
+          "verdict": "unknown",
+          "conditions": [],
+          "notice": null,
+          "note": "Places2 terms could not be fetched (dossier \u00a79 item 1), so the dataset position stays unconfirmed."
+        },
+        "admitted": true
       }
     }
   ]
