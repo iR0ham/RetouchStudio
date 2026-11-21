@@ -145,7 +145,7 @@ The worker has its own Python suite (`unittest`); see `Docs/AI_RUNTIME.md`.
 
 - Image analysis, editing, upscaling and export are entirely local; nothing is uploaded.
 - When AI is used through a bundled helper or a future approved runtime package, the only network use is two explicit downloads: the optional AI runtime archive and the model weights. The owner approves the runtime after seeing its name, size and a 16-character SHA256 prefix, and approves each model after a sheet shows its file count, total size and licence. The runtime verifies its full SHA256 before installation; model checksums are verified where the catalog provides them (the SAM 2.1 tiny entry does not).
-- The current build offers no runtime download. When enabled, the runtime is fetched once from this repository's release page; the app has no other outbound address, no telemetry and no background requests.
+- The current build offers no runtime download. When enabled, the runtime is fetched once from the release URL named in the approved package metadata, and model weights come from the two hosts named in `Resources/model-catalog.json` (`huggingface.co`, `dl.fbaipublicfiles.com`). No address is compiled into the binary, the update check reads its feed from `Info.plist` and this build declares none, so there is no telemetry and no background request.
 - GPS and camera identity are removed from exported copies.
 - No telemetry, no analytics, no crash reporting service.
 

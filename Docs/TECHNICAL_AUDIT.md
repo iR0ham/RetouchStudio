@@ -718,7 +718,15 @@ This is a functional batch *converter*, not a batch version of the single-export
 
 ### 8.1 Network exposure
 
-**No network code exists.** A repository-wide search for `URLSession`, `http://`, `https://`, `NSAllowsArbitraryLoads` and network entitlements returns only the XML DOCTYPE URL in `Resources/Info.plist`. There is no telemetry, analytics, crash reporting, update check, cloud sync, or remote model. Processing is entirely local.
+**At the time of this audit the tree contained no network code** — a repository-wide search for `URLSession`, `http://`, `https://`, `NSAllowsArbitraryLoads` and network entitlements returned only the XML DOCTYPE URL in `Resources/Info.plist`.
+
+**Current inventory (re-measured 2026-11-21 against `06e8ac4`): network code does exist, and no path in it runs unasked.** `URLSession` appears in five files — `Core/AIRuntimeInstaller.swift`, `Core/UpdateController.swift`, `Core/UpdateVerification.swift`, `Models/ModelStore.swift`, `Models/ModelManager.swift` — and every one of them is gated:
+
+- **Runtime download** is unreachable while `AIRuntime.package` is nil (`Core/AIRuntime.swift:40`), which is the shipping state. When a package is configured the installer is consent-driven (`Core/AIRuntimeInstaller.swift:103-150`): a sheet shows the archive name, size and SHA-256 prefix first, and the download is verified before it is promoted.
+- **Update check** runs only when the person using the app presses *Check for Updates* (`Views/InfoViews.swift:200`). It accepts HTTPS feeds only, compiles no address into the binary, and reads them from `RSUpdateFeedURL` / `RSUpdateFeedURLs` in the bundle's `Info.plist` (`Core/UpdateController.swift:159-166`). `Resources/Info.plist` declares neither key, so `performCheck()` stops at its empty-feed guard (`UpdateController.swift:66-69`) and reports a missing feed rather than contacting anybody.
+- **Model weights** are consent-gated in the worker (`worker/retouch_ai_worker/downloads.py`): the recorded token in `download-consent.json` is bound to the hash of the manifest, so a changed manifest requires fresh consent. `ModelStore` writes only under `.staging`, refuses any file without an exact byte size and SHA-256, verifies each one and publishes the version directory with a single atomic move (`Models/ModelStore.swift:182-397`).
+
+There is still no telemetry, analytics, crash reporting, cloud sync or remote inference, and image processing remains entirely local. One caveat belongs here rather than in the entitlements table: `Resources/RetouchStudio.entitlements` grants nothing at all, including `com.apple.security.network.client`, because the app is unsandboxed and needs no entitlement to open a socket. **The entitlements file is therefore not a control on egress** — the guarantee is the gated code above plus the absence of any automatic call site.
 
 This is a strong privacy posture for portrait retouching. It should be preserved.
 
@@ -773,7 +781,7 @@ This process should remain the standard for any future verification.
 
 | Area | Assessment |
 |---|---|
-| Network data leakage | None — no network code |
+| Network data leakage | None automatic — images never leave the machine; the network call sites in §8.1 are consent- or user-initiated and, in the shipping configuration, unreachable |
 | Telemetry | None |
 | Third-party code | None |
 | Local file access | Broad (unsandboxed), expected for the tool |
