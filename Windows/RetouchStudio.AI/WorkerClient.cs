@@ -49,6 +49,10 @@ public sealed class AIWorkerException : Exception
         -32016 => "E_MODEL_MISSING",
         -32019 => "E_MODEL_UNVERIFIED",
         -32020 => "E_UNSUPPORTED",
+        // A catalog pin that is missing or malformed leaves nothing to verify
+        // the bytes against; no download repairs it. Same label as -32019, and
+        // neither is the installable E_MODEL_MISSING class.
+        -32021 => "E_MODEL_UNVERIFIED",
         -32602 => "E_INVALID_INPUT",
         _ => "E_INTERNAL",
     };

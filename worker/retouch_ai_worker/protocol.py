@@ -35,8 +35,10 @@ CHECKSUM_MISMATCH = -32019
 # recorded size or SHA-256 is missing, or a digest that is not 64 hex
 # characters, is a defect no download can repair, so it must not be reported as
 # "damaged weights" (-32019) nor as "not installed" (-32011). Both hosts map
-# this code to E_MODEL_UNVERIFIED, which is the honest label: the bytes cannot be
-# verified against anything.
+# this code to E_MODEL_UNVERIFIED — the class for bytes that cannot be verified
+# against anything — and neither opens the model manager or offers a download
+# for it. The worker's message is the sentence the host shows; a dedicated
+# localized sentence awaits the strings table owned by another change.
 CATALOG_INVALID = -32021
 # Additive in contract 1: a capability this adapter or platform does not
 # provide. The frozen W5-0 vocabulary has no numeric code of its own; the host
