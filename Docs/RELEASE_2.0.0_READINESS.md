@@ -818,3 +818,100 @@ branch whose author was still pushing. A review must be pinned to a frozen head 
 either wait for the author's session to finish or state explicitly that the object
 is a moving branch and require the reviewer to re-pin and re-run anything that
 changes.
+
+## Addendum J — 2026-11-22: the runtime-integrity question answered, and a toolchain fact that changes how the RC must be built
+
+### J.1 G-RTP — is the runtime that 2.0.0 executes integrity-sealed? **No — by design, and it is refused rather than trusted**
+
+Deciding line, read by me at `cd5741b76`:
+
+```
+Sources/RetouchStudio/Core/AIRuntime.swift:40
+    static var package: Package? { nil }
+    // "No official protocol-v2 runtime has been published. Fabricating its
+    //  metadata would enable a download the app cannot verify, so this stays
+    //  nil and the UI reports the runtime as unavailable."
+```
+
+The only cryptographic seal in the pipeline is `AIRuntimeTransaction.verifyArchive`
+(`:1095-1106`, size then SHA-256 of the whole archive) and it is guarded by
+`if let package` (`:210-212`), so with `package == nil` it is never reached — and
+**nothing anywhere in the repository ever verifies a signature over the installed
+runtime tree**; the archive hash seals bytes in transit, not the adopted directory.
+The companion sentence matters just as much for the release claim: with
+`package == nil`, download is refused (`AIWorker.swift:928-930`, `:485`), the UI
+reports the runtime unavailable, the shipping DMG is built with
+`RETOUCH_SKIP_WORKER=1` (`release.yml:25,55`) and contains no helper, and every
+adoption/recovery path re-runs the functional contract before committing
+(`AIRuntimeTransaction.swift:875-877` with `runtimeIsValid` →
+`AIRuntimeValidation.functional`). So the exposure is **a feature that is off, not
+a gate that is open** — which is the accurate 2.0.0 statement.
+
+Three inherited "fail-open" claims about this chain are **refuted**, continuing the
+pattern where such claims collapse under a second reader: adoption cannot run an
+unverified tree (A3a); there are no CI *signing* checks at all to fail open, and the
+verdict assertions that do exist fail closed under `set -euo pipefail` plus an
+explicit anti-skip guard (`ci.yml:176`, `:181-187`) (A3c); the `verifyArchive` nil
+guard is latent and dead-by-construction once reachable, because the caller already
+checks the same digest (`AIRuntimeInstaller.swift:281-303`) (A3b).
+
+### J.2 New real finding: extraction does not contain the archive's own contents
+
+**A6 (Medium, dormant behind the same nil).** Extraction is `/usr/bin/ditto -x -k`
+(`AIRuntime.swift:137-158`, args at `:140`) with **no** `--noqtn` and no content
+walk. Measured on synthetic archives: ditto reproduces `escape ->
+../../../escape_target` and `abs_escape -> /etc` verbatim (exit 0); a `..`-prefixed
+*member name* stays contained only because ditto strips leading `/` and re-roots it.
+Post-extraction validation (`AIRuntimeValidation.swift:84-121`) checks presence and
+executability of a few paths plus symlink-ness at the root only; containment
+rejection exists for transaction *directory names*
+(`AIRuntimeTransaction.swift:1059-1071`), never for archive *contents*. Required
+sequencing decision, mine: **walk-and-refuse on extracted contents must land before
+`AIRuntime.Package` is ever given a value**, so whichever change turns the runtime
+on inherits a closed gate instead of adding one. Same pass should also fix the
+quarantine propagation (`--noqtn`), which is the already-known `#94`/`#107` finding
+and is a different property from integrity — the two must not be conflated.
+
+Four smaller items from the same review, ticketed not blocking: **A4** `ci.yml:164-175`
+never asserts `MASK QUALITY TESTS: PASS` or `ABI TESTS: PASS` although
+`Docs/CI_GATES.md:52-54` says macOS Integration asserts each suite's PASS line, so
+deleting either suite keeps CI green; **A2** no check couples a capability's declared
+`Spec.packages` to the lock, so `mask.click` could name a package that never ships
+(and `import_smoke.py:14` deliberately excludes `sam2`, so this must be a
+set-membership assertion, not an import probe); **B1b** the jobs sweep runs only at
+launch, disclosed at `Docs/AI_RUNTIME.md:149-156`; **B3b** the acceptance tool
+re-declares `.lock` as its own literal instead of importing `server.JOB_LOCK_NAME`.
+Retention/locking itself is sound because the claim is a kernel-scoped `flock` on a
+descriptor, not a pid or timestamp record — so there is no pid-reuse, boot-time,
+clock-skew or host-rename case for the lock, and a crash releases it (measured with a
+real child process, `Ran 1 test`, OK).
+
+### J.3 Toolchain reality: this Mac cannot build the app, so the RC must be built on CI
+
+`xcode-select -p` → `/Library/Developer/CommandLineTools`; `swiftc --version` →
+Apple Swift 6.4.2; **no `/Applications/Xcode*.app` exists**, and therefore no
+`SwiftUIMacros` plugin. Any `@State`-using SwiftUI source cannot be compiled here, so
+`Tests/run.sh`-style Swift suites and `build.sh` are both impossible locally — the
+same wall the reviewer hit (`error: external macro implementation type
+'SwiftUIMacros.StateMacro' could not be found`).
+
+**DR-11 (my decision).** The 2.0.0 release candidate is **built and validated on a
+GitHub macOS runner**, not on this machine: GitHub's macOS images carry full Xcode,
+`release.yml` already calls `build.sh` (`:38,68`), the version stamping exists
+(`build.sh:110-114`, `Tools/check-versions.sh`), and a CI-produced artefact with
+CI-computed SHA-256s is better release evidence than a laptop build in any case. Two
+consequences recorded honestly: **DR-4's premise is dissolved** — a
+`RETOUCH_SKIP_SELFTEST` flag would not unblock anything locally, because the local
+build fails long before the self-test; it stays a nicety, not a gate. And every
+Swift-side claim in this ledger that says NOT VERIFIED is now explained rather than
+merely unproven: it could not have been run here.
+
+### J.4 Runner note
+
+The shared scratch interpreter `/private/tmp/rs-worker-venv` has only pip/wheel, so
+six worker test modules fail there with `ModuleNotFoundError` and the suite
+misreports it as a count mismatch. A lock-exact runner now exists at
+`/private/tmp/rs-rev-gates-venv` (built with `requirements-test.lock
+--require-hashes`, all 166 worker tests OK) but it is **Python 3.15.0**, while the
+locks target 3.13 — results from it are genuine, and their interpreter version must
+be named in every future report.
