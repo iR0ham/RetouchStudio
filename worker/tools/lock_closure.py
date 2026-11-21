@@ -100,11 +100,18 @@ def distribution_for(module: str, names: set[str]) -> str:
     not make it protobuf.
     """
     prefixes = ALIAS_PREFIXES.get(module)
-    if prefixes and not all(
-            any(name == prefix or name.startswith(prefix + ".")
-                for prefix in prefixes)
-            for name in names):
-        return canonical(module)
+    if prefixes:
+        # `from google import protobuf` records both `google` (the module the
+        # name came from) and `google.protobuf` (the bound name). The bare
+        # top-level name is the namespace, not evidence of a second
+        # distribution, so only the dotted names are judged. With no dotted
+        # name at all (`import google`), the bare name must still prove itself.
+        dotted = {name for name in names if name != module}
+        if not all(
+                any(name == prefix or name.startswith(prefix + ".")
+                    for prefix in prefixes)
+                for name in (dotted or names)):
+            return canonical(module)
     return ALIASES.get(module, canonical(module))
 
 

@@ -154,6 +154,15 @@ class ImportSmokePlanTest(unittest.TestCase):
         self.assertEqual([target.module for target in result.targets],
                          ["google"])
 
+        # The `from` form records the bare module name as well; it is the
+        # namespace, not a second distribution, and stays pinned.
+        write_package(self.package,
+                      {"engine.py": "from google import protobuf\n"})
+        result = smoke.plan(self.package, lock, fixed=())
+        self.assertEqual(result.unpinned, [])
+        self.assertEqual([target.module for target in result.targets],
+                         ["google"])
+
     def test_the_shipped_package_has_no_stale_targets(self):
         """The real TARGETS still describe the real worker."""
         real_lock = lock_closure.read_lock(WORKER / "requirements.lock")

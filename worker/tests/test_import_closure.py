@@ -326,6 +326,27 @@ class ImportClosureTest(unittest.TestCase):
         self.assertEqual(resolved.get("google"), "protobuf")
         self.assertEqual(optional, {})
 
+        # `from google import protobuf` records the bare module name too; that
+        # is not a second distribution and must not become a false positive.
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(
+                "from google import protobuf\n", encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(violations, [])
+        self.assertEqual(resolved.get("google"), "protobuf")
+
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(
+                "from google import auth\n", encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(len(violations), 1,
+                         "`from google import auth` is not protobuf either")
+        self.assertNotIn("google", resolved)
+
     def test_a_guard_around_a_definition_does_not_reach_into_it(self):
         """An enclosing `try` does not guard an import the definition runs later.
 
