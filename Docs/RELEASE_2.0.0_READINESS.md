@@ -475,3 +475,43 @@ absent on this machine, so CI is the only compile evidence — recorded as such.
 
 Nothing in this addendum was published, tagged, merged or deployed, and
 `/Users/roham/RetouchStudio` was not modified.
+
+### E.8 Correction to E.7 (2026-11-22, same day) — the updater design review did not happen
+
+The G-UPD row above says "independent design review now running". That was wrong
+and is retracted: the host confirmed the reviewer's session had already died
+before submitting, and its report never arrived. So for 2.0.0 the updater's
+**independent design review of `Docs/UPDATE_SYSTEM.md` is NOT DONE**, and the
+only evidence backing G-UPD is my own measurement, restated with its limit:
+`git grep -n RSUpdateFeedURL c3bdced` matches only
+`Sources/RetouchStudio/Core/UpdateController.swift:156-162` (the comment plus
+the two read sites) and never `Resources/Info.plist`, therefore no feed is
+configured — but the claim that no code path can reach a user-writable location
+that a local attacker could poison with no feed configured remains **NOT
+VERIFIED**, because the reviewer's half of that question died with the session.
+Per mandate §6 this cannot block 2.0.0; the updater ships disabled and the
+subsystem stays unaudited-but-inert-by-configuration, which is what the row
+should have said.
+
+Two consequences of the same incident, recorded so nobody repeats my inference
+error:
+
+1. **Review counts are not a liveness signal.** `gh pr view <n> --json reviews`
+   hides PENDING reviews, so an empty list proves nobody *submitted*, never that
+   nobody started — and conversely a pending review that dies is silently
+   discarded. Measured now: PR #110 shows zero submitted reviews at head
+   `c3bdced`. Liveness is tracked from branch heads and diffs only.
+2. Two merged gates in the shipping path have **never had an independent read**:
+   the runtime package gate (PR #85 @ `71881f7`) and AI jobs retention/locking
+   (PR #84 @ `48bb3db`). A read-only review of both is now running, asked for a
+   yes/no with the deciding line on "is the runtime 2.0.0 executes
+   integrity-sealed on the shipping path?" This is the same family as the open
+   runtime-integrity-seal ticket, and it is the last unreviewed piece of the
+   download→verify→execute chain.
+
+Reconciliation snapshot at the time of writing (`git ls-remote` / `gh pr list`):
+`main` still `cd5741b76`; `w5-worker-gates-failclosed` still `c3bdced` (the
+#110 fixer has not pushed yet); open PRs 113 `0caf9a7`, 112 `67a21f3`, 111
+`407c6fd`, 110 `c3bdced`, 107 `2c95eb7`, 102 `e361772`, 99 `277cf50`.
+PR #113's `macOS Integration` context was still `pending`, so #113 remains
+`BLOCKED` and its 401-check Windows result stands only on the `Windows App` job.
