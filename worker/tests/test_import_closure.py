@@ -389,6 +389,78 @@ class ImportClosureTest(unittest.TestCase):
         self.assertIn("sam2", optional)
         self.assertNotIn("sam2", resolved)
 
+    def test_the_upb_tree_of_the_pinned_protobuf_wheel_is_protobuf(self):
+        """`google._upb._message` is protobuf's own extension module (F8).
+
+        The rule for a shared namespace is "every imported dotted name must be
+        inside a prefix the pinned distribution actually ships". Measured on
+        the pinned wheel recorded in `requirements.lock`
+        (`protobuf-7.36.2-cp310-abi3-macosx_10_9_universal2.whl`, 456,039 B,
+        listed by `unzip -l` on the download), the only two trees under
+        `google/` are `google/protobuf/` and `google/_upb/_message.abi3.so`, so
+        both are prefixes here, and the second one used to be a false
+        positive: `import google._upb._message`
+        resolved to canonical `google` and was reported as unpinned. Every
+        other `google.*` name still has exactly one violation.
+        """
+        lock = closure.read_lock(WORKER / "requirements.lock")
+        self.assertIn("protobuf", lock.pins)
+        self.assertNotIn("google", lock.pins)
+
+        # Inside a shipped prefix: protobuf, no violation.
+        for source in ("import google._upb._message\n",
+                       "from google._upb import _message\n"):
+            with self.subTest(source=source.strip()):
+                with tempfile.TemporaryDirectory() as scratch:
+                    package = Path(scratch) / "pkg"
+                    package.mkdir()
+                    (package / "engine.py").write_text(source, encoding="utf-8")
+                    violations, resolved, optional = closure.audit(lock, package)
+                self.assertEqual(violations, [])
+                self.assertEqual(resolved.get("google"), "protobuf")
+                self.assertEqual(optional, {})
+
+        # Both prefixes together are still one distribution.
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(
+                "import google.protobuf\nimport google._upb._message\n",
+                encoding="utf-8")
+            violations, resolved, _optional = closure.audit(lock, package)
+        self.assertEqual(violations, [])
+        self.assertEqual(resolved.get("google"), "protobuf")
+
+        # Outside every prefix: exactly one violation each, fail-closed.
+        outside = {
+            "import google.auth\n": {"google"},
+            "import google.cloud.storage\n": {"google"},
+            "from google import auth\n": {"google"},
+            "import google\n": {"google"},
+        }
+        for source, expected_names in outside.items():
+            with self.subTest(source=source.strip()):
+                with tempfile.TemporaryDirectory() as scratch:
+                    package = Path(scratch) / "pkg"
+                    package.mkdir()
+                    (package / "engine.py").write_text(source, encoding="utf-8")
+                    violations, resolved, optional = closure.audit(lock, package)
+                self.assertEqual(len(violations), 1, f"{source!r} -> {violations}")
+                self.assertIn("google", violations[0])
+                self.assertEqual(set(resolved) & expected_names, set())
+                self.assertEqual(optional, {})
+
+        # A prefix and an outside name together still taint the top-level.
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(
+                "import google._upb._message\nimport google.auth\n",
+                encoding="utf-8")
+            violations, resolved, _optional = closure.audit(lock, package)
+        self.assertEqual(len(violations), 1)
+        self.assertNotIn("google", resolved)
+
     def test_lock_is_exact_hashed_and_covers_the_test_lock(self):
         lock = closure.read_lock(WORKER / "requirements.lock")
         self.assertEqual(lock.violations, [])

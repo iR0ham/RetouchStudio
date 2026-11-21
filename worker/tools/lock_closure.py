@@ -57,16 +57,20 @@ ALIASES = {
     "attr": "attrs",
     "Crypto": "pycryptodome",
     "OpenSSL": "pyopenssl",
+    # A shared namespace: judged by `ALIAS_PREFIXES`, never by the top-level
+    # name alone.
     "google": "protobuf",
 }
 
 # Most aliases own their top-level name outright. `google` does not: it is a
-# namespace several distributions share, and protobuf provides only
-# `google.protobuf`. An alias listed here stands for its distribution only
-# while every imported dotted name is inside these prefixes; any other
-# `google.*` import falls back to the canonical top-level name and is
-# reported as unpinned, because no pinned distribution is known to provide it.
-ALIAS_PREFIXES = {"google": ("google.protobuf",)}
+# namespace several distributions share, and the pinned protobuf wheel ships
+# exactly two module trees under it — `google/protobuf/` and
+# `google/_upb/_message.abi3.so`, the upb extension protobuf's generated code
+# imports. An alias listed here stands for its distribution only while every
+# imported dotted name is inside one of these prefixes; any other `google.*`
+# import falls back to the canonical top-level name and is reported as
+# unpinned, because no pinned distribution is known to provide it.
+ALIAS_PREFIXES = {"google": ("google.protobuf", "google._upb")}
 
 # The package the bundle ships. Tests and tools are not in the payload.
 FIRST_PARTY = {"retouch_ai_worker"}
@@ -95,9 +99,11 @@ def distribution_for(module: str, names: set[str]) -> str:
 
     `names` carries the full dotted imports the AST walk recorded. A scoped
     alias applies only when every one of them belongs to the distribution's
-    module tree: `import google.protobuf` is protobuf, but `import google.auth`
-    is a different distribution nobody pinned, and the `google` namespace does
-    not make it protobuf.
+    module tree — for `google`, the prefixes in `ALIAS_PREFIXES`, which are
+    the two trees the pinned protobuf wheel ships (`google.protobuf` and the
+    `google._upb` extension). `import google.protobuf` is protobuf, but
+    `import google.auth` is a different distribution nobody pinned, and the
+    `google` namespace does not make it protobuf.
     """
     prefixes = ALIAS_PREFIXES.get(module)
     if prefixes:

@@ -163,6 +163,56 @@ class ImportSmokePlanTest(unittest.TestCase):
         self.assertEqual([target.module for target in result.targets],
                          ["google"])
 
+    def test_the_upb_tree_of_the_pinned_protobuf_wheel_is_a_target(self):
+        """`google._upb._message` is protobuf's own tree, so it is a target (F8).
+
+        The mirror of the closure seed: with the real pinned lock, the smoke
+        must plan `google` as a derived target for an import inside
+        `google/_upb/` — never as an `unpinned` entry — and must still name the
+        namespace unpinned outside the prefixes protobuf ships.
+        """
+        lock = lock_closure.read_lock(WORKER / "requirements.lock")
+        self.assertIn("protobuf", lock.pins)
+
+        write_package(self.package, {
+            "engine.py": "import google._upb._message\n"})
+        result = smoke.plan(self.package, lock, fixed=())
+        self.assertEqual(result.unpinned, [])
+        self.assertEqual([target.module for target in result.targets],
+                         ["google"])
+        self.assertEqual([target.module for target in result.derived],
+                         ["google"], "the fixed floor does not name google")
+        self.assertIn("engine.py", result.derived[0].why)
+
+        imported: list[str] = []
+        failures, _seconds = smoke.run(result.targets, imported.append)
+        self.assertEqual(imported, ["google"])
+        self.assertEqual(
+            failures, [],
+            "if protobuf is installed its own extension module must load; a "
+            "real ImportError here is a lock defect, not a planning one")
+
+        # The `from` form of the same shipped prefix is a target too.
+        write_package(self.package,
+                      {"engine.py": "from google._upb import _message\n"})
+        result = smoke.plan(self.package, lock, fixed=())
+        self.assertEqual(result.unpinned, [])
+        self.assertEqual([target.module for target in result.targets],
+                         ["google"])
+
+        # Outside every shipped prefix the namespace stays unpinned and is not
+        # imported, so the broadened alias cannot smuggle a foreign tree in.
+        write_package(self.package, {"engine.py": "import google.auth\n"})
+        result = smoke.plan(self.package, lock, fixed=())
+        unpinned = {module: (files, guard)
+                    for module, files, guard in result.unpinned}
+        self.assertIn("google", unpinned)
+        self.assertEqual(unpinned["google"][1], "")
+        self.assertNotIn("google", [t.module for t in result.targets])
+        imported = []
+        smoke.run(result.targets, imported.append)
+        self.assertEqual(imported, [])
+
     def test_the_shipped_package_has_no_stale_targets(self):
         """The real TARGETS still describe the real worker."""
         real_lock = lock_closure.read_lock(WORKER / "requirements.lock")
