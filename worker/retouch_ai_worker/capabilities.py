@@ -144,10 +144,11 @@ def _inspect(catalog: Catalog, model_id: str) -> tuple[str, str | None, str | No
     # incomplete or malformed cannot be bound to a capability. Before this, the
     # two layers disagreed — `_inspect` called a pinless entry unverifiable while
     # `require_verified` loaded it on size alone.
-    if any(spec.bytes is None or spec.sha256 is None for spec in entry.files):
+    problem = pin_problem(entry)
+    if problem is not None:
         return "unverifiable", None, (
-            f"{entry.id} has no recorded size or SHA-256, so it cannot be "
-            "installed or reported as supported (DR-5)")
+            f"{entry.id} {problem[1]}: {problem[2]} "
+            "(DR-5, catalog defect; no download can repair it)")
     flat = catalog.root / entry.id
     try:
         root = resolve_model_root(catalog.root, entry.id)
