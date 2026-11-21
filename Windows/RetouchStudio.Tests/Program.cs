@@ -3912,6 +3912,62 @@ internal static class Program
         });
         Check("the nine renderable sliders are not edits",
               renderable.UnsupportedEdits.Count == 0);
+
+        // The look is two fields: the identifier names the grade, the strength
+        // blends it in. A project can carry one without the other — macOS only
+        // zeroes the strength when the rail selection goes back to .none, and
+        // the decode reads each field independently — so each half alone must
+        // prompt rather than export a picture without the grade.
+        var strengthOnly = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "", ["lookStrength"] = 45.0,
+            },
+        });
+        Check("a look amount with no identifier is named",
+              strengthOnly.UnsupportedEdits.Count == 1
+              && strengthOnly.UnsupportedEdits[0] == "a look");
+
+        var missingId = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject { ["lookStrength"] = -20.0 },
+        });
+        Check("a negative look amount with no identifier at all is named",
+              missingId.UnsupportedEdits.Count == 1
+              && missingId.UnsupportedEdits[0] == "a look");
+
+        var clearedLook = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "", ["lookStrength"] = 0.0,
+            },
+        });
+        Check("an empty identifier and a zero strength name nothing",
+              clearedLook.UnsupportedEdits.Count == 0);
+
+        var identifierOnly = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "kodachrome", ["lookStrength"] = 0.0,
+            },
+        });
+        Check("an identifier with a zero strength is still named",
+              identifierOnly.UnsupportedEdits.Count == 1
+              && identifierOnly.UnsupportedEdits[0] == "a look");
+
+        var bothHalves = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "warmGold", ["lookStrength"] = 55.0,
+            },
+        });
+        Check("both halves of one look name it once",
+              bothHalves.UnsupportedEdits.Count == 1
+              && bothHalves.UnsupportedEdits[0] == "a look");
     }
 
     /// <summary>

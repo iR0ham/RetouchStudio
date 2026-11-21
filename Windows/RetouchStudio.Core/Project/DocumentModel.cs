@@ -271,7 +271,11 @@ public sealed class DocumentModel
             {
                 found.Add("makeup");
             }
-            if (ReadAdjustmentString("lookID") is { Length: > 0 })
+            // The look is the one edit macOS writes as two fields: the
+            // identifier names the grade, the strength blends it in. Either
+            // half alone can ask for a grade this host cannot render, so both
+            // are checked.
+            if (ReadAdjustmentString("lookID") is { Length: > 0 } || AnyAmount("lookStrength"))
             {
                 found.Add("a look");
             }
