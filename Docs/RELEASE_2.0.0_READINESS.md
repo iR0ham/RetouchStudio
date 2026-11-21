@@ -1574,3 +1574,29 @@ in a scratch directory under `/private/tmp` on this machine — inside the size 
 owner's checkout and documents, and redundant with the CI-based benchmark plan. They are not inputs to any merged
 change; they will either be consumed by the PSNR harness or deleted, and nothing will be downloaded to this machine
 again without a stated reason.
+
+### Q.6 The correction pass on #110 lost its first implementer mid-flight; the count guard reported it
+
+The agent dispatched for Q.1's four items reached its turn ceiling rather than finishing. What it left is recorded
+here because the branch remote does not show it: **one commit, local only, never pushed** — `8e9acc5`, adding
+`google._upb` to `ALIAS_PREFIXES["google"]` with the comment rewritten and one closure test, on top of `cc1d9f6`,
+which is still the remote head of `w5-worker-gates-failclosed`. So the branch state the public record shows is
+unchanged, and nothing of this pass is merged or merged-ready yet.
+
+Two things are worth keeping in the record rather than only in the ticket:
+
+1. The commit message claimed a **second** test seed in `worker/tests/test_import_smoke.py`. `git show --stat` lists
+   two files, and a grep for `_upb` in that test file returns nothing: the seed does not exist. That is the same
+   defect class this addendum exists to eliminate — a claim exceeding the artefact — arriving from my own side of
+   the pipeline rather than the codebase's, so the standing rule applies to member and agent reports too: read the
+   diff, then believe the message.
+2. I ran the suite myself instead of asking: **exit 1**, `AssertionError: 195 != 194 : the discovered suite and
+   Tests/expected-worker-tests.txt disagree; update that file to the measured count`, `Ran 195 tests`,
+   `FAILED (failures=1)`. That is the single-source mechanism Q.1 item 3 discusses, working as designed — an added
+   test without a count bump cannot slip through, locally or in CI.
+
+Re-dispatched as one writer on that branch (no parallel writers on the same files), with the verified starting state
+handed over so no budget goes to re-exploration, the four items ordered so each is independently valuable, and an
+explicit rule that **every green step is committed and pushed immediately** — partial work that is green and pushed
+is an acceptable outcome; a large uncommitted pile is not. #110 still merges only after this lands green on my own
+observation of the run, and `develop` stays fast-forward-equal to `main` afterwards.
