@@ -1255,8 +1255,7 @@ hash, the same treatment the updater design document got.
 
 ---
 
-## 12. Addendum O — 2026-11-22: the owner replaced the licensing use class, and issued full
-## model-ecosystem execution authority
+## Addendum O — 2026-11-22: the owner replaced the licensing use class and issued full model-ecosystem execution authority
 
 ### O.1 What was said, and what it changes
 
@@ -1354,6 +1353,7 @@ multi-gigabyte download into this Mac.
 | M1-C | Research (parallel seat) | same for background removal, segmentation/masks, object removal/inpainting, portrait/beauty, generative fill — including a hard audit of `flux2-klein-4b-q4` | assigned |
 | #115 review | Code Reviewer | independent adversarial review required by §7 and §8 of the mandate (and carried from §4 of the release mandate) | assigned |
 | execution evidence | Test Engineer | what the worker and Foundation-only Swift suites actually do at `cc1d9f6` and `75cbb89`, and which rejection classes are provable through the real RPC path here | assigned |
+| #114 rework | Full-stack Engineer | schema that can express UNKNOWN, the four review must-fixes (idempotent regeneration, bidirectional cross-check, mirrored fields, excluded-loads), and the dossier imported out of `/tmp` | assigned |
 
 Merge order **DR-6 is unchanged**: #110 → #111 → #107 → #99, then the catalogue/licence and
 integrity lines, version bump last. Current facts at the moment this addendum was written: #110 is
@@ -1362,3 +1362,78 @@ independent verdict, not on CI; #115 carries the two commits that landed the `-3
 hosts (`9b64949`, `75cbb89`), is green on every context read so far **except** `macOS Integration`
 which was still running, and still owes the rebase-and-count reconciliation against #110 (#132).
 Nothing is merged, tagged or published; the owner's checkout is untouched.
+
+---
+
+## Addendum P — 2026-11-22: DR-16, the decision framework I will apply to every model
+
+The mandate says *"Do not ask the owner to choose between technically equivalent candidates. Make
+the decision using evidence."* A decision rule that does not exist yet cannot be applied
+consistently, so it is written down **before** the candidate surveys land, and every adoption or
+rejection from here on is measured against it. It is a PM decision, not owner policy, and it is
+falsifiable: if a rule below makes a good model fail for a silly reason, the rule changes on the
+record and the change is dated.
+
+### P.1 Floor — a candidate that fails any of these never enters the catalogue, whatever its quality
+
+| # | Requirement | Why it is a floor and not a preference |
+|---|---|---|
+| F1 | The exact weight file is fetchable over HTTPS from an **immutable** location: a release tag with a stable asset id, or a Hugging Face revision commit SHA. Not Google Drive, not OneDrive, not a "latest" alias. | §7 demands "exact artifact source" and "reproducible installation metadata". A mutable host cannot satisfy either, so `RestoreFormer++` fails on this axis regardless of licence. |
+| F2 | Full SHA-256 and byte size are recorded **from the artefact we will actually load**, and the entry is inactive until they are. | Without a real digest the fail-closed gate (#115) has nothing to enforce. A hash "to be filled in later" is how the last audit found only 1 of 4 models verified at load. |
+| F3 | The rights holder — the party that authored the trained weights or is documented as their owner — states the permission. A re-uploader's metadata tag is not a grant. | The owner's §4, restated on 2026-11-22. This is what moved `swin2sr-x4` to UNKNOWN. |
+| F4 | Runs inside the locked runtime (`torch 2.15.0`, `torchvision 0.29.2`, `onnxruntime 1.31.1`, `numpy 2.5.4`, `pillow 13.0.0`) **or** arrives with a lock change whose set-membership evidence closes ticket #129. | A model that needs an untracked dependency is a runtime change smuggled in as a feature. |
+| F5 | Peak resident memory stays inside the reference envelope: the MacBook Air M3 with 16 GB, sharing the machine with the app. Working target: peak RSS ≤ 8 GB on a 2048×2048 tile, measured headless in the worker, with the number recorded rather than asserted. | §6 lists RAM as an evaluation axis; the upscaler's memory envelope is already the measured reason for the 40 MP ceiling. |
+| F6 | A Windows path either exists (CPU/ONNX, demonstrated on a runner) or the capability is recorded as macOS-only in the matrix and the UI says so. | §2 of the mandate allows different models per platform precisely so that "Windows silently loses the edit" is never the fallback — that class of bug is #122/#133. |
+| F7 | Every condition the licence imposes is **implemented**, not annotated: attribution present where required, no dataset redistribution where forbidden, no derivative-work claim where ND applies. | "APPROVED WITH CONDITIONS models may be included only when every condition is technically and legally satisfied and clearly documented." |
+
+### P.2 Ceiling — we are not collecting models
+
+- **One primary model per capability.** A second is admitted only with a named, measurable benefit
+  (quality delta above the recorded noise floor, a degradation class the primary cannot handle, or a
+  platform the primary cannot run on). "It also exists" is not a reason to ship another hundred
+  megabytes and another licence surface.
+- **No duplicate capabilities.** If two candidates cover one feature, one becomes primary and the
+  other is recorded in the selection document as a rejected alternative with the reason — the
+  rejection is part of the deliverable, not a footnote.
+- **Feature boundary over feature theatre.** Where nothing clears F1–F7, the capability keeps its
+  existing UI state and reports truthfully that no verified model is available. The mandate is
+  explicit: *"preserve the feature boundary and report the limitation rather than shipping an
+  unverified model."*
+
+### P.3 Quality and performance evidence, so a number is never confused with a claim
+
+1. **Protocol first, then run.** Each capability gets a named metric, a named threshold, a named
+   fixture set, and the command that produces the number, recorded in
+   `Docs/AI_MODEL_BENCHMARKS.md`. The upscaler already has a working precedent: downscale → upscale
+   → PSNR against the native high-resolution reference, **≥ 24 dB**, measured on the owner's private
+   portrait fixtures. Equivalent protocols are defined per capability before a candidate is called
+   better.
+2. **Three labels, always distinct:** *MEASURED* (ran here or in CI, artefact retained), *UPSTREAM
+   CLAIM* (the paper or README says so), *INFERRED* (my reasoning from architecture or parameter
+   count). A candidate selected on an upstream claim is recorded as selected on an upstream claim.
+3. **Fixtures stay private.** The portrait test images are never committed; the benchmark document
+   records derived statistics and hashes of the derived artefacts, not the photographs.
+4. **No large downloads on the owner's machine.** Anything above a few hundred MB is fetched in CI or
+   an isolated environment, per §6 of the mandate and DR-2. Where that is impossible, the honest cell
+   in the matrix is NOT VERIFIED.
+
+### P.4 Replacement and ejection
+
+- *"Do not preserve an inferior model simply because it is already integrated."* A current entry has
+  no standing: it must clear the same floor as a newcomer, and if a better cleared candidate exists
+  we swap and record why.
+- Ejection keeps the row. A model moved to EXCLUDED or UNKNOWN stays visible in the register and in
+  the capability matrix with its reason, so the product says "not available: provenance" rather than
+  appearing to have never had the feature.
+- One adoption = one PR carrying pin, size, SHA-256, register entry, licence conditions, the negative
+  integrity tests, the benchmark row, and the truthful UI state. A code-only model change is the
+  pattern that produced yesterday's asymmetry.
+
+### P.5 What I still owe, and the order
+
+Research (M1-A/B/C) → per-capability decision list, one primary + rejected alternatives with reasons →
+catalogue and register changes on evidence → integrity and admission tests (#115 plus the Scope-A
+invariants) → headless benchmarks in CI or an isolated environment → independent review of licensing,
+provenance, catalogue changes, runtime integration, dependency changes, integrity, cross-platform
+behaviour and test coverage (§8's list, reviewer ≠ implementer) → RC preparation. Publication,
+tagging, release assets, the `v1.0.0` release and any GUI acceptance session remain the owner's.
