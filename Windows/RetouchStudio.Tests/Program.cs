@@ -4507,8 +4507,11 @@ internal static class Program
         }
         else
         {
-            Fail(name, $"named [{string.Join(", ", actual.OrderBy(edit => edit, StringComparer.Ordinal))}] " +
-                       $"expected [{string.Join(", ", expected.OrderBy(edit => edit, StringComparer.Ordinal))}]");
+            var named = string.Join(", ",
+                actual.OrderBy(edit => edit, StringComparer.Ordinal));
+            var wanted = string.Join(", ",
+                expected.OrderBy(edit => edit, StringComparer.Ordinal));
+            Fail(name, $"named [{named}], expected [{wanted}]");
         }
     }
 
