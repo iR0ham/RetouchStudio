@@ -47,6 +47,13 @@ class ModelEntry:
     source: str
     files: tuple[ModelFile, ...] = field(default_factory=tuple)
     notes: str = ""
+    # Recorded evidence, not a gate. The app catalog carries the same facts and
+    # the two surfaces have to be checkable against each other; see §8a of the
+    # model licence dossier. `license_url` is where the weights grant was read,
+    # `license_read_on` the date it was read, so a stale claim can be detected.
+    # Defaults keep every existing construction site working unchanged.
+    license_url: str | None = None
+    license_read_on: str | None = None
 
     def public(self, root: Path) -> dict:
         return {
@@ -59,6 +66,10 @@ class ModelEntry:
             "source": self.source,
             "notes": self.notes,
             "bytes": sum(f.bytes or 0 for f in self.files) or None,
+            # Added after the existing members on purpose: a consumer that reads
+            # this mapping positionally keeps seeing exactly what it saw before.
+            "license_url": self.license_url,
+            "license_read_on": self.license_read_on,
         }
 
     def installed(self, root: Path) -> bool:
@@ -122,6 +133,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         license_id="Apache-2.0",
         commercial_ok=True,
         source="hf:mflux-community/flux2-klein-4b-mflux-q4",
+        license_url="https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+        license_read_on="2026-11-21",
         files=(
             ModelFile("text_encoder/0.safetensors",
                       "e59ed2b6825cb8ae3d0ba1e8a43575a565d465ce4518b7d79d28020b19b639cd", 2_135_435_237,
@@ -148,6 +161,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         license_id="Apache-2.0",
         commercial_ok=True,
         source="hf:facebook/sam2.1-hiera-tiny",
+        license_url="https://huggingface.co/facebook/sam2.1-hiera-tiny",
+        license_read_on="2026-11-21",
         files=(ModelFile(
             "sam2.1_hiera_tiny.pt",
             # Measured 2026-11-18 three ways that agree: the pinned URL streams
@@ -170,6 +185,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         license_id="Apache-2.0",
         commercial_ok=True,
         source="hf:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+        license_url="https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+        license_read_on="2026-11-21",
         files=(
             ModelFile("config.json",
                       "1e986fb6d0b6de32bae01a6ccd756e5d8ae1525dcb52f7ee5b2dc7f6132d6365", 772,
@@ -191,6 +208,8 @@ CATALOG: tuple[ModelEntry, ...] = (
         license_id="MIT",
         commercial_ok=True,
         source="hf:andraniksargsyan/migan",
+        license_url="https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/LICENSE-WEIGHTS",
+        license_read_on="2026-11-21",
         files=(ModelFile(
             "migan_pipeline_v2.onnx",
             "6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b", 28_079_181,
