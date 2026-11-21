@@ -3826,22 +3826,25 @@ internal static class Program
     private static void UnsupportedEditGuard(string root)
     {
         var repo = RepoRoot();
+        // The names a macOS project must be refused, written out once. Both
+        // fixtures are the same picture at two schema versions, so they share
+        // this list; a count is never asserted on its own.
+        var fullProjectEdits = new[]
+        {
+            "heal spots", "stickers", "AI patches", "analysis callouts",
+            "skin retouching", "face reshaping", "a look", "film grain",
+        };
         using (var session = ProjectSession.Open(Path.Combine(
                    repo, "Tests/Fixtures/ProjectV4/project-v4-full.retouch")))
         {
-            var edits = session.Document.UnsupportedEdits;
-            Check("a macOS project names every edit this host cannot render",
-                  edits.Count == 8
-                  && edits.Contains("heal spots") && edits.Contains("stickers")
-                  && edits.Contains("AI patches") && edits.Contains("analysis callouts")
-                  && edits.Contains("skin retouching") && edits.Contains("face reshaping")
-                  && edits.Contains("a look") && edits.Contains("film grain"));
+            CheckEdits("a macOS project names every edit this host cannot render",
+                       session.Document, fullProjectEdits);
         }
         using (var session = ProjectSession.Open(Path.Combine(
                    repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch")))
         {
-            Check("a v3 project is checked the same way",
-                  session.Document.UnsupportedEdits.Count == 8);
+            CheckEdits("a v3 project is checked the same way",
+                       session.Document, fullProjectEdits);
         }
 
         using (var session = ProjectSession.Create(Path.Combine(root, "fresh.png")))
@@ -3853,7 +3856,7 @@ internal static class Program
         }
 
         var empty = new DocumentModel(new JsonObject());
-        Check("a project with no extra edits names none", empty.UnsupportedEdits.Count == 0);
+        CheckEdits("a project with no extra edits names none", empty);
 
         empty.Root["healSpots"] = new JsonArray();
         empty.Root["stickers"] = new JsonArray();
@@ -4437,6 +4440,22 @@ internal static class Program
         {
             Fail(name, "condition was false");
         }
+    }
+
+    /// <summary>
+    /// Asserts the exact set of names a document's guard reports. A count is
+    /// never compared with a hand-typed number: where a caller needs one it
+    /// comes from the same literal list it passes here, so an edit that adds or
+    /// drops a name cannot stay green by bumping a figure somewhere else. The
+    /// comparison is order-insensitive; the failure prints what the guard
+    /// actually named beside what was expected.
+    /// </summary>
+    private static void CheckEdits(string name, DocumentModel model,
+                                   params string[] expected)
+    {
+        var actual = model.UnsupportedEdits;
+        Check(name, actual.OrderBy(edit => edit, StringComparer.Ordinal)
+                          .SequenceEqual(expected.OrderBy(edit => edit, StringComparer.Ordinal)))
     }
 
     private static void Pass(string name)
