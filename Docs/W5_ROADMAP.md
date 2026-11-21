@@ -161,8 +161,11 @@ capabilities.
 44110079042 is green on head `45e9e30` (macOS Integration, Windows App,
 Windows StudioCore, StudioCore Boundary, Platform-neutral Conformance;
 `Ran 88 tests`, `AI RUNTIME TESTS: PASS`, `WINDOWS APP BUILD: PASS`). Only
-`upscale.4x` on macOS is `supported`, from the recorded 4× run; every other
-capability carries an explicit state and reason. The macOS job path still
+`upscale.4x` on macOS is `supported`, from the recorded 4× run; the ledger
+entry at `worker/retouch_ai_worker/capability-evidence.json` is the textual
+record of it (`Docs/PHASE5_ACCEPTANCE.md` §4, `Docs/PRIVACY_AUDIT.md` §4), and
+it names no run id, host or artefact hash, so no CI gate re-checks it. Every
+other capability carries an explicit state and reason. The macOS job path still
 submits by kind; a review found that a size-mismatched install reported
 `blocked` was still loaded by that path, and the load path now refuses it with
 `-32019` (`E_MODEL_UNVERIFIED`). Qualification states (no recorded run, legacy
