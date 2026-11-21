@@ -396,19 +396,27 @@ public sealed class DocumentModel
     /// The look the document asks for, or nothing when it asks for none. macOS
     /// stores a <c>FilmLook</c> raw value, so clearing the selection writes the
     /// literal "none" rather than an empty string; both mean no grade, and the
-    /// guard must not refuse a document that renders nothing.
+    /// guard must not refuse a document that renders nothing. Only the sentinel
+    /// is folded away here — an absent or empty identifier still counts as a
+    /// half of the edit, because a file can pair it with a strength.
     /// </summary>
     private string? LookIdentifier() =>
         ReadAdjustmentString("lookID") is { } id
         && !id.Equals(NoLookIdentifier, StringComparison.OrdinalIgnoreCase) ? id : null;
 
     /// <summary>
-    /// The look's blend amount, or zero when the document names no look. macOS
-    /// only spends <c>lookStrength</c> through a grade, so under the cleared
-    /// sentinel it changes nothing and must not be read as an edit.
+    /// The look's blend amount, or zero beside the cleared-look sentinel. macOS
+    /// spends <c>lookStrength</c> through a grade alone, so under
+    /// <c>FilmLook.none</c> it changes no pixel and would otherwise refuse a
+    /// document this host has no way to repair. A missing identifier keeps its
+    /// amount live: that pairing comes from a crafted or externally written
+    /// file, and refusing it is what this branch is for.
     /// </summary>
     private double LookStrengthAmount() =>
-        LookIdentifier() is { Length: > 0 } ? Amount("lookStrength") : 0;
+        string.Equals(ReadAdjustmentString("lookID"), NoLookIdentifier,
+                      StringComparison.OrdinalIgnoreCase)
+        ? 0
+        : Amount("lookStrength");
 
     private bool ReadAdjustmentBool(string key) =>
         Adjustments?[key] is JsonValue value
