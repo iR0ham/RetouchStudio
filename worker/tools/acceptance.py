@@ -32,6 +32,10 @@ import psutil
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "worker"))
+
+from retouch_ai_worker.morphology import dilate_binary, ellipse_kernel  # noqa: E402
+
 DEFAULT_IMAGE = ROOT / "out" / "patchdemo" / "source-512.png"
 DEFAULT_RECORD = ROOT / "out" / "phase1-acceptance.json"
 PROMPT = ("Remove the wristwatch and continue the white knit sleeve and the skin "
@@ -171,11 +175,7 @@ def data_url(array: np.ndarray) -> str:
 
 
 def dilate(mask: np.ndarray, radius: int) -> np.ndarray:
-    import cv2
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                      (radius * 2 + 1, radius * 2 + 1))
-    return cv2.dilate((mask > 127).astype(np.uint8) * 255, kernel)
+    return dilate_binary((mask > 127).astype(np.uint8), ellipse_kernel(radius)) * 255
 
 
 # --------------------------------------------------------------------------

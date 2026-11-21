@@ -21,7 +21,7 @@ from typing import Callable
 import numpy as np
 from PIL import Image
 
-from . import __version__, provenance
+from . import __version__, morphology, provenance
 from .capabilities import current_platform, job_capability
 from .catalog import Catalog, ModelEntry
 from .protocol import (BUDGET_EXCEEDED, CONTRACT_VERSION, INTERNAL_ERROR,
@@ -113,17 +113,29 @@ def region_alpha(mask: np.ndarray, dilate: int = 4, feather: int = 2) -> np.ndar
 
     The feather is forced to zero outside the dilated mask, so a resampled
     version of this plane can never bleed past the authorized region.
+    Filtering is cropped to the mask's bbox plus the filter reach; the rest of
+    the plane stays zero, which is what a zero border gives there anyway.
     """
-    import cv2
-
     binary = (mask > 127).astype(np.uint8)
-    if dilate > 0:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate * 2 + 1, dilate * 2 + 1))
-        binary = cv2.dilate(binary, kernel)
-    alpha = binary.astype(np.float32)
+    height, width = binary.shape
+    alpha = np.zeros((height, width), np.float32)
+    ys, xs = np.nonzero(binary)
+    if ys.size == 0:
+        return alpha
+    kernel = morphology.ellipse_kernel(dilate) if dilate > 0 else None
+    reach = morphology.gaussian_kernel(feather).size // 2 if feather > 0 else 0
+    margin = max(dilate, 0) + reach
+    y0 = max(0, int(ys.min()) - margin)
+    y1 = min(height, int(ys.max()) + margin + 1)
+    x0 = max(0, int(xs.min()) - margin)
+    x1 = min(width, int(xs.max()) + margin + 1)
+    crop = binary[y0:y1, x0:x1]
+    dilated = morphology.dilate_binary(crop, kernel) if kernel is not None else crop
+    plane = dilated.astype(np.float32)
     if feather > 0:
-        alpha = cv2.GaussianBlur(alpha, (0, 0), feather)
-        alpha[binary == 0] = 0.0
+        plane = morphology.gaussian_blur(plane, feather)
+        plane[dilated == 0] = 0.0
+    alpha[y0:y1, x0:x1] = plane
     return alpha
 
 

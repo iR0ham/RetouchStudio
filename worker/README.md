@@ -14,7 +14,7 @@ The source lives in this repository. `Tools/setup-worker-venv.sh` creates
 branch.
 
 ```bash
-./Tools/setup-worker-venv.sh          # protocol/server tests (numpy, Pillow, OpenCV)
+./Tools/setup-worker-venv.sh          # protocol/server tests (numpy, Pillow)
 ./Tools/setup-worker-venv.sh --full   # builds CPython 3.13.15 from source, then models/MLX/torch
 ```
 

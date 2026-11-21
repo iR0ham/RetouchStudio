@@ -39,6 +39,11 @@ VENV="${RETOUCH_WORKER_VENV:-worker/.venv}"
 if [ ! -x "$VENV/bin/python3" ]; then
   "$PYTHON" -m venv "$VENV"
 fi
+# The locks are complete closures, so pip is told not to resolve on its own.
+# Without this, mflux's declared dependency on opencv-python (only its optional
+# ControlNet/OpenPose image preprocessing uses it) would put the GPL-linked
+# OpenCV wheel back into the environment, or fail the hashed install because
+# that dependency carries no pin.
 "$VENV/bin/python3" -m pip install --disable-pip-version-check \
-  --require-hashes -r "$LOCK"
+  --require-hashes --no-deps -r "$LOCK"
 echo "worker environment ready: $VENV ($([ "$FULL" = 1 ] && echo full || echo test))"
