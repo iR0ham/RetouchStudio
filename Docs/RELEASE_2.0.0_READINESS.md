@@ -235,3 +235,14 @@ The owner's ruling is that the standing mandate **is** full permission, and that
 | DR-6 *(new)* | Merge order when several gates are green at once. | **#110 → #111 → #107 → #99 → integrity/licence PRs, with `develop` fast-forwarded after each.** Version bump to 2.0.0 happens only after #111 merges, because both touch `Resources/Info.plist`. | Avoids two branches rewriting the same plist — the exact coupling that produced past conflicts. |
 
 No item above changes a licence position, a target platform, or any owner boundary. They are engineering calls, and they are made.
+
+### Addendum C — 2026-11-21, authority scope confirmed by the owner
+
+Owner: *"afarin, are to full authority dari roo kole proje, ke tamoomesh koni"* — full authority over the whole project until it is finished. Accepted. Practical consequence: every gate in this document is mine to close, every merge order and interface contract is mine to set, and no engineering question is queued to the owner again.
+
+One boundary is **not** an engineering question and I am holding it deliberately, because the owner's own mandate §1 states it in his words: **no public release, publishing, uploading assets, retagging, deleting releases or modifying `v1.0.0` without explicit owner authorization.** "Full authority" over the project does not read as "publish now" — publication is the one irreversible, externally visible act, and it will be requested once, at the end, with the release candidate already built, validated and independently reviewed. Everything up to and including the RC is executed without further asking.
+
+Two more items resolved under this authority, not asked:
+
+- **DR-7 — Remaining open defect tickets are triaged against the release, not carried indefinitely.** The Wave-1 truthfulness fixes that touch `Localization.swift` / `PersianL10n.swift` (watermark wording, cancelled-batch wording, ICC wording, cold-Metal 1-LSB disclosure) are **sequenced after #99 merges**, because #99 owns those two files and parallel edits would overwrite each other. They are 2.0.0-relevant only insofar as they change what the product claims; each is re-checked against the ledger before the release notes are written, and any that stays NOT VERIFIED will simply not be claimed in them.
+- **DR-8 — `develop` is a mirror, not a lane.** It is fast-forwarded to `main` after every merge and never receives its own commits; if it is ever found divergent, that is a defect to correct immediately.
