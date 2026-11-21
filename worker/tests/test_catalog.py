@@ -595,6 +595,109 @@ class CatalogTests(unittest.TestCase):
                     self.assertGreater(spec.bytes, 0)
                     self.assertEqual(normalize_digest(spec.sha256), spec.sha256)
 
+    def test_a_pin_for_an_escaping_path_is_refused_as_a_catalog_defect(self):
+        # Mandate §4 case 6's other half. A catalog file path is joined onto the
+        # resolved model root, so `../` makes every size and digest check run on
+        # a *different* file than the one the loader later opens — the pins would
+        # be true of the wrong bytes. `resolve_model_root` guards the id and the
+        # version directory; nothing guarded the per-file paths.
+        escaping = ("../../etc/passwd", "../outside.bin", "/etc/passwd",
+                    "vae/../../secret", "", "a\x00b", ".hidden/x")
+        for path in escaping:
+            with self.subTest(path=path):
+                bad = ModelEntry(
+                    id="escape", name="Escape", task="upscaling",
+                    license_id="MIT", commercial_ok=True, source="local",
+                    files=(ModelFile(path, SHA_OF_WEIGHTS, len(WEIGHTS)),))
+                self.assertEqual(pin_problem(bad)[:2],
+                                 ("unsafe-path", path))
+                folder = self.root / bad.id
+                folder.mkdir(exist_ok=True)
+                (folder / "weights.bin").write_bytes(WEIGHTS)
+                catalog = Catalog(self.root, allow_uncleared=False)
+                with _with(bad):
+                    for accessor in (catalog.require, catalog.require_verified):
+                        with self.subTest(accessor=accessor.__name__):
+                            with self.assertRaises(WorkerError) as caught:
+                                accessor(bad.id)
+                self.assertEqual(caught.exception.code, CATALOG_INVALID)
+                self.assertEqual(caught.exception.data["reason"], "unsafe-path")
+                self.assertEqual(catalog._leases, {})
+
+    def test_nested_catalog_paths_stay_legal(self):
+        # `flux2` really does pin `vae/0.safetensors`, so a nested path must keep
+        # passing admission or the fix would strand a shipped model.
+        nested = ModelEntry(
+            id="nested", name="Nested", task="upscaling", license_id="MIT",
+            commercial_ok=True, source="local",
+            files=(ModelFile("vae/0.safetensors", SHA_OF_WEIGHTS, len(WEIGHTS)),))
+        self.assertIsNone(pin_problem(nested))
+
+    def test_a_symlinked_weight_is_refused_rather_than_pinned_to_other_bytes(self):
+        # Attempted bypass of the digest gate by substituting a link: the pins are
+        # checked against the target's bytes, while a runtime that reopens by
+        # name can be redirected between the two operations. A store entry has to
+        # be a regular file inside its own install.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "weights.bin").write_bytes(WEIGHTS)   # the correct digest
+        os.symlink(elsewhere / "weights.bin", folder / "weights.bin")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            for accessor in (catalog.require, catalog.require_verified):
+                with self.subTest(accessor=accessor.__name__):
+                    with self.assertRaises(WorkerError) as caught:
+                        accessor(VERIFIED.id)
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(caught.exception.data["reason"], "unsafe-path")
+        self.assertEqual(catalog._leases, {})
+
+    def test_no_accessor_returns_a_path_without_hashing_when_a_digest_is_recorded(self):
+        # Structural proof that there is no way back to the old behaviour: the
+        # digest loop cannot be skipped by a null pin, because the only skip
+        # branch in `_verify_digests` is the cache hit, and admission guarantees
+        # every recorded digest normalises to 64 hex characters.
+        source = Path(catalog_module.__file__).read_text("utf-8")
+        body = source[source.index("def _verify_digests"):source.index("def require_verified")]
+        self.assertNotIn("is None:\n                continue", body,
+                         "_verify_digests skips a file instead of hashing it")
+        self.assertIn("self._proofs[key] = (generation, expected)", body,
+                      "the memo write disappeared, so a cache hit could be forged")
+        # The cache is written only after a real hash matched.
+        self.assertLess(body.index("actual = _sha256(target)"),
+                        body.index("self._proofs[key] ="))
+        self.assertLess(body.index("if actual != expected:"),
+                        body.index("self._proofs[key] ="))
+
+    def test_a_proof_cannot_be_seeded_from_outside_a_hash(self):
+        # Attempted bypass of the cache: pre-populate `_proofs` with what looks
+        # like a verified record for tampered bytes and confirm the load still
+        # hashes. The key includes ctime and the catalog generation, and a caller
+        # that does not know them cannot produce a hit.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        target = folder / "weights.bin"
+        target.write_bytes(b"TAMPRED")     # right length, wrong content
+        catalog = Catalog(self.root, allow_uncleared=False)
+        stamp = target.stat()
+        guesses = [
+            (catalog.root, VERIFIED.id, "weights.bin", SHA_OF_WEIGHTS,
+             len(WEIGHTS), stamp.st_dev, stamp.st_ino, stamp.st_size,
+             stamp.st_mtime_ns),
+            (str(catalog.root), VERIFIED.id, "weights.bin", SHA_OF_WEIGHTS,
+             len(WEIGHTS)),
+            (VERIFIED.id, "weights.bin", SHA_OF_WEIGHTS),
+        ]
+        for key in guesses:
+            catalog._proofs[key] = (catalog._generation(), SHA_OF_WEIGHTS)
+        with _with(VERIFIED):
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require_verified(VERIFIED.id)
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(caught.exception.data["reason"], "digest")
+
     def test_unknown_model(self):
         with self.assertRaises(WorkerError) as caught:
             Catalog(self.root).get("nope")

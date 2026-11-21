@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .catalog import Catalog, resolve_model_root
+from .catalog import Catalog, pin_problem, resolve_model_root
 from .protocol import CONTRACT_VERSION
 
 VOCABULARY = "capabilities/1"
@@ -140,10 +140,15 @@ def _inspect(catalog: Catalog, model_id: str) -> tuple[str, str | None, str | No
     `state` is `ok`, `missing`, `legacy`, `damaged` or `unverifiable`.
     """
     entry = catalog.get(model_id)
-    if any(spec.bytes is None or spec.sha256 is None for spec in entry.files):
+    # One admission rule with the load path: an entry whose pin set is absent,
+    # incomplete or malformed cannot be bound to a capability. Before this, the
+    # two layers disagreed — `_inspect` called a pinless entry unverifiable while
+    # `require_verified` loaded it on size alone.
+    problem = pin_problem(entry)
+    if problem is not None:
         return "unverifiable", None, (
-            f"{entry.id} has no recorded size or SHA-256, so it cannot be "
-            "installed or reported as supported (DR-5)")
+            f"{entry.id} {problem[1]}: {problem[2]} "
+            "(DR-5, catalog defect; no download can repair it)")
     flat = catalog.root / entry.id
     try:
         root = resolve_model_root(catalog.root, entry.id)
@@ -164,7 +169,11 @@ def _inspect(catalog: Catalog, model_id: str) -> tuple[str, str | None, str | No
         except OSError:
             return "damaged", root.name, (
                 f"{entry.id} {root.name} is missing {spec.path}; install or verify it")
-        if spec.bytes is not None and actual != spec.bytes:
+        if actual != spec.bytes:
+            # Unconditional: `pin_problem` already guarantees a recorded size, so
+            # a null here can only mean the catalog changed mid-report. A check
+            # silently skipped on a null pin is exactly how this layer used to be
+            # fail-open.
             return "damaged", root.name, (
                 f"{entry.id} {root.name} failed its size check; verify it in the "
                 "model manager")

@@ -106,9 +106,16 @@ LEGACY_LEASE = "@legacy"
 REASON_MISSING_SIZE = "missing-size"
 REASON_MISSING_DIGEST = "missing-digest"
 REASON_INVALID_DIGEST = "invalid-digest"
+REASON_INCOMPLETE_ENTRY = "incomplete-entry"
+REASON_UNSAFE_PATH = "unsafe-path"
 REASON_SIZE = "size"
 REASON_DIGEST = "digest"
 REASON_UNREADABLE = "unreadable"
+
+# `pin_problem` reports the first defect it finds, in this order, so a message
+# can name the class without re-deriving it.
+PIN_REASONS = (REASON_MISSING_DIGEST, REASON_INVALID_DIGEST, REASON_MISSING_SIZE,
+               REASON_INCOMPLETE_ENTRY, REASON_UNSAFE_PATH)
 
 
 def _sha256(path: Path) -> str:
@@ -139,9 +146,14 @@ def pin_problem(entry: ModelEntry) -> tuple[str, str, str] | None:
     Checked per file, in catalog order, so the answer names the first defect.
     An entry with no files at all is incomplete: there is nothing to load, and
     treating that as a healthy empty install would be a silent pass.
+
+    This is the single admission rule. `require`, `require_verified`, `health`,
+    `verify`, `capability.list` and the download plan all ask it, which is what
+    keeps the reporting layer from calling an entry usable while the load layer
+    refuses it — the disagreement the audit measured.
     """
     if not entry.files:
-        return ("incomplete-entry", "",
+        return (REASON_INCOMPLETE_ENTRY, "",
                 f"{entry.id} has no files recorded in the catalog")
     for spec in entry.files:
         digest = normalize_digest(spec.sha256)
@@ -156,7 +168,37 @@ def pin_problem(entry: ModelEntry) -> tuple[str, str, str] | None:
         if spec.bytes is None:
             return (REASON_MISSING_SIZE, spec.path,
                     f"{entry.id} {spec.path} has no recorded exact size")
+    # Mandate §4 case 6, the half a null pin used to hide: a listed path that
+    # leaves the model folder, or cannot be named safely at all, would make every
+    # integrity check below run on some *other* file than the one the runtime
+    # later opens. `resolve_model_root` guards the id and the version; nothing
+    # guarded the per-file paths, so `../../etc/passwd` was a legal pin.
+    for spec in entry.files:
+        if not _safe_relative_path(spec.path):
+            return (REASON_UNSAFE_PATH, spec.path,
+                    f"{entry.id} records an unsafe file path {spec.path!r}, so its "
+                    "pins cannot be bound to the bytes a loader opens")
     return None
+
+
+def _safe_relative_path(value: object) -> bool:
+    """True when a catalog file path stays inside the model folder it pins.
+
+    A path may nest (`vae/0.safetensors` is legitimate), but it must be relative,
+    free of `..`, made only of safe components and not a symlink. This is the
+    check `_safe_component` cannot express for a multi-part path, and it runs on
+    the *recorded* string — before any pin is compared to a file.
+    """
+    if not isinstance(value, str) or not value or value.startswith("/"):
+        return False
+    if "\\" in value or "\x00" in value:
+        return False
+    parts = value.split("/")
+    if any(not part or part == "." or part == ".."
+           or not _SAFE_COMPONENT.fullmatch(part) or ".." in part
+           for part in parts):
+        return False
+    return True
 
 
 def _pin_data(entry: ModelEntry, problem: tuple[str, str, str]) -> dict:
@@ -299,20 +341,25 @@ class Catalog:
         # Artifact identity -> (catalog generation, digest). Memoising the hash
         # proof is what makes a verified load affordable: 4.6 GB of FLUX weights
         # costs ~2.2 s once per process, which a job can pay and a capability
-        # poll cannot. The key covers the device, inode, size and mtime, so a
-        # repaired or replaced file is a different key; the generation covers the
-        # catalog itself, so a pin change invalidates every proof.
-        self._proofs: dict[tuple, tuple[int, str]] = {}
+        # poll cannot. The key covers the device, inode, size, mtime **and ctime**
+        # — an in-place rewrite that preserves the length and a hand-set mtime
+        # still moves the change time — plus the catalog generation and the
+        # expected digest, so editing a pin invalidates every proof. A proof is
+        # only ever *added* after a file has actually been hashed; nothing can
+        # seed it from outside.
+        self._proofs: dict[tuple, tuple[tuple, str]] = {}
 
     @staticmethod
-    def _generation() -> int:
+    def _generation() -> tuple:
         """Identity of the catalog data currently in force.
 
         `_pins_of` reads the module-level `CATALOG`, so a test (or a runtime
         amendment) that replaces the tuple changes this value and with it every
-        cached digest proof.
+        cached digest proof. The tuple is stored rather than a builtin `hash`
+        because those are salted per process — fine for one worker, but it would
+        make the value unprintable in a diagnostic and incomparable across runs.
         """
-        return hash(tuple(_pins_of(entry) for entry in CATALOG))
+        return tuple(_pins_of(entry) for entry in CATALOG)
 
     def _lease(self, entry: ModelEntry, identity: str, filename: str,
                label: str) -> None:
@@ -429,6 +476,47 @@ class Catalog:
         identity = LEGACY_LEASE if model_root == flat_root else model_root.name
         return model_root, identity
 
+    def _check_sizes(self, entry: ModelEntry,
+                     model_root: Path) -> dict[str, object]:
+        """Stat every listed file; return the stamps a digest pass can reuse.
+
+        Existence answers first (`MODEL_MISSING`, so the UI can offer a download),
+        then length (`CHECKSUM_MISMATCH`). A refused load must not keep its lease,
+        which is why neither raise happens inside a `with` that holds it.
+        """
+        stamps: dict[str, object] = {}
+        for spec in entry.files:
+            target = model_root / spec.path
+            try:
+                stamp = target.stat()
+            except OSError:
+                raise WorkerError(
+                    MODEL_MISSING, f"{entry.id} is not installed",
+                    {"model": entry.id, "missing": spec.path,
+                     "download": entry.source, "reason": "not-installed"})
+            if os.path.islink(target):
+                # The recorded pins would be checked against whatever the link
+                # points at, while a loader that reopens by name can land
+                # somewhere else. A store path must be a regular file.
+                raise WorkerError(
+                    CHECKSUM_MISMATCH,
+                    f"{entry.id} {spec.path} is a symlink, so its bytes cannot be "
+                    "pinned to this install",
+                    {"model": entry.id, "file": spec.path,
+                     "reason": REASON_UNSAFE_PATH})
+            if stamp.st_size != spec.bytes:
+                # The same condition capability.list reports as blocked. A
+                # submission that names only a job kind must not load a file
+                # the record says is damaged. The lease is dropped by the caller.
+                raise WorkerError(CHECKSUM_MISMATCH,
+                                  f"{entry.id} failed its recorded size check",
+                                  {"model": entry.id, "file": spec.path,
+                                   "reason": REASON_SIZE,
+                                   "expected_bytes": spec.bytes,
+                                   "actual_bytes": stamp.st_size})
+            stamps[spec.path] = stamp
+        return stamps
+
     def require(self, model_id: str) -> Path:
         """Resolve and lease an install, checking recorded sizes only.
 
@@ -452,33 +540,14 @@ class Catalog:
             raise WorkerError(CATALOG_INVALID, problem[2], _pin_data(entry, problem))
         model_root, identity = self._resolve_under_lease(entry)
         try:
-            for spec in entry.files:
-                target = model_root / spec.path
-                try:
-                    size = target.stat().st_size
-                except OSError:
-                    raise WorkerError(
-                        MODEL_MISSING, f"{entry.id} is not installed",
-                        {"model": entry.id, "missing": spec.path,
-                         "download": entry.source, "reason": "not-installed"})
-                if size != spec.bytes:
-                    # The same condition capability.list reports as blocked. A
-                    # submission that names only a job kind must not load a file
-                    # the record says is damaged. The lease is dropped so the
-                    # model can still be deleted or reinstalled.
-                    raise WorkerError(CHECKSUM_MISMATCH,
-                                      f"{entry.id} failed its recorded size check",
-                                      {"model": entry.id, "file": spec.path,
-                                       "reason": REASON_SIZE,
-                                       "expected_bytes": spec.bytes,
-                                       "actual_bytes": size})
+            self._check_sizes(entry, model_root)
         except WorkerError:
             self._release(entry, identity)
             raise
         return model_root
 
     def _verify_digests(self, entry: ModelEntry, model_root: Path,
-                        identity: str) -> None:
+                        identity: str, stamps: dict) -> None:
         """Hash every listed file against its pin, releasing the lease on refusal."""
         generation = self._generation()
         for spec in entry.files:
@@ -495,24 +564,27 @@ class Catalog:
                                   else {"model": entry.id,
                                         "reason": REASON_INVALID_DIGEST})
             target = model_root / spec.path
-            try:
-                stamp = target.stat()
-            except OSError:
-                self._release(entry, identity)
-                raise WorkerError(
-                    MODEL_MISSING, f"{entry.id} is not installed",
-                    {"model": entry.id, "missing": spec.path,
-                     "download": entry.source, "reason": "not-installed"})
+            stamp = stamps.get(spec.path)
+            if stamp is None:
+                try:
+                    stamp = target.stat()
+                except OSError:
+                    self._release(entry, identity)
+                    raise WorkerError(
+                        MODEL_MISSING, f"{entry.id} is not installed",
+                        {"model": entry.id, "missing": spec.path,
+                         "download": entry.source, "reason": "not-installed"})
             key = (self.root, entry.id, spec.path, expected, spec.bytes,
-                   stamp.st_dev, stamp.st_ino, stamp.st_size, stamp.st_mtime_ns)
+                   stamp.st_dev, stamp.st_ino, stamp.st_size, stamp.st_mtime_ns,
+                   getattr(stamp, "st_ctime_ns", 0))
             if self._proofs.get(key) == (generation, expected):
                 # Already proven by this process, and these are the same bytes:
-                # same inode, same length, same modification time.
+                # same inode, same length, same modification *and* change time.
                 continue
             try:
                 actual = _sha256(target)
             except OSError:
-                # `require` stat'ed this file moments ago. A name that resolves
+                # The size pass stat'ed this file moments ago. A name that resolves
                 # but will not open is an unreadable install, not a missing one:
                 # calling it missing would offer a download over a file that is
                 # sitting right there.
@@ -553,23 +625,8 @@ class Catalog:
             raise WorkerError(CATALOG_INVALID, problem[2], _pin_data(entry, problem))
         model_root, identity = self._resolve_under_lease(entry)
         try:
-            for spec in entry.files:
-                target = model_root / spec.path
-                try:
-                    size = target.stat().st_size
-                except OSError:
-                    raise WorkerError(
-                        MODEL_MISSING, f"{entry.id} is not installed",
-                        {"model": entry.id, "missing": spec.path,
-                         "download": entry.source, "reason": "not-installed"})
-                if size != spec.bytes:
-                    raise WorkerError(CHECKSUM_MISMATCH,
-                                      f"{entry.id} failed its recorded size check",
-                                      {"model": entry.id, "file": spec.path,
-                                       "reason": REASON_SIZE,
-                                       "expected_bytes": spec.bytes,
-                                       "actual_bytes": size})
-            self._verify_digests(entry, model_root, identity)
+            stamps = self._check_sizes(entry, model_root)
+            self._verify_digests(entry, model_root, identity, stamps)
         except WorkerError:
             self._release(entry, identity)
             raise
@@ -604,8 +661,11 @@ class Catalog:
             if problem is not None:
                 # Reported for every entry, installed or not: an unusable pin is a
                 # catalog fact, and a not-installed model with a bad pin must not
-                # look fixable by a download.
+                # look fixable by a download. The code is the one `require` raises
+                # for the same defect, so a host sees one taxonomy over the wire
+                # and in the report — `-32021` is never downloadable.
                 state["ok"] = False
+                state["code"] = CATALOG_INVALID
                 state.setdefault("problems", []).append(
                     {"file": problem[1], "reason": problem[0]})
                 ok = False
