@@ -47,6 +47,13 @@ public sealed class DocumentModel
         "vibrance", "warmth", "clarity", "vignette",
     };
 
+    /// <summary>
+    /// The raw value macOS writes into <c>lookID</c> when no look is selected —
+    /// <c>FilmLook.none</c>. It carries the same meaning here as an absent or
+    /// empty identifier: nothing to render.
+    /// </summary>
+    public const string NoLookIdentifier = "none";
+
     private JsonObject _root;
 
     public DocumentModel(JsonObject root)
@@ -274,8 +281,12 @@ public sealed class DocumentModel
             // The look is the one edit macOS writes as two fields: the
             // identifier names the grade, the strength blends it in. Either
             // half alone can ask for a grade this host cannot render, so both
-            // are checked.
-            if (ReadAdjustmentString("lookID") is { Length: > 0 } || AnyAmount("lookStrength"))
+            // are checked. Clearing the rail writes FilmLook.none, whose raw
+            // value is the string "none", and an older document can keep a
+            // stale strength beside it — that pair asks for no grade at all,
+            // so the sentinel reads as no identifier rather than as an edit
+            // this host refuses forever.
+            if (LookIdentifier() is { Length: > 0 } || AnyAmount("lookStrength"))
             {
                 found.Add("a look");
             }
@@ -333,6 +344,16 @@ public sealed class DocumentModel
     private string? ReadAdjustmentString(string key) =>
         Adjustments?[key] is JsonValue value
         && value.TryGetValue<string>(out var text) ? text : null;
+
+    /// <summary>
+    /// The look the document asks for, or nothing when it asks for none. macOS
+    /// stores a <c>FilmLook</c> raw value, so clearing the selection writes the
+    /// literal "none" rather than an empty string; both mean no grade, and the
+    /// guard must not refuse a document that renders nothing.
+    /// </summary>
+    private string? LookIdentifier() =>
+        ReadAdjustmentString("lookID") is { } id
+        && !id.Equals(NoLookIdentifier, StringComparison.OrdinalIgnoreCase) ? id : null;
 
     private bool ReadAdjustmentBool(string key) =>
         Adjustments?[key] is JsonValue value

@@ -3971,6 +3971,32 @@ internal static class Program
         Check("both halves of one look name it once",
               bothHalves.UnsupportedEdits.Count == 1
               && bothHalves.UnsupportedEdits[0] == "a look");
+
+        // Clearing the rail on macOS writes FilmLook.none, whose raw value is
+        // the string "none", and only zeroes the strength in that same edit —
+        // a document from an older build can therefore carry the sentinel next
+        // to a stale amount. It asks for no grade, so it must not be refused:
+        // a guard that named it would warn on every cleared look, forever,
+        // because nothing on this host can write the field back to empty.
+        var sentinelLook = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "none", ["lookStrength"] = 0.8,
+            },
+        });
+        CheckEdits("the cleared-look sentinel with a stale amount names nothing",
+                   sentinelLook);
+
+        var realLook = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "kodachrome", ["lookStrength"] = 0.8,
+            },
+        });
+        CheckEdits("a real identifier with the same amount is still named",
+                   realLook, "a look");
     }
 
     /// <summary>
