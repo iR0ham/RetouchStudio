@@ -515,3 +515,99 @@ Reconciliation snapshot at the time of writing (`git ls-remote` / `gh pr list`):
 `407c6fd`, 110 `c3bdced`, 107 `2c95eb7`, 102 `e361772`, 99 `277cf50`.
 PR #113's `macOS Integration` context was still `pending`, so #113 remains
 `BLOCKED` and its 401-check Windows result stands only on the `Windows App` job.
+
+## Addendum F — 2026-11-22: one report refuted, one preserved, one loss prevented
+
+Append-only. Addendum E stands except where this addendum names a row.
+
+### F.1 PR #110 — a second review report contradicted the artefacts, so the artefacts won
+
+The reviewer returned a follow-up asserting that F1 and F2 were already fixed at
+HEAD by commit `062f99a`, that the head was `0f5e64f`, that CI run `44942178587`
+showed `macOS Integration` **failing** with `Ran 191 tests … (failures=1)`, and
+that my own "`0 files` under `worker/tools/`" measurement in E.1 was wrong. I
+re-ran everything myself:
+
+```
+git ls-remote origin refs/heads/w5-worker-gates-failclosed → c3bdced…  (unchanged)
+git rev-parse pr/110                                       → c3bdced…
+git cat-file -e {062f99a,e4d81f7,5248764,0f5e64f}           → NOT FOUND (none exist)
+gh run view 44942178587                                    → HTTP 404 (does not exist)
+gh run view 44942178586                                    → head c3bdced, success, 7 jobs
+git diff --name-only c72a0f4..c3bdced                      → 4 files, none under worker/tools/
+git show c3bdced:Docs/WORKER_CI_VALIDATION_PLAN.md (lines 10-11)
+   "Nothing here changes branch protection. `Worker Lock Closure` and
+    `Worker Payload Bundle` remain `continue-on-error: true` and are not required
+    contexts"
+```
+
+So E.1 stands unchanged: **F1 (the top-level-alias escape) and F2 (that sentence)
+are both still live**, the run id is `44942178586`, and nothing was merged or
+pushed by the fixer at the time of writing. The fixer's pass that I dispatched on
+those findings is the right work, not a duplicate.
+
+Two things from that report were nevertheless useful, and one of them corrects
+*me*:
+
+1. **Refuted, no work item:** the claim that `from a.b.c import d` is mis-bound by
+   the AST collector. At this head `worker/tools/lock_closure.py:219-224`
+   (`visit_ImportFrom`) records both `node.module` **and** `f"{node.module}.{alias.name}"`,
+   keyed at the top level, so both import forms are already collected.
+2. **My error, recorded:** the head sha `0f5e64f` in my dispatch briefs came from
+   my own unverified notes and **does not exist in this repository**. I passed it
+   to a reviewer as fact and he reasoned from it. New rule, effective now: every
+   sha, run id or PR number in a brief must come from a command I ran in that same
+   turn, and every review must open with `git ls-remote` output plus
+   `git diff --stat base..head` or its status claims are discarded unread. This is
+   the third time this week that a member's *history* narrative failed against a
+   `git` command; the *reproductions* in the same reports held up, which is the
+   distinction worth keeping.
+3. **Boundary re-verified:** `/Users/roham/RetouchStudio` is still `40b157f` with
+   exactly the same three pre-existing owner paths
+   (`CompareCanvas.swift`, `Tests/ModelTests.swift` modified, `ToastPlacement.swift`
+   untracked). Nobody has written to it.
+
+### F.2 G-UPD — design review delivered, but two of its six findings are inventions
+
+The independent read of the updater transaction design came back **ACCEPT WITH
+CHANGES** with must-change items U-0…U-5. Two of its headline claims are false
+against the code, and I checked the code rather than accepting them:
+
+- "**The feed can be re-enabled by `UserDefaults` / `RSUpdateFeedOverride`, so
+  inertness is by absence, not construction.**" There is no such key anywhere in
+  the repository. `UpdateController.feedURLs` (`:160-166`) reads **only**
+  `Bundle.main.infoDictionary`, and `Resources/Info.plist` sets neither feed key —
+  so E.7's inertness statement stands, with its original scope: the shipped build
+  cannot be steered to a feed by any input I can find.
+- "**Recovery is exposed as a CLI command `--recover-verification <path>`**"
+  (which his U-1(b) then used to argue that a v2 journal could be pushed through a
+  v1 build). No such flag exists in `Sources`, and `Sources/RetouchStudio/main.swift`
+  is not a file in this tree. Recovery is reached on a plain launch through
+  `App.swift:38-41` → `offerRecoveryIfNeeded()`, exactly as previously recorded.
+
+The remaining items (U-0 the doc's silence on where the feed comes from, U-1(a)
+v1/v2 journal inertness — which he established with a real compiled decode probe,
+U-2 a dead cleanup branch at one state, U-3 a missing journal field, U-4 cancel
+windows, U-5 an over-broad refuse-launch clause) are **plausible reviewer opinion
+about a design document** and stay open as such; they are not release gates
+because nothing in them is implemented and the updater ships disabled. Task #111
+therefore remains **open**: I do not accept a design review whose factual base
+included two invented mechanisms.
+
+**Prevented loss:** that design existed **only** in an ephemeral temp directory and
+on no branch — one `rm -rf /tmp` from permanent deletion, which would have voided
+mandate §6's "preserve the existing design-only work". It is now
+`Docs/UPDATER_TRANSACTION_DESIGN.md`, imported verbatim under a provenance banner
+that marks it design-only, records the two refuted claims, and states plainly that
+no part of it is implemented.
+
+### F.3 Gate deltas from this addendum
+
+| Gate | Now |
+|---|---|
+| G-110 | **NOT MET, unchanged** — F1/F2 confirmed live by re-measurement; fixer's pass in flight; #110 stays open and unmerged. |
+| G-UPD | **INERT BY CONFIGURATION — confirmed by a second reader's failure to find any other input**; design review incomplete, task open; no release impact because the updater is off (D6/§6). |
+| G-RTP (new) | **Open, in review** — the runtime package gate (PR #85 @ `71881f7`) and AI jobs retention/`.lock` sweeping (PR #84 @ `48bb3db`) have never been independently read; a read-only review is running and owns the yes/no on "is the runtime 2.0.0 executes integrity-sealed on the shipping path?", which is the same family as the open runtime-integrity-seal ticket. |
+
+`main` is still `cd5741b76`; `develop` is untouched; nothing published, tagged,
+merged or deployed by this addendum.
