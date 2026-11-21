@@ -1049,3 +1049,103 @@ Independent design review returned **ACCEPT WITH CHANGES** and, separately, the 
 | G-UPD | unreviewed | **design reviewed; inert YES** with residual journal surface + doc fix pending | reviewer probes + my caller grep |
 | G-LIC / G-CAT | conditional verdicts | conditional **confirmed by primary text**; independent adjudication still running | Addendum L.5 |
 | G-SAM2 | route undecided | **vendor route evidence-backed**; runtime compat NOT CONFIRMED | L.5 |
+
+## Addendum M — 2026-11-22: the licence record overstated one model, and the UI can print a promise the record does not support
+
+Independent adjudication of every model verdict came back with disagreements. I tested
+each one myself before adopting anything; two of their citations were wrong and one
+load-bearing claim I could not reproduce, but the central finding is correct and it is
+against me.
+
+### M.1 `swin2sr-x4`: `commercialOk: true` is unsupportable — corrected to unknown
+
+Fetched live from Hugging Face for `caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr`
+(read 2026-11-22):
+
+```
+author/org : caidas
+tags       : [..., 'license:apache-2.0', ...]
+cardData   : {"license": "apache-2.0", "tags": [...], "inference": false}
+files      : ['.gitattributes', 'README.md', 'config.json',
+              'preprocessor_config.json', 'pytorch_model.bin']
+commits    : 5 ("initial commit" .. "Update README.md"), repo created 2022-12-16
+```
+
+There is **no `LICENSE` file** in the repository. The only statement of any licence is
+one YAML key in a 19-line model-card front matter, on a checkpoint repo whose owner
+(`caidas`) is neither the architecture's author (`JingyunLiang/SwinIR`) nor the code
+author (`mv-lab/swin2sr`) — and our own evidence doc already records `explicit: false`
+for this row, meaning "we inferred it from a repo-level tag". Under the owner's
+definition — zero price **and** explicit permission for commercial use in a public MIT
+app — `explicit: false` sitting next to `commercialOk: true` is self-contradiction, not
+nuance. **Decision: `commercialOk` becomes `unknown` for this model; the verdict stays
+`conditional`; the upscaler still ships as a feature, but no surface may state or imply
+that its weights are commercially cleared.** The adjudicator also attributes every
+commit there to an Hugging Face staff account rather than the rights holder; I could
+**not** reproduce the author identities from the commits API (the response carried no
+author objects in the shape parsed), so that specific attribution is recorded as
+NOT VERIFIED and is *not* part of the basis for the correction — the absence of a
+licence file and the third-party provenance of the card are enough on their own.
+
+Two related corrections to my own record, both adopted: **`migan`** keeps an approved
+*weights* position (the author ships a dedicated `LICENSE-WEIGHTS` MIT file whose very
+filename scopes the grant to the weights), but omitting the Places2 fact was wrong —
+the archived download pages say "use the data only for non-commercial research and
+educational purposes. You will NOT distribute", so absence was encoding "unknown" where
+the evidence is adverse; it must be recorded as a **disclosed residual risk**, not left
+blank. **`RestoreFormer++`** moves from "usable with conditions" to **excluded** (an
+Apache code file with an unedited placeholder copyright line, weights reachable only via
+Google Drive, and authors stating it was trained on FFHQ, which is CC BY-NC-SA).
+**`BiRefNet`** is not `USABLE` yet: the MIT tag is same-author, but there is no pin, the
+weight repo carries no `LICENSE` file, and DIS5K terms are contradictory across mirrors
+(`openrail` vs `apache-2.0`).
+
+### M.2 The schema cannot express the truth, so the truth gets flattened into "cleared"
+
+`worker/retouch_ai_worker/catalog.py` models this as `commercial_ok: bool` (`:46`) and
+constructs **all four shipped entries with `commercial_ok=True`** (`:134`, `:162`,
+`:186`, `:209`), then refuses on `if not entry.commercial_ok` (`:293`). There is no
+third state for "we could not determine this", and no rule connecting the two axes the
+mandate separates — nothing stops `explicit: false` from travelling alongside
+`commercialOk: true`, which is precisely how M.1 happened.
+
+**DR-13 (my decision).** The licence record gains a genuine unknown state (`unknown`,
+not `false`, because "denied" and "unknown" drive different product behaviour), plus an
+enforced invariant — **`explicit == false` implies `commercialOk != true`** — pinned by a
+property test over the combination space, and a `datasetRestrictions` field so adverse
+dataset terms are *present* in the data rather than representable only by omission.
+Note the adjudicator's citation `catalog.py:256-259` for "asserts binary commercial
+clearance" was wrong as a location (those lines are `get()`/`require()`); the substance
+is right at `:46`/`:134-209`.
+
+### M.3 The consent sheet prints a licence as fact and hides the evidence that qualifies it
+
+Verified by me at `main`: the download-consent body is
+`Sources/RetouchStudio/Models/Localization.swift:708-713` (the adjudicator's path omitted
+`Models/`) and renders `"Code licence: \(codeLicense). Weights licence: \(weightsLicense)."`
+— a bare assertion. `ModelManagerView.swift:389` and `:610` print the same two fields as a
+badge line. Meanwhile `licenseEvidenceUrl` exists in the Swift model
+(`Models/ModelCatalog.swift:108`) and appears **nowhere else in `Sources/`**: the URL that
+carries the qualification is validated and stored, and never shown.
+
+So for `swin2sr-x4` the app tells a user "Weights licence: Apache-2.0" while our own
+record says that claim is an inferred tag on a third-party checkpoint repo with no licence
+file. **DR-14 (my decision):** no surface may render a weights licence as a bare fact. The
+evidence URL, the read date and the explicit/unknown state travel with the string, and a
+non-explicit or unknown verdict renders as unresolved rather than as a licence name. The
+string lives behind PR #99's files, so the wording waits for that merge (DR-7); the data
+and the invariant do not.
+
+### M.4 What is now defensible, stated without inflation
+
+`migan` is the only shipped model with an author-written weights grant, and its training
+data carries a non-commercial caveat we must disclose. `sam2.1-hiera-tiny` is licence-cleared
+by Meta's own README sentence covering checkpoints, and its feature stays blocked for
+runtime reasons — licence and capability must not be conflated. `flux2-klein-4b-q4` is
+licence-cleared and hardware-excluded on measured memory, and that stays two separate facts.
+`swin2sr-x4` ships as a disclosed-conditional feature pending the owner's written risk
+acceptance. DR-9 and DR-10 both survive the adversarial read, and the vendored sam2 size
+claim reproduces exactly (`375,194 B` = 0.38 MB at the pinned commit).
+
+**Ledger erratum:** my commit message for Addendum L typed `engine.py:917` where the
+verified call site is `:717`; the addendum body is correct. Recording rather than rewriting.
