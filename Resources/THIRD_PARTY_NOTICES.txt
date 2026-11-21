@@ -5,7 +5,8 @@ in this folder as LICENSE, and the same notice appears in Info.plist's
 NSHumanReadableCopyright: "© 2026 iRoham. Licensed under the MIT License;
 provided as is, without warranty."
 
-This bundle contains one third-party component:
+The application in this bundle — everything except the optional AI helper
+runtime described at the end of this file — contains one third-party component:
 
 Vazirmatn — SIL Open Font License 1.1
   Files in this bundle:
