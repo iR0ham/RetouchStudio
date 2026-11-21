@@ -1,9 +1,15 @@
+import builtins
+import hashlib
+import json
+import re
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -12,8 +18,9 @@ from retouch_ai_worker import provenance
 from retouch_ai_worker.catalog import Catalog
 from retouch_ai_worker.engine import (Cancelled, Context, Engine, _square_box,
                                       composite, mask_policy, region_alpha)
-from retouch_ai_worker.protocol import (CONTRACT_VERSION, INTERNAL_ERROR,
-                                        INVALID_PARAMS, WorkerError)
+from retouch_ai_worker.protocol import (CHECKSUM_MISMATCH, CONTRACT_VERSION,
+                                        INTERNAL_ERROR, INVALID_PARAMS,
+                                        WorkerError)
 
 PACKAGE = Path(__file__).resolve().parent.parent / "retouch_ai_worker"
 
@@ -343,6 +350,138 @@ class NoNetworkTests(unittest.TestCase):
     def test_server_does_not_import_the_downloader(self):
         source = (PACKAGE / "server.py").read_text("utf-8")
         self.assertNotIn("downloads", source)
+
+
+class LoaderIntegrityTests(unittest.TestCase):
+    """No engine path may read model bytes it has not verified.
+
+    Measured on `cd5741b`: three of the four shipped loaders called the
+    size-only `require`, so a same-length substitution reached torch, ONNX
+    Runtime and MLX unhashed — and only `swin2sr-x4` hashed at all. The source
+    check below is deliberately coarse: it names the invariant rather than
+    re-implementing the call graph, so adding a fifth loader cannot quietly
+    reopen the hole.
+    """
+
+    def test_every_catalog_load_in_the_engine_is_verified(self):
+        source = (PACKAGE / "engine.py").read_text("utf-8")
+        self.assertNotIn("catalog.require(", source,
+                         "an engine loader resolved a model without hashing it")
+        for model_id in ("swin2sr-x4", "sam2.1-hiera-tiny", "migan",
+                         "flux2-klein-4b-q4"):
+            with self.subTest(model=model_id):
+                self.assertIn(f'require_verified("{model_id}")', source)
+
+    def test_size_only_require_has_no_loader_caller(self):
+        # `require` reads no contents, so the only honest callers are reporting
+        # paths. If this assertion ever fails, the new caller must be reviewed as
+        # a trust-boundary change, not a convenience.
+        for name in sorted(path.name for path in PACKAGE.glob("*.py")):
+            if name == "catalog.py":
+                continue
+            source = (PACKAGE / name).read_text("utf-8")
+            callers = [line.strip() for line in source.splitlines()
+                       if ".require(" in line and "require_verified" not in line]
+            with self.subTest(module=name):
+                self.assertEqual(callers, [], f"{name} calls size-only require")
+
+    def test_a_tampered_model_never_reaches_a_runtime(self):
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        # The end-to-end form of the same rule, on the one loader this machine
+        # can drive without weights: a fake torch proves whether
+        # `from_pretrained` was reached at all. The file is exactly the recorded
+        # length, so nothing but the digest can stop it.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        inputs = tmp / "inputs"
+        inputs.mkdir()
+        workdir = tmp / "job"
+        workdir.mkdir()
+        image = inputs / "photo.png"
+        Image.fromarray(np.zeros((16, 12, 3), dtype=np.uint8)).save(image)
+        models_root = tmp / "models"
+        version = models_root / "swin2sr-x4" / "1.0.0"
+        version.mkdir(parents=True)
+        (models_root / "swin2sr-x4" / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": "swin2sr-x4", "version": "1.0.0",
+        }), encoding="utf-8")
+        entry = ModelEntry(
+            id="swin2sr-x4", name="Swin2SR x4", task="upscaling",
+            license_id="Apache-2.0", commercial_ok=True, source="local",
+            files=(ModelFile("weights.bin",
+                             hashlib.sha256(b"trusted").hexdigest(), 7),))
+        (version / "weights.bin").write_bytes(b"tampere")
+        reached = []
+
+        class _Model:
+            def from_pretrained(self, *a, **k):
+                reached.append(True)
+                raise AssertionError("the loader ran on unverified bytes")
+
+            def to(self, *a, **k):
+                return self
+
+            def eval(self):
+                return self
+
+        catalog = Catalog(models_root, allow_uncleared=False)
+        engine = Engine(catalog, allow_roots=(inputs,))
+        ctx = Context(job_id="up-1", workdir=workdir, cancel=lambda: False,
+                      progress=lambda fields: None, allow_roots=(inputs,),
+                      capability_id="upscale.4x")
+        with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+            with mock.patch.dict(sys.modules, {
+                    "torch": SimpleNamespace(
+                        backends=SimpleNamespace(
+                            mps=SimpleNamespace(is_available=lambda: False))),
+                    "transformers": SimpleNamespace(
+                        Swin2SRForImageSuperResolution=_Model())}):
+                with self.assertRaises(WorkerError) as caught:
+                    engine.run("upscale", {"image": {"path": str(image)}}, ctx)
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(caught.exception.data["reason"], "digest")
+        self.assertEqual(caught.exception.data["file"], "weights.bin")
+        self.assertFalse(reached, "the runtime was handed bytes it could not verify")
+        # A refused load leaves nothing leased, so the owner can still repair it.
+        self.assertEqual(catalog._leases, {})
+
+    def test_no_loader_returns_a_path_it_could_not_verify(self):
+        # The structural half of "no silent fallback": every loader in the engine
+        # resolves its weights through `require_verified`, and none of them keeps
+        # a size-only option to fall back to. A runtime import may sit above the
+        # load — an unavailable package is answered before 4.6 GB is hashed, which
+        # is `sam2`'s documented refusal — but no loader may reach a model path
+        # through the size-only accessor.
+        source = (PACKAGE / "engine.py").read_text("utf-8")
+        loaders = {}
+        pattern = re.compile(r"\n    def (_ensure_\w+)\(self.*?(?=\n    def |\nclass |\Z)",
+                             re.S)
+        for match in pattern.finditer(source):
+            loaders[match.group(1)] = match.group(0)
+
+        self.assertEqual(sorted(loaders), ["_ensure_flux", "_ensure_migan",
+                                           "_ensure_sam", "_ensure_swin"],
+                         "a new loader needs to be covered by this invariant")
+        for name, body in loaders.items():
+            with self.subTest(loader=name):
+                self.assertIn('require_verified("', body,
+                              f"{name} resolved weights without hashing them")
+                self.assertNotIn(".require(", body.replace("require_verified(", ""))
+                # There is no try/except anywhere in a loader that could swallow a
+                # verification failure and carry on with the same model id.
+                self.assertNotIn("CHECKSUM_MISMATCH", body,
+                                 f"{name} catches an integrity refusal")
+                self.assertNotIn("CATALOG_INVALID", body,
+                                 f"{name} catches a catalog refusal")
+
+        # `sam2`'s honest refusal (no importable runtime, `-32020`) still precedes
+        # its verified load: the weights are installable and simply have nothing
+        # that reads them, and that answer must not be buried behind a hash.
+        sam = loaders["_ensure_sam"]
+        self.assertLess(sam.index('"package": "sam2"'),
+                        sam.index('require_verified("sam2.1-hiera-tiny")'))
 
 
 class SamRuntimeTests(unittest.TestCase):

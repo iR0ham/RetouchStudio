@@ -173,7 +173,9 @@ class _StubCatalog:
     """The catalog surface the upscaler uses, with digests the test owns.
 
     `require` is a trap: a job path that reaches it would load weights that were
-    never hashed against the catalog.
+    never hashed against the catalog. It stays one for every model, which is why
+    `test_every_engine_loader_verifies_before_it_reads_bytes` walks the real
+    loaders too.
     """
 
     def __init__(self, root, version=None):

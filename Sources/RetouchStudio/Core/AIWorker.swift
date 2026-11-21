@@ -589,6 +589,14 @@ enum AIWorker {
         }
         environment["PYTHONPATH"] = paths.joined(separator: ":")
         environment["PYTHONUNBUFFERED"] = "1"
+        // The research switch that lets the worker load a model its catalog has
+        // not cleared for commercial use. `AIRuntimeValidation.environment` has
+        // stripped it since W5-1; the worker launch copies the whole shell
+        // environment, so an exported variable opened the licence gate in a real
+        // app→worker run while runtime validation refused to. It stays a
+        // deliberate switch — settable on the worker's own command line, and
+        // never something a user's login environment can grant by accident.
+        environment.removeValue(forKey: "RETOUCH_AI_EVAL_MODELS")
         return environment
     }
 

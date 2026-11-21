@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import socket
@@ -9,6 +10,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from unittest.mock import patch
 
 from retouch_ai_worker.catalog import Catalog
 from retouch_ai_worker.capabilities import (PROVIDER, SUPPORTED, VOCABULARY,
@@ -492,6 +494,147 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status["status"], "failed")
         self.assertEqual(result["error"]["code"], CHECKSUM_MISMATCH)
         self.assertEqual(result["error"]["data"]["model"], "swin2sr-x4")
+
+    def test_a_same_length_substitution_fails_the_job_over_rpc(self):
+        # Measured on `cd5741b`: only the upscaler hashed at load, so a file with
+        # the recorded length and the wrong content reached a runtime through a
+        # kind-only submit. This drives the real RPC path — submit, run, read the
+        # failure back out of `job.result` — with an engine that resolves its
+        # weights through the catalog exactly as the shipped loaders do.
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        trusted = b"trusted!"
+        pin = hashlib.sha256(trusted).hexdigest()
+        entry = ModelEntry(id="migan", name="MI-GAN", task="inpainting",
+                           license_id="MIT", commercial_ok=True, source="local",
+                           files=(ModelFile("weights.bin", pin, len(trusted)),))
+        folder = self.server.catalog.root / "migan" / "1.0.0"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "weights.bin").write_bytes(b"tampereD")   # same length
+        (self.server.catalog.root / "migan" / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": "migan", "version": "1.0.0"}), encoding="utf-8")
+
+        root = Path(self.tmp.name)
+        manager = JobManager(ModelEngine(self.server.catalog), root / "tamper-jobs",
+                             (root / "inputs",))
+        server = WorkerServer(root / "tamper.sock", manager, self.server.catalog,
+                              (root / "inputs",))
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        session = Session(root / "tamper.sock")
+        try:
+            with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+                job_id = session.call("job.submit",
+                                      {"kind": "inpaint", "params": {}})["result"]["job_id"]
+                deadline = time.time() + 5
+                status = None
+                while time.time() < deadline:
+                    status = session.call("job.status", {"job_id": job_id})["result"]
+                    if status["status"] in ("succeeded", "failed", "cancelled"):
+                        break
+                    time.sleep(0.02)
+                error = session.call("job.result", {"job_id": job_id})["result"]["error"]
+        finally:
+            session.close()
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(status["status"], "failed", status)
+        self.assertEqual(error["code"], CHECKSUM_MISMATCH)
+        self.assertEqual(error["data"]["model"], "migan")
+        self.assertEqual(error["data"]["reason"], "digest")
+        self.assertEqual(error["data"]["expected_sha256"], pin)
+        self.assertEqual(error["data"]["actual_sha256"],
+                         hashlib.sha256(b"tampereD").hexdigest())
+        # The refused model is still repairable: nothing holds its lease.
+        self.assertEqual(self.server.catalog._leases, {})
+
+    def test_an_unverifiable_pin_refuses_the_kind_only_job(self):
+        # The other half of admission over RPC: a null digest must fail the job
+        # with `-32021`, not load the file the way `require_verified` used to.
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        entry = ModelEntry(id="migan", name="MI-GAN", task="inpainting",
+                           license_id="MIT", commercial_ok=True, source="local",
+                           files=(ModelFile("weights.bin", None, 8),))
+        folder = self.server.catalog.root / "migan"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "weights.bin").write_bytes(b"tampereD")
+
+        root = Path(self.tmp.name)
+        manager = JobManager(ModelEngine(self.server.catalog), root / "pin-jobs",
+                             (root / "inputs",))
+        server = WorkerServer(root / "pin.sock", manager, self.server.catalog,
+                              (root / "inputs",))
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        session = Session(root / "pin.sock")
+        try:
+            with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+                job_id = session.call("job.submit",
+                                      {"kind": "inpaint", "params": {}})["result"]["job_id"]
+                deadline = time.time() + 5
+                status = None
+                while time.time() < deadline:
+                    status = session.call("job.status", {"job_id": job_id})["result"]
+                    if status["status"] in ("succeeded", "failed", "cancelled"):
+                        break
+                    time.sleep(0.02)
+                error = session.call("job.result", {"job_id": job_id})["result"]["error"]
+        finally:
+            session.close()
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(status["status"], "failed", status)
+        self.assertEqual(error["code"], CATALOG_INVALID)
+        self.assertEqual(error["data"]["reason"], "missing-digest")
+
+    def test_health_reports_an_unverifiable_catalog_entry_over_the_wire(self):
+        # A null pin used to make `health()` answer ok:true for an installed model
+        # it had checked against nothing. Over RPC that became a green launch probe
+        # for bytes nobody had verified.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        broken = tuple(
+            ModelEntry(id=item.id, name=item.name, task=item.task,
+                       license_id=item.license_id, commercial_ok=item.commercial_ok,
+                       source=item.source,
+                       files=tuple(ModelFile(spec.path, None, spec.bytes)
+                                   for spec in item.files))
+            if item.id == "migan" else item for item in SHIPPED)
+        target = self.server.catalog.root / "migan" / "migan_pipeline_v2.onnx"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"anything at all")
+        with patch("retouch_ai_worker.catalog.CATALOG", broken):
+            reply = self.session.call("health")["result"]
+        self.assertFalse(reply["ok"])
+        state = {item["model"]: item for item in reply["models"]}["migan"]
+        self.assertTrue(state["installed"])
+        self.assertFalse(state["ok"])
+        self.assertEqual(state["problems"][0]["reason"], "missing-digest")
+
+    def test_models_verify_reports_an_unverifiable_entry_without_raising(self):
+        # The report shape the model manager consumes stays a report: a bad pin
+        # becomes `unverifiable`, not an exception and not `ok`.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        broken = tuple(
+            ModelEntry(id=item.id, name=item.name, task=item.task,
+                       license_id=item.license_id, commercial_ok=item.commercial_ok,
+                       source=item.source,
+                       files=tuple(ModelFile(spec.path, "deadbeef", spec.bytes)
+                                   for spec in item.files))
+            if item.id == "migan" else item for item in SHIPPED)
+        with patch("retouch_ai_worker.catalog.CATALOG", broken):
+            reply = self.session.call("models.verify", {"model": "migan"})["result"]
+        self.assertFalse(reply["ok"])
+        self.assertEqual(reply["checked"], 0)
+        self.assertTrue(reply["unverifiable"])
+        self.assertEqual(reply["failed"][0]["reason"], "invalid-digest")
 
     def test_a_legacy_install_is_refused_by_name_and_runs_by_kind(self):
         # The two submission shapes must answer differently for one and the same
