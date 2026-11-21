@@ -277,10 +277,12 @@ jobs:
   # No CI job ever ran that script — the release job sets
   # RETOUCH_SKIP_WORKER=1 — so the distributable helper tree was never built or
   # inspected on a runner. This job builds it end to end into a scratch app
-  # bundle and inspects the result: the three payload documents, one dist-info
-  # per lock pin, licence files inside those dist-info directories, a SHA-256
-  # manifest of the tree, and the import smoke run by the bundled interpreter
-  # with the same PYTHONHOME/PYTHONPATH the app sets at launch.
+  # bundle, packages the archive with `Tools/make-runtime.sh`, and inspects
+  # it: the three payload documents and the interpreter at the archive root,
+  # one dist-info per lock pin, licence files inside those dist-info
+  # directories, the archive's byte size and SHA-256, and the import smoke run
+  # by the extracted runtime with the same PYTHONHOME/PYTHONPATH the app sets
+  # at launch.
   #
   # It is `continue-on-error` on purpose: this is the first time the payload is
   # built in CI, so a failure is evidence to act on, not a merge gate. It
