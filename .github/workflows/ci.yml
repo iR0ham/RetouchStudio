@@ -324,6 +324,30 @@ jobs:
           echo "full-lock install wall time: $(( $(date +%s) - started ))s"
           du -sh worker/.venv worker/.venv/lib/python3.13/site-packages
 
+      # The lock installs with --no-deps, so a requirement the lock forgets
+      # would only surface when the package is used. `pip check` reads every
+      # installed distribution's metadata and names each unsatisfied
+      # requirement. Exactly one is expected: mflux declares opencv-python for
+      # its optional ControlNet/OpenPose preprocessing, which the worker never
+      # runs — the lock deliberately leaves it out, and the setup script's
+      # --no-deps comment records that. Anything else is the missing-pin
+      # failure this job exists to catch.
+      - name: Every installed requirement is satisfied except the documented one
+        run: |
+          set -euo pipefail
+          check=$(worker/.venv/bin/python3 -m pip check || true)
+          printf '%s\n' "$check"
+          unexpected=$(printf '%s\n' "$check" \
+            | grep -v '^No broken requirements found\.$' \
+            | grep -vE '^mflux [^ ]+ requires opencv-python, which is not installed\.$' \
+            || true)
+          [ -z "$unexpected" ] || {
+            echo "requirements the lock does not satisfy:" >&2
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          }
+          echo "only the documented mflux -> opencv-python gap is reported"
+
       - name: Import the modules the shipped worker loads lazily
         run: |
           set -euo pipefail
