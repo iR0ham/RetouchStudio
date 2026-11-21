@@ -50,6 +50,12 @@ Hard rules for this document:
 
 **Free = zero purchase price AND an explicit grant for commercial use in a public MIT-licensed application.** Code licence, weights licence and training-data terms are evaluated separately, and an inferred repo-level licence is never recorded as an author's weights grant.
 
+> **SUPERSEDED 2026-11-22 by Addendum O.** The owner replaced the use class: the app is free and
+> intended for public **non-commercial** use, with no intention to commercialise. The sentence
+> above is kept verbatim because every verdict recorded between 2026-11-21 and 2026-11-22 was
+> produced under it, and the record must stay re-derivable. The gate that replaces it — including
+> what it unblocks and what it deliberately does not — is §12 Addendum O.
+
 Source of the per-model evidence: `/private/tmp/rs-model-licences/MODEL_LICENSES.md` (Researcher, 2026-11-21, 355 lines, Appendix A logs 32 URL reads with timestamps). Its licence statements are the research baseline; the two catalogue facts in §8c of that dossier were **contradicted by the repository** and are corrected in §12 Addendum A.
 
 ---
@@ -1246,3 +1252,113 @@ hash, the same treatment the updater design document got.
 | PR #113 | CI green, unreviewed | **ACCEPT WITH FIXES** — mergeable in substance; `texturePreserve` is a live same-class defect |
 | #130 | "CI-pending by definition" | **locally provable** — `WorkerClient.swift` has no SwiftUI dependency |
 | licence provenance | thought lost | present on disk; must be moved out of `/tmp` into the repo |
+
+---
+
+## 12. Addendum O — 2026-11-22: the owner replaced the licensing use class, and issued full
+## model-ecosystem execution authority
+
+### O.1 What was said, and what it changes
+
+The owner issued a second mandate, "FULL EXECUTION AUTHORITY — RetouchStudio AI Model Ecosystem"
+(2026-11-22). It is an execution mandate, and §12 of it is explicit that research, a candidate
+list, or catalogue entries are not completion: *"The work is complete only when the selected models
+are integrated, their licenses are documented, their integrity is enforced, their inference paths
+are tested, and independent reviews have passed."*
+
+The rule in §2 of this document is **replaced** by these owner statements:
+
+- *"RetouchStudio is a free application intended for public non-commercial use."*
+- *"There is no intention to commercialize the application in the future."*
+- *"Models do not need commercial-use permission if their actual licenses permit the intended
+  non-commercial use and distribution."*
+- *"Models must have defensible licensing and provenance."*
+- *"Free downloads do not automatically mean redistribution is permitted."*
+- *"All attribution, dataset, ShareAlike, and other applicable obligations must be respected."*
+- *"Do not treat all NC models as automatically approved."*
+- MIT stays (§11: *"Change the project's MIT license"* remains outside my authority).
+
+**DR-15 (the gate that replaces the §2 definition).** For every artefact, four separate rights are
+now evaluated, each with a primary-source quotation and an access date:
+
+1. **Acquisition** — may the end user pull this exact file from the location we ship?
+2. **Install metadata** — may we publish the URL, size and SHA-256 of that file inside a distributed
+   app, and is that act itself "redistribution" under the licence?
+3. **Use** — does the licence permit *public non-commercial* use, and does it permit the derived
+   output the product produces?
+4. **Conditions** — attribution, ShareAlike, NoDerivatives, dataset takedown, no-fine-tuning,
+   no-dataset-redistribution clauses: each must be technically satisfiable by us, not just noted.
+
+Statuses are now exactly the owner's four: **APPROVED / APPROVED WITH CONDITIONS / UNKNOWN /
+EXCLUDED**. Only APPROVED enters the normal distributable catalogue; APPROVED WITH CONDITIONS
+enters only when *every* condition is implemented and documented; UNKNOWN and EXCLUDED must not ship.
+
+**What the change does NOT relax**, because the owner restated it in §4 of the new mandate:
+*"A repository license does not automatically cover model weights. A Hugging Face metadata tag alone
+is not sufficient when the rights holder or authorization cannot be established. A model with unclear
+weight permissions must not enter a distributable build. Do not invent permissions or silently infer
+them."* DR-13 therefore survives **unchanged in substance** — its invariant was never really about
+commerce, it was *"an inference may not be recorded as a grant"* — and its concrete shape changes
+from a `commercial_ok` tri-state to a permitted-use record per artefact. **DR-14** (no surface may
+render a weights licence as a bare fact without its evidence URL, read date and explicit/unknown
+state) is untouched by this and remains the reason the consent sheet is still a must-fix.
+
+### O.2 Provisional consequences for the five verdicts made yesterday
+
+These are **directions of travel, not verdicts**. Each is re-derived from the primary source by the
+M1-A audit before anything is written into a catalogue or a document.
+
+| artefact | verdict under the retired commercial rule | what DR-15 changes | status today |
+|---|---|---|---|
+| `swin2sr-x4` | UNKNOWN (third-party card, metadata tag only, no LICENSE file) | Commercial clearance is no longer the question, but *"a Hugging Face metadata tag alone is not sufficient"* still is: the gap is now **rights-holder authorisation over the weights**, not commerce. The upscaler stays shipping; the licence question keeps the same severity and changes shape. | UNKNOWN, under re-audit |
+| `migan` | APPROVED WITH CONDITIONS (author-published MIT-based weights grant; Places2 academic-NC terms) | The use-class conflict disappears — our use **is** non-commercial. What remains is disclosure and attribution, which §O.1 point 4 requires us to implement rather than delete. | strongest surviving candidate |
+| `sam2.1-hiera-tiny` | APPROVED pending pin re-verification (Apache-2.0 from Meta, the rights holder) | Unaffected in principle; needs the identity re-check, not a licence rethink. | APPROVED, identity pending |
+| `RestoreFormer++` | EXCLUDED (no commercial grant; Drive-hosted weights; placeholder copyright line) | The *commercial* objection falls. The **provenance** objections do not: a mutable Google-Drive payload cannot carry "exact artifact source" + "reproducible installation metadata" (§7), and a placeholder copyright line means the grantor cannot be established (§4). | EXCLUDED on provenance grounds unless re-evidenced |
+| `BiRefNet` | UNKNOWN (no pin; no LICENSE in the weights repo; DIS5K terms disagree between mirrors) | Commercial objection falls. Still blocked on pin, rights-holder statement, and a self-consistent dataset licence. | UNKNOWN, re-opened for evaluation |
+| `flux2-klein-4b-q4` | carried in catalogue, never adjudicated | Needs a full provenance pass whoever publishes it, plus a hard technical question the mandate's §6 asks: is a 4B generative model usable at all on a 16 GB arm64 laptop and a Windows CPU. | NOT ASSESSED |
+
+### O.3 New obligations on the record itself
+
+1. **Four repository-owned documents** are now required deliverables (§10):
+   `Docs/AI_MODEL_SELECTION.md`, `Docs/AI_MODEL_LICENSE_REGISTER.md`,
+   `Docs/AI_MODEL_BENCHMARKS.md`, `Docs/AI_MODEL_INTEGRATION_STATUS.md`, and they *"must become
+   reproducible, repository-owned sources of truth"*.
+2. *"Do not rely on temporary `/private/tmp` files as permanent licensing evidence."* This is the
+   owner adopting the finding recorded in N.4. Consequence:
+   `/private/tmp/rs-model-licences/MODEL_LICENSES.md` (39,361 B, mtime 2026-11-21 21:55, verified
+   present) must be imported into the repository with a recorded hash, and
+   `Docs/licence-evidence-apply.py:4` must stop reading a `/tmp` path as the source of values
+   stamped into a shipped catalogue.
+3. Exact source URLs, artefact identities, licence evidence, **dates, full hashes, conditions and
+   review outcomes** are mandatory fields. Where a hash cannot be produced without a large
+   download, the honest entry is "must be produced in CI", not a guess.
+
+### O.4 Boundaries the owner re-imposed in the same document (§11)
+
+Unchanged and load-bearing: no licence change away from MIT; no publishing or distribution; no
+release creation, asset upload, tag creation or movement; the existing `v1.0.0` release is frozen;
+no paid services; no irreversible external-service changes; the owner's personal checkout and data
+are off-limits; **no launching the application or opening GUI windows under the standing no-GUI
+restriction**; the updater stays unimplemented and disabled; existing release governance and the
+Better Harness workflow stay. §6 restates *"do not perform disruptive installations or large
+downloads on the owner's personal machine without authorization"* and *"use isolated environments or
+CI where possible"* — so benchmark work runs headless in CI or an isolated environment, never as a
+multi-gigabyte download into this Mac.
+
+### O.5 Work actually opened by this addendum
+
+| stream | owner | question it answers | state |
+|---|---|---|---|
+| M1-A | Researcher | code-true AI capability inventory, licence/provenance re-audit of the five artefacts above, the full surface map for a catalogue-semantics change, and rescue of the `/tmp` dossier | assigned |
+| M1-B | Research (parallel seat) | best practical candidates for super-resolution, face restoration, deblur, denoise, enhancement, texture preservation under DR-15 | assigned |
+| M1-C | Research (parallel seat) | same for background removal, segmentation/masks, object removal/inpainting, portrait/beauty, generative fill — including a hard audit of `flux2-klein-4b-q4` | assigned |
+| #115 review | Code Reviewer | independent adversarial review required by §7 and §8 of the mandate (and carried from §4 of the release mandate) | assigned |
+| execution evidence | Test Engineer | what the worker and Foundation-only Swift suites actually do at `cc1d9f6` and `75cbb89`, and which rejection classes are provable through the real RPC path here | assigned |
+
+Merge order **DR-6 is unchanged**: #110 → #111 → #107 → #99, then the catalogue/licence and
+integrity lines, version bump last. Current facts at the moment this addendum was written: #110 is
+green on all five required contexts plus both advisory worker jobs at `cc1d9f6` and is waiting on the
+independent verdict, not on CI; #115 carries the two commits that landed the `-32021` mapping on both
+hosts (`9b64949`, `75cbb89`), is green on every context read so far **except** `macOS Integration`
+which was still running, and still owes the rebase-and-count reconciliation against #110 (#132).
+Nothing is merged, tagged or published; the owner's checkout is untouched.
