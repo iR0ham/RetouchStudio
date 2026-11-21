@@ -246,3 +246,33 @@ Two more items resolved under this authority, not asked:
 
 - **DR-7 — Remaining open defect tickets are triaged against the release, not carried indefinitely.** The Wave-1 truthfulness fixes that touch `Localization.swift` / `PersianL10n.swift` (watermark wording, cancelled-batch wording, ICC wording, cold-Metal 1-LSB disclosure) are **sequenced after #99 merges**, because #99 owns those two files and parallel edits would overwrite each other. They are 2.0.0-relevant only insofar as they change what the product claims; each is re-checked against the ledger before the release notes are written, and any that stays NOT VERIFIED will simply not be claimed in them.
 - **DR-8 — `develop` is a mirror, not a lane.** It is fast-forwarded to `main` after every merge and never receives its own commits; if it is ever found divergent, that is a defect to correct immediately.
+
+### Addendum D — 2026-11-21, Windows evidence audit closes G-WIN (and corrects two of my own rows)
+
+Source: `/private/tmp/rs-win-200/WINDOWS_READINESS.md` (read-only audit of `cd5741b76`; no build, no execution, no Windows desktop involved). I re-read the load-bearing claims myself and **two things changed**: one finding was more severe than I had recorded, and one was less.
+
+**G-WIN is now much stronger than the ledger said — my earlier row understated CI.** Measured from the workflow and an inspected run:
+
+| Fact | Status | Evidence |
+|---|---|---|
+| The Windows CI jobs build **and install, upgrade and uninstall the MSI**, and **run the app** with a window marker plus 14 UIA interaction passes | **VERIFIED** (hosted runner) | `.github/workflows/ci.yml:531-545` pins five app verdict lines, each `found:` line inspected in the log of run `44936922862` (job `136945472595`) |
+| `WINDOWS HOST TESTS: PASS (396 checks)` | **VERIFIED as CI output** | same run. **NOT REPRODUCED statically** — counting `Check(` plus its loops gives 380, so the 396 figure is trusted only as far as the runner printed it |
+| Portability suite verdict pinned | **VERIFIED** | `ci.yml:464-471` |
+| Version sources agree | **VERIFIED** | `Windows/Directory.Build.props` `<Version>1.0.0</Version>` == `Resources/Info.plist`, forced by `Tools/check-versions.sh:22-37` |
+| An actual Windows install has run on a real desktop | **NOT VERIFIED** | every artefact of Windows evidence is from a GitHub-hosted runner. Under mandate §8 this alone bars the words "ready" without qualification |
+
+**The substantive product fact: Windows has no AI at all, and it fails closed.** All four catalogue entries are `macos-arm64`; the Windows host reports zero supported capabilities; every `job.submit` is refused with error `-32020` and a reason, over a real pipe, and there is no Python on Windows. That is the honest shape of "Windows first-class" for 2.0.0, and I am scoping the claim rather than blocking the release on it:
+
+> **Decision (mine, under the owner's standing authority):** 2.0.0 ships Windows as a **first-class light editor** — WIC decode/encode, crop, orientation, nine global sliders, shared project files, history, MSI install/upgrade/uninstall — with **AI tools explicitly absent on Windows and refused with a stated reason**, not degraded silently. Any release note, README or About text that implies otherwise is a defect to fix, not a nuance to keep. Release-blocking gate G-WIN-CLAIM added below.
+
+**Findings, with my own severity ruling after re-reading the code:**
+
+| ID | Finding | My verdict | Basis |
+|---|---|---|---|
+| G-WIN-1 | The unsupported-edits guard names `lookID` but never `lookStrength` (`Windows/RetouchStudio.Core/Project/DocumentModel.cs:274`), so a document carrying a look grade with no id gets no prompt and silently drops the grade — while the guard's own comment (`:247`) promises "every other amount macOS writes is named here". | **Real invariant gap; severity LATENT, not live — downgraded from the audit's HIGH.** | `EditorModel.swift:657-664` (`setLook`) zeroes `lookStrength` when the look becomes `.none`, so the UI cannot produce the mismatched pair. Whether a crafted or legacy project file can arrive that way is being established on the fix branch before anything is claimed. One-clause fix + host tests, PR in flight (`w5-200-windows-look-guard`). |
+| G-WIN-2 | The Windows package attributes only ONNX Runtime. Nothing in the package carries the app's own MIT text, the ~142 redistributed Swift runtime DLLs, or the .NET/WPF runtime. PR #111 excludes Windows by design. | **RELEASE-RELEVANT compliance gap.** | An MIT application redistributing Apache/BSD/MIT dependencies owes the notices; the macOS side now has them and the Windows side does not. Queued; must reuse the notice design the #111 review settles rather than inventing a second one. |
+| G-WIN-3 | `README.md:47` states Windows "has no published artifact, installer…", "passes its 55 headless host checks" and "is **not** a shipping target" — all false today, and the last one contradicts the 2.0.0 claim it would sit next to. | **RELEASE-BLOCKING truthfulness defect.** | Understating a shipped capability is still a false claim, and it is in the first file a distributor reads. Fix must be a dated correction, matching the project's append-only style. |
+| G-WIN-3b | The audit also flagged `Docs/RELEASING.md:187` as stale. | **REFUTED by me.** | That item already carries an inline dated correction (2026-11-15) stating that a zip and MSI are built on CI and that install/upgrade/uninstall ran in `43563787267`. The stale lead sentence survives *with* its correction attached, which is exactly the policy. No change needed; README is the one that lacks it. |
+| G-WIN-4 | No Windows equivalent of `Tools/validate-bundle.sh`. | **Open, Medium.** | Packaging correctness is asserted by the installer succeeding, not by a content check. |
+| G-WIN-5 | A tag-driven release has never published Windows; the one Release inspected skipped the Publish step. | **Open, informational.** | No 2.0.0 publication happens without owner approval anyway (D7). |
+| G-WIN-6 | ONNX Runtime 1.32.0 is pinned and its nupkg is hash-refused on mismatch; MIT is **asserted, not independently verified**. | **NOT VERIFIED** | Cheap to close from the nupkg `LICENSE`; folded into G-WIN-2's evidence pass. |
