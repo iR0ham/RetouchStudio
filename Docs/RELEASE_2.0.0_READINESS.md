@@ -685,3 +685,43 @@ The separate **evidence** question — is each recorded licence verdict actually
 supported by a primary source, and are code licence, weight licence and
 training-data terms kept apart — is queued as its own assignment and is not
 covered by a code review of #114.
+
+## Addendum H — 2026-11-22: the §4 integrity implementation was one `rm -rf /tmp` from deletion
+
+The mandate §4 workstream (fail-closed model integrity) reached its turn ceiling
+with **1117 lines uncommitted** on a local branch in `/private/tmp/rs-int-200`, no
+commit, no branch pushed, no PR. I made a verbatim salvage commit
+(`d142257`, message records that it is unrevised salvage, not a verified change)
+and dispatched a continuation that is instructed to commit and push incrementally
+and to open a draft PR as soon as the tree is coherent.
+
+What the salvage contains, read by me rather than accepted from the report:
+
+- `worker/retouch_ai_worker/catalog.py`: `normalize_digest`, `pin_problem`,
+  `_pins_of`, `_pin_data`, `_require_licensed`, `_resolve_under_lease`,
+  `_verify_digests` and rewritten `require` / `require_verified` — i.e. the
+  admission-time pin validation plus digest normalisation that E.3 asked for, and
+  a `_generation()` counter whose invalidation guarantees the continuation must
+  prove (a verification cache that cannot survive a replaced file is worthless).
+- `Sources/RetouchStudio/Core/AIWorker.swift`: `environment.removeValue(forKey:
+  "RETOUCH_AI_EVAL_MODELS")`, closing the licence-gate leak E.3 found — the
+  research switch stays deliberately settable on the worker's own command line, it
+  is just no longer inheritable from a user's login environment.
+- Test files already extended: `test_catalog` (+459), `test_engine` (+143),
+  `test_server` (+143), `test_capabilities` (+67), `test_upscale` (+4).
+
+What is **not** there: the session's own last words were *"now add the server-level
+(RPC) coverage for the new taxonomy and the kind-only path"*, so the new
+rejections are not yet proven to surface as intended RPC error kinds end to end,
+the single-source suite count is unreconciled, nothing has been run to my
+knowledge, and no independent adversarial review exists — which mandate §4 requires
+explicitly before this can count as done. Status stays **NOT VERIFIED**, and DR-6
+keeps G-RC behind it.
+
+Process finding, recorded against me and not against the member: two implementation
+sessions hit the same ceiling on the same night, and in the first case (G-CAT, F
+§G.2) the loss was only an unanswered question while here it was 1117 unsaved
+lines. My briefs asked for a final push but never for incremental commits.
+Every implementation brief from now on carries commit/push checkpoints and a draft
+PR as a deliverable in its own right, and salvage-from-temp-dir is a known failure
+mode of this workflow, not a surprise.
