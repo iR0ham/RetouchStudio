@@ -987,3 +987,65 @@ substitute. The work went forward as a local background workstream with the same
 brief, so progress is unaffected; but **team-member delegation is currently unavailable
 to me**, and independent review requests (the queued licence-evidence and #114 reviews)
 stay parked until that binding is restored or I reproduce their evidence myself.
+
+## Addendum L — 2026-11-22: four workstreams land; the worker gates are review-ready, the integrity gate gained a host-side hole
+
+### L.1 PR #110 — my own verification at the final head, not the implementer's report
+
+Head `cc1d9f6`, verified by test merge and direct read rather than by claim:
+
+| claim | my measurement |
+|---|---|
+| dependency pins untouched | `git diff --stat cd5741b..cc1d9f6 -- worker/requirements.lock worker/requirements-test.lock` → **empty** |
+| single suite-count source | `git show cc1d9f6:Tests/expected-worker-tests.txt` → `194` |
+| CI green at this head | run `44948957776`, `headSha cc1d9f6`, `conclusion success`, **all seven jobs** success (I read the run object, not the badge) |
+| independent review exists | `gh pr view 110` → `reviews = 0`, `reviewDecision` empty — **the §7 gate is still unmet** |
+
+The contested point from Addendum I is now **adjudicated in the implementer's favour, on evidence**. Re-running the real tool at `cc1d9f6` under the lock-exact interpreter (Python **3.13.15**, `/private/tmp/rs-worker-venv2`), after clearing `__pycache__`:
+
+```
+['google','google.protobuf']              -> protobuf     (legitimate alias use)
+['google','google.auth']                  -> google       (unpinned -> refused)
+['google','google._upb._message']         -> google       (unpinned -> refused)
+['google']                                -> google       (bare namespace -> refused)
+['google','google.protobuf','google.auth'] -> google      (mixed -> refused, no escape hatch)
+```
+
+So the escape direction is genuinely shut in both forms: a `google.*` subpackage that no pin provides cannot borrow protobuf's identity, and mixing one legitimate with one unpinned import refuses rather than resolves. My Addendum I reading of `google._upb` as a *false positive* was right about the behaviour and wrong about the severity: the docstring at this head states the rule as it actually behaves — "any other `google.*` import falls back to the canonical top-level name and is reported as unpinned" — the failure is in the safe direction, and no shipped code imports `google._upb`. Conservative-by-design, documented, therefore not a defect. Merges remain gated on the independent verdict, which is now requested against this frozen head.
+
+### L.2 G-INT — the two precedence defects are closed, and the review found me a worse one
+
+Branch `w5-200-integrity-failclosed`, draft **PR #115** @ `65b7d13`. Implementer's diagnosis, which I checked structurally: there was no ordering bug — there were **two admission rules for one question**, the reporting layer scanning per-field nulls while the load layer silently skipped them, so the gate and the loader disagreed. The fix funnels `require`, `require_verified`, `health`, `verify`, `capabilities._inspect` and `plan.manifest` through one rule (`catalog.pin_problem`), ordered licence → pin → lease → size → digest so the research switch clears only the licence question. Measured `Ran 221 tests` `OK`, non-vacuity proved by mutation (reverting `_inspect` fails 4 subtests; removing the pin gate fails 10). Caveats I am carrying rather than laundering: that run is **Python 3.15** on an off-target interpreter, and CI at this head is **not** complete — I read the check rollup and macOS Integration, Windows jobs and Payload Bundle were still unwritten.
+
+Then I checked the claim that matters for users and it is **false today** (`grep -rn "32021" Sources/ Windows/` → zero hits): `protocol.py` asserts "Both hosts map this code to `E_MODEL_UNVERIFIED`", but neither host has the case, so the new integrity refusal — the most important diagnostic this branch adds — surfaces as a generic internal error and can still open the model manager for a defect no download can repair. Ticketed (#130) as a blocker for #115's review, not for #110.
+
+**Process failure I own:** two writers were on this branch within minutes of each other (`0eba5ce` → `f7b70bb` → `e14357c` → `b386f6d` → `65b7d13`), and one of them added the suite-count mechanism that belongs to #110. No files were lost, but it broke my own no-double-booking rule and produced L.3. The earlier ceiling-death notification for the pre-salvage session is the *old* run re-measuring the matrix; its artefact already exists, so nothing is outstanding from it.
+
+### L.3 DR-12 amended — the count collision is now real, measured
+
+`git merge` of #115 into #110 in a throwaway branch: `CONFLICT (add/add)` on `Tests/expected-worker-tests.txt` (**194 vs 221**) and `CONFLICT (content)` on `Tests/run-worker.sh`. GitHub calls both PRs `MERGEABLE` because it only tests each against `main`, so this is invisible in the UI until the second one lands. Resolution: #110 first; #115 then rebases, keeps #115's strictly stronger runner (it adds `grep -qE '^OK$'` so a silently empty run cannot pass), drops its duplicate count file, and **re-measures** the size instead of carrying 221 forward as a guess (#132).
+
+### L.4 The integrity evidence base is worse than the mandate stated — confirmed at the call sites
+
+The acceptance matrix found six fail-open cases and concluded the gap is *wider* than §4 assumed: only **one** of four models ever hashes at load. I verified the sites on `main` directly — `engine.py:653` `require_verified("swin2sr-x4")` versus `:686` `require("sam2.1-hiera-tiny")`, `:701` `require("migan")`, `:717` `require("flux2-klein-4b-q4")` — so a same-size swap of weights for three of the four is accepted by the worker today. Independently found in the same pass: `AIWorker.workerEnvironment` did **not** strip `RETOUCH_AI_EVAL_MODELS` while `AIRuntimeValidation` did, i.e. an exported shell variable could open the licence gate in the real worker — and that is exactly what #115's `AIWorker.swift` change removes, so two workstreams met on the same defect without being told. Also recorded from that pass, still open: an uppercase digest pin permanently rejects a correct file, and an entry with a malformed aggregate digest reports `.ready` while install is disabled. Hash cost for a future verified load was measured (flux2 2.19 s over 4.6 GB), which is why verification belongs at adoption, not in `health()` polling.
+
+### L.5 Licence and model decisions now have evidence behind them
+
+- **DR-9 (vendor sam2) confirmed**, not merely chosen: there is no Meta wheel on PyPI, the PyPI `sam2` is an unaffiliated re-upload, every transitive dependency is already pinned (zero new distributions, zero CUDA wheels), the payload grows ~0.5 MB, and the CUDA `_C` extension belongs to the video path this app never imports. Runtime compatibility of sam2 under the locked torch on Python 3.13/MPS is **NOT CONFIRMED** — nothing was executed.
+- **DR-10 is supported by primary text**, and it is load-bearing: swin2sr is trained mainly on DIV2K/Flickr2K, whose terms are academic-use only, and MI-GAN's MIT weight grant does not relicense Places2, whose terms forbid distribution. So `swin2sr-x4` and `migan` **stay `conditional`** — the artefact licence is permissive while the training data is not, and no UI text may collapse that.
+- **One claim in my own dossier is downgraded**: the sam2 digest was recorded as "measured three ways". Two legs are publicly re-verifiable (HF LFS id, installed copy); the third — the CDN object's content hash — cannot be proven from headers, because its ETag is a 19-part S3 multipart MD5, not a SHA-256. CDN identity is **INFERRED** from identical length plus provenance. Proving it costs one 156 MB download, which I am not authorizing on this machine. Related: `realesr-general-x4v3` has no author checksum at all, only an opaque ETag.
+- The reviewer's correction is accepted: `RETOUCH_AI_EVAL_MODELS` deletion is not the fix, and the worker's null-skip paths survived on `main` at `catalog.py:330`/`:418`, safe only because all four entries happen to be fully pinned today.
+
+### L.6 G-UPD answered, with a residual surface that is not a blocker
+
+Independent design review returned **ACCEPT WITH CHANGES** and, separately, the release question: the updater in a 2.0.0 build is **inert at configuration level** — no feed key exists in `Resources/Info.plist`, `performCheck` returns at the empty-feed guard, the only `swap` call is unreachable, and there is no launch agent, login item or background service anywhere in the sources. I confirmed the mechanism it depends on: `grep -rn "UpdateController(" Sources/` has exactly one hit, `InfoViews.swift:95`, the About view. Two honest qualifications: that is a plist guarantee rather than a code kill-switch, so the RC bundle must be re-checked (#117), and opening About runs `UpdateInstaller.recover` against a **user-writable** journal with no path validation — reproduced headlessly as deletion of an arbitrary victim file. Same-uid confused deputy, no privilege escalation, not a 2.0.0 blocker, but it is now on the record as residual risk, and `Docs/UPDATE_SYSTEM.md` claiming recovery "runs on every launch" is false in a way that matters (#131).
+
+### L.7 Status deltas from this round
+
+| gate | before | now | basis |
+|---|---|---|---|
+| G-110 | must-fix list open | **ready for independent review** at `cc1d9f6`; F1 adjudicated closed by me | pins zero-diff, count 194, run 44948957776, 0 reviews |
+| G-INT | salvage, 2 failures | **implemented, 221 OK off-target**, CI incomplete, **host mapping gap #130 open** | PR #115 @ `65b7d13` |
+| G-UPD | unreviewed | **design reviewed; inert YES** with residual journal surface + doc fix pending | reviewer probes + my caller grep |
+| G-LIC / G-CAT | conditional verdicts | conditional **confirmed by primary text**; independent adjudication still running | Addendum L.5 |
+| G-SAM2 | route undecided | **vendor route evidence-backed**; runtime compat NOT CONFIRMED | L.5 |
