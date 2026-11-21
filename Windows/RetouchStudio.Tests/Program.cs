@@ -4498,8 +4498,18 @@ internal static class Program
                                    params string[] expected)
     {
         var actual = model.UnsupportedEdits;
-        Check(name, actual.OrderBy(edit => edit, StringComparer.Ordinal)
-                          .SequenceEqual(expected.OrderBy(edit => edit, StringComparer.Ordinal)))
+        var matches = actual.OrderBy(edit => edit, StringComparer.Ordinal)
+                            .SequenceEqual(expected.OrderBy(edit => edit,
+                                                            StringComparer.Ordinal));
+        if (matches)
+        {
+            Pass(name);
+        }
+        else
+        {
+            Fail(name, $"named [{string.Join(", ", actual.OrderBy(edit => edit, StringComparer.Ordinal))}] " +
+                       $"expected [{string.Join(", ", expected.OrderBy(edit => edit, StringComparer.Ordinal))}]");
+        }
     }
 
     private static void Pass(string name)
