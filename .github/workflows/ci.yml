@@ -349,12 +349,14 @@ jobs:
           set -euo pipefail
           out="$RUNTIME_ZIP"
           locked=$(grep -cE '^[A-Za-z0-9]' worker/requirements.lock)
+          # Not `grep -q`: it exits at the first match, closing the pipe under
+          # `pipefail` while the printf is still writing 5 MB of entries.
           entries=$(unzip -Z1 "$out")
           for name in LICENSE THIRD_PARTY_NOTICES.md requirements.lock; do
-            printf '%s\n' "$entries" | grep -qx "$name" || {
+            printf '%s\n' "$entries" | grep -x "$name" >/dev/null || {
               echo "the archive has no $name at its root" >&2; exit 1; }
           done
-          printf '%s\n' "$entries" | grep -qx 'bin/python3' || {
+          printf '%s\n' "$entries" | grep -x 'bin/python3' >/dev/null || {
             echo "the archive has no bundled interpreter" >&2; exit 1; }
           package_files=$(printf '%s\n' "$entries" | grep -c '^retouch_ai_worker/' | tr -d ' ')
           distinfos=$(printf '%s\n' "$entries" \
