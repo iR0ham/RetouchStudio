@@ -7,8 +7,13 @@ Two gaps are checked here, without wheels or network:
             mode that bit the engine once: code imported `cv2`, the pin was
             absent, and the break surfaced as an ImportError on the owner's
             machine instead of in CI. An import guarded by `except
-            ImportError` is exempt — it is a deliberate refusal path, not a
-            dependency — but it is still reported so the exemption is visible;
+            ImportError` or `except ModuleNotFoundError` is exempt — it is a
+            deliberate refusal path, not a dependency — but it is still
+            reported so the exemption is visible. A broader handler is not
+            exempt: `except Exception:` and bare `except:` also catch errors
+            raised by the imported module itself, so they prove nothing about
+            whether the dependency is optional, and a hard import behind one
+            is still required to be pinned;
   lock      every pin is exact (`name==version`), carries at least one
             SHA-256, appears once, and the test lock does not name a package
             or version the runtime lock does not.
@@ -55,10 +60,22 @@ ALIASES = {
     "google": "protobuf",
 }
 
+# Most aliases own their top-level name outright. `google` does not: it is a
+# namespace several distributions share, and protobuf provides only
+# `google.protobuf`. An alias listed here stands for its distribution only
+# while every imported dotted name is inside these prefixes; any other
+# `google.*` import falls back to the canonical top-level name and is
+# reported as unpinned, because no pinned distribution is known to provide it.
+ALIAS_PREFIXES = {"google": ("google.protobuf",)}
+
 # The package the bundle ships. Tests and tools are not in the payload.
 FIRST_PARTY = {"retouch_ai_worker"}
 
-IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
+# Only these two prove that the handler exists for a failed import. A handler
+# that also catches `Exception` proves nothing about the dependency: it is the
+# common defensive idiom around a hard import, and treating it as a refusal
+# path would let an unpinned import pass.
+IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 
 REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)"
@@ -71,6 +88,31 @@ HASH = re.compile(r"^--hash=(?P<algorithm>[a-z0-9]+):(?P<digest>[0-9a-fA-F]+)$")
 def canonical(name: str) -> str:
     """PEP 503 normalisation: the only safe way to compare names."""
     return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def distribution_for(module: str, names: set[str]) -> str:
+    """The distribution a top-level module name stands for.
+
+    `names` carries the full dotted imports the AST walk recorded. A scoped
+    alias applies only when every one of them belongs to the distribution's
+    module tree: `import google.protobuf` is protobuf, but `import google.auth`
+    is a different distribution nobody pinned, and the `google` namespace does
+    not make it protobuf.
+    """
+    prefixes = ALIAS_PREFIXES.get(module)
+    if prefixes:
+        # `from google import protobuf` records both `google` (the module the
+        # name came from) and `google.protobuf` (the bound name). The bare
+        # top-level name is the namespace, not evidence of a second
+        # distribution, so only the dotted names are judged. With no dotted
+        # name at all (`import google`), the bare name must still prove itself.
+        dotted = {name for name in names if name != module}
+        if not all(
+                any(name == prefix or name.startswith(prefix + ".")
+                    for prefix in prefixes)
+                for name in (dotted or names)):
+            return canonical(module)
+    return ALIASES.get(module, canonical(module))
 
 
 class Lock:
@@ -142,17 +184,35 @@ def read_lock(path: Path) -> Lock:
     return lock
 
 
-def _catches_import_error(handler: ast.ExceptHandler) -> bool:
-    if handler.type is None:  # bare except: catches it too
-        return True
+def _handler_text(handler: ast.ExceptHandler) -> str:
+    if handler.type is None:
+        return "except:"
+    return f"except {ast.unparse(handler.type)}"
+
+
+def _import_guard(handler: ast.ExceptHandler) -> str | None:
+    """Return the handler text if it guards an import, else None.
+
+    The guard must catch only `ImportError`/`ModuleNotFoundError` (a tuple of
+    those is fine). A bare `except:` or any handler that also names
+    `Exception`/`BaseException` catches failures from the imported module
+    itself, so it is not evidence that the dependency is optional.
+    """
+    if handler.type is None:
+        return None
     types = (handler.type.elts if isinstance(handler.type, ast.Tuple)
              else [handler.type])
+    names = []
     for node in types:
-        name = node.id if isinstance(node, ast.Name) else (
-            node.attr if isinstance(node, ast.Attribute) else "")
-        if name in IMPORT_ERRORS:
-            return True
-    return False
+        if isinstance(node, ast.Name):
+            names.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.append(node.attr)
+        else:
+            return None
+    if not names or any(name not in IMPORT_ERRORS for name in names):
+        return None
+    return _handler_text(handler)
 
 
 class _Imports(ast.NodeVisitor):
@@ -165,22 +225,36 @@ class _Imports(ast.NodeVisitor):
 
     def __init__(self, filename: str) -> None:
         self.filename = filename
-        self.found: dict[str, dict[str, set[bool]]] = {}
-        self.guarded = False
+        # `guarded` is True only for a strict import guard; `guards` records
+        # which handler text supplied it so the report can name it.
+        self.found: dict[str, dict[str, set]] = {}
+        self.guards: set[str] = set()
+        self.broad: set[str] = set()
 
     def _record(self, names: list[str]) -> None:
         for name in names:
             top = name.split(".")[0]
-            entry = self.found.setdefault(top, {"files": set(), "guarded": set()})
+            entry = self.found.setdefault(
+                top, {"files": set(), "guarded": set(), "guards": set(),
+                      "broad": set(), "names": set()})
             entry["files"].add(self.filename)
-            entry["guarded"].add(self.guarded)
+            entry["guarded"].add(bool(self.guards))
+            entry["guards"] |= self.guards
+            entry["broad"] |= self.broad
+            # The full dotted name, kept for readers that need more than the
+            # top-level module — `import_smoke.py` checks that each heavy
+            # submodule it names is still imported somewhere.
+            entry["names"].add(name)
 
     def visit_Import(self, node: ast.Import) -> None:
         self._record([alias.name for alias in node.names])
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.level == 0 and node.module:
-            self._record([node.module])
+            names = [node.module]
+            names += [f"{node.module}.{alias.name}" for alias in node.names
+                      if alias.name != "*"]
+            self._record(names)
 
     def visit_Call(self, node: ast.Call) -> None:
         if node.args and isinstance(node.args[0], ast.Constant) \
@@ -196,16 +270,51 @@ class _Imports(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Try(self, node: ast.Try) -> None:
-        catches = any(_catches_import_error(handler) for handler in node.handlers)
-        previous = self.guarded
-        self.guarded = previous or catches
+        guards = {guard for guard in
+                  (_import_guard(handler) for handler in node.handlers)
+                  if guard}
+        broad = {_handler_text(handler) for handler in node.handlers
+                 if _import_guard(handler) is None}
+        previous = self.guards
+        previous_broad = self.broad
+        self.guards = previous | guards
+        self.broad = previous_broad | broad
         for statement in node.body:
             self.visit(statement)
-        self.guarded = previous
+        self.guards = previous
+        self.broad = previous_broad
         for handler in node.handlers:
             self.visit(handler)
         for statement in node.orelse + node.finalbody:
             self.visit(statement)
+
+    def _visit_definition(self, node: ast.AST) -> None:
+        """A handler around a definition does not cover code called from it.
+
+        An import inside a function body runs when the function is called, not
+        when the definition executes, so an enclosing `try` proves nothing
+        about that import. The rule is fail-closed for every definition form:
+        only a `try` inside the definition makes an import optional. A class
+        body does run at definition time, which an enclosing handler would
+        cover, but treating it the same keeps the classifier conservative for
+        a shape nobody in the shipped package uses.
+        """
+        guards, broad = self.guards, self.broad
+        self.guards, self.broad = set(), set()
+        self.generic_visit(node)
+        self.guards, self.broad = guards, broad
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_definition(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_definition(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._visit_definition(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._visit_definition(node)
 
 
 def imported_modules(package: Path) -> dict[str, dict[str, set]]:
@@ -215,9 +324,14 @@ def imported_modules(package: Path) -> dict[str, dict[str, set]]:
         visitor.visit(ast.parse(source.read_text(encoding="utf-8"),
                                 filename=str(source)))
         for module, entry in visitor.found.items():
-            merged = found.setdefault(module, {"files": set(), "guarded": set()})
+            merged = found.setdefault(
+                module, {"files": set(), "guarded": set(), "guards": set(),
+                         "broad": set(), "names": set()})
             merged["files"] |= entry["files"]
             merged["guarded"] |= entry["guarded"]
+            merged["guards"] |= entry["guards"]
+            merged["broad"] |= entry["broad"]
+            merged["names"] |= entry["names"]
     return found
 
 
@@ -233,17 +347,23 @@ def audit(lock: Lock, package: Path) -> tuple[list[str], dict[str, str], dict[st
     for module, entry in sorted(imported_modules(package).items()):
         if module in stdlib or module in FIRST_PARTY:
             continue
-        distribution = ALIASES.get(module, canonical(module))
+        distribution = distribution_for(module, entry["names"])
         if canonical(distribution) in lock.pins:
             resolved[module] = distribution
             continue
         if entry["guarded"] == {True}:
-            optional[module] = "guarded by except ImportError"
+            optional[module] = (
+                "guarded by " + ", ".join(sorted(entry["guards"])))
             continue
         where = ", ".join(sorted(entry["files"])[:3])
+        broad = ""
+        if entry["broad"]:
+            broad = (f"; its {', '.join(sorted(entry['broad']))} handler is "
+                     f"not an import guard, so it does not make the import "
+                     f"optional")
         violations.append(
             f"{where}: imports {module!r}, which no distribution in "
-            f"{lock.path.name} provides")
+            f"{lock.path.name} provides{broad}")
     return violations, resolved, optional
 
 
