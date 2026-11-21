@@ -145,6 +145,22 @@ else
   exit 1
 fi
 
+# The MIT licence asks that its notice travel with copies of the software, and
+# the font licence asks the same for the fonts. Both files are checked again by
+# Tools/validate-bundle.sh after signing, so a release cannot ship without them.
+if [ -f LICENSE ]; then
+  cp LICENSE "$APP_BUNDLE/Contents/Resources/LICENSE"
+else
+  echo "✗ LICENSE is missing; the bundle would carry no MIT notice." >&2
+  exit 1
+fi
+if [ -f Resources/THIRD_PARTY_NOTICES.txt ]; then
+  cp Resources/THIRD_PARTY_NOTICES.txt "$APP_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"
+else
+  echo "✗ Resources/THIRD_PARTY_NOTICES.txt is missing; the bundle would carry no third-party attribution." >&2
+  exit 1
+fi
+
 # Python interpreter, wheels and the worker package, so the app does not depend
 # on this checkout or on Homebrew. Model weights stay out: they are downloaded
 # by explicit consent. The worker source and its hashed lockfile live in this
