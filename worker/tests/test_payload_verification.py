@@ -8,7 +8,9 @@ those shapes in a small archive and assert the set comparison fails them, while
 a complete archive still passes. The same `analyse` runs in CI against the real
 `make-runtime.sh` archive.
 """
+import contextlib
 import importlib.util
+import io
 import tempfile
 import unittest
 import zipfile
@@ -33,20 +35,26 @@ def write_lock(path: Path, pins: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_archive(path: Path, distributions: list[tuple[str, str, str]]) -> None:
+def write_archive(path: Path, distributions: list[tuple[str, str, str]],
+                  *, documents: bool = True, licences: bool = True,
+                  interpreter: bool = True, package: bool = True) -> None:
     with zipfile.ZipFile(path, "w") as archive:
-        for document in verify.ROOT_DOCUMENTS:
-            archive.writestr(document, "placeholder")
-        archive.writestr("bin/python3", "")
-        archive.writestr("retouch_ai_worker/__init__.py", "")
-        for package, version, directory in distributions:
+        if documents:
+            for document in verify.ROOT_DOCUMENTS:
+                archive.writestr(document, "placeholder")
+        if interpreter:
+            archive.writestr("bin/python3", "")
+        if package:
+            archive.writestr("retouch_ai_worker/__init__.py", "")
+        for name, version, directory in distributions:
             archive.writestr(
                 f"site-packages/{directory}/METADATA",
-                f"Metadata-Version: 2.1\nName: {package}\nVersion: {version}"
+                f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}"
                 f"\n\n")
             archive.writestr(f"site-packages/{directory}/RECORD", "")
-            archive.writestr(
-                f"site-packages/{directory}/licenses/LICENSE", "licence")
+            if licences:
+                archive.writestr(
+                    f"site-packages/{directory}/licenses/LICENSE", "licence")
 
 
 class PayloadVerificationTest(unittest.TestCase):
@@ -58,10 +66,18 @@ class PayloadVerificationTest(unittest.TestCase):
         write_lock(self.lock_path, {"alpha": "1.0", "beta": "2.0"})
         self.lock = verify.lock_closure.read_lock(self.lock_path)
 
-    def _archive(self, distributions):
+    def _archive(self, distributions, **options):
         path = self.root / "runtime.zip"
-        write_archive(path, distributions)
+        write_archive(path, distributions, **options)
         return path
+
+    def _run(self, path):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = verify.main(["--archive", str(path),
+                                "--lock", str(self.lock_path),
+                                "--pip-version", PIP_VERSION])
+        return code, out.getvalue(), err.getvalue()
 
     def test_a_complete_archive_passes(self):
         path = self._archive([
@@ -151,6 +167,72 @@ class PayloadVerificationTest(unittest.TestCase):
             without_pip, self.lock, PIP_VERSION)
         self.assertTrue(any("no pip dist-info" in violation
                             for violation in violations))
+
+    def test_zero_licences_is_reported_not_an_empty_process(self):
+        """AC-nolicences: the shell step died in `grep -c` before its check.
+
+        The Python verifier has no pipe to abort: it counts zero licence
+        files and says so, and `main` exits 1 with a non-empty verdict.
+        """
+        path = self._archive([
+            ("alpha", "1.0", "alpha-1.0.dist-info"),
+            ("beta", "2.0", "beta-2.0.dist-info"),
+            ("pip", PIP_VERSION, f"pip-{PIP_VERSION}.dist-info"),
+        ], licences=False)
+        violations, counts = verify.analyse(path, self.lock, PIP_VERSION)
+        self.assertEqual(counts["licences"], 0)
+        self.assertIn("no licence file survived into the archive", violations)
+        code, out, err = self._run(path)
+        self.assertEqual(code, 1)
+        self.assertIn("licence files inside dist-info: 0", out)
+        self.assertIn("no licence file survived into the archive", err)
+        self.assertIn("WORKER PAYLOAD: FAIL", err)
+
+    def test_an_empty_archive_is_explicit(self):
+        """No dist-info at all: every missing thing is named, no traceback."""
+        path = self.root / "empty.zip"
+        write_archive(path, [], documents=False, interpreter=False,
+                      package=False)
+        violations, counts = verify.analyse(path, self.lock, PIP_VERSION)
+        self.assertEqual(counts["distinfos"], 0)
+        for document in verify.ROOT_DOCUMENTS:
+            self.assertIn(f"the archive has no {document} at its root",
+                          violations)
+        self.assertIn("the archive has no bundled interpreter (bin/python3)",
+                      violations)
+        self.assertIn("the archive carries no retouch_ai_worker package",
+                      violations)
+        self.assertIn("no licence file survived into the archive", violations)
+        self.assertIn("alpha: the lock pins it, the archive does not carry it",
+                      violations)
+        self.assertIn("the archive carries no pip dist-info, so the one "
+                      "documented allowance cannot be verified", violations)
+        code, _out, err = self._run(path)
+        self.assertEqual(code, 1)
+        self.assertIn("WORKER PAYLOAD: FAIL", err)
+
+    def test_fewer_dist_info_than_pins_is_a_failure(self):
+        """AC-short: the count control. Fewer entries than pins."""
+        path = self._archive([
+            ("alpha", "1.0", "alpha-1.0.dist-info"),
+            ("pip", PIP_VERSION, f"pip-{PIP_VERSION}.dist-info"),
+        ])
+        violations, counts = verify.analyse(path, self.lock, PIP_VERSION)
+        self.assertLess(counts["distinfos"], len(self.lock.pins) + 1)
+        self.assertIn("beta: the lock pins it, the archive does not carry it",
+                      violations)
+
+    def test_missing_root_documents_are_named(self):
+        """AC-nodocs: each absent root document gets its own message."""
+        path = self._archive([
+            ("alpha", "1.0", "alpha-1.0.dist-info"),
+            ("beta", "2.0", "beta-2.0.dist-info"),
+            ("pip", PIP_VERSION, f"pip-{PIP_VERSION}.dist-info"),
+        ], documents=False)
+        violations, _counts = verify.analyse(path, self.lock, PIP_VERSION)
+        for document in verify.ROOT_DOCUMENTS:
+            self.assertIn(f"the archive has no {document} at its root",
+                          violations)
 
 
 if __name__ == "__main__":

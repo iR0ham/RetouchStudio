@@ -80,9 +80,14 @@ def judge(status: int, stdout: str, stderr: str = "") -> list[str]:
     return problems
 
 
-def main() -> int:
-    proc = subprocess.run([sys.executable, "-m", "pip", "check"],
+def _invoke():
+    return subprocess.run([sys.executable, "-m", "pip", "check"],
                           capture_output=True, text=True)
+
+
+def main(runner=None) -> int:
+    """Judge a `pip check` run; `runner` exists so the seedings can drive it."""
+    proc = (runner or _invoke)()
     if proc.stdout:
         print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
     if proc.stderr:

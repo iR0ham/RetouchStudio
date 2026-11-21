@@ -7,9 +7,12 @@ requirement, and the documented mflux gap at the judge level; the same judge
 runs in CI on the real environment, so the seedings here are the failure
 demonstration for a defect the CI environment cannot easily reproduce.
 """
+import contextlib
 import importlib.util
+import io
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 WORKER = Path(__file__).resolve().parents[1]
 TOOL = WORKER / "tools" / "pip_check_gate.py"
@@ -54,6 +57,44 @@ class PipCheckGateTest(unittest.TestCase):
         self.assertTrue(gate.judge(0, CLEAN + "\n" + GAP, ""),
                         "exit 0 contradicts a named requirement")
         self.assertTrue(gate.judge(0, "", ""))
+
+    def test_the_measured_cases_drive_the_exit_code(self):
+        """D1–D5 as measured on `80b23eea7`, through `main` itself.
+
+        The old pipeline passed D1, D4 and D5. Each row states the expected
+        verdict and the exit code the step would take.
+        """
+        traceback = ("Traceback (most recent call last):\n"
+                     "  File \"pip/_internal/cli/main.py\", line 1\n"
+                     "ModuleNotFoundError: No module named 'pip'")
+        cases = {
+            # label: (status, stdout, stderr, expected exit, why)
+            "D1 crash, traceback on stderr, empty stdout": (
+                1, "", traceback, 1, "a crashed check is not a pass"),
+            "D2 unexpected requirement": (
+                1, "torch 2.9.0 requires sympy, which is not installed.",
+                "", 1, "the lock is incomplete"),
+            "D3 documented mflux gap": (1, GAP, "", 0, "the one exception"),
+            "D4 clean line plus a traceback": (
+                0, CLEAN, traceback, 1, "the check did not complete"),
+            "D5 completely silent, status 0": (
+                0, "", "", 1, "no verdict at all"),
+            "D5b completely silent, status 1": (
+                1, "", "", 1, "no verdict at all"),
+        }
+        for label, (status, stdout, stderr, expected, why) in cases.items():
+            with self.subTest(case=label):
+                proc = SimpleNamespace(returncode=status, stdout=stdout,
+                                      stderr=stderr)
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), \
+                        contextlib.redirect_stderr(err):
+                    code = gate.main(runner=lambda proc=proc: proc)
+                self.assertEqual(code, expected, why)
+                if expected:
+                    self.assertIn("PIP CHECK GATE: FAIL", err.getvalue())
+                else:
+                    self.assertIn("PIP CHECK GATE: PASS", out.getvalue())
 
 
 if __name__ == "__main__":
