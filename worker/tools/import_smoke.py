@@ -46,7 +46,7 @@ import lock_closure  # noqa: E402  (sibling tool; resolves after the insert)
 #   :765        import torch                    (upscale tiling)
 #   :884-885    import torch / Swin2SR...       (upscale weights)
 #   :947        import onnxruntime as ort       (migan session)
-#   :966-968    import mlx.core as mx, mflux... (flux2 edit)
+#   :965-967    import mlx.core as mx, mflux... (flux2 edit)
 # `numpy` and `PIL.Image` are unconditional in engine.py:21-22, which the
 # protocol suite already exercises via the test lock; importing them here
 # proves the full lock does not shadow them with a different build.
@@ -125,8 +125,8 @@ def plan(package: Path, lock: lock_closure.Lock,
         if any(module == name or name.startswith(module + ".")
                for name in fixed_modules):
             continue
-        distribution = lock_closure.ALIASES.get(
-            module, lock_closure.canonical(module))
+        distribution = lock_closure.distribution_for(
+            module, imported[module]["names"])
         if lock_closure.canonical(distribution) not in lock.pins:
             files = ", ".join(sorted(imported[module]["files"])[:2])
             entry = imported[module]

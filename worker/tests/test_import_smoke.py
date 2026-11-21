@@ -127,6 +127,33 @@ class ImportSmokePlanTest(unittest.TestCase):
         self.assertIn("cv2", violations[0])
         self.assertIn("sam2", optional)
 
+    def test_a_namespace_import_outside_the_aliased_distribution_is_unpinned(self):
+        """A shared namespace must not borrow the alias's pin.
+
+        `google` maps to protobuf, but protobuf only owns `google.protobuf`.
+        `google.cloud.storage` used to be planned as a pinned target and
+        imported; it must be named as unpinned instead.
+        """
+        write_lock(self.lock_path, {"protobuf": "7.0"})
+        lock = lock_closure.read_lock(self.lock_path)
+        write_package(self.package, {
+            "engine.py": "import google.cloud.storage\n"})
+        result = smoke.plan(self.package, lock, fixed=())
+        unpinned = {module: (files, guard)
+                    for module, files, guard in result.unpinned}
+        self.assertIn("google", unpinned)
+        self.assertEqual(unpinned["google"][1], "")
+        self.assertNotIn("google", [target.module for target in result.targets])
+        imported: list[str] = []
+        smoke.run(result.targets, imported.append)
+        self.assertEqual(imported, [], "an unpinned namespace is not imported")
+
+        write_package(self.package, {"engine.py": "import google.protobuf\n"})
+        result = smoke.plan(self.package, lock, fixed=())
+        self.assertEqual(result.unpinned, [])
+        self.assertEqual([target.module for target in result.targets],
+                         ["google"])
+
     def test_the_shipped_package_has_no_stale_targets(self):
         """The real TARGETS still describe the real worker."""
         real_lock = lock_closure.read_lock(WORKER / "requirements.lock")

@@ -58,6 +58,30 @@ class PipCheckGateTest(unittest.TestCase):
                         "exit 0 contradicts a named requirement")
         self.assertTrue(gate.judge(0, "", ""))
 
+    def test_status_1_with_the_clean_verdict_is_a_conflict(self):
+        """Status 1 and "No broken requirements found." cannot both be true.
+
+        The documented allowance is the only acceptable status-1 content; a
+        clean line next to it means the two streams disagree about the same
+        environment and the gate must not pick one.
+        """
+        mixed = CLEAN + "\n" + GAP
+        problems = gate.judge(1, mixed, "")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("exited 1 while also printing the clean verdict",
+                      problems[0])
+        clean_only = gate.judge(1, CLEAN, "")
+        self.assertEqual(len(clean_only), 2,
+                         "status 1 with only a clean line is both a conflict "
+                         "and a missing documented gap")
+        proc = SimpleNamespace(returncode=1, stdout=mixed, stderr="")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = gate.main(runner=lambda proc=proc: proc)
+        self.assertEqual(code, 1)
+        self.assertIn("PIP CHECK GATE: FAIL (1 problem(s))", err.getvalue())
+
     def test_the_measured_cases_drive_the_exit_code(self):
         """D1–D5b as measured on `80b23eea7`, through `main` itself.
 

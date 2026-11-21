@@ -71,6 +71,9 @@ def judge(status: int, stdout: str, stderr: str = "") -> list[str]:
         problems.append(
             "pip check reported a problem but not the documented "
             "mflux -> opencv-python gap")
+    if status == 1 and CLEAN in lines:
+        problems.append(
+            "pip check exited 1 while also printing the clean verdict")
     if status == 0 and documented:
         problems.append(
             "pip check exited 0 while naming an unsatisfied requirement")

@@ -285,6 +285,89 @@ class ImportClosureTest(unittest.TestCase):
             self.assertIn("numpy resolved to 9.9.9, the lock pins 2.5.4",
                           violations[0])
 
+    def test_a_namespace_import_outside_the_aliased_distribution_is_unpinned(self):
+        """`google.auth` is not protobuf merely because both live under google.
+
+        The alias map is keyed on the top-level name, so a namespace shared by
+        several distributions used to collapse into its one alias entry:
+        `import google.auth` resolved to protobuf and both gates passed. The
+        alias now applies only inside `google.protobuf`.
+        """
+        lock = closure.read_lock(WORKER / "requirements.lock")
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text("import google.auth\n",
+                                               encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("google", violations[0])
+        self.assertNotIn("google", optional)
+        self.assertNotIn("google", resolved)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(
+                "import google.protobuf\nimport google.auth\n",
+                encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(len(violations), 1,
+                         "one outside name taints the whole top-level module")
+        self.assertNotIn("google", resolved)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text("import google.protobuf\n",
+                                               encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(violations, [])
+        self.assertEqual(resolved.get("google"), "protobuf")
+        self.assertEqual(optional, {})
+
+    def test_a_guard_around_a_definition_does_not_reach_into_it(self):
+        """An enclosing `try` does not guard an import the definition runs later.
+
+        `try:\n def load(): import cv2\nexcept ImportError:` used to mark cv2
+        optional even though the import executes when `load()` is called,
+        possibly outside the handler. Fail-closed: only a `try` inside the
+        definition can do that.
+        """
+        lock = closure.read_lock(WORKER / "requirements.lock")
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(
+                "try:\n"
+                "    def load():\n"
+                "        import cv2\n"
+                "except ImportError:\n"
+                "    pass\n"
+                "load()\n",
+                encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("cv2", violations[0])
+        self.assertNotIn("cv2", optional)
+        self.assertNotIn("cv2", resolved)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(
+                "def load():\n"
+                "    try:\n"
+                "        import sam2\n"
+                "    except ImportError:\n"
+                "        return None\n"
+                "load()\n",
+                encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(violations, [])
+        self.assertIn("sam2", optional)
+        self.assertNotIn("sam2", resolved)
+
     def test_lock_is_exact_hashed_and_covers_the_test_lock(self):
         lock = closure.read_lock(WORKER / "requirements.lock")
         self.assertEqual(lock.violations, [])

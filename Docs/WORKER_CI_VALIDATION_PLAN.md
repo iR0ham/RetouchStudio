@@ -7,11 +7,12 @@ payload builds, installs, imports or ships. This file records, for each real
 path, what is verified today, the exact command and evidence that would
 verify it, where it runs, and what is still unverified after PR #110.
 
-Nothing here changes branch protection. `Worker Lock Closure` and
-`Worker Payload Bundle` remain `continue-on-error: true` and are not required
-contexts; promotion waits on the criteria recorded in `Docs/CI_GATES.md`
-(F1–F3 closed, the seedings running in a required job, a seeded defect shown
-failing its job, and a green streak on `main`).
+Nothing here changes branch protection. Neither worker job is a required
+context. `Worker Lock Closure` carries no `continue-on-error`, so its failure
+still marks the run red; only `Worker Payload Bundle` uses
+`continue-on-error: true`. Promotion waits on the criteria recorded in
+`Docs/CI_GATES.md` (F1–F3 closed, the seedings running in a required job, a
+seeded defect shown failing its job, and a green streak on `main`).
 
 ## Status summary
 

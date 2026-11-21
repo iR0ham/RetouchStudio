@@ -60,6 +60,14 @@ ALIASES = {
     "google": "protobuf",
 }
 
+# Most aliases own their top-level name outright. `google` does not: it is a
+# namespace several distributions share, and protobuf provides only
+# `google.protobuf`. An alias listed here stands for its distribution only
+# while every imported dotted name is inside these prefixes; any other
+# `google.*` import falls back to the canonical top-level name and is
+# reported as unpinned, because no pinned distribution is known to provide it.
+ALIAS_PREFIXES = {"google": ("google.protobuf",)}
+
 # The package the bundle ships. Tests and tools are not in the payload.
 FIRST_PARTY = {"retouch_ai_worker"}
 
@@ -80,6 +88,24 @@ HASH = re.compile(r"^--hash=(?P<algorithm>[a-z0-9]+):(?P<digest>[0-9a-fA-F]+)$")
 def canonical(name: str) -> str:
     """PEP 503 normalisation: the only safe way to compare names."""
     return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def distribution_for(module: str, names: set[str]) -> str:
+    """The distribution a top-level module name stands for.
+
+    `names` carries the full dotted imports the AST walk recorded. A scoped
+    alias applies only when every one of them belongs to the distribution's
+    module tree: `import google.protobuf` is protobuf, but `import google.auth`
+    is a different distribution nobody pinned, and the `google` namespace does
+    not make it protobuf.
+    """
+    prefixes = ALIAS_PREFIXES.get(module)
+    if prefixes and not all(
+            any(name == prefix or name.startswith(prefix + ".")
+                for prefix in prefixes)
+            for name in names):
+        return canonical(module)
+    return ALIASES.get(module, canonical(module))
 
 
 class Lock:
@@ -255,6 +281,34 @@ class _Imports(ast.NodeVisitor):
         for statement in node.orelse + node.finalbody:
             self.visit(statement)
 
+    def _visit_definition(self, node: ast.AST) -> None:
+        """A handler around a definition does not cover code called from it.
+
+        An import inside a function body runs when the function is called, not
+        when the definition executes, so an enclosing `try` proves nothing
+        about that import. The rule is fail-closed for every definition form:
+        only a `try` inside the definition makes an import optional. A class
+        body does run at definition time, which an enclosing handler would
+        cover, but treating it the same keeps the classifier conservative for
+        a shape nobody in the shipped package uses.
+        """
+        guards, broad = self.guards, self.broad
+        self.guards, self.broad = set(), set()
+        self.generic_visit(node)
+        self.guards, self.broad = guards, broad
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_definition(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_definition(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._visit_definition(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._visit_definition(node)
+
 
 def imported_modules(package: Path) -> dict[str, dict[str, set]]:
     found: dict[str, dict[str, set]] = {}
@@ -286,7 +340,7 @@ def audit(lock: Lock, package: Path) -> tuple[list[str], dict[str, str], dict[st
     for module, entry in sorted(imported_modules(package).items()):
         if module in stdlib or module in FIRST_PARTY:
             continue
-        distribution = ALIASES.get(module, canonical(module))
+        distribution = distribution_for(module, entry["names"])
         if canonical(distribution) in lock.pins:
             resolved[module] = distribution
             continue
