@@ -40,6 +40,10 @@ enum AIFailureCopy {
         case .inferenceFailed:
             return language == .persian ? inferenceFailedFA : inferenceFailedEN
         case .exportFailed:
+            // Taxonomy only: no code path produces this state. A real AI export
+            // failure goes through `StatusToken.exportUpscaleFailed`, whose
+            // sentence names the pass that failed; this generic sentence is the
+            // placeholder for a future save-failed path, not that one.
             return language.table.exportFailed
         }
     }
@@ -52,6 +56,13 @@ enum AIFailureCopy {
     /// A runtime that is here and did not pass its startup check.
     static func runtimeInstallFailed(_ language: Language) -> String {
         language.table.aiRuntimeValidationFailed
+    }
+
+    /// A runtime whose launch-time recovery did not finish safely. It is a
+    /// different action from a failed startup check: the files were preserved,
+    /// and the owner restarts or downloads again.
+    static func runtimeRecoveryFailed(_ language: Language) -> String {
+        language.table.aiRuntimeRecoveryFailed
     }
 
     /// A runtime that is on disk but is held by another window. The owner's
