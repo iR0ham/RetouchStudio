@@ -1600,3 +1600,78 @@ handed over so no budget goes to re-exploration, the four items ordered so each 
 explicit rule that **every green step is committed and pushed immediately** — partial work that is green and pushed
 is an acceptable outcome; a large uncommitted pile is not. #110 still merges only after this lands green on my own
 observation of the run, and `develop` stays fast-forward-equal to `main` afterwards.
+
+## Addendum R — 2026-11-22: merge authority exercised, and the model decisions I made under DR-16 without asking
+
+### R.1 Authority and order of operations
+
+The owner authorised the sequence explicitly: when the correction passes on #110 and #111 are green, merge them
+myself, fast-forward `develop`, then move to #115 and the model lines. That is a continuation of DR-6, not a change
+to it. What "green" means here is bounded on purpose: I observe the CI run for the pushed head myself and confirm
+`Tests/expected-worker-tests.txt` agrees with the measured count — a member's report of green is not the gate.
+Publication, tags, release assets, the existing `v1.0.0` release, any paid service and any GUI session remain
+outside this authority.
+
+Branch state at the moment of writing, from `git ls-remote`: `main` `cd5741b`, `develop` `06e8ac4` (behind, to be
+fast-forwarded after the first merge), #110 `ad9483d`, #111 `4973cc3` — both advanced past the heads that were
+reviewed, so the reviews below are against the reviewed heads and the new heads still need their own observation.
+
+### R.2 PR #115 — what the diff actually enforces, verified rather than reported
+
+I checked the branch myself before assigning review, because §7's requirements are the ones a comment can fake:
+`worker/retouch_ai_worker/engine.py` calls `require_verified` for **all four** models (:884, :938, :951, :971) —
+where `main` hashes exactly one, which was the finding that made a same-size byte swap acceptable for three of four.
+`worker/retouch_ai_worker/catalog.py` refuses an absent or malformed digest and an absent size at admission (:163-170,
+raised at :540/:560/:625) and reports the condition through `health()` (:668) instead of presenting the entry as
+loadable. `Sources/RetouchStudio/Core/AIWorker.swift:599` now strips `RETOUCH_AI_EVAL_MODELS`, which was the host
+path that could open the licence gate from the environment. So the five fail-opens the acceptance matrix named are
+addressed **in code**; whether the code holds against seeded bypasses is exactly what the independent adversarial
+review is for, and that review is assigned (mandate §8: the implementer cannot be the sole reviewer). Distinguish
+the two states in anything derived from this ledger: *implemented* is not *verified*.
+
+### R.3 The model decisions I made, so the record contains decisions and not only research
+
+Per the mandate's §2 I am not bringing the owner equivalent candidates to choose between. Applying DR-15's four
+rights and DR-16's floors F1–F7 to the semantic-track dossier:
+
+- **`sam2.1-hiera-tiny` — retained as the `mask.click` primary, status APPROVED on rights (Meta states Apache-2.0
+  for the weights), blocked on packaging only.** Its size and digest are already on `main`; the blocker is the
+  missing `sam2` runtime package. Decision unchanged: vendor the ~0.38 MB package rather than loosen the lock gate,
+  because a URL or git pin fails the closure tool that #110 just hardened. **I rejected the proposal to switch to
+  `hiera-small` as the default** — no measured mask-quality benefit exists, and DR-16's ceiling forbids swapping a
+  working model on an upstream size claim. A size change needs a benchmark row first.
+- **FLUX generative — the current pin is not distributable as it stands.** It points at a mutable third-party
+  conversion whose own card disclaims authorship, whose 4.6 GB has no published digest, and which omits the
+  tokenizer files the code would need: that fails F1 and F2 regardless of licence. The rights-holder grant *does*
+  exist one level up (`black-forest-labs/FLUX.2-klein-4B`, Apache-2.0 `LICENSE.md` covering the weights), so the
+  decision is to **re-record the entry against the upstream revision with the conversion commit and CI-generated
+  hashes, and to keep the quantised derivative only if its tokenizer set is pinned too** — and until that lands, the
+  generative capability must not be presented as distributable. Its out-of-scope-use clause and trademark
+  restriction are product policy, not decoration, and belong in the register.
+- **`migan` — APPROVED, retained.** MIT weight grant from the author, ONNX, Windows-viable, smallest footprint of
+  anything in the catalogue. Its Places2 training-data caveat stays recorded as a dataset obligation we cannot
+  discharge, and `inpaint.spot` stays bounded to its measured mask-fraction limit.
+- **Two adoptions opened.** `BiRefNet_lite` (author-hosted, MIT file present) as the `mask.subject` / background
+  primary on macOS, self-converted to ONNX in CI rather than taken from a mirror; `MODNet` (~25 MB, Apache-2.0
+  stated over code **and** models, CPU-viable) as the portrait matte tier and the Windows candidate. Both are
+  APPROVED WITH CONDITIONS: opt-in, dataset provenance recorded, and a segmentation mask never renamed into a matte.
+- **`opencv/inpainting_lama` — conditional, not adopted.** An Apache-2.0 licence file in the OpenCV org is a real
+  step up from a Drive link, but the artifact descends from a third-party conversion, so the chain
+  LaMa → converter → OpenCV zoo has to be established before it enters the catalogue. Adopting it on the repo
+  licence alone is precisely the inference DR-13 prohibits.
+- **Excluded with reasons recorded, rows kept.** `RestoreFormer++` (mutable payload, unestablishable grantor —
+  fails F1/F3 whatever its licence), RMBG-2.0 and Qwen2.5-VL (NC terms whose use class we are not positioned to
+  satisfy alongside their obligations), FastSAM (AGPL against an MIT app), SAM 3 / 3.1 (rights-holder grants the
+  download behind personal-data acceptance and the artifact is 3.44 GB — not installable by a free app on the user's
+  behalf), `jonathandinu/face-parsing` (CelebAMask-HQ research-only), MobileSAM (mixed uploader licences and a
+  quality regression, so no reason to take the risk), and every mirror of EfficientSAM, original LaMa and u2net
+  (UNKNOWN: the file exists, the grant does not).
+- **Four refusals stay refusals.** Fine matting with a cleared data chain, mask-conditioned generative
+  inpaint/outpaint under a redistributable licence at ≤4 B parameters, face parsing with a usable grant, and any
+  defensible Windows generative path: none exists today. The capability boundary and the honest blocked state stay
+  in the product rather than being filled with an unverified model.
+- **Sequencing.** Each of the above is one PR carrying pin, size, SHA-256, register entry, conditions, negative
+  integrity tests, benchmark row and truthful UI state. Benchmarks run in CI or an isolated environment — not by
+  downloading onto this machine — and `swin2sr-x4` stays in service as the upscaler while the restoration survey
+  returns measured alternatives, because ejecting the only working upscaler on an unmeasured preference would be
+  the same mistake in the other direction.
