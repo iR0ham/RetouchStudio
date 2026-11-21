@@ -915,3 +915,75 @@ misreports it as a count mismatch. A lock-exact runner now exists at
 --require-hashes`, all 166 worker tests OK) but it is **Python 3.15.0**, while the
 locks target 3.13 — results from it are genuine, and their interpreter version must
 be named in every future report.
+
+## Addendum K — 2026-11-22: the integrity gate survives its second near-loss, and two precedence defects are now named
+
+### K.1 State of G-INT, measured rather than reported
+
+The continuation session again stopped with a dirty tree. Salvaged as checkpoint
+`0eba5ce` on `w5-200-integrity-failclosed` (5 files, +522/−127), on top of `e901ab8`
+and the earlier `d142257`. Against `cd5741b` the branch is now 9 files, +1125/−90
+plus that checkpoint. Nothing was lost this time because the checkpoint was committed
+before it was analysed.
+
+Real measured state, one command, lock-exact interpreter
+(`/private/tmp/rs-rev-gates-venv/bin/python3`, Python **3.15.0** — the locks target
+3.13, so this is genuine but off-version evidence):
+
+```
+RETOUCH_WORKER_PYTHON=/private/tmp/rs-rev-gates-venv/bin/python3 ./Tests/run-worker.sh
+Ran 214 tests ... FAILED (failures=2)
+```
+
+The suite grew 166 → 214. Two failures, both in `test_server.py`, both **diagnostic
+precedence** defects, not crashes:
+
+| test | currently answers | must answer |
+|---|---|---|
+| `test_a_named_capability_still_answers_UNSUPPORTED_for_a_bad_pin` | `UNKNOWN_MODEL` (-32016) | `UNSUPPORTED` (-32020), `state = blocked` |
+| `test_an_uncleared_model_refuses_the_kind_only_job_before_any_integrity` | `LICENSE_BLOCKED` (-32010) | `CATALOG_INVALID` (-32021), `reason = missing-digest` |
+
+The first is the more serious of the two in product terms: the same process lists that
+capability as *blocked* with a "no recorded SHA-256" reason while refusing a job that
+names it as *unknown model*. A host that believes "unknown" can offer a download that
+repairs nothing, which is exactly the class of false promise §4 exists to remove. The
+second is the research switch leaking further than it should: `allow_uncleared` clears
+the licence question and must never clear the integrity question.
+
+Both tests encode the intended contract, so the implementation moves and the
+assertions do not. Status of G-INT stays **in progress**; the head is not mergeable
+and says so in its own commit message.
+
+### K.2 DR-12 — the integrity branch rebases onto `main` after #110, for one reason
+
+`ci.yml:164` hard-pins the worker suite size as the literal `Ran 166 tests`, and PR #110
+replaces those literals with `Tests/expected-worker-tests.txt`. That file does not
+exist on this branch's base, so an integrity PR opened now would have to edit the five
+hand-pinned places that #110 deletes, guaranteeing a conflict on the one line that
+decides whether macOS Integration goes green. Ordering is therefore: **#110 lands → this
+branch rebases → the suite size becomes a one-line edit in a single file.** No other
+workstream changes order because of this.
+
+### K.3 Mapping Addendum J's findings onto existing tickets, and one new one
+
+Not re-ticketed: **A6** (extraction does not walk archive contents) is already tracked as
+the S3-security containment ticket, now with the sequencing rule attached — it must land
+before `AIRuntime.Package` ever takes a value. **A4** (`MASK QUALITY TESTS` /
+`ABI TESTS` asserted in `Docs/CI_GATES.md` but not in `ci.yml:164-175`) is already
+tracked as the CI-honesty ticket. **B1b** (jobs sweep runs only at launch) is a
+disclosed limitation in `Docs/AI_RUNTIME.md`, not a defect. New ticket opened for
+**A2**: nothing couples a capability's declared `Spec.packages` to the lock, so a
+capability can advertise a package the shipped payload cannot import — and because
+`import_smoke.py:14` deliberately excludes `sam2`, the check has to be set membership
+against the lock, not an import probe.
+
+### K.4 Team tooling limitation encountered while dispatching
+
+Re-dispatching the integrity fix to the team's implementation member through the team
+delegation tool now fails with `COLLABORATION_MCP_TEAM_LEADER_REQUIRED` on every
+attempt, including an empty check-only dispatch, which means the leader binding was not
+re-established after this session was resumed. No team-member entry point was used as a
+substitute. The work went forward as a local background workstream with the same
+brief, so progress is unaffected; but **team-member delegation is currently unavailable
+to me**, and independent review requests (the queued licence-evidence and #114 reviews)
+stay parked until that binding is restored or I reproduce their evidence myself.
