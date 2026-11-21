@@ -1210,8 +1210,13 @@ func testHostJobSubmissionAgainstLiveWorker() {
     }
     check(published("upscale.2x")?["state"] as? String == "unsupported",
           "O: 2× is unsupported in the worker's own report")
-    check(published("upscale.4x")?["state"] as? String == "requires_model",
-          "O: 4× needs weights this models root does not have")
+    // 4× used to be `requires_model` here, because the weights were recorded as
+    // usable. The permitted-use record now says the only weights statement is a
+    // repository tag, so the capability is blocked and the app has nothing to
+    // offer: a licence refusal must never arrive as a download prompt.
+    check(published("upscale.4x")?["state"] as? String == "blocked",
+          "O: 4× is blocked until its weights permission is established",
+          published("upscale.4x")?["reason"] as? String ?? "not listed")
 
     let two = refusal("upscale.2x")
     check(two?.code == -32020 && two?.typedCode == "E_UNSUPPORTED",
@@ -1226,11 +1231,14 @@ func testHostJobSubmissionAgainstLiveWorker() {
           two?.message ?? "")
 
     let four = refusal("upscale.4x")
-    check(four?.code == -32011 && four?.typedCode == "E_MODEL_MISSING",
-          "O: naming 4× without weights opens the model manager",
+    check(four?.code == -32020 && four?.typedCode == "E_UNSUPPORTED",
+          "O: naming 4× is refused as unsupported while its licence is unclear",
           four?.message ?? "")
+    check(four?.message.contains("no established permission") == true,
+          "O: the refusal names the permission that is missing", four?.message ?? "")
     check(four?.message == published("upscale.4x")?["reason"] as? String,
-          "O: a missing-model refusal names the model", four?.message ?? "")
+          "O: the refusal repeats the report's own sentence, not a paraphrase",
+          four?.message ?? "")
 
     // The gate filters the frozen table by job kind, so an id that exists under
     // another kind must not pass: the kind is what the worker looks up.
