@@ -217,7 +217,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-166 tests, no GPU and no model download: framing, contract versioning, request
+176 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing

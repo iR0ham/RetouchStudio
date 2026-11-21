@@ -7,8 +7,13 @@ Two gaps are checked here, without wheels or network:
             mode that bit the engine once: code imported `cv2`, the pin was
             absent, and the break surfaced as an ImportError on the owner's
             machine instead of in CI. An import guarded by `except
-            ImportError` is exempt — it is a deliberate refusal path, not a
-            dependency — but it is still reported so the exemption is visible;
+            ImportError` or `except ModuleNotFoundError` is exempt — it is a
+            deliberate refusal path, not a dependency — but it is still
+            reported so the exemption is visible. A broader handler is not
+            exempt: `except Exception:` and bare `except:` also catch errors
+            raised by the imported module itself, so they prove nothing about
+            whether the dependency is optional, and a hard import behind one
+            is still required to be pinned;
   lock      every pin is exact (`name==version`), carries at least one
             SHA-256, appears once, and the test lock does not name a package
             or version the runtime lock does not.
@@ -58,7 +63,11 @@ ALIASES = {
 # The package the bundle ships. Tests and tools are not in the payload.
 FIRST_PARTY = {"retouch_ai_worker"}
 
-IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
+# Only these two prove that the handler exists for a failed import. A handler
+# that also catches `Exception` proves nothing about the dependency: it is the
+# common defensive idiom around a hard import, and treating it as a refusal
+# path would let an unpinned import pass.
+IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 
 REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)"
@@ -142,17 +151,35 @@ def read_lock(path: Path) -> Lock:
     return lock
 
 
-def _catches_import_error(handler: ast.ExceptHandler) -> bool:
-    if handler.type is None:  # bare except: catches it too
-        return True
+def _handler_text(handler: ast.ExceptHandler) -> str:
+    if handler.type is None:
+        return "except:"
+    return f"except {ast.unparse(handler.type)}"
+
+
+def _import_guard(handler: ast.ExceptHandler) -> str | None:
+    """Return the handler text if it guards an import, else None.
+
+    The guard must catch only `ImportError`/`ModuleNotFoundError` (a tuple of
+    those is fine). A bare `except:` or any handler that also names
+    `Exception`/`BaseException` catches failures from the imported module
+    itself, so it is not evidence that the dependency is optional.
+    """
+    if handler.type is None:
+        return None
     types = (handler.type.elts if isinstance(handler.type, ast.Tuple)
              else [handler.type])
+    names = []
     for node in types:
-        name = node.id if isinstance(node, ast.Name) else (
-            node.attr if isinstance(node, ast.Attribute) else "")
-        if name in IMPORT_ERRORS:
-            return True
-    return False
+        if isinstance(node, ast.Name):
+            names.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.append(node.attr)
+        else:
+            return None
+    if not names or any(name not in IMPORT_ERRORS for name in names):
+        return None
+    return _handler_text(handler)
 
 
 class _Imports(ast.NodeVisitor):
@@ -165,15 +192,22 @@ class _Imports(ast.NodeVisitor):
 
     def __init__(self, filename: str) -> None:
         self.filename = filename
-        self.found: dict[str, dict[str, set[bool]]] = {}
-        self.guarded = False
+        # `guarded` is True only for a strict import guard; `guards` records
+        # which handler text supplied it so the report can name it.
+        self.found: dict[str, dict[str, set]] = {}
+        self.guards: set[str] = set()
+        self.broad: set[str] = set()
 
     def _record(self, names: list[str]) -> None:
         for name in names:
             top = name.split(".")[0]
-            entry = self.found.setdefault(top, {"files": set(), "guarded": set()})
+            entry = self.found.setdefault(
+                top, {"files": set(), "guarded": set(), "guards": set(),
+                      "broad": set()})
             entry["files"].add(self.filename)
-            entry["guarded"].add(self.guarded)
+            entry["guarded"].add(bool(self.guards))
+            entry["guards"] |= self.guards
+            entry["broad"] |= self.broad
 
     def visit_Import(self, node: ast.Import) -> None:
         self._record([alias.name for alias in node.names])
@@ -196,12 +230,19 @@ class _Imports(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Try(self, node: ast.Try) -> None:
-        catches = any(_catches_import_error(handler) for handler in node.handlers)
-        previous = self.guarded
-        self.guarded = previous or catches
+        guards = {guard for guard in
+                  (_import_guard(handler) for handler in node.handlers)
+                  if guard}
+        broad = {_handler_text(handler) for handler in node.handlers
+                 if _import_guard(handler) is None}
+        previous = self.guards
+        previous_broad = self.broad
+        self.guards = previous | guards
+        self.broad = previous_broad | broad
         for statement in node.body:
             self.visit(statement)
-        self.guarded = previous
+        self.guards = previous
+        self.broad = previous_broad
         for handler in node.handlers:
             self.visit(handler)
         for statement in node.orelse + node.finalbody:
@@ -215,9 +256,13 @@ def imported_modules(package: Path) -> dict[str, dict[str, set]]:
         visitor.visit(ast.parse(source.read_text(encoding="utf-8"),
                                 filename=str(source)))
         for module, entry in visitor.found.items():
-            merged = found.setdefault(module, {"files": set(), "guarded": set()})
+            merged = found.setdefault(
+                module, {"files": set(), "guarded": set(), "guards": set(),
+                         "broad": set()})
             merged["files"] |= entry["files"]
             merged["guarded"] |= entry["guarded"]
+            merged["guards"] |= entry["guards"]
+            merged["broad"] |= entry["broad"]
     return found
 
 
@@ -238,12 +283,18 @@ def audit(lock: Lock, package: Path) -> tuple[list[str], dict[str, str], dict[st
             resolved[module] = distribution
             continue
         if entry["guarded"] == {True}:
-            optional[module] = "guarded by except ImportError"
+            optional[module] = (
+                "guarded by " + ", ".join(sorted(entry["guards"])))
             continue
         where = ", ".join(sorted(entry["files"])[:3])
+        broad = ""
+        if entry["broad"]:
+            broad = (f"; its {', '.join(sorted(entry['broad']))} handler is "
+                     f"not an import guard, so it does not make the import "
+                     f"optional")
         violations.append(
             f"{where}: imports {module!r}, which no distribution in "
-            f"{lock.path.name} provides")
+            f"{lock.path.name} provides{broad}")
     return violations, resolved, optional
 
 

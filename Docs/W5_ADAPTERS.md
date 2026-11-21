@@ -114,7 +114,7 @@ table of its own.
 
 ## Tests
 
-- Worker: 166 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
+- Worker: 176 tests in `worker/tests` (`Tests/run-worker.sh`). W5-3 shipped 88
   of them; W5-4 Slice 1 adds 12, the §3.6 publication work adds 15, the
   gate's admitting half adds 1, the independent review's fixes add 4, the
   submission-boundary pins add 2, W5-5 adds 2 (the acceptance harness
@@ -138,7 +138,14 @@ table of its own.
   quantiser over every band boundary), and the runtime-payload lock closure
   adds 3 (every unguarded import of the shipped package is pinned, a guarded
   import is exempt while an unguarded missing pin fails, and the test lock
-  stays a subset of the runtime lock at the same versions). 14 of the W5-3
+  stays a subset of the runtime lock at the same versions), and the
+  fail-closed follow-up adds 10 (two seedings for the import-guard classifier
+  — a broad handler no longer exempts a missing pin and the real handler text
+  is reported — three for the `pip check` gate's status, crash and content
+  judging, and five for the payload identity check — a matching count with a
+  wrong version and with a renamed directory, only the verified pip allowance,
+  a complete archive, and a case-preserving `PyYAML-...dist-info` name that
+  must not be read as a mismatch). 14 of the W5-3
   tests are for the vocabulary, state rules, evidence handling, legacy layout, size and DR-5
   blocks, the server-level refusals (`-32020`, `-32011`, mismatched kind), a
   kind-only job that must not load a size-mismatched model (`-32019`), and the
