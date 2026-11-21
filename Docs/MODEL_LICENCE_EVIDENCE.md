@@ -145,7 +145,7 @@ this machine — the project builds against Command Line Tools only.
 - Property check over all 12 `verdict × commercialOk × explicit` combinations:
   8 decode with every field round-tripping independently, and the only 4 refused
   are the `commercialOk: false` non-excluded pairs.
-- The 265 model-store checks pass (172 before this change, +93 new).
+- The 268 model-store checks pass (172 before this change, +96 new).
 
 Pre-existing and unrelated to this gate: `RUNTIME V2 TESTS: FAIL (4)` locally,
 identical on the pristine baseline, because `worker/.venv` does not exist on this
