@@ -720,11 +720,11 @@ This is a functional batch *converter*, not a batch version of the single-export
 
 **At the time of this audit the tree contained no network code** — a repository-wide search for `URLSession`, `http://`, `https://`, `NSAllowsArbitraryLoads` and network entitlements returned only the XML DOCTYPE URL in `Resources/Info.plist`.
 
-**Current inventory (re-measured 2026-11-21 against `06e8ac4`): network code does exist, and no path in it runs unasked.** `URLSession` appears in five files — `Core/AIRuntimeInstaller.swift`, `Core/UpdateController.swift`, `Core/UpdateVerification.swift`, `Models/ModelStore.swift`, `Models/ModelManager.swift` — and every one of them is gated:
+**Current inventory (re-measured 2026-11-21 against `06e8ac4`): network code does exist, and no path in it runs unasked.** `URLSession` appears in six files; four have real call sites — `Core/AIRuntimeInstaller.swift`, `Core/UpdateController.swift`, `Core/UpdateVerification.swift`, `Models/ModelStore.swift` — and the other two (`Models/ModelManager.swift`, `Core/AIRuntimeInstallPhase.swift`) only name the type in comments. The four call sites are gated:
 
-- **Runtime download** is unreachable while `AIRuntime.package` is nil (`Core/AIRuntime.swift:40`), which is the shipping state. When a package is configured the installer is consent-driven (`Core/AIRuntimeInstaller.swift:103-150`): a sheet shows the archive name, size and SHA-256 prefix first, and the download is verified before it is promoted.
+- **Runtime download** is unreachable while `AIRuntime.package` is nil (`Core/AIRuntime.swift:40`), which is the shipping state. When a package is configured the installer is consent-driven: the alert is `Views/ModelManagerView.swift:129-141` (archive name, size and SHA-256 prefix), opened by the Install button at `:310`, and the state machine behind it refuses a download until that consent transition is granted (`Core/AIRuntimeInstaller.swift:107-150`, `requestConsent` and the `consentGranted` guard in `install`).
 - **Update check** runs only when the person using the app presses *Check for Updates* (`Views/InfoViews.swift:200`). It accepts HTTPS feeds only, compiles no address into the binary, and reads them from `RSUpdateFeedURL` / `RSUpdateFeedURLs` in the bundle's `Info.plist` (`Core/UpdateController.swift:159-166`). `Resources/Info.plist` declares neither key, so `performCheck()` stops at its empty-feed guard (`UpdateController.swift:66-69`) and reports a missing feed rather than contacting anybody.
-- **Model weights** are consent-gated in the worker (`worker/retouch_ai_worker/downloads.py`): the recorded token in `download-consent.json` is bound to the hash of the manifest, so a changed manifest requires fresh consent. `ModelStore` writes only under `.staging`, refuses any file without an exact byte size and SHA-256, verifies each one and publishes the version directory with a single atomic move (`Models/ModelStore.swift:182-397`).
+- **Model weights** are consent-gated in the app, not in the worker: the Install/Update chip for a `.ready` entry whose catalog version is not installed (`Views/ModelManagerView.swift:505-516`) opens the same alert type's `.install` case (`:90-103`), which names the file count, total size, licences and the 16-character SHA-256 prefix. Only its Download action calls `ModelManager.install` (`Models/ModelManager.swift:118-138`), which drives `ModelStore.install` (`Models/ModelStore.swift:315`). The store writes under `.staging`, refuses any file without an exact byte size and SHA-256 (`:360-366`), downloads through its own `URLSession` (`:921`) and publishes the version directory with a single atomic move. The worker's `downloads.py` consent token is a separate path that the app's model store does not read.
 
 There is still no telemetry, analytics, crash reporting, cloud sync or remote inference, and image processing remains entirely local. One caveat belongs here rather than in the entitlements table: `Resources/RetouchStudio.entitlements` grants nothing at all, including `com.apple.security.network.client`, because the app is unsandboxed and needs no entitlement to open a socket. **The entitlements file is therefore not a control on egress** — the guarantee is the gated code above plus the absence of any automatic call site.
 
@@ -753,11 +753,9 @@ The app never writes the original photo. It does not create temp copies of the i
 
 ### 8.4 Metadata and GPS
 
-`ImageProcessor.write` copies the source metadata dictionary, removes only pixel-dimension/depth/colour-model/profile-name/has-alpha keys, forces orientation to 1, and writes the rest (`ImageProcessor.swift:1078-1089`).
+`ImageProcessor.write` no longer copies the source metadata dictionary. When its `stripPrivacyMetadata` parameter is on — the default — the export dictionary is rebuilt by `strippedPrivacyMetadata` (`Core/ImageProcessor.swift:1224-1246`), an allowlist that starts empty and copies only DPI, TIFF resolution and orientation, so GPS, camera identity, owner name, capture times, IPTC, XMP and vendor blocks are dropped together; the call site is `ImageProcessor.swift:1186-1189`. The default is `true` (`Models/AppSettings.swift:25`), and Settings exposes the switch (`Views/SettingsView.swift:143`). Turning it off restores the source metadata copy for that export.
 
-**This preserves EXIF GPS coordinates, camera serial number, owner name and capture timestamps in every export.** For a portrait retoucher, exported images may therefore reveal where the subject was photographed and on which device. There is no stripping option and no warning.
-
-Recommendation: default to stripping GPS and personal EXIF fields on export, or add an explicit "Keep location and camera metadata" switch, default off.
+**Corrected 2026-11-21.** This section previously read that `ImageProcessor.write` copied the source dictionary, preserving EXIF GPS coordinates, camera serial number, owner name and capture timestamps in every export, with no stripping option. That described the audited 2.1 build; the allowlist, the default and the Settings switch were added afterwards. `README.md:149` describes the current default.
 
 ### 8.5 Project-file trust
 
@@ -781,11 +779,11 @@ This process should remain the standard for any future verification.
 
 | Area | Assessment |
 |---|---|
-| Network data leakage | None automatic — images never leave the machine; the network call sites in §8.1 are consent- or user-initiated and, in the shipping configuration, unreachable |
+| Network data leakage | None automatic — images never leave the machine. Runtime and update call sites are unreachable in the shipping configuration; model-weight downloads require the per-model consent alert (§8.1) |
 | Telemetry | None |
 | Third-party code | None |
 | Local file access | Broad (unsandboxed), expected for the tool |
-| Metadata leakage on export | **Present** — GPS/EXIF carried through |
+| Metadata leakage on export | **Removed by default** — `strippedPrivacyMetadata` is an allowlist (orientation, DPI and TIFF resolution only; `Core/ImageProcessor.swift:1224-1246`, applied when the flag is on, default at `Models/AppSettings.swift:25`), so GPS/EXIF/IPTC/XMP do not travel unless the switch at `Views/SettingsView.swift:143` is turned off. This row was a 2026-11-04 snapshot; `README.md:149` describes the default |
 | Code signing / distribution | Ad-hoc only; not distributable as-is |
 | Project-file parsing | Low risk; no version validation |
 | Temp-file residue | Recovery/presets only, in Application Support |
