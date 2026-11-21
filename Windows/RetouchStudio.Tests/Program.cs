@@ -3877,6 +3877,9 @@ internal static class Program
                 ["smooth"] = 30.0,
                 ["lookID"] = "kodachrome",
                 ["backgroundImageAmount"] = 100.0,
+                // A skin amount and its texture are one edit, not two: the name
+                // has to appear once however many of its amounts the file carries.
+                ["texturePreserve"] = 70.0,
             },
         });
         Check("a skin amount and a look are named",
@@ -3910,11 +3913,26 @@ internal static class Program
             ["adjustments"] = new JsonObject
             {
                 ["exposure"] = 20.0, ["contrast"] = 10.0, ["clarity"] = 15.0,
-                ["texturePreserve"] = 70.0,
             },
         });
-        Check("the nine renderable sliders are not edits",
-              renderable.UnsupportedEdits.Count == 0);
+        CheckEdits("the nine sliders this host draws are not edits", renderable);
+
+        // texturePreserve is not one of those nine. macOS hands it to the skin
+        // smoothing pass, where it sets how much detail the blur keeps, so a
+        // project that carries a non-zero value asks for pixels this host cannot
+        // make — even though its own slider never appears here. Certifying it as
+        // a no-op would be the false success this guard exists to refuse.
+        var textureOnly = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject { ["texturePreserve"] = 70.0 },
+        });
+        CheckEdits("a texture amount alone is named", textureOnly, "skin retouching");
+
+        var textureZero = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject { ["texturePreserve"] = 0.0 },
+        });
+        CheckEdits("a zero texture amount names nothing", textureZero);
 
         // The look is two fields: the identifier names the grade, the strength
         // blends it in. A project can carry one without the other — macOS only
