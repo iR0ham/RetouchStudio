@@ -1437,3 +1437,140 @@ invariants) → headless benchmarks in CI or an isolated environment → indepen
 provenance, catalogue changes, runtime integration, dependency changes, integrity, cross-platform
 behaviour and test coverage (§8's list, reviewer ≠ implementer) → RC preparation. Publication,
 tagging, release assets, the `v1.0.0` release and any GUI acceptance session remain the owner's.
+
+## Addendum Q — 2026-11-22: three independent verdicts land, one research claim is refuted by my own check, and both review-driven fix passes are dispatched
+
+Everything in this addendum is either a verdict I received with evidence, or a fact I re-measured myself on the
+remote. Where I re-measured and the report was wrong, the correction is recorded here rather than propagated.
+
+### Q.1 PR #110 — independent verdict received: PASS-WITH-COMMENTS, and I am not merging it yet
+
+The reviewer who did not write the code re-reviewed `cc1d9f64347fe07e3fa6131a281b7fa3cc9ce86f` (18 files,
++1893/−94) after the earlier BLOCK at `c72a0f4` was closed. Their finding: F1/F2/F5/F6 fully closed, F3 and F4
+closed in code and permanent tests, `Ran 194 tests / OK / exit 0` reproduced locally on a lock-exact venv, and
+**no check was weakened**. My own check of the remote, independent of both reports: `gh pr checks 110` → all five
+required contexts plus both advisory worker jobs plus CodeQL pass at run `44948957776`; `mergeable: MERGEABLE`,
+`mergeStateStatus: CLEAN`; zero formal GitHub reviews (the reviewer seat reports to me and does not post reviews,
+so the verdict is the record, not the API).
+
+The residual items are claims exceeding tool behaviour, plus one future-facing fail-open:
+
+1. **Medium** — `lock_closure.visit_Call` sees only a positional literal argument to `__import__` and
+   `importlib.import_module`, so `from importlib import import_module; import_module('cv2')`,
+   `__import__(name='cv2')` and `builtins.__import__('cv2')` escape **both** gates. The tree uses none of the
+   three (grep-verified), so today is safe; the sentence "A newly introduced unpinned import therefore cannot
+   escape both checks" is nonetheless false.
+2. **Low** — the comment "protobuf provides only `google.protobuf`" is false: the pinned protobuf wheel ships
+   `google/_upb/_message.abi3.so`, so `import google._upb._message` is rejected as canonical `google`
+   (fail-safe direction, wrong docstring).
+3. **Low** — the suite-count mechanism pins the *discovered case count*; a rename, a net-zero replacement or an
+   added `@unittest.skip` keep it green, so "adding, removing or renaming … cannot pass locally" overstates.
+4. **Low** — derived import-smoke targets are top-level only, so a broken pinned submodule (`yaml.nodes`)
+   passes both gates.
+
+Decision, because this release track exists precisely to stop governance documents asserting guarantees the tools
+do not implement: **items 1, 3 and 4 are fixed in code, item 2 in code and comment, and only then is #110
+merged.** Narrowing the text instead of closing the escape would put a permanently false security sentence on
+`main`, which every later release review reads. Dispatched as a bounded implementation pass on
+`w5-worker-gates-failclosed` with the reviewer's reproduction probes quoted, a no-weakening rule, and the
+requirement to quote real exit codes and the CI run id for the new head.
+
+### Q.2 PR #115 — the single red context is the shared-file count pin, and #110 is what removes it
+
+I verified this myself rather than accepting the implementer's account. `gh run view 44952716741 --log-failed`
+shows the failing step is `Assert every suite reported a verdict`, whose loop still hard-codes `'Ran 166 tests'`;
+`git show origin/main:.github/workflows/ci.yml` line 164 carries that same literal. Every other step of that job
+succeeded, including `Ran 221 tests`, `MODEL TESTS: PASS` and the five new routing checks, and **Windows App is
+green** with `[H] the catalog defect is not an install`. `git show origin/main:.github/workflows/ci.yml` will lose
+that literal the moment #110 merges, because #110 makes the job read `Tests/expected-worker-tests.txt`. So the red
+is neither caused by #115 nor fixable inside it; it is ticket **#132** and it resolves by the DR-6 order. The
+independent adversarial review of the fail-closed integrity diff (mandate §4/§7, ticket **#128**) is still the open
+gate on this branch, not CI.
+
+The `-32021` outcome is worth recording plainly: the class the `protocol.py` comment named did exist on both
+hosts as `E_MODEL_UNVERIFIED` (`WorkerClient.swift:40`, `WorkerClient.cs:50`), and the documented definition at
+`Docs/W5_IMPLEMENTATION_DECISION_RECORD.md:191` already covers "lacks mandatory metadata". So the fix is a
+mapping, not an invention, `opensModelManager` stays `false` by construction, and `E_MODEL_MISSING` — the
+installable class — is untouched. The sibling sweep of all 17 protocol codes found `-32021` to be the only
+claimed-but-unmapped one; `-32017/-32018` are unmapped but CLI-only and unreachable over the socket, so they are
+a latent gap, not a live false promise. What remains **NOT VERIFIED** on this branch is user-visible: the Persian
+sentence is blocked by the two localisation files PR #99 owns, and no path from a real `-32021` on the socket to
+rendered refusal text has been exercised.
+
+### Q.3 PR #111 — MERGE AFTER FIXES, and the two cases that would become release-blocking later
+
+The reviewer confirmed the shipped macOS artefact is truthful today and that `build.sh` gained only a +16-line
+block with the sign → validate → selftest order intact and the copy happening **before** codesigning. Blocking
+items: `Resources/THIRD_PARTY_NOTICES.txt:8` says the bundle contains "one" third-party component while the same
+file documents an optional helper runtime of ~67 distributions, and `build.sh:157-162` copies that file in **both**
+modes; and `Docs/RELEASING.md:49` plus the PR body claim the audit fails on "any bundle file the notice does not
+account for" while `audit-bundle-notices.sh:32-33,53-54` blanket-accept `Contents/MacOS/**` and the whole helper
+tree (measured: pin-unnamed, empty-helper-notice and no-lock fixtures all exit 0). Dispatched as a bounded pass:
+MF1/MF2 text, MF3 per-pin coverage enforcement with negative fixtures, MF4 per-named-font existence, and the
+case-insensitive copyright guard.
+
+Severity ruling I am recording, because it changes what blocks 2.0.0: those three bypasses are **not**
+release-blocking while `.github/workflows/release.yml:25,55` builds with `RETOUCH_SKIP_WORKER=1` — the shipped
+DMG has no `Contents/Resources/Worker` to misdescribe. The day a helper-bearing DMG ships, MF1 plus the three
+bypasses become release-blocking together, so the fix must land before that decision, not after.
+
+Also confirmed and out of this PR's scope: `Windows/installer/Product.wxs` references no licence or notice and
+`Tools/package-windows-msi.ps1:68` only heat-packs the publish folder, so a Windows MSI would ship neither
+`LICENSE` nor the OnnxRuntime notice. MIT's notice obligation covers the Windows build; that belongs to the
+Windows packaging ticket, not to #111, and Windows artefact publication is already gated on it.
+
+### Q.4 Updater — G-UPD is answered YES at configuration level, with one residual surface
+
+The independent design review returned **ACCEPT WITH CHANGES** and, for the release gate, an explicit answer:
+2.0.0 is inert — no feed key exists in `Resources/Info.plist`, `performCheck` returns at the empty-feed guard,
+the only `UpdateInstaller.swap` call sits behind that, and no launch-agent/`SMAppService`/`RunAtLoad` string
+appears anywhere in `Sources`, `Resources`, `build.sh`, `Tools` or `.github`. The caveat is stated as the caveat
+deserves: that is a **plist-level** guarantee, not a code kill-switch, so it must be re-checked on the RC bundle
+(G-BLD is still blocked because `build.sh` execs the binary).
+
+One residual surface was reproduced headlessly, not theorised: with no feed, opening About still constructs
+`UpdateController`, whose `init` runs `recover` on the user-writable
+`~/Library/Application Support/RetouchStudio/update-journal.json`, and `recover` performs no path validation —
+a planted journal deleted an arbitrary victim file. Same-uid confused deputy, no privilege escalation, reachable
+only from a UI action, and therefore **not** a 2.0.0 blocker; it is recorded as residual risk against G-UPD, and
+it is the reason the review's M1 (anchor path validation to the running bundle, never to `parent(journal.appPath)`)
+must precede any move of recovery into `App.init`. Nine must-change items (fallback two-rename window, "v1 reader
+is unreleased" being false because 2.0.0 ships it, doc truthfulness, ordering, key-compromise threat model,
+no-probe-skip, the missing app-level exchange measurements, post-exchange resource mixing) gate **implementation**,
+which is not authorised for 2.0.0. `Docs/UPDATE_SYSTEM.md:128-131` is now known false on two counts — recovery
+does not run "on every launch", and in the stranded-bundle state there is no app left to run it — which is ticket
+**#131**.
+
+### Q.5 M1-C landed, and its headline unlock is refuted
+
+The semantic/segmentation/generative dossier is delivered (`/private/tmp/rs-models/M1-C.md`, 758 lines, 25
+candidate rows with per-artefact rights-holder findings, plus four explicit "no such model exists" statements —
+fine matting with a cleared data chain, mask-conditioned generative inpaint/outpaint under a redistributable
+licence at ≤4 B parameters, face parsing with a usable grant, and any defensible Windows generative path). Under
+DR-16 its two strongest consequences are the FLUX.2 re-record — the pin points at a community **conversion**
+whose own card disclaims authorship, its 4.6 GB has no published SHA-256 (the HF tree carries Git blob oids, not
+file digests), the repo is mutable, and the conversion omits the tokenizer files the app would need — against
+rights-holder evidence that does exist: `black-forest-labs/FLUX.2-klein-4B` ships a 9,584-byte verbatim Apache-2.0
+`LICENSE.md` covering the weights, with an out-of-scope-use list and a trademark clause to respect. Background
+matting finally has author-granted candidates (BiRefNet_lite 177,634,392 B MIT; MODNet ~25 MB, Apache-2.0 stated
+over code **and** models, Windows-CPU viable) and LaMa has one ONNX path with a licence file
+(`opencv/inpainting_lama`, 92,591,623 B) whose derivation chain still needs confirming. FastSAM (AGPL), RMBG-2.0
+and Qwen2.5-VL (NC), SAM 3/3.1 (download gated behind personal-data acceptance, 3.44 GB) and the CelebAMask-HQ
+parsers are excluded or UNKNOWN with reasons.
+
+**But its #1 recommendation is wrong, and I caught it by checking the remote instead of trusting it.** The dossier
+says `sam2.1-hiera-tiny` has no `bytes`/`sha256` so `mask.click` is blocked purely for unverifiability
+(`catalog.py:143-145`, `capabilities.py:124-127`). `git show origin/main:worker/retouch_ai_worker/catalog.py` says
+otherwise at :145-159 — the entry carries 156,008,466 bytes and the digest measured three ways — and
+`capabilities.py:124-127` on main is the `_importable` helper, not the unverifiable gate. The blocker is the missing
+runtime dependency, exactly as the earlier SAM follow-up report established and as ticket **#116** carries. The
+cause is procedural, not intellectual: the owner's checkout sits at `40b157f`, **38 commits behind `origin/main`**,
+and the agent read the working tree. This is the second research report this week to be poisoned the same way, so
+the standing rule for every future dispatch is now explicit: **read the pinned ref with `git show`/`git ls-remote`,
+never the local tree**, and quote the ref in the evidence line.
+
+Disclosure, so the record matches §6: that survey left two RealESRGAN checkpoints (67,061,725 B and 67,040,989 B)
+in a scratch directory under `/private/tmp` on this machine — inside the size bound its brief set, outside the
+owner's checkout and documents, and redundant with the CI-based benchmark plan. They are not inputs to any merged
+change; they will either be consumed by the PSNR harness or deleted, and nothing will be downloaded to this machine
+again without a stated reason.
