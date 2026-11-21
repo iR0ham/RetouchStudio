@@ -76,9 +76,11 @@ they are delivery gates rather than feature work:
   (`Sources/RetouchStudio/Core/AIRuntime.swift:40`): no AI entry point in the app can reach
   the worker, so no D/F capability can satisfy its own acceptance criteria. This is the
   first-release Runtime Delivery milestone, already in progress, and it must not be
-  confused with roadmap scope. Its licensing gate is open: an optional `opencv-python` wheel
-  dragged in a GPLv3-configured FFmpeg build, which is why removal, not argument, was
-  chosen. The lesson is a standing rule for this roadmap — **every new dependency gets a
+  confused with roadmap scope. Its licensing gate **was** opened by an optional
+  `opencv-python` wheel that dragged in a GPLv3-configured FFmpeg build; that wheel was
+  removed in `1e4632c` (NumPy replacement in `worker/retouch_ai_worker/morphology.py`),
+  which closed the gate. Removal, not argument, was and remains the standing answer. The
+  lesson is a standing rule for this roadmap — **every new dependency gets a
   licence inventory and a proof-of-absence scan before adoption.**
 - **G2 — per-artefact model approval.** SAM 2 (156,008,466 B) and MI-GAN (28,079,181 B) are
   listed but unverifiable, `sam2` is not in the worker lock, and written licences are still
@@ -206,7 +208,7 @@ in §2.
 
 | # | Recommend | Why / problem addressed | Dependencies · complexity | Priority |
 | --- | --- | --- | --- | --- |
-| P1 | **Machine-checked capability evidence ledger** (`worker/capability-evidence.json` + per-capability records: run id, host, artefact hash, quality metric) and a CI gate that refuses a status bump without one | The owner's §9 measures progress by verified evidence, and four documentation/reality mismatches were found while building the matrix (a support claim whose ledger is not in the repo, a stale "worker source outside the repository", stale negative audit claims, a doc-vs-doc ICC conflict). The matrix rots without an artefact backing it, and every future roadmap decision inherits the rot | low complexity, no runtime dependency; touches tests and CI only | **now, Phase 1** — cheapest item here, protects everything after |
+| P1 | **Extend and gate the capability evidence ledger that already ships** — `worker/retouch_ai_worker/capability-evidence.json` exists and holds one `upscale.4x` entry; add per-capability records (run id, host, artefact hash, quality metric) and a CI gate that refuses a status bump without one | The owner's §9 measures progress by verified evidence, and four documentation gaps or mismatches were found while building the matrix (a support claim whose ledger is textual — it exists, but names no run id, host or artefact hash, so a reader cannot re-run it, a stale "worker source outside the repository", stale negative audit claims, a doc-vs-doc ICC conflict). The matrix rots without an artefact backing it, and every future roadmap decision inherits the rot | low complexity, no runtime dependency; touches tests and CI only | **now, Phase 1** — cheapest item here, protects everything after |
 | P2 | **Cross-platform GPU render and compositing substrate** (one render API; Metal on macOS, D3D12 or a portable backend on Windows) | Today Windows runs an image pipeline on CPU with WPF compositing while macOS uses CoreImage/GPU. Layers, blend modes, masks at resolution and 50 MP canvases are not achievable on the current Windows path, so half the roadmap would silently become macOS-only | high complexity, cross-cutting; must be spike-validated before commitment | **Phase 1** — gate for A, B, C at professional scale |
 | P3 | **Selection/masking engine as a named infrastructure milestone** (not a feature list) | Directly implements the owner's §B instruction; without a single abstraction each new tool re-implements masking, which is how the current state is "masks exist but are not a layer property" | depends on P2; medium–high | **Phase 2** |
 | P4 | **Document model v6 + render-graph design package** (specification and a throwaway spike, no user-visible features) before any layer UI | §5 shows layers are architecture, not a feature: a stack needs schema v6, an asset store, a compositor, tree-structured history and C ABI semantics. Building UI first is how a project ends up with a demo that cannot survive the golden corpus or Windows | after Phase 0; depends on P2 for the renderer; medium complexity for the spec, high for what it unlocks | **Phase 1, first item** |
