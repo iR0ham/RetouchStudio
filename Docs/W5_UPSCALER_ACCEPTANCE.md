@@ -1354,6 +1354,12 @@ file still holding `188`, discovery found `190` and
 `test_suite_count` failed with
 `AssertionError: 190 != 188 : the discovered suite and
 Tests/expected-worker-tests.txt disagree`; after the file was set to `190`,
-the runner reported `Ran 190 tests ... OK` and exited 0. Adding, removing or
-renaming a worker test now means editing one value, not five.
+the runner reported `Ran 190 tests ... OK` and exited 0. Adding or removing a
+worker test now means editing one value, not five. What that guard pins is the
+*number of discovered cases*, which is narrower than the suite's contents: a
+rename and a one-for-one replacement leave the number alone, so neither needs the
+file edited. A test file that fails to import is still caught — discovery appends
+a synthetic `_FailedTest`, so the count moves — but an added `@unittest.skip` is
+not, because a skipped case still counts as discovered: a test can be
+neutralised without the number moving.
 
