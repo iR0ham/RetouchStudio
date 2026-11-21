@@ -640,19 +640,10 @@ struct ModelManagerView: View {
         return Self.size(bytes)
     }
 
-    /// English keeps the system formatter untouched. Persian writes the number
-    /// in Persian digits and turns the unit into a word, so the row reads in
-    /// place instead of showing "MB 48.5" in a right-to-left paragraph.
+    /// English keeps the system formatter untouched; Persian follows the same
+    /// unit policy as every other readout (`Digits.size`).
     private static func size(_ bytes: Int64) -> String {
-        let base = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-        guard AppLanguage.current == .persian else { return base }
-        let parts = base.split(separator: " ", maxSplits: 1)
-        guard parts.count == 2 else { return Digits.convert(base) }
-        let units = ["bytes": "بایت", "byte": "بایت", "KB": "کیلوبایت", "kB": "کیلوبایت",
-                     "MB": "مگابایت", "GB": "گیگابایت", "TB": "ترابایت"]
-        let unit = units[String(parts[1])] ?? String(parts[1])
-        let number = Digits.convert(String(parts[0])).replacingOccurrences(of: ".", with: "٫")
-        return "\(number) \(unit)"
+        Digits.size(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
     }
 
     private func chipButton(_ title: String, action: @escaping () -> Void) -> some View {
