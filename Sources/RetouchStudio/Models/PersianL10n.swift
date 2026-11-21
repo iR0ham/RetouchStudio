@@ -771,6 +771,12 @@ final class PersianL10n: L10n {
     override var aiRuntimeVerifying: String { "در حال بررسی دانلود…" }
     override var aiRuntimeInstalling: String { "در حال نصب دستیار…" }
     override var aiRuntimeDownloadFailed: String { "دستیار دانلود نشد. چیزی نصب نشد." }
+    override func aiRuntimeInsufficientDisk(neededBytes: Int64, freeBytes: Int64) -> String {
+        "فضای آزاد دیسک کافی نیست: نصب دستیار هوش مصنوعی حدود \(Digits.persian(L10n.byteSize(neededBytes))) فضای آزاد برای دانلود و باز شدن لازم دارد و اکنون \(Digits.persian(L10n.byteSize(freeBytes))) آزاد است. چیزی نصب نشد."
+    }
+    override var aiRuntimeDiskFull: String {
+        "دیسک در حین نصب دستیار هوش مصنوعی پر شد. چیزی نصب نشد."
+    }
     override var aiRuntimeChecksumFailed: String {
         "فایل دانلودشده با SHA256 مطابقت ندارد. چیزی نصب نشد."
     }
