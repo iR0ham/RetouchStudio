@@ -611,3 +611,77 @@ no part of it is implemented.
 
 `main` is still `cd5741b76`; `develop` is untouched; nothing published, tagged,
 merged or deployed by this addendum.
+
+## Addendum G — 2026-11-22: #110 blocker closed by the author, and two PRs waiting on CI
+
+### G.1 #110 at head `07095d3` — my own re-measurement
+
+```
+git ls-remote origin refs/heads/w5-worker-gates-failclosed → 07095d3…
+git log --oneline c3bdced..07095d3 → 07095d3 "Stop a shared namespace and a
+                definition guard from hiding an import"
+```
+
+Both items I confirmed open in E.1/F.1 are addressed, and I read the fix rather
+than accepting the report:
+
+- **F1 (the escape).** `worker/tools/lock_closure.py` keeps
+  `ALIASES["google"] = "protobuf"` (:60) but adds
+  `ALIAS_PREFIXES = {"google": ("google.protobuf",)}` (:69) and a resolver
+  (:97-108) that applies an alias **only when every dotted name belongs to that
+  distribution's module tree** — the code comment states the rule exactly as the
+  reviewer framed it: `import google.protobuf` is protobuf, `import google.auth`
+  is an unpinned distribution.
+- **F2 (the false sentence).** `Docs/WORKER_CI_VALIDATION_PLAN.md:9-13` now reads
+  "Neither worker job is a required context. `Worker Lock Closure` carries no
+  `continue-on-error`, so its failure still marks the run red; only `Worker
+  Payload Bundle` uses `continue-on-error: true`." That is what the workflow
+  actually does, and no key was added to the closure job.
+- **F5** (a nested `def` inheriting an `except ImportError` guard) is in the same
+  commit's scope, and the single-source count moved `190 → 194` for the new tests.
+
+CI at `07095d3` (run `44947620477`): StudioCore Boundary, Platform-neutral
+Conformance, Windows StudioCore, Worker Lock Closure, Worker Payload Bundle and
+CodeQL **pass**; **`macOS Integration` and `Windows App` were pending** when I
+looked, so **#110 is not yet mergeable evidence** and DR-6 keeps everything
+behind it. An independent re-review of the full diff at this head is running
+against the reporting discipline introduced in F.1 (open with `ls-remote` +
+`diff --stat`, no unreproduced identifiers), with explicit instructions to hunt
+sibling escapes of the namespace-alias class — `from google import auth`,
+aliases whose submodule is not in the distribution's tree, and any drift between
+`lock_closure.py`'s and `import_smoke.py`'s alias handling, since the mandate's
+criterion is that an unpinned import escape **neither** check.
+
+### G.2 G-CAT delivered PR #114, but its author session stopped before a safety question was answered
+
+`w5-200-licence-evidence` @ `2656db1`, PR **#114** "record weights-licence
+evidence (G-CAT) — data layer only, no behaviour change". Files touched:
+`Resources/model-catalog.json`, `Sources/RetouchStudio/Models/ModelCatalog.swift`,
+`Tests/ModelStoreTests.swift`, `worker/retouch_ai_worker/catalog.py`, plus
+`Docs/MODEL_LICENCE_EVIDENCE.md` and a `Docs/licence-evidence-apply.py`. CI at
+the time of writing: Boundary / Conformance / Lock Closure pass, **macOS
+Integration, Windows App, Windows StudioCore and Payload Bundle still pending**
+(run `44948419985`).
+
+The implementing session then hit its turn ceiling **while asking the one question
+that matters here**: whether anything else in the repository reads
+`ModelCatalogEntry`'s Codable shape in a way a hand-written `init(from:)` could
+disturb. That question is **unanswered**, and this project already has a
+documented wire-compatibility constraint (the v3 format uses unkeyed arrays, v4 is
+file-only, nested unknown fields are not preserved) plus strict decoding at
+`ModelCatalog.swift:37`. Two consequences, both mine to enforce, not the author's:
+
+1. **#114 must not merge on a green check alone.** Its independent review must
+   prove that adding the licence-evidence fields cannot change how an existing
+   catalogue decodes on either side (Swift and Python), that an older app build
+   still reads a new catalogue and vice versa, and that a hand-written
+   `init(from:)` did not silently drop or reorder a keyed/unkeyed field.
+2. `Docs/licence-evidence-apply.py` is a script that writes catalogue content; its
+   review must establish whether the catalogue is regenerated deterministically
+   and whether the golden-corpus protection rules were respected (no baseline
+   regeneration, no rewritten tracked exports).
+
+The separate **evidence** question — is each recorded licence verdict actually
+supported by a primary source, and are code licence, weight licence and
+training-data terms kept apart — is queued as its own assignment and is not
+covered by a code review of #114.
