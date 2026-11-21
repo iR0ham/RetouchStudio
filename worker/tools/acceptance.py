@@ -217,7 +217,7 @@ def main() -> int:
 
         listing = client.call("models.list")
         models = listing["result"]["models"]
-        record["models"] = [{k: m[k] for k in ("id", "license", "commercial_ok",
+        record["models"] = [{k: m[k] for k in ("id", "license", "permitted_use",
                                                "installed", "bytes")} for m in models]
         print("models:", [(m["id"], m["license"], m["installed"]) for m in models])
 
