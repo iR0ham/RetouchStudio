@@ -162,6 +162,45 @@ class ImportClosureTest(unittest.TestCase):
                 self.assertEqual(optional.get("sam2"),
                                  f"guarded by {expected}")
 
+    def test_unguarded_and_mixed_occurrences_are_violations(self):
+        """B3/B4 seedings, side by side.
+
+        B3 is the control: an unguarded unpinned import must fail. B4 is the
+        one the old classifier also got wrong in the interesting way — the
+        same module imported unguarded in one file and behind a real guard in
+        another. One unguarded occurrence is enough: the import is required,
+        and the `optional` report must not absorb it.
+        """
+        lock = closure.read_lock(WORKER / "requirements.lock")
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text("import cv2\n",
+                                               encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(len(violations), 1)  # B3
+        self.assertIn("cv2", violations[0])
+        self.assertNotIn("not an import guard", violations[0],
+                         "a bare unguarded import has no handler to blame")
+        self.assertNotIn("cv2", optional)
+        self.assertNotIn("cv2", resolved)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "guarded.py").write_text(
+                "try:\n"
+                "    import cv2\n"
+                "except ImportError:\n"
+                "    cv2 = None\n",
+                encoding="utf-8")
+            (package / "unguarded.py").write_text("import cv2\n",
+                                                  encoding="utf-8")
+            violations, resolved, optional = closure.audit(lock, package)
+        self.assertEqual(len(violations), 1)  # B4
+        self.assertIn("cv2", violations[0])
+        self.assertNotIn("cv2", optional)
+
     def test_lock_is_exact_hashed_and_covers_the_test_lock(self):
         lock = closure.read_lock(WORKER / "requirements.lock")
         self.assertEqual(lock.violations, [])

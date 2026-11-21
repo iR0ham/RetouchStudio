@@ -203,18 +203,25 @@ class _Imports(ast.NodeVisitor):
             top = name.split(".")[0]
             entry = self.found.setdefault(
                 top, {"files": set(), "guarded": set(), "guards": set(),
-                      "broad": set()})
+                      "broad": set(), "names": set()})
             entry["files"].add(self.filename)
             entry["guarded"].add(bool(self.guards))
             entry["guards"] |= self.guards
             entry["broad"] |= self.broad
+            # The full dotted name, kept for readers that need more than the
+            # top-level module — `import_smoke.py` checks that each heavy
+            # submodule it names is still imported somewhere.
+            entry["names"].add(name)
 
     def visit_Import(self, node: ast.Import) -> None:
         self._record([alias.name for alias in node.names])
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.level == 0 and node.module:
-            self._record([node.module])
+            names = [node.module]
+            names += [f"{node.module}.{alias.name}" for alias in node.names
+                      if alias.name != "*"]
+            self._record(names)
 
     def visit_Call(self, node: ast.Call) -> None:
         if node.args and isinstance(node.args[0], ast.Constant) \
@@ -258,11 +265,12 @@ def imported_modules(package: Path) -> dict[str, dict[str, set]]:
         for module, entry in visitor.found.items():
             merged = found.setdefault(
                 module, {"files": set(), "guarded": set(), "guards": set(),
-                         "broad": set()})
+                         "broad": set(), "names": set()})
             merged["files"] |= entry["files"]
             merged["guarded"] |= entry["guarded"]
             merged["guards"] |= entry["guards"]
             merged["broad"] |= entry["broad"]
+            merged["names"] |= entry["names"]
     return found
 
 
