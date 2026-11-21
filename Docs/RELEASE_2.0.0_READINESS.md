@@ -1149,3 +1149,100 @@ claim reproduces exactly (`375,194 B` = 0.38 MB at the pinned commit).
 
 **Ledger erratum:** my commit message for Addendum L typed `engine.py:917` where the
 verified call site is `:717`; the addendum body is correct. Recording rather than rewriting.
+
+## Addendum N — 2026-11-22: two reviews land, one of them corrects me, and a third same-class Windows defect appears
+
+### N.1 My DR-11 was overstated — Swift verification *is* possible on this machine
+
+Independent review of PR #114/#113 came back having built and run the Swift suite here:
+`MODEL STORE TESTS: PASS`, **268 checks, exit 0**, using swiftc against Command Line
+Tools. I checked the mechanism myself rather than accept it, and the repository says so in
+its own words at `Tests/run.sh:5`:
+
+```
+# swiftc against Command Line Tools only (no Xcode), so there is no test runner.
+```
+
+with SDKs present including `MacOSX26.5.sdk`. So my Addendum J claim — "zero Swift-side
+reproduction is possible here" — was **wrong in scope**. The accurate statement is:
+**SwiftUI view code is not compilable here** (no `SwiftUIMacros` plugin for `@State`),
+while Foundation-only sources are, and that is most of the core: `grep -cE
+"import SwiftUI|@State|@Binding"` returns **0** for `Tests/ModelStoreTests.swift`,
+`Sources/RetouchStudio/Models/ModelCatalog.swift` *and*
+`Sources/RetouchStudio/Core/WorkerClient.swift`.
+
+Two consequences, both mine to act on. G-RC/#117 still stands — the **app bundle** needs
+Xcode, so building the release artefact stays on CI (DR-11 survives narrowed to bundles) —
+but the `-32021` host-mapping work (#130) is **locally provable**, so "CI-pending" is no
+acceptable label for it. I attempted to send that correction to the member mid-flight and
+the team-delegation call failed again with the leader-binding error, so the correction is
+recorded here instead and I will verify the suite myself after he reports.
+
+### N.2 PR #114 — ACCEPT WITH FIXES, and one finding collides head-on with Addendum M
+
+Executed evidence, not read-only judgement: the regeneration tool **fails against the
+artifact it produced** — `python3 Docs/licence-evidence-apply.py` on `2656db1` dies with
+`JSONDecodeError: Extra data` at `:166` (`entry_last_key` picks up the closing `}` of the
+block it just appended), i.e. it is not idempotent and cannot be re-run on its own output.
+From the pre-change baseline it *is* byte-identical (`OK: 29 keys added, 0 changed,
+0 removed`, `cmp` clean, sha256 `c52ed5e6…` on both) — so the provenance is reproducible
+once and unrepeatable thereafter, which makes the tool documentation, not a source of
+truth. Verdict: **fix required before I call #114 mergeable**, because the whole purpose of
+this branch is auditable licence provenance.
+
+The fail-closed behaviour, measured through a five-mutation decoder harness, is genuinely
+good: absent evidence stays `nil`, `nil` never becomes approval, and the two contradictions
+that *are* caught refuse with named messages. The gap is exactly where Addendum M bit me:
+`validate()` cannot express `explicit: false` × `commercialOk: true` — and that is not
+hypothetical, it is the **actual shipped row for `swin2sr-x4`** that M.1 just had to
+retract. The reviewer independently found the same hole from the code; I found it from the
+licence text. That convergence is why DR-13's invariant is a requirement, not a tidy-up.
+Also accepted as must-fix-before-trust: `verdict: excluded` + `commercialOk: true` loads,
+the worker's `public()` carries only 3 of the 8 recorded fields while the doc says the
+evidence is mirrored, and the cross-surface commercial check at
+`Tests/ModelStoreTests.swift:2004` is one-directional (flipping the worker to
+`commercial_ok=False` produces zero failures).
+
+### N.3 PR #113 — ACCEPT WITH FIXES, plus a new defect of the same class it was written to close
+
+The look fix itself is right and the six input shapes were enumerated: empty `lookID` with
+strength, missing `lookID` with negative strength, cleared look, ID-only-with-zero, and
+both-halves-once — with **no false refusal** when both are absent. `AnyAmount` ignores sign
+and treats zero as "no edit", identically to all 13 sibling groups.
+
+Then the reviewer cross-counted the wire format mechanically: macOS encodes **60** numeric
+amount keys, the Windows guard names **50**, and of the ten omissions nine are the correct
+renderable set — but **`texturePreserve` is not**. It changes macOS pixels
+(`ImageProcessor.swift:800`, `:823`), it is a live slider, it is non-zero in the shared
+v4 fixture, Windows never reads it, and the PR's own new test
+(`Windows/RetouchStudio.Tests/Program.cs:3909` + `:3913-3914`) now **asserts it is not an
+edit** under a label claiming "the nine renderable sliders". That is the identical bug
+#113 exists to fix, promoted into an assertion. Ticketed separately so it does not get
+absorbed silently into this PR.
+
+Two lower items carried: three assertions hardcode `UnsupportedEdits.Count == 8` instead of
+the name set (the mechanism by which an omission survives), and `lookID == "none"` — which
+macOS writes when the rail selection is cleared (`EditorModel.swift:657-662`) — would trip
+the guard permanently on a document that renders no look. That last one is **INFERRED**,
+not executed: `dotnet` is genuinely absent, so the 401-check Windows suite remains NOT RUN.
+
+### N.4 One reviewer claim refuted, in the other direction
+
+The same report states the licence dossier `/private/tmp/rs-model-licences/MODEL_LICENSES.md`
+"is gone from this machine", and used that to argue the recorded `readOn` dates cannot be
+re-checked. It is **not gone**: `ls -la` shows `MODEL_LICENSES.md`, 39,361 bytes,
+mtime Nov 21 21:55. The finding is dropped. The adjacent concern survives on its own
+merits, though, and is now ticketed: `Docs/licence-evidence-apply.py:4` cites that **/tmp
+path** as the transcription source for values stamped into the shipped catalogue, and a
+temporary directory is not provenance — it needs to be imported into the repository with a
+hash, the same treatment the updater design document got.
+
+### N.5 Deltas
+
+| item | before | now |
+|---|---|---|
+| DR-11 / Swift verification | "impossible on this machine" | **bundle-only**; core sources compile and 268 checks run here |
+| PR #114 | CI green, unreviewed | **ACCEPT WITH FIXES** — regeneration tool broken on its own output; `explicit`/`commercialOk` invariant missing |
+| PR #113 | CI green, unreviewed | **ACCEPT WITH FIXES** — mergeable in substance; `texturePreserve` is a live same-class defect |
+| #130 | "CI-pending by definition" | **locally provable** — `WorkerClient.swift` has no SwiftUI dependency |
+| licence provenance | thought lost | present on disk; must be moved out of `/tmp` into the repo |
