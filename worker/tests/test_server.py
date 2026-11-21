@@ -15,9 +15,9 @@ from unittest.mock import patch
 from retouch_ai_worker.catalog import Catalog
 from retouch_ai_worker.capabilities import (PROVIDER, SUPPORTED, VOCABULARY,
                                             current_platform)
-from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, INVALID_PARAMS,
-                                        MODEL_MISSING, PATH_DENIED, UNSUPPORTED,
-                                        WorkerError, decode, encode)
+from retouch_ai_worker.protocol import (BUSY, CATALOG_INVALID, CHECKSUM_MISMATCH,
+                                        INVALID_PARAMS, MODEL_MISSING, PATH_DENIED,
+                                        UNSUPPORTED, WorkerError, decode, encode)
 from retouch_ai_worker.server import (JOB_LOCK_NAME, JobManager,
                                       acquire_folder_lock, WorkerServer)
 from retouch_ai_worker.transport import read_image
@@ -62,6 +62,11 @@ class ModelEngine:
     def run(self, kind, params, ctx):
         if kind == "upscale":
             return {"root": str(self.catalog.require("swin2sr-x4"))}
+        if kind == "inpaint":
+            # The `migan` loader's shape: resolve the weights through the
+            # catalog and hand the bytes to a runtime. Integrity refusals have
+            # to surface from here, which is why this fake exists.
+            return {"root": str(self.catalog.require_verified("migan"))}
         raise WorkerError(-32601, f"no such kind {kind}")
 
     def execution_providers(self):
