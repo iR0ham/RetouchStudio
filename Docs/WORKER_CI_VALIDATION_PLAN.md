@@ -123,10 +123,33 @@ import what the checkout names, not that the extracted worker serves a job.
 ## 4. Positive real-environment import smoke
 
 The smoke is dependency-aware: the fixed eight targets are a critical-path
-floor, and every third-party top-level module the shipped package imports is
-derived with the same AST walk `lock_closure.imported_modules()` uses, mapped
-through `ALIASES` and required to be pinned. It runs twice in the payload job
-— once in the venv, once from the extracted runtime.
+floor, and every third-party module the shipped package imports is derived with
+the same AST walk `lock_closure.imported_modules()` uses, mapped through
+`ALIASES` and required to be pinned. The derived target is the **recorded dotted
+name**, not its top-level component (`worker/tools/import_smoke.py:derive_targets`),
+so a worker that newly does `import yaml.nodes` produces the target
+`yaml.nodes`; names already covered by another target in either direction — a
+parent that imports its child's package, or a child inside a fixed target — are
+deduplicated, which keeps one target per distribution where only a top-level
+import exists. It runs twice in the payload job — once in the venv, once from the
+extracted runtime.
+
+**What the walk reads.** A functional import is an import: `__import__("x")`,
+`importlib.import_module("x")`, the `name=` keyword form, `builtins.__import__`
+and a name bound by `from importlib import import_module` all resolve through
+one shared classifier, so both gates see them. A call to one of those importers
+whose module name is not a string literal is **not** silently dropped — it is a
+`lock_closure.audit` violation naming file and line (opt out per caller with
+`allow_dynamic=True`; nothing shipped needs it) and an entry in the smoke's
+unpinned list. Proven by permanent tests in
+`worker/tests/test_import_closure.py` and `worker/tests/test_import_smoke.py`.
+
+**Residual limit, stated rather than implied.** Code that hides the importer
+itself behind a computation — `getattr(importlib, "import_module")("cv2")`,
+`globals()["__import__"]` — presents no function name to classify and stays
+invisible to this walk. That shape is pinned by an assertion so the limit cannot
+widen unnoticed; closing it would mean evaluating arbitrary Python during the
+audit. Confirmed by a local probe, not by a gate.
 
 **Expected evidence:** both steps exit 0 and print one verdict line naming
 the fixed and derived targets and the stdlib / project-local / unpinned
@@ -138,6 +161,14 @@ required `macOS Integration` job fails it through
 
 **Limitation:** a passing smoke proves importability under this interpreter,
 not that a model loads or that a job runs.
+
+**Suite-count guard, and what it does not pin.** `Tests/expected-worker-tests.txt`
+holds one integer and `test_suite_count.py` compares it against
+`countTestCases()` from a `discover` run, after asserting `loader.errors` is empty
+so an unimportable test file is named instead of leaving a bare off-by-one. What
+is pinned is the number of discovered cases: a rename or a one-for-one
+replacement moves nothing, and an added `@unittest.skip` is still counted as
+discovered, so a test can be neutralised without the number changing.
 
 ## macOS
 
