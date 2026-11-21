@@ -71,6 +71,24 @@ absent rather than reusing MI-GAN's Places2 caveat. §6 attributes Places2 to
 presented as a recorded fact. The same rule that keeps `explicit` honest applies
 here. Closing it needs one dossier read of the FLUX.2-klein-4B card.
 
+### Dossier inconsistencies found while transcribing
+
+Two things in the source document are worth correcting before it is cited again;
+neither changes a verdict, and both are reasons not to treat this table as
+self-verifying:
+
+- **§10 sizes the FLUX artefact at 4.61 GB, which is decimal.** The catalogue's
+  own recorded total is 4,608,176,697 B = 4.29 GiB. Elsewhere the dossier uses
+  MiB (LaMa's "196 MiB" for 205,803,670 B), so the unit convention is mixed
+  within one document. A size quoted without a binary/decimal marker cannot be
+  compared against a pin.
+- **A32 cites two sources but carries one timestamp, marked "earlier today."**
+  Every other row in Appendix A has a full UTC timestamp. The four rows recording
+  the shipped entries' grants — A21 (swin2sr), A26 (MI-GAN), A28/A29 (SAM 2) —
+  are precise; A32 is the weakest evidence behind a `readOn` stamp in this file,
+  and the `flux2-klein-4b-q4` grant URL is the repo page rather than the
+  FLUX.2-klein-4B card that actually carries the quoted commercial sentence.
+
 Notes on two rows that are easy to get wrong:
 
 - **`swin2sr-x4`** carries `explicit: false` because the only statement about the
