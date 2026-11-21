@@ -276,3 +276,202 @@ Source: `/private/tmp/rs-win-200/WINDOWS_READINESS.md` (read-only audit of `cd57
 | G-WIN-4 | No Windows equivalent of `Tools/validate-bundle.sh`. | **Open, Medium.** | Packaging correctness is asserted by the installer succeeding, not by a content check. |
 | G-WIN-5 | A tag-driven release has never published Windows; the one Release inspected skipped the Publish step. | **Open, informational.** | No 2.0.0 publication happens without owner approval anyway (D7). |
 | G-WIN-6 | ONNX Runtime 1.32.0 is pinned and its nupkg is hash-refused on mismatch; MIT is **asserted, not independently verified**. | **NOT VERIFIED** | Cheap to close from the nupkg `LICENSE`; folded into G-WIN-2's evidence pass. |
+
+## Addendum E — 2026-11-22 (four delegated results landed and integrated)
+
+Append-only. §3/§5/§8/Addendum B-D above stay as written; where a row is now
+dormant it is named in the delta table (E.7).
+
+### E.1 #110 — the three mandate corrections landed; the reviewer's blocker did not
+
+Engineer pass at head `c3bdced3338ff89b8ed4110a37f482c74c4e93c1` (commits
+`468f61e`, `c3bdced`), CI run `44942178586` with all seven contexts success, PR
+`MERGEABLE`/`CLEAN`, suite line `Tests/expected-worker-tests.txt` `188 → 190`.
+Locally measured by him: `Ran 190 tests`, exit 0
+(`/tmp/run-worker-final.log`).
+
+The independent review of #110 came back **BLOCK**, but it was produced against
+the previous head `c72a0f4` (the reviewer states this in his own
+`git ls-remote` evidence). I reconciled the two reports myself rather than
+trusting either:
+
+```
+git diff --name-only c72a0f4..c3bdced -- worker/tools/   → 0 files
+git show c3bdced:worker/tools/lock_closure.py | grep -n google → 60:    "google": "protobuf",
+git show c3bdced:Docs/WORKER_CI_VALIDATION_PLAN.md | grep -n continue-on-error
+   → 11:`Worker Payload Bundle` remain `continue-on-error: true` and are not required
+```
+
+So of the reviewer's findings, **F2 is only half fixed** (the PR body is
+correct, the sentence inside the repository doc is still wrong) and **F1 — the
+main blocker — is untouched**: a top-level-name alias map means
+`import google.auth` or `import google.cloud.storage` reports
+`violations == []` / `resolved == {'google': 'protobuf'}`, so an unpinned
+dependency escapes both the closure audit and the import smoke test. That is
+exactly the escape the owner's criterion #1 asks to be *proven impossible*, so
+**G-110 is NOT MET** and #110 stays unmerged. Re-dispatched with the
+reproduction, plus F4 (`judge(1, CLEAN+GAP)` returns `[]`), F5 (a guard that
+leaks through a nested `def`) and F6 (a wrong line citation). Merge order DR-6
+is unchanged; everything downstream waits.
+
+Reviewer findings that the Engineer's landed commits DO close: D5b
+exit-status/test mismatch, missing broadened-`mflux` negatives, A4
+resolver/Count-Divergence automation, and the append-only count addendum
+(`Docs/W5_UPSCALER_ACCEPTANCE.md` §13, history untouched).
+
+### E.2 #111 — independent verdict: MERGE AFTER FIXES
+
+Head confirmed by `git ls-remote` as `407c6fd`; 9 files, +306/-7; all required
+contexts green; zero reviews; `mergeStateStatus = CLEAN`. The reviewer
+independently reproduced the tester's negative fixtures (`audit`/`validate`
+exit 0 on `pin-unnamed.app`, `worker-notice-empty.app`, `one-font.app`,
+`worker-no-lock.app`, and `validate-bundle.sh` exit 0 on
+`upper-rights.app`), and confirmed `Tools/test-bundle-notices.sh` 7/7 and the
+67/67 pin-name coverage. He also corrected one overstatement in the tester's
+report: N6 defeats the *guard*, not the PR's literal wording.
+
+Must-fix list before merge: **MF1** `Resources/THIRD_PARTY_NOTICES.txt:8` says
+"this bundle contains **one** third-party component" while `build.sh:157-162`
+copies the same file into helper-bearing builds; **MF2** `Docs/RELEASING.md:49`
+and the PR body claim the audit "fails on any bundle file the notice does not
+account for", which `audit-bundle-notices.sh:32-33,53-54` does not do; **MF3**
+helper notice content is unmeasured (existence only, `:76-81`); **MF4** the
+"notice names an absent component" rule only covers the whole-Vazirmatn case.
+
+Severity ruling, mine: **none of the five N-cases corrupts the artefact 2.0.0
+would ship today**, because `.github/workflows/release.yml:25,55` builds both
+macOS jobs with `RETOUCH_SKIP_WORKER=1` — the shipping DMG is the light bundle,
+which passes. They become release-blocking the moment a helper-bearing DMG is
+published, and MF1 is a false statement in a shipped file in every local
+helper build. Merge is still gated on MF1/MF2 because they are text defects,
+not coverage debt.
+
+Second, independent confirmation of **G-WIN-2**: `Windows/installer/Product.wxs`
+has no licence/notice reference and `Tools/package-windows-msi.ps1:68` just
+heats the publish folder, so the Windows MSI carries neither `LICENSE` nor the
+OnnxRuntime attribution MIT requires. Not a #111 blocker; **a blocker for
+publishing any Windows artefact**, which 2.0.0 intends to do.
+
+### E.3 G-INT — the integrity defect is wider than the mandate states
+
+`/private/tmp/rs-integrity-matrix/MATRIX.md`, measured at `cd5741b76`
+(12 cases, `python3 matrix.py` exit 1 = 5 FAIL-OPEN, 2 NO-CODE-PATH). Beyond the
+mandate's null-skip premise:
+
+- Only **one of four** engine load paths hashes at all: `engine.py:882` uses
+  `require_verified`, while `:936`, `:949`, `:969` use size-only `require`. A
+  same-size tampered `migan` or `flux2` file is accepted **today** (cases 5, 10).
+- `health()` reports all four models healthy when built from **zero files**.
+- Case 2's fail-open is *pinned as intended behaviour* by
+  `test_an_entry_without_a_recorded_digest_loads_on_size` — the fix must change
+  an assertion, not just add ones.
+- Malformed digests are not normalised: an uppercase pin permanently rejects a
+  correct file.
+- **New finding, not in the mandate:** `AIWorker.swift:573-592`
+  (`workerEnvironment`) does not strip `RETOUCH_AI_EVAL_MODELS`, while
+  `AIRuntimeValidation:211` does — an exported shell variable opens the
+  `commercial_ok` licence gate in a real app→worker launch.
+- The app/Swift side is already fail-closed for install/adopt/activate; the gap
+  is worker-side. Hash cost measured: flux2 2.19 s / 4.6 GB, sam2 0.07 s,
+  swin2sr 0.02 s, migan 0.01 s — so verify-once-and-cache, never per poll.
+
+Implementation dispatched on `w5-200-integrity-failclosed` with the mandate's
+nine rejections, the env-var strip, negative + positive automated tests, and
+explicit preservation of optional-unavailable vs untrusted. Per §4 an
+independent adversarial review of that diff is mandatory before it can be
+counted.
+
+### E.4 G-SAM2 — correction accepted, provenance measured, route decided
+
+The Researcher verified my correction and recorded the root cause: his reading
+was from `/Users/roham/RetouchStudio` at `40b157f` (2026-11-17), **38 commits
+behind** `origin/main`, where the fields really are `null`. At `cd5741b76`
+`Resources/model-catalog.json:76-77` carries `156008466` and
+`7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69`, the same
+digest is in `catalog.py`, and it is asserted by
+`Tests/ModelStoreTests.swift:596` and `worker/tests/test_catalog.py:80`; it
+reached `main` by merge `44647b0`. Dossier lines 38, 108, 257, 260, 262 are
+superseded. **No digest contradiction is to be recorded:** the value at line 82
+is the *entry-level manifest* digest, a different object from the file digest.
+
+Provenance today: HF API (size + LFS sha256 + `apache-2.0` tag), Meta CDN
+`HEAD` (200, `content-length: 156008466`, single-byte `Range` → 206), HF
+`resolve` (`x-linked-etag: "7402e0d8…"`), and the installed copy all agree. The
+CDN object's *content* hash remains **INFERRED** — its ETag
+`2a9d5f6d…-19` is a 19-part multipart MD5, not a SHA-256 — and closing that
+last leg costs one 156 MB download, which DR-2 keeps off this machine.
+
+Runtime gate: `sam2` exists only as `facebookresearch/sam2` (no Meta wheel on
+PyPI; the PyPI `sam2` project is an unaffiliated re-upload and must not be
+used). All nine of its transitive requirements are already pinned, zero new
+distributions, zero CUDA wheels, ~+0.5 MB payload, and the `_C` extension is
+video-only so this app's path never imports it. **But** the lock tooling of
+#110 rejects any `http/https/git+/file:` line and `--require-hashes` rejects an
+unpinned git source, so a git pin cannot pass the gates we are hardening.
+
+**DR-9 (my decision, no owner input needed):** integrate SAM 2.1 by vendoring
+the ~0.38 MB package with an recorded checksum, not by a URL or git pin — the
+vendor route is the only one that is simultaneously git-reproducible,
+hash-compatible with `--require-hashes`, and free of third-party re-uploads.
+Remaining open item is behavioural, not clerical: **NOT CONFIRMED** that sam2 1.0
+runs under locked torch 2.15.0 on Python 3.13/MPS; that needs a real CI
+execution, and `unverifiableReason` stays until then. Shipping without sam2
+stays honest in the meantime (`engine.py:919-932` refuses `mask.click` with
+`UNSUPPORTED`, `state: blocked`).
+
+### E.5 Training-data terms — measured, and how they are recorded
+
+Three register items closed from primary sources: **Places2** archived download
+page requires "non-commercial research and educational purposes" and forbids
+redistribution; **Swin2SR** README states the real-world x4 model was trained
+mainly on DIV2K + Flickr2K and the DIV2K page says "academic research purpose
+only"; **realesr-general-x4v3** is size-verified at 4,885,111 B from two sources
+but publishes no author checksum (a mirror's sha256 is usable only as a
+post-download cross-check). Per-checkpoint mix for Swin2SR stays NOT CONFIRMED.
+
+**DR-10 (my decision):** the catalogue records these separately —
+`weightsLicense` / `commercialOk` describe the *artefact's* grant by its rights
+holder, and `datasetRestrictions` records what the authors trained on. Because a
+research-only training mix is not something we can license away, `swin2sr-x4`
+and `migan` keep `verdict: conditional` with the restriction text in
+`noticeText`, and are **never** written up as unconditionally commercially
+approved. This is the mandate's "do not silently convert" rule made concrete,
+and it is the honest position: the artifact licence says Apache-2.0/MIT, the
+dataset terms say otherwise, both go in the record.
+
+### E.6 G-WIN-1 — closed by measurement at Low, not High
+
+PR **#113**, head verified by `git ls-remote` as
+`0caf9a739d791032d4bf9fa5be2d8dbc37803634`; `Windows App` job
+`136970631752` reports `WINDOWS HOST TESTS: PASS (401 checks)` — exactly 396 + 5
+new — plus `WINDOWS APP BUILD: PASS`; `macOS Integration` was still pending at
+the time of writing, so #113 is `BLOCKED` and unmerged. Fix:
+`DocumentModel.cs:274` now reads
+`if (ReadAdjustmentString("lookID") is { Length: > 0 } || AnyAmount("lookStrength"))`.
+
+The implementer's reachability measurement moved my severity from LATENT to
+**Low**: `lookStrength` is decoded with no cross-field clamp
+(`Sources/StudioCore/Adjustments.swift:855-856`), `SelfCheck.swift:549` is
+presets-only, and conformance only range-checks the value — so the mismatch is
+real — but it is reachable only from a crafted or externally written project
+file. The strength slider *is* live with no look selected
+(`InspectorView.swift:501-505`), yet `LookEngine.swift:321` returns the image
+untouched for `.none`, so macOS drops no pixels either. The defect is the
+guard's overclaimed invariant comment, not user-visible data loss. `dotnet` is
+absent on this machine, so CI is the only compile evidence — recorded as such.
+
+### E.7 Status deltas (the table rows above keep their text; these are current)
+
+| Gate | Was | Now |
+|---|---|---|
+| G-110 | corrections requested | **NOT MET** — landed at `c3bdced`, but reviewer F1 escape still in `worker/tools/lock_closure.py:60` and `WORKER_CI_VALIDATION_PLAN.md:11`; merge order DR-6 holds everything behind it. |
+| G-PKG (#111) | tester PARTIAL FAIL | **MERGE AFTER FIXES** — MF1/MF2 are text defects; N-cases confirmed not to affect today's light DMG (`release.yml:25,55`). |
+| G-INT | matrix requested | **Matrix delivered, implementation in flight**, defect confirmed wider (3 of 4 load paths never hash) + `RETOUCH_AI_EVAL_MODELS` env leak. Adversarial review still owed. |
+| G-CAT | fields proposed | implementation in flight (`w5-200-licence-evidence`). |
+| G-SAM2 | pin missing (dossier) | **Pin present and 4-way corroborated**; route decided DR-9; runtime compatibility NOT CONFIRMED; `unverifiableReason` stays. |
+| G-WIN-1 | LATENT, fix in flight | **Low, fixed as #113** (401 host checks); `macOS Integration` pending, not merged. |
+| G-WIN-2 | open | **confirmed independently**; blocker for publishing a Windows artefact, not for #111. |
+| G-UPD | VERIFIED (config) / NOT VERIFIED (UI) | independent design review now running (§6 permits it because the reviewer is free); cannot block 2.0.0. Inertness re-confirmed at `c3bdced`: `RSUpdateFeedURL` appears only in `UpdateController.swift:156-162`, never in `Resources/Info.plist`. |
+
+Nothing in this addendum was published, tagged, merged or deployed, and
+`/Users/roham/RetouchStudio` was not modified.
