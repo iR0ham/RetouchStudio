@@ -604,6 +604,144 @@ check(cycle.isTerminal && !cycle.isBusy, "G: cancelled is a settled answer")
 _ = reducer.reduce(current: cycle, into: &cycle, event: .retryRequested)
 check(cycle == .awaitingConsent, "G: retry asks for consent again")
 
+// I. The runtime archive arrives as a download, so the file carries
+//    `com.apple.quarantine`; ditto copies that flag onto every file it writes,
+//    and AMFI then kills the ad-hoc-signed interpreter the runtime ships. The
+//    production extractor must not carry the flag across. The fixture is a real
+//    archive holding a real compiled executable, the unpack goes through
+//    InstallHooks' default closure (the production path, `AIRuntime.extract`),
+//    and the extracted binary is executed. The control run shows the same
+//    archive leaking the flag when ditto is called without `--noqtn`, so the
+//    assertion fails if the flag ever leaves the arguments.
+print("\n[RI] a downloaded archive's quarantine never reaches the runtime")
+
+let quarantineAttribute = "com.apple.quarantine"
+
+func installTestQuarantine(_ path: String) -> String? {
+    var size = getxattr(path, quarantineAttribute, nil, 0, 0, 0)
+    guard size > 0 else { return nil }
+    var buffer = [UInt8](repeating: 0, count: size)
+    size = getxattr(path, quarantineAttribute, &buffer, size, 0, 0)
+    guard size > 0 else { return nil }
+    return String(decoding: buffer.prefix(size), as: UTF8.self)
+}
+
+/// Every path under `root` that carries the quarantine flag, relative to it.
+func installTestQuarantinedPaths(_ root: URL) -> [String] {
+    guard let enumerator = FileManager.default.enumerator(
+        at: root, includingPropertiesForKeys: nil) else { return [] }
+    var found: [String] = []
+    for case let url as URL in enumerator where installTestQuarantine(url.path) != nil {
+        found.append(url.path.replacingOccurrences(of: root.path + "/", with: ""))
+    }
+    return found
+}
+
+func installTestPaths(_ root: URL) -> [String] {
+    guard let enumerator = FileManager.default.enumerator(
+        at: root, includingPropertiesForKeys: nil) else { return [] }
+    var found: [String] = []
+    for case let url as URL in enumerator {
+        found.append(url.path.replacingOccurrences(of: root.path + "/", with: ""))
+    }
+    return found
+}
+
+/// Runs a real subprocess and answers (exit status, stdout, timed out). stderr
+/// is a pipe of its own so a diagnostic cannot block the child on a full
+/// buffer, and the child is killed at the deadline: a quarantined binary waits
+/// for a Gatekeeper decision that never comes on a headless run, and a suite
+/// must report that instead of hanging.
+func installTestRun(_ executable: URL, arguments: [String] = [],
+                    timeout: TimeInterval = 20) -> (Int32, String, Bool)? {
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = arguments
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = Pipe()
+    do { try process.run() } catch { return nil }
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning && Date() < deadline {
+        usleep(20_000)
+    }
+    var timedOut = false
+    if process.isRunning {
+        timedOut = true
+        process.terminate()
+        usleep(200_000)
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+    }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return (process.terminationStatus, String(decoding: data, as: UTF8.self), timedOut)
+}
+
+let quarantineRoot = installTestSupport("quarantine")
+do {
+    let source = quarantineRoot.appendingPathComponent("payload", isDirectory: true)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let cSource = source.appendingPathComponent("main.c")
+    try Data("#include <stdio.h>\nint main(void) { printf(\"RUNS\\n\"); return 0; }\n".utf8)
+        .write(to: cSource)
+    let built = source.appendingPathComponent("probe")
+    let compile = installTestRun(URL(fileURLWithPath: "/usr/bin/cc"),
+                                 arguments: ["-O0", "-o", built.path, cSource.path])
+    check(compile?.0 == 0, "the fixture executable compiles",
+          compile.map { "cc exited \($0.0)" } ?? "cc did not start")
+
+    let archive = quarantineRoot.appendingPathComponent("runtime.zip")
+    let packed = installTestRun(URL(fileURLWithPath: "/usr/bin/ditto"),
+                                arguments: ["-c", "-k", source.path, archive.path])
+    check(packed?.0 == 0, "the fixture archive is written like a downloaded runtime")
+    let marked = installTestRun(URL(fileURLWithPath: "/usr/bin/xattr"),
+                                arguments: ["-w", quarantineAttribute,
+                                            "0081;00000000;Test;1", archive.path])
+    check(marked?.0 == 0 && installTestQuarantine(archive.path) != nil,
+          "the archive carries com.apple.quarantine before extraction",
+          installTestQuarantine(archive.path) ?? "absent")
+
+    // Control: the unmodified ditto call is what the defect looked like. It
+    // must leak the flag, otherwise the check below proves nothing.
+    let control = quarantineRoot.appendingPathComponent("control", isDirectory: true)
+    try FileManager.default.createDirectory(at: control, withIntermediateDirectories: true)
+    let plain = installTestRun(URL(fileURLWithPath: "/usr/bin/ditto"),
+                               arguments: ["-x", "-k", archive.path, control.path])
+    let controlAll = installTestPaths(control)
+    let leaked = installTestQuarantinedPaths(control)
+    check(plain?.0 == 0 && !leaked.isEmpty,
+          "control: bare `ditto -x -k` copies the flag onto every extracted file",
+          "\(leaked.count) of \(controlAll.count) paths")
+
+    // The production path: the default hook is the closure the transaction and
+    // the installer both use.
+    let staging = quarantineRoot.appendingPathComponent("staging", isDirectory: true)
+    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+    var extractError: Error?
+    do {
+        try AIRuntime.InstallHooks().extract(archive, staging)
+    } catch {
+        extractError = error
+    }
+    check(extractError == nil, "the production extractor unpacks the quarantined archive",
+          extractError.map { "\($0)" } ?? "")
+    let extracted = installTestPaths(staging)
+    let carried = installTestQuarantinedPaths(staging)
+    check(!extracted.isEmpty && carried.isEmpty,
+          "no extracted file carries com.apple.quarantine",
+          "\(carried.count) of \(extracted.count) paths")
+
+    let probe = staging.appendingPathComponent("probe")
+    let launched = installTestRun(probe)
+    check(launched.map { $0.0 == 0 && !$0.2 && $0.1 == "RUNS\n" } ?? false,
+          "the extracted executable runs",
+          launched.map { $0.2 ? "killed after 20 s without finishing"
+                              : "exit \($0.0), stdout \($0.1.trimmingCharacters(in: .newlines))" }
+              ?? "the process did not start")
+} catch {
+    check(false, "the quarantine fixture is written", "\(error)")
+}
+
 try? FileManager.default.removeItem(at: installTestRoot)
 
 print("")
