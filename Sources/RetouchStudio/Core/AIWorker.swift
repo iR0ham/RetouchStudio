@@ -7,6 +7,34 @@ import ImageIO
 import UniformTypeIdentifiers
 import StudioCore
 
+/// The distinct reasons an AI request can fail.
+///
+/// These were collapsed into one sentence before: the message asked about the
+/// model package first, so a helper that shipped with the app and failed to
+/// launch was announced as "not available in this build". Each case is a
+/// different fact, and each has its own copy in `AIFailureCopy`.
+enum AIFailureState: String, CaseIterable, Equatable {
+    /// No runtime exists for this build or for this machine.
+    case runtimeUnavailable
+    /// A runtime is on disk but cannot be used: it failed validation or
+    /// recovery, or another window holds it.
+    case runtimeInstallFailed
+    /// The helper is on disk, but starting it or reaching it failed.
+    case workerLaunchFailed
+    /// The helper ran, and the job failed before producing an edit.
+    case inferenceFailed
+    /// An edit was produced, and saving it failed.
+    case exportFailed
+}
+
+/// What the app knows when a startup fails, captured as a value.
+struct AIFailureEvidence: Equatable {
+    var runtimePackageAvailable: Bool
+    var runtimeOnDisk: Bool
+    var runtimeProblem: String?
+    var launchFailure: String?
+}
+
 /// Launches and talks to the local AI helper.
 ///
 /// The helper is a separate process on purpose: it can be killed without
@@ -571,25 +599,62 @@ enum AIWorker {
     /// downloaded runtime. `ensureRunning` runs the functional contract first.
     static var isInstalled: Bool { interpreter() != nil && repositoryRoot() != nil }
 
-    /// The message an AI tool shows when it cannot start the helper. A light
-    /// build points at the runtime download; Intel has no runtime to offer.
-    /// A runtime that is present but failed its contract says so instead of
-    /// pretending it is missing or usable.
+    /// What the app knows at the moment a startup fails. A value, not a probe,
+    /// so the decision below can be exercised without a runtime on disk.
+    static var helperFailureEvidence: AIFailureEvidence {
+        AIFailureEvidence(
+            runtimePackageAvailable: AIRuntime.package != nil,
+            runtimeOnDisk: bundledRoot != nil || installedRoot != nil
+                || interpreter() != nil || repositoryRoot() != nil,
+            runtimeProblem: installedRuntimeProblem,
+            launchFailure: lastLaunchFailure)
+    }
+
+    /// Decides which fact a startup failure is.
+    ///
+    /// The order is the fix for the old message, which asked
+    /// `AIRuntime.package == nil` first and therefore called a helper that
+    /// shipped here and refused to start "not available in this build". A
+    /// helper on disk can only fail to start, and that answer is true whichever
+    /// way the model package looks. The package is consulted last, and only to
+    /// choose between "this build has no runtime" and "the runtime is not
+    /// installed yet".
+    static func failureState(_ evidence: AIFailureEvidence) -> AIFailureState {
+        if let problem = evidence.runtimeProblem, !problem.isEmpty {
+            return .runtimeInstallFailed
+        }
+        if evidence.runtimeOnDisk || evidence.launchFailure != nil {
+            return .workerLaunchFailed
+        }
+        return .runtimeUnavailable
+    }
+
+    /// The message an AI tool shows when it cannot start the helper. Each state
+    /// has its own sentence, so a launch failure can never borrow the sentence
+    /// for a build that has no AI at all.
     static var missingHelperMessage: String {
-        if AIRuntime.package == nil {
+        let evidence = helperFailureEvidence
+        switch failureState(evidence) {
+        case .runtimeUnavailable:
+            if evidence.runtimePackageAvailable && !evidence.runtimeOnDisk {
+                return AIFailureCopy.runtimeNotInstalled(.current)
+            }
             #if arch(x86_64)
-            return L10n.current.aiRuntimeIntelUnavailable
+            return AIFailureCopy.runtimeUnavailableIntel(.current)
             #else
-            return L10n.current.aiRuntimeUnavailable
+            return AIFailureCopy.runtimeUnavailable(.current)
             #endif
+        case .runtimeInstallFailed:
+            return evidence.runtimeProblem?.hasPrefix("busy:") == true
+                ? AIFailureCopy.runtimeBusy(.current)
+                : AIFailureCopy.runtimeInstallFailed(.current)
+        case .workerLaunchFailed:
+            return AIFailureCopy.text(for: .workerLaunchFailed, .current)
+        case .inferenceFailed:
+            return AIFailureCopy.text(for: .inferenceFailed, .current)
+        case .exportFailed:
+            return AIFailureCopy.text(for: .exportFailed, .current)
         }
-        if let problem = installedRuntimeProblem {
-            return problem.hasPrefix("busy:")
-                ? L10n.current.aiRuntimeBusy
-                : L10n.current.aiRuntimeValidationFailed
-        }
-        if installedRoot == nil && bundledRoot == nil { return L10n.current.aiRuntimeNotInstalled }
-        return L10n.current.aiHelperMissing
     }
 
     static func ensureRunning() throws {
