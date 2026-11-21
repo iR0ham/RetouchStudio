@@ -725,3 +725,96 @@ lines. My briefs asked for a final push but never for incremental commits.
 Every implementation brief from now on carries commit/push checkpoints and a draft
 PR as a deliverable in its own right, and salvage-from-temp-dir is a known failure
 mode of this workflow, not a surprise.
+
+## Addendum I — 2026-11-22: the #110 re-review is sound, and it found a regression I reproduced myself
+
+The re-review arrived under the new reporting discipline (it opened with
+`git ls-remote` and `git diff --stat`, and pinned itself to the head it actually
+reviewed). That immediately mattered: the branch had moved again while the review
+ran. **`w5-worker-gates-failclosed` is now `cc1d9f64347fe07e3fa6131a281b7fa3cc9ce86f`**
+(`cc1d9f6 "Judge a namespace alias by its dotted names"`), one commit past the
+`07095d3` my brief named — the author's session is still landing work, so the
+reviewed object was real and current, and the mismatch is my scheduling error, not
+his. CI at `cc1d9f6` is run `44948957776`: Boundary, Conformance, Windows
+StudioCore, Worker Lock Closure, Worker Payload Bundle and CodeQL pass; **`macOS
+Integration` and `Windows App` — both required — were pending**, `mergeStateStatus
+= BLOCKED`.
+
+### I.1 The blocker, reproduced by me (not inherited)
+
+`cc1d9f6` closed the original escape but **introduced a sibling one of the same
+class, and this one defeats both gates at once.** Calling the shipped resolver
+directly at `cc1d9f6`:
+
+```
+names=['google']                              -> google            (violation, correct)
+names=['google','google.auth']                -> google            (violation, correct)
+names=['google.protobuf']                     -> protobuf          (correct)
+names=['google','google.protobuf']            -> protobuf   <-- used by BOTH the
+                                                          legitimate and the escaping form
+names=['google','google._upb._message']       -> google   (false positive: protobuf ships _upb)
+```
+
+`worker/tools/lock_closure.py:109` reads `dotted = {name for name in names if
+name != module}`, so the bare namespace name is discarded whenever any dotted name
+is present. `import google.protobuf` alongside `mod = __import__('google')`
+therefore resolves to `protobuf`, is pinned, and produces **zero violations** —
+while `import_smoke.py:128` calls the *same* `lock_closure.distribution_for`, so
+the payload gate agrees and even executes `importlib.import_module('google')`,
+which succeeds because the `google` namespace is importable once protobuf is
+installed. The mandate's criterion is that an unpinned import cannot escape
+**both** checks; at this head it can. And `07095d3` did fail closed on this shape,
+so the newest commit is a **net weakening** relative to its own parent.
+
+The root cause is representational: the collector flattens everything into one set
+of names, so `from google import protobuf` (forgivable bare name) and
+`import google` / `__import__('google')` (unpinned namespace use) are literally
+indistinguishable. Forgiving the bare name to kill the false positive therefore
+cannot be done on the flat set — the fix has to record provenance (was the bare
+name the `module` of an `ImportFrom` that bound a prefixed name, or was it imported
+or fetched directly?). I adopt that as the required shape of the fix, plus P11/P12
+as permanent seedings in both tools' test files, and a deliberate decision on
+`google._upb` rather than an accidental one.
+
+### I.2 Two mandate-level gaps this review exposed
+
+1. **The adversarial matrix was never committed.** `Docs/WORKER_CI_VALIDATION_PLAN.md:3-4`
+   cites seed ids (B1–B4, A1, AC-\*, D1–D5, E3) and the tests echo those labels in
+   docstrings, but no table maps seed → test → expected exit → expected problem
+   count anywhere in the tree. Mandate correction (2) asked to align the matrix with
+   the tests; alignment was verified by reconstruction from docstrings, which is not
+   a durable artefact. #110 must commit the table.
+2. **The worker suite is not hermetic about its own test lock.** Six test modules
+   import numpy/Pillow at module scope, so on a bare interpreter `Tests/run-worker.sh`
+   fails as a *count* mismatch (`92 != 194`) rather than naming the missing
+   dependency. Fail-closed direction is right; the diagnosis misleads the next
+   reader. Separate small ticket, not a #110 blocker.
+
+### I.3 Environment state change to disclose
+
+To run the suite at all, the reviewer installed `numpy 2.5.5` and `pillow 13.0.0`
+into the shared scratch interpreter `/private/tmp/rs-worker-venv` (it arrived with
+only pip/wheel). That venv now satisfies `requirements-test.lock` **approximately**
+(numpy 2.5.5 vs the pinned 2.5.4). Consequence for this release record: any suite
+result quoted from it is real but not lock-exact, and from now on every reported
+run must name its interpreter and the two dependency versions. Rebuilding the venv
+is not worth the loss of the only working local runner; the imprecision is recorded
+instead of hidden.
+
+### I.4 Verdict and effect on the plan
+
+**#110 = BLOCK**, by independent review **and** by my own reproduction: I.1 must
+land before merge, together with the docstring/comment/code disagreement at
+`lock_closure.py:96-100` vs `:104-108` and the matrix table. The three mandate
+corrections themselves are otherwise confirmed landed (the `continue-on-error`
+prose is now accurate and corroborated against branch protection's five required
+contexts; D5b, broadened-`mflux`, A4 and count-divergence are genuinely automated;
+the count history is append-only with `188 → 190 → 194` and no rewritten number).
+Nothing got weaker except I.1. `main` is unchanged; DR-6 still holds, so #111, #107,
+#99, G-INT and G-RC remain sequenced behind a now-longer #110.
+
+Process note against me, second one the same day: I dispatched a review against a
+branch whose author was still pushing. A review must be pinned to a frozen head —
+either wait for the author's session to finish or state explicitly that the object
+is a moving branch and require the reviewer to re-pin and re-run anything that
+changes.
