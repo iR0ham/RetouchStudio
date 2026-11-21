@@ -280,13 +280,17 @@ public sealed class DocumentModel
             }
             // The look is the one edit macOS writes as two fields: the
             // identifier names the grade, the strength blends it in. Either
-            // half alone can ask for a grade this host cannot render, so both
-            // are checked. Clearing the rail writes FilmLook.none, whose raw
-            // value is the string "none", and an older document can keep a
-            // stale strength beside it — that pair asks for no grade at all,
-            // so the sentinel reads as no identifier rather than as an edit
-            // this host refuses forever.
-            if (LookIdentifier() is { Length: > 0 } || AnyAmount("lookStrength"))
+            // half alone can ask for a grade this host cannot render — a
+            // strength with no identifier decodes as FilmLook.none on macOS,
+            // which draws nothing, but a crafted or externally written file can
+            // carry the pair, so it is refused rather than exported silently.
+            // Clearing the rail is the exception: it writes FilmLook.none under
+            // its raw value, the string "none", and an older document can keep a
+            // stale strength beside it. That pair renders no grade and nothing on
+            // this host can rewrite the field, so naming it would refuse the
+            // document forever; the sentinel counts as no identifier on both
+            // halves of the check.
+            if (LookIdentifier() is { Length: > 0 } || LookStrengthAmount() != 0)
             {
                 found.Add("a look");
             }
@@ -397,6 +401,14 @@ public sealed class DocumentModel
     private string? LookIdentifier() =>
         ReadAdjustmentString("lookID") is { } id
         && !id.Equals(NoLookIdentifier, StringComparison.OrdinalIgnoreCase) ? id : null;
+
+    /// <summary>
+    /// The look's blend amount, or zero when the document names no look. macOS
+    /// only spends <c>lookStrength</c> through a grade, so under the cleared
+    /// sentinel it changes nothing and must not be read as an edit.
+    /// </summary>
+    private double LookStrengthAmount() =>
+        LookIdentifier() is { Length: > 0 } ? Amount("lookStrength") : 0;
 
     private bool ReadAdjustmentBool(string key) =>
         Adjustments?[key] is JsonValue value

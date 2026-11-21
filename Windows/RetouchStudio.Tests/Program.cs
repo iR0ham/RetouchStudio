@@ -3993,9 +3993,9 @@ internal static class Program
         // Clearing the rail on macOS writes FilmLook.none, whose raw value is
         // the string "none", and only zeroes the strength in that same edit —
         // a document from an older build can therefore carry the sentinel next
-        // to a stale amount. It asks for no grade, so it must not be refused:
-        // a guard that named it would warn on every cleared look, forever,
-        // because nothing on this host can write the field back to empty.
+        // to a stale amount. That pair renders no grade and nothing on this host
+        // can rewrite the field, so a guard naming it would refuse the document
+        // forever. The sentinel means "no look" on both halves of the check.
         var sentinelLook = new DocumentModel(new JsonObject
         {
             ["adjustments"] = new JsonObject
