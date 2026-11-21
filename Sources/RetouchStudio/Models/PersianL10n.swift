@@ -277,6 +277,7 @@ final class PersianL10n: L10n {
     override func projectSaved(_ name: String) -> String { "پروژهٔ \(name) ذخیره شد" }
     override var projectSaveFailed: String { "پروژه ذخیره نشد." }
     override var projectOpened: String { "پروژه بازیابی شد." }
+    override var sessionRestored: String { "ویرایش‌ها بازیابی شد." }
     override var projectOpenFailed: String { "این پروژه باز نشد." }
     override var projectPhotoMissing: String {
         "عکسی که این پروژه به آن اشاره می‌کند دیگر در آن مسیر نیست."
@@ -610,6 +611,7 @@ final class PersianL10n: L10n {
     // MARK: - Settings, About, Help
 
     override var settingsTitle: String { "تنظیمات" }
+    override var settingsMenu: String { "تنظیمات…" }
     override var settingsWindowTitle: String { "\(settingsTitle) \(appName)" }
     override var settingsLanguage: String { "زبان" }
     override var settingsLanguageHelp: String { "زبان رابط برنامه را انتخاب کن." }
@@ -685,7 +687,7 @@ final class PersianL10n: L10n {
     }
     override func modelsDownloadTitle(_ name: String) -> String { "دانلود \(name)؟" }
     override func modelsDownloadBody(files: Int, size: String, license: String) -> String {
-        "\(files) فایل، \(size). مجوز: \(license). این تنها مرحله‌ای است که از اینترنت استفاده می‌کند."
+        "\(Digits.persian(String(files))) فایل، \(size). مجوز: \(license). این تنها مرحله‌ای است که از اینترنت استفاده می‌کند."
     }
     override var modelsDownloadAction: String { "دانلود" }
     override var modelsCancel: String { "انصراف" }
@@ -706,7 +708,7 @@ final class PersianL10n: L10n {
 
     // Versioned model store (W5-2)
     override func modelsVersionLabel(_ version: String) -> String {
-        "نسخهٔ \(version)"
+        "نسخهٔ \(Digits.persian(version))"
     }
     override var modelsActiveChip: String { "فعال" }
     override var modelsUseVersion: String { "استفاده" }
@@ -730,7 +732,7 @@ final class PersianL10n: L10n {
         "\(name) به انبار نسخه‌دار منتقل شد."
     }
     override func modelsActivated(_ name: String, _ version: String) -> String {
-        "\(name) اکنون از نسخهٔ \(version) استفاده می‌کند."
+        "\(name) اکنون از نسخهٔ \(Digits.persian(version)) استفاده می‌کند."
     }
     override var modelsInUseRetry: String {
         "این نسخه در حال استفاده توسط کاری در حال اجرا یا پنجرهٔ دیگری است. کار را تمام کن و دوباره تلاش کن."
@@ -742,12 +744,12 @@ final class PersianL10n: L10n {
         "مشکل فایل مدل: \(detail)"
     }
     override func modelsConsentTitle(_ name: String, _ version: String) -> String {
-        "نصب \(name)، نسخهٔ \(version)؟"
+        "نصب \(name)، نسخهٔ \(Digits.persian(version))؟"
     }
     override func modelsConsentBody(files: Int, size: String, codeLicense: String,
                                     weightsLicense: String, host: String, sha: String) -> String {
         """
-        \(files) فایل، \(size)، از \(host).
+        \(Digits.persian(String(files))) فایل، \(size)، از \(host).
         مجوز کد: \(codeLicense). مجوز وزن‌ها: \(weightsLicense).
         SHA-256 (مانیفست): \(sha)…
         این تنها مرحله‌ای است که از اینترنت استفاده می‌کند. چیزی نصب نمی‌شود مگر آنکه هر فایل با اندازه و چک‌سام خودش مطابقت داشته باشد.
@@ -760,7 +762,7 @@ final class PersianL10n: L10n {
     override var aiRuntimeInstalledChip: String { "نصب شده" }
     override var aiRuntimeMissingChip: String { "نصب نیست" }
     override var aiRuntimeBody: String {
-        "ابزارهای هوش مصنوعی به یک دستیار محلی، حدود ۳۹۰ مگابایت، نیاز دارند. اپ آن را فقط بعد از نمایش فایل، حجم و SHA256 و تأیید شما دانلود می‌کند."
+        "ابزارهای هوش مصنوعی به یک دستیار محلی، حدود \(Digits.isolate("۳۹۰ MB"))، نیاز دارند. اپ آن را فقط بعد از نمایش فایل، حجم و SHA256 و تأیید شما دانلود می‌کند."
     }
     override var aiRuntimeInstall: String { "دانلود دستیار" }
     override var aiRuntimeDownloadTitle: String { "دستیار هوش مصنوعی دانلود شود؟" }
@@ -772,7 +774,7 @@ final class PersianL10n: L10n {
     override var aiRuntimeInstalling: String { "در حال نصب دستیار…" }
     override var aiRuntimeDownloadFailed: String { "دستیار دانلود نشد. چیزی نصب نشد." }
     override func aiRuntimeInsufficientDisk(neededBytes: Int64, freeBytes: Int64) -> String {
-        "فضای آزاد دیسک کافی نیست: نصب دستیار هوش مصنوعی حدود \(Digits.persian(L10n.byteSize(neededBytes))) فضای آزاد برای دانلود و باز شدن لازم دارد و اکنون \(Digits.persian(L10n.byteSize(freeBytes))) آزاد است. چیزی نصب نشد."
+        "فضای آزاد دیسک کافی نیست: نصب دستیار هوش مصنوعی حدود \(Digits.isolate(Digits.persian(L10n.byteSize(neededBytes)))) فضای آزاد برای دانلود و باز شدن لازم دارد و اکنون \(Digits.isolate(Digits.persian(L10n.byteSize(freeBytes)))) آزاد است. چیزی نصب نشد."
     }
     override var aiRuntimeDiskFull: String {
         "دیسک در حین نصب دستیار هوش مصنوعی پر شد. چیزی نصب نشد."

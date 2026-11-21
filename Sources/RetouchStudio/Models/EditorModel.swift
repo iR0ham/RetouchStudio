@@ -1188,7 +1188,12 @@ final class EditorModel: ObservableObject {
         } else {
             recents.add(result.url, isProject: false)
         }
-        if restoration.isProject {
+        if recoveryRestore != nil {
+            // A crash-recovery candidate carries the document values of an
+            // unsaved photo; there is no project file behind it, so it must not
+            // report that a project was opened.
+            statusToken = .sessionRestored
+        } else if restoration.isProject {
             statusToken = .projectOpened
         } else if result.faces.isEmpty {
             statusToken = .noFaceColorOnly
@@ -3147,7 +3152,7 @@ final class EditorModel: ObservableObject {
     /// language.
     var imageInfo: String {
         guard workingPixelSize.width > 0, workingPixelSize.height > 0 else { return "" }
-        return "\(Digits.num(Int(workingPixelSize.width))) × \(Digits.num(Int(workingPixelSize.height))) px"
+        return Digits.pixelSize(Int(workingPixelSize.width), Int(workingPixelSize.height))
     }
 
     /// Whether the chosen edge asks for more pixels than the photo has.
@@ -3196,7 +3201,7 @@ final class EditorModel: ObservableObject {
     var exportPixelText: String {
         let size = exportPixelSize
         guard size.width >= 1, size.height >= 1 else { return "" }
-        return "\(Digits.num(Int(size.width))) × \(Digits.num(Int(size.height))) px"
+        return Digits.pixelSize(Int(size.width), Int(size.height))
     }
 
     var windowTitle: String {

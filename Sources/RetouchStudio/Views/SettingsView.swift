@@ -158,7 +158,7 @@ struct SettingsView: View {
             sectionTitle(model.s.settingsTools, help: model.s.settingsToolsHelp)
 
             row(model.s.settingsBrush,
-                detail: "\(Digits.num(model.healBrushPixels)) px") {
+                detail: Digits.pixels(model.healBrushPixels)) {
                 BipolarSlider(value: $model.healBrushPercent, range: 0.4...6, step: 0.2)
                     .help(model.s.brushShortcutHint)
             }
