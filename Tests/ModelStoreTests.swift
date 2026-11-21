@@ -168,6 +168,21 @@ func catalogData(containing ids: Set<String>, base: String) throws -> Data {
     return Data(text.replacingOccurrences(of: "{base}", with: base).utf8)
 }
 
+/// Drops keys from selected entries of the full fixture catalog. Used to prove a
+/// field is optional on decode: an entry with the key absent must still load.
+func catalogData(dropping keys: [String], from ids: Set<String>, base: String) throws -> Data {
+    let full = try Data(contentsOf: URL(fileURLWithPath: fixturePath("catalog-fixture.json")))
+    var object = try JSONSerialization.jsonObject(with: full) as! [String: Any]
+    var entries = object["entries"] as! [[String: Any]]
+    for index in entries.indices where ids.contains(entries[index]["id"] as? String ?? "") {
+        for key in keys { entries[index].removeValue(forKey: key) }
+    }
+    object["entries"] = entries.filter { ids.contains($0["id"] as? String ?? "") }
+    let filtered = try JSONSerialization.data(withJSONObject: object)
+    return Data(String(data: filtered, encoding: .utf8)!
+        .replacingOccurrences(of: "{base}", with: base).utf8)
+}
+
 func fixturePath(_ name: String) -> String {
     fixtureDirectory.appendingPathComponent(name).path
 }
@@ -1588,6 +1603,445 @@ do {
               "the model list and the capability list agree after adoption")
         check(manager.install == nil, "the adoption bar is gone")
     }
+}
+
+// MARK: - [19] Weights licence evidence (G-CAT)
+
+// This section is a freeze, not a feature test. The release gate records licence
+// evidence; it deliberately does not act on it. So half of these checks assert
+// that adding the fields changed no install/refuse decision, and the other half
+// pin the recorded URLs and dates so a silent future edit is caught.
+print("\n[19] weights licence evidence decodes optionally and pins the dossier")
+do {
+    let server = makeServer()
+    defer { server.stop() }
+    let shippedURL = testsRoot.appendingPathComponent("Resources/model-catalog.json")
+    let legacyRaw = try! Data(contentsOf: shippedURL)
+    let shipped = try! ModelCatalog.load(url: shippedURL)
+    let readOn = "2026-11-21"
+
+    // (a) An old-format catalog — every evidence key stripped — must still
+    // decode, because ModelCatalog.load uses a strict JSONDecoder.
+    var legacyEntries = try! (JSONSerialization.jsonObject(with: legacyRaw)
+        as! [String: Any])["entries"] as! [[String: Any]]
+    for index in legacyEntries.indices {
+        legacyEntries[index].removeValue(forKey: "weightsEvidence")
+    }
+    var legacyObject = try! JSONSerialization.jsonObject(with: legacyRaw) as! [String: Any]
+    legacyObject["entries"] = legacyEntries
+    let legacyData = try! JSONSerialization.data(withJSONObject: legacyObject)
+    let legacyText = String(data: legacyData, encoding: .utf8)!
+    check(!legacyText.contains("weightsEvidence") && !legacyText.contains("commercialOk"),
+          "the old-format fixture really carries none of the new keys")
+    var legacyLoaded = false
+    var legacy: ModelCatalog?
+    do {
+        legacy = try ModelCatalog.load(data: legacyData)
+        legacyLoaded = true
+    } catch {
+        check(false, "an old-format catalog without any evidence field loads", "\(error)")
+    }
+    check(legacyLoaded && legacy?.entries.count == shipped.entries.count,
+          "the old-format catalog decodes with the same entry count")
+
+    // (b) No behaviour change: the two DR-5 accessors are pure functions of
+    // fields this gate does not touch, so they must be identical with and
+    // without the evidence present.
+    if let legacy {
+        let sameVerifiability = zip(legacy.entries, shipped.entries).allSatisfy {
+            $0.isVerifiable == $1.isVerifiable
+                && $0.verificationProblem == $1.verificationProblem
+                && $0.unverifiableReason == $1.unverifiableReason
+                && $0.supports(platform: "macos-arm64") == $1.supports(platform: "macos-arm64")
+                && $0.supports(platform: "windows-x64") == $1.supports(platform: "windows-x64")
+        }
+        check(sameVerifiability,
+              "evidence changes no verifiability, refusal or platform decision")
+        let onlyDifference = zip(legacy.entries, shipped.entries).allSatisfy {
+            var older = $0
+            older.weightsEvidence = $1.weightsEvidence
+            return older == $1
+        }
+        check(onlyDifference,
+              "the decoded entries differ from the old-format ones in no field but the evidence")
+        check(legacy.entries.allSatisfy { $0.weightsEvidence == nil },
+              "an old-format entry decodes its evidence to nil rather than to a guess")
+    }
+
+    // (c) The shipped values, pinned one entry at a time. These are the four
+    // rows the licence dossier delivered; the assertions exist so that editing
+    // a URL, a date or a verdict in Resources/model-catalog.json fails here.
+    struct EvidenceExpectation {
+        let id: String
+        let licenseUrl: String
+        let explicit: Bool
+        let commercialOk: Bool
+        let verdict: ModelCatalogEntry.ModelLicenseVerdict
+        let hasDatasetNote: Bool
+        let noticePrefix: String
+    }
+    let expectations: [EvidenceExpectation] = [
+        EvidenceExpectation(
+            id: "flux2-klein-4b-q4",
+            licenseUrl: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+            explicit: true, commercialOk: true, verdict: .usable, hasDatasetNote: false,
+            noticePrefix: "Apache-2.0."),
+        EvidenceExpectation(
+            id: "sam2.1-hiera-tiny",
+            licenseUrl: "https://huggingface.co/facebook/sam2.1-hiera-tiny",
+            explicit: true, commercialOk: true, verdict: .usable, hasDatasetNote: false,
+            noticePrefix: "Apache-2.0."),
+        EvidenceExpectation(
+            id: "swin2sr-x4",
+            licenseUrl: "https://huggingface.co/caidas/"
+                + "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+            explicit: false, commercialOk: true, verdict: .usableWithConditions,
+            hasDatasetNote: true, noticePrefix: "Apache-2.0."),
+        EvidenceExpectation(
+            id: "migan",
+            licenseUrl: "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/"
+                + "LICENSE-WEIGHTS",
+            explicit: true, commercialOk: true, verdict: .usable, hasDatasetNote: false,
+            noticePrefix: "MIT."),
+    ]
+    check(Set(shipped.entries.map(\.id)) == Set(expectations.map(\.id)),
+          "every shipped entry is covered by an evidence expectation")
+    for want in expectations {
+        guard let got = shipped.entry(id: want.id)?.weightsEvidence else {
+            check(false, "\(want.id) carries recorded evidence")
+            continue
+        }
+        check(got.licenseUrl == want.licenseUrl, "\(want.id) weights grant URL is pinned",
+              got.licenseUrl ?? "nil")
+        check(got.readOn == readOn, "\(want.id) grant was read on the dossier date",
+              got.readOn ?? "nil")
+        check(got.explicit == want.explicit, "\(want.id) explicit grant flag",
+              "\(got.explicit.map(String.init(describing:)) ?? "nil")")
+        check(got.commercialOk == want.commercialOk, "\(want.id) commercial grant",
+              "\(got.commercialOk.map(String.init(describing:)) ?? "nil")")
+        check(got.verdict == want.verdict, "\(want.id) verdict",
+              got.verdict?.rawValue ?? "nil")
+        check((got.noticeText ?? "").hasPrefix(want.noticePrefix)
+                && (got.noticeText ?? "").count > 40,
+              "\(want.id) records the redistribution notice text")
+        check((got.verdictReason ?? "").count > 20, "\(want.id) states why that verdict")
+        check((got.datasetNote != nil) == want.hasDatasetNote,
+              "\(want.id) dataset note matches the dossier position")
+        // A non-explicit grant is the dossier's own word for "we inferred it",
+        // and an inferred grant may never be recorded as plain usable.
+        if got.explicit == false {
+            check(got.verdict != .usable,
+                  "\(want.id) is not called usable on an inferred grant")
+        }
+    }
+    // The dossier says FLUX.2 klein is excluded by memory on this hardware, not
+    // by licence, so its licence verdict stays `usable`. That separation is the
+    // point of recording the two facts apart.
+    check(shipped.entry(id: "flux2-klein-4b-q4")?.weightsEvidence?.verdict == .usable
+            && (shipped.entry(id: "flux2-klein-4b-q4")?.notes ?? "").contains("16.7 GB"),
+          "FLUX is licence-usable while its memory rejection stays in notes")
+
+    // (d) Malformed evidence is rejected by validate(), and only by validate():
+    // the fields stay optional on decode so an older file keeps working. Each
+    // case rewrites one entry's evidence object over the old-format catalog. The
+    // row is chosen by id, because JSON round-tripping does not preserve order.
+    let probeID = (legacyObject["entries"] as! [[String: Any]])
+        .first { ($0["unverifiableReason"] as? String) == nil }?["id"] as? String ?? ""
+    check(!probeID.isEmpty, "the malformed-evidence probe has a verifiable fixture row", probeID)
+    func rejecting(_ evidence: [String: Any]) -> Bool {
+        var object = try! JSONSerialization.jsonObject(with: legacyData) as! [String: Any]
+        var entries = object["entries"] as! [[String: Any]]
+        for index in entries.indices where entries[index]["id"] as? String == probeID {
+            entries[index]["weightsEvidence"] = evidence
+        }
+        object["entries"] = entries
+        return (try? ModelCatalog.load(data: try! JSONSerialization.data(withJSONObject: object)))
+            == nil
+    }
+    check(rejecting(["readOn": "yesterday"]),
+          "a read date that is not an ISO-8601 calendar date is refused")
+    check(rejecting(["readOn": "2026-13-01"]),
+          "an impossible month in the read date is refused")
+    check(rejecting(["readOn": 20_261_121]),
+          "a non-string read date fails the strict decode")
+    check(rejecting(["verdict": "probably-fine"]),
+          "a verdict outside the closed set is refused")
+    check(rejecting(["licenseUrl": "http://example.com/license"]),
+          "a plain-HTTP weights grant URL is refused")
+    check(rejecting(["licenseUrl": "https://user:pw@example.com/license"]),
+          "credentials in the weights grant URL are refused")
+    check(rejecting(["verdict": "usable", "commercialOk": false]),
+          "a usable verdict without a commercial grant is refused")
+    check(rejecting(["verdict": "usable-with-conditions", "commercialOk": false]),
+          "usable-with-conditions without a commercial grant is refused")
+    check(!rejecting(["verdict": "excluded", "commercialOk": false]),
+          "an excluded verdict may carry commercialOk false")
+    check(!rejecting(["verdict": "excluded", "commercialOk": true]),
+          "an excluded verdict keeps its recorded commercial fact un-derived")
+    check(!rejecting(["explicit": false]),
+          "partial evidence still loads; absent facts are not invented")
+
+    // The reject path must come from validate(), not from the decoder, or rule 1
+    // (optional in the Codable representation) would be violated.
+    // The nested spelling is what this repository ships, so its rejection must
+    // be proven on a real `WeightsLicenseEvidence` rather than only through the
+    // flat bridge. It is built by encoding a valid record, rewriting the one
+    // `verdict` member and decoding again — which also proves the Codable shape
+    // round-trips every field.
+    func rewriteNestedVerdict(_ text: String) -> Data {
+        var object = try! JSONSerialization.jsonObject(with: legacyData) as! [String: Any]
+        var entries = object["entries"] as! [[String: Any]]
+        for index in entries.indices where entries[index]["id"] as? String == probeID {
+            entries[index]["weightsEvidence"] = [
+                "verdict": text, "readOn": readOn, "commercialOk": true, "explicit": true,
+            ]
+        }
+        object["entries"] = entries
+        return try! JSONSerialization.data(withJSONObject: object)
+    }
+    var decodedButInvalid = false
+    var decodingFailed = false
+    var encodedBack = ""
+    do {
+        let parsed = try JSONDecoder().decode(ModelCatalog.self,
+                                             from: rewriteNestedVerdict("probably-fine"))
+        let row = parsed.entries.first(where: { $0.id == probeID })?.weightsEvidence
+        decodedButInvalid = row?.verdict == nil && row?.verdictRaw == "probably-fine"
+        let json = try! JSONEncoder().encode(row!)
+        encodedBack = String(data: json, encoding: .utf8)!
+    } catch {
+        decodingFailed = true
+    }
+    check(decodedButInvalid && !decodingFailed,
+          "a bad nested verdict survives decoding and is rejected only by validate()")
+    check(encodedBack.contains("\"verdict\":\"probably-fine\""),
+          "an unknown verdict round-trips through encode instead of vanishing", encodedBack)
+    check(rejecting(["verdict": "probably-fine", "readOn": readOn]),
+          "the nested spelling is rejected by load() too")
+    var knownRoundTrip = false
+    do {
+        let parsed = try JSONDecoder().decode(ModelCatalog.self,
+                                             from: rewriteNestedVerdict("usable-with-conditions"))
+        let row = parsed.entries.first(where: { $0.id == probeID })?.weightsEvidence
+        knownRoundTrip = row?.verdict == .usableWithConditions
+            && row?.verdictRaw == "usable-with-conditions"
+    } catch {
+        check(false, "a known nested verdict decodes", "\(error)")
+    }
+    check(knownRoundTrip, "every nested evidence member decodes from the shipped shape")
+
+    // The flat spelling named by the release gate must carry the same facts and
+    // the same rejection, so a catalog written either way cannot smuggle a bad
+    // verdict past the checks above.
+    func rejectingFlat(_ evidence: [String: Any]) -> Bool {
+        var object = try! JSONSerialization.jsonObject(with: legacyData) as! [String: Any]
+        var entries = object["entries"] as! [[String: Any]]
+        for index in entries.indices where entries[index]["id"] as? String == probeID {
+            for (key, value) in evidence { entries[index][key] = value }
+        }
+        object["entries"] = entries
+        return (try? ModelCatalog.load(data: try! JSONSerialization.data(withJSONObject: object)))
+            == nil
+    }
+    let flatOK: [String: Any] = [
+        "weightsLicenseUrl": "https://example.com/LICENSE-WEIGHTS",
+        "weightsLicenseReadOn": readOn,
+        "commercialOk": true,
+        "weightsLicenseExplicit": true,
+        "noticeText": "MIT notice text recorded for the flat spelling.",
+        "verdict": "usable",
+        "verdictReason": "The author granted the weights explicitly.",
+    ]
+    let flatURL = flatOK["weightsLicenseUrl"] as! String
+    var flatLoaded: ModelCatalogEntry.WeightsLicenseEvidence?
+    do {
+        var object = try! JSONSerialization.jsonObject(with: legacyData) as! [String: Any]
+        var entries = object["entries"] as! [[String: Any]]
+        for index in entries.indices where entries[index]["id"] as? String == probeID {
+            for (key, value) in flatOK { entries[index][key] = value }
+        }
+        object["entries"] = entries
+        let parsed = try ModelCatalog.load(
+            data: try! JSONSerialization.data(withJSONObject: object))
+        flatLoaded = parsed.entries.first(where: { $0.id == probeID })?.weightsEvidence
+    } catch {
+        check(false, "the flat evidence spelling loads", "\(error)")
+    }
+    check(flatLoaded?.licenseUrl == flatURL
+            && flatLoaded?.readOn == readOn
+            && flatLoaded?.explicit == true
+            && flatLoaded?.commercialOk == true
+            && flatLoaded?.verdict == .usable,
+          "the flat evidence spelling decodes into the same record")
+    check(!rejectingFlat(["weightsLicenseReadOn": readOn, "verdict": "usable"]),
+          "the flat spelling with a valid shape loads")
+    check(rejectingFlat(["weightsLicenseReadOn": "last tuesday"]),
+          "the flat spelling is held to the same date rule")
+    check(rejectingFlat(["verdict": "probably-fine"]),
+          "the flat spelling is held to the same closed verdict set")
+    check(rejectingFlat(["commercialOk": false, "verdict": "usable"]),
+          "the flat spelling is held to the same commercial rule")
+
+    // (e) The invariant asked for: nothing shipped may claim both commercial
+    // permission and exclusion. FLUX's exclusion is a memory constraint, which
+    // lives in notes precisely so this stays true.
+    check(!shipped.entries.contains {
+        $0.weightsEvidence?.commercialOk == true && $0.weightsEvidence?.verdict == .excluded
+    }, "no shipped entry pairs commercialOk with an excluded verdict")
+    // The same rule as a property over every constructible verdict/commercial
+    // pair, so it cannot be satisfied by the four rows happening to agree.
+    var loadedPairs = 0
+    var refusedPairs = 0
+    var derivedViolation = false
+    for verdict in [ModelCatalogEntry.ModelLicenseVerdict.usable,
+                    .usableWithConditions, .excluded] {
+        for commercial in [true, false] {
+            for explicit in [true, false] {
+                var object = try! JSONSerialization.jsonObject(with: legacyRaw)
+                    as! [String: Any]
+                var entries = object["entries"] as! [[String: Any]]
+                for index in entries.indices where entries[index]["id"] as? String == probeID {
+                    entries[index]["weightsEvidence"] = [
+                        "verdict": verdict.rawValue, "commercialOk": commercial,
+                        "explicit": explicit, "readOn": readOn,
+                    ]
+                }
+                object["entries"] = entries
+                let data = try! JSONSerialization.data(withJSONObject: object)
+                guard let parsed = try? ModelCatalog.load(data: data) else {
+                    // The only legal refusal here is the gate's own invariant, so
+                    // a rejection that is not `commercialOk == false` paired with a
+                    // non-excluded verdict means the rule fired for the wrong row.
+                    if commercial == false && verdict != .excluded { refusedPairs += 1 } else {
+                        check(false, "\(verdict.rawValue)/commercial=\(commercial) was refused "
+                              + "for a reason other than the commercial invariant")
+                    }
+                    continue
+                }
+                let row = parsed.entries.first(where: { $0.id == probeID })?.weightsEvidence
+                guard let row else { continue }
+                loadedPairs += 1
+                // `commercialOk` must round-trip exactly as written: a verdict
+                // never sets it, never clears it, and an excluded verdict keeps
+                // whatever the dossier recorded. What may never happen is a row
+                // that is both excluded and advertised as cleared for use.
+                if row.commercialOk != commercial
+                    || row.explicit != explicit
+                    || row.verdict != verdict { derivedViolation = true }
+            }
+        }
+    }
+    check(loadedPairs == 8 && refusedPairs == 4 && !derivedViolation,
+          "commercialOk/explicit/verdict stay independent, and only the commercial "
+          + "invariant refuses a combination",
+          "\(loadedPairs) decoded, \(refusedPairs) refused by the invariant")
+
+    check(shipped.entries.allSatisfy { $0.weightsEvidence?.commercialOk != nil },
+          "every shipped entry records its commercial position explicitly")
+    check(shipped.entries.allSatisfy { $0.weightsEvidence?.explicit != nil },
+          "every shipped entry says whether the grant was stated about the weights")
+    check(shipped.entries.allSatisfy { $0.weightsEvidence?.readOn == readOn },
+          "every shipped evidence record carries the dossier read date")
+
+    // Equality is the recorded licence position, not the file's spelling: two
+    // rows saying the same thing must compare equal whether one arrived through
+    // the flat keys or the other carries an unparseable verdict word.
+    let sameRecord = ModelCatalogEntry.WeightsLicenseEvidence(
+        licenseUrl: "https://example.com/L", readOn: readOn, explicit: true,
+        commercialOk: true, noticeText: "n", verdict: .usable, verdictRaw: "usable",
+        verdictReason: "r", datasetNote: nil)
+    let unknownWord = ModelCatalogEntry.WeightsLicenseEvidence(
+        licenseUrl: "https://example.com/L", readOn: readOn, explicit: true,
+        commercialOk: true, noticeText: "n", verdict: nil, verdictRaw: "probably-fine",
+        verdictReason: "r", datasetNote: nil)
+    let flatSpelled = ModelCatalogEntry.WeightsLicenseEvidence(
+        licenseUrl: "https://example.com/L", readOn: readOn, explicit: true,
+        commercialOk: true, noticeText: "n", verdict: .usable, verdictRaw: "usable",
+        verdictReason: "r", datasetNote: nil, flatSpelling: true)
+    let differentVerdict = ModelCatalogEntry.WeightsLicenseEvidence(
+        licenseUrl: "https://example.com/L", readOn: readOn, explicit: true,
+        commercialOk: true, noticeText: "n", verdict: .excluded, verdictRaw: "excluded",
+        verdictReason: "r", datasetNote: nil)
+    check(sameRecord == flatSpelled,
+          "the same licence position compares equal across both spellings")
+    check(sameRecord != differentVerdict,
+          "a different verdict is a different record")
+    check(!unknownWord.verdictRaw!.isEmpty,
+          "an unparseable verdict word stays readable for the rejection message")
+
+    // (g) Cross-surface check against the worker's own catalog table: the two
+    // surfaces record the same licence facts and must not drift apart. The
+    // worker file is read as text here, because parsing it in Python would need
+    // a new registered suite, which this gate may not add.
+    do {
+        let workerURL = testsRoot.appendingPathComponent("worker/retouch_ai_worker/catalog.py")
+        if let worker = try? String(contentsOf: workerURL, encoding: .utf8) {
+            // Split on the entry constructor: every chunk after the first belongs
+            // to one ModelEntry, so a value cannot leak between rows. The worker's
+            // own tests call `replace(entry, ...)`, so only a line that opens a
+            // record counts as a boundary.
+            let blocks = worker.components(separatedBy: "\n    ModelEntry(").dropFirst()
+            check(blocks.count == shipped.entries.count,
+                  "the worker catalog lists as many entries as the app catalog",
+                  "\(blocks.count) vs \(shipped.entries.count)")
+            for row in shipped.entries {
+                guard let evidence = row.weightsEvidence else { continue }
+                guard let block = blocks.first(where: { $0.contains("id=\"\(row.id)\"") }) else {
+                    check(false, "\(row.id) exists in the worker catalog")
+                    continue
+                }
+                check(block.contains("license_id=\"\(row.codeLicense)\"")
+                        || block.contains("license_id=\"\(row.weightsLicense)\""),
+                      "\(row.id) states the same SPDX on both surfaces", row.weightsLicense)
+                if let url = evidence.licenseUrl {
+                    check(block.contains("license_url=\"\(url)\""),
+                          "\(row.id) records the same weights grant URL in the worker", url)
+                }
+                if let readOn = evidence.readOn {
+                    check(block.contains("license_read_on=\"\(readOn)\""),
+                          "\(row.id) records the same read date in the worker", readOn)
+                }
+                if evidence.commercialOk == true {
+                    check(block.contains("commercial_ok=True"),
+                          "\(row.id) is cleared for commercial use on both surfaces")
+                }
+            }
+        } else {
+            check(false, "the worker catalog is readable for the cross-surface check")
+        }
+    }
+
+    // (h) The untouched accessors, frozen independently of the old-format
+    // comparison above: the four current entries must reach exactly the
+    // decisions they reached before this gate existed.
+    let frozen: [(String, Bool, String?)] = [
+        ("flux2-klein-4b-q4", true, nil),
+        ("sam2.1-hiera-tiny", false, "Downloading is refused: the sam2 runtime package is not installed in the bundled worker, so these weights would have nothing to run on. The checkpoint's size and SHA-256 are recorded, so an install that is already on disk can be verified and adopted into a version."),
+        ("swin2sr-x4", true, nil),
+        ("migan", true, nil),
+    ]
+    for (id, verifiable, problem) in frozen {
+        guard let row = shipped.entry(id: id) else {
+            check(false, "\(id) is still in the shipped catalog")
+            continue
+        }
+        check(row.isVerifiable == verifiable, "\(id) verifiability is unchanged",
+              "\(row.isVerifiable)")
+        check(row.verificationProblem == problem, "\(id) refusal reason is unchanged",
+              row.verificationProblem ?? "nil")
+    }
+    // A store built from the shipped catalog must expose the same licence
+    // strings it exposed before, because the consent sheet reads them from here.
+    let frozenRoot = scratchRoot.appendingPathComponent(UUID().uuidString)
+    try! FileManager.default.createDirectory(at: frozenRoot, withIntermediateDirectories: true)
+    let frozenStore = ModelStore(root: frozenRoot, catalog: shipped, platform: "macos-arm64",
+                                 allowLocalHTTP: false)
+    let frozenRecords = frozenStore.records()
+    check(frozenRecords.map(\.id).sorted() == shipped.entries.map(\.id).sorted(),
+          "the shipped catalog still lists all four models")
+    check(frozenRecords.allSatisfy {
+        $0.entry.weightsEvidence != nil && !$0.entry.codeLicense.isEmpty
+    }, "a store built from the shipped catalog carries licence strings and evidence")
 }
 
 print("\n\(failures.isEmpty ? "✓ all model-store checks passed" : "✗ \(failures.count) checks failed")")
