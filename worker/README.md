@@ -25,6 +25,14 @@ without downloading torch. `--full` builds the interpreter from
 `c28d9d213c09b5b5ab2c29812950e12f746999e099b82894231be954b26baed9`); the app
 bundle carries that framework, never a Homebrew or user-installed Python.
 
+The full lock is what ships, so it has its own checks. `tools/lock_closure.py`
+parses the shipped package's imports and proves each unguarded one is pinned
+(`sam2` is guarded, a deliberate refusal, not a dependency), then compares a
+`pip --dry-run --report` of the full lock against it. `tools/import_smoke.py`
+imports the heavy modules the engine loads lazily once a full environment
+exists. CI runs the first on every pull request, and the second beside a build
+of the runtime archive.
+
 ## Run
 
 ```bash
@@ -209,7 +217,7 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-163 tests, no GPU and no model download: framing, contract versioning, request
+166 tests, no GPU and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing

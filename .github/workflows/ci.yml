@@ -161,7 +161,7 @@ jobs:
         run: |
           set -euo pipefail
           for verdict in \
-            'Ran 163 tests' \
+            'Ran 166 tests' \
             'StudioCore: [0-9]+ checks passed' \
             'Upscale ETA: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
@@ -196,6 +196,199 @@ jobs:
             build/python-runtime/make.log
             build/python-runtime/install.log
           if-no-files-found: ignore
+
+  # The app ships `worker/requirements.lock`; the suite installs only
+  # `requirements-test.lock`. That split is right for speed — and it is how an
+  # unpinned import once reached the owner's machine: the engine imported
+  # `cv2`, the tests never loaded it, and the break surfaced as an ImportError
+  # behind an AI feature. This job proves the shipping lock on the platform
+  # whose wheels are the ones that ship. It resolves every pin, downloads each
+  # artefact to check the recorded SHA-256, installs nothing, then hands pip's
+  # report to `worker/tools/lock_closure.py`, which proves the report is
+  # exactly the locked set: no direct URL, no version pip chose, no
+  # distribution the lock does not name, and nothing the lock pins missing.
+  # The same script re-runs the source-level import closure; the new suite in
+  # `Tests/run-worker.sh` runs it too, so a missing pin also fails the
+  # required macOS Integration job even before this one is configured as a
+  # required check.
+  #
+  # Measured locally on macOS arm64 with Python 3.13: 304.6 MB downloaded in
+  # 169.8 s. Linux is not used on purpose: the recorded hashes are macOS
+  # wheels, so a Linux resolution would fail for the wrong reason and would
+  # say nothing about the payload that ships.
+  worker-lock-closure:
+    name: Worker Lock Closure
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up the interpreter the locks are written for
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          uname -m
+          python --version
+          python -m pip --version
+
+      # --no-cache-dir keeps the recorded cost honest: a warm cache would
+      # report a number a fresh runner cannot reproduce.
+      - name: Resolve the full runtime lock without installing
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          # --ignore-installed keeps the report independent of whatever the
+          # runner image already has: a pin the image happens to satisfy would
+          # otherwise drop out of "install" and read as a lock failure.
+          python -m pip install --no-cache-dir --ignore-installed \
+            --require-hashes --no-deps --dry-run \
+            --report "$RUNNER_TEMP/runtime-report.json" \
+            -r worker/requirements.lock
+          echo "resolver wall time: $(( $(date +%s) - started ))s"
+
+      - name: Prove the lock closes over the shipped imports
+        run: |
+          set -euo pipefail
+          python worker/tools/lock_closure.py \
+            --report "$RUNNER_TEMP/runtime-report.json" \
+            | tee "$RUNNER_TEMP/lock-closure.log"
+          grep -qE '^WORKER LOCK CLOSURE: PASS \([0-9]+ distributions, [0-9]+ imported modules\)$' \
+            "$RUNNER_TEMP/lock-closure.log"
+
+      - name: Upload the closure log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-lock-closure-log
+          path: |
+            ${{ runner.temp }}/lock-closure.log
+            ${{ runner.temp }}/runtime-report.json
+          if-no-files-found: ignore
+
+  # What the app actually ships is a copy of the interpreter, the worker
+  # package and the full site-packages, assembled by `Tools/bundle-worker.sh`.
+  # No CI job ever ran that script — the release job sets
+  # RETOUCH_SKIP_WORKER=1 — so the distributable helper tree was never built or
+  # inspected on a runner. This job builds it end to end into a scratch app
+  # bundle and inspects the result: the three payload documents, one dist-info
+  # per lock pin, licence files inside those dist-info directories, a SHA-256
+  # manifest of the tree, and the import smoke run by the bundled interpreter
+  # with the same PYTHONHOME/PYTHONPATH the app sets at launch.
+  #
+  # It is `continue-on-error` on purpose: this is the first time the payload is
+  # built in CI, so a failure is evidence to act on, not a merge gate. It
+  # removes nothing, changes no dependency and downloads no model; promote it
+  # to a blocking check once it has a green streak. Measured locally: the full
+  # lock unpacks to 1.4 GB of site-packages (67 pinned distributions plus the
+  # venv's own pip), and the source runtime is built from source here exactly
+  # as the macOS Integration job builds it.
+  worker-payload-bundle:
+    name: Worker Payload Bundle
+    runs-on: macos-15
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          uname -m
+          sw_vers
+
+      - name: Build the pinned source runtime
+        run: |
+          set -euo pipefail
+          for formula in openssl@3 xz sqlite; do
+            brew list --versions "$formula" >/dev/null 2>&1 || brew install "$formula"
+          done
+          runtime="$(./Tools/build-python-runtime.sh)"
+          echo "source runtime: $runtime"
+          echo "PYTHON_RUNTIME=$runtime" >> "$GITHUB_ENV"
+
+      - name: Install the full runtime lock
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          RETOUCH_PYTHON="$PYTHON_RUNTIME" ./Tools/setup-worker-venv.sh --full
+          echo "full-lock install wall time: $(( $(date +%s) - started ))s"
+          du -sh worker/.venv worker/.venv/lib/python3.13/site-packages
+
+      - name: Import the modules the shipped worker loads lazily
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          worker/.venv/bin/python3 worker/tools/import_smoke.py
+          echo "import smoke wall time: $(( $(date +%s) - started ))s"
+
+      - name: Bundle the helper and package the runtime archive
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/payload/Retouch Studio.app"
+          mkdir -p "$app/Contents/Resources" "$RUNNER_TEMP/payload/out"
+          ./Tools/bundle-worker.sh "$app"
+          cd "$RUNNER_TEMP/payload/out"
+          "$GITHUB_WORKSPACE/Tools/make-runtime.sh" \
+            "$app/Contents/Resources/Worker" 0.0.0-ci
+          echo "RUNTIME_ZIP=$RUNNER_TEMP/payload/out/RetouchStudio-0.0.0-ci-ai-runtime-arm64.zip" >> "$GITHUB_ENV"
+
+      # `make-runtime.sh` zips the Worker folder itself, so these names are
+      # exactly what extraction puts at the root of an installed runtime. The
+      # listing is the evidence that the payload carries its own documents and
+      # every locked distribution's metadata and licences.
+      - name: Inspect the runtime archive
+        run: |
+          set -euo pipefail
+          out="$RUNTIME_ZIP"
+          locked=$(grep -cE '^[A-Za-z0-9]' worker/requirements.lock)
+          entries=$(unzip -Z1 "$out")
+          for name in LICENSE THIRD_PARTY_NOTICES.md requirements.lock; do
+            printf '%s\n' "$entries" | grep -qx "$name" || {
+              echo "the archive has no $name at its root" >&2; exit 1; }
+          done
+          printf '%s\n' "$entries" | grep -qx 'bin/python3' || {
+            echo "the archive has no bundled interpreter" >&2; exit 1; }
+          package_files=$(printf '%s\n' "$entries" | grep -c '^retouch_ai_worker/' | tr -d ' ')
+          distinfos=$(printf '%s\n' "$entries" \
+            | sed -nE 's#^site-packages/([^/]+)\.dist-info/.*#\1#p' | sort -u | wc -l | tr -d ' ')
+          licences=$(printf '%s\n' "$entries" \
+            | grep -cE '^site-packages/[^/]+\.dist-info/(licenses/)?(LICENSE|COPYING|NOTICE)' | tr -d ' ')
+          files=$(printf '%s\n' "$entries" | wc -l | tr -d ' ')
+          echo "entries: $files (worker package files: $package_files)"
+          echo "dist-info directories: $distinfos (the lock pins $locked)"
+          echo "licence files inside dist-info: $licences"
+          [ "$distinfos" -ge "$locked" ] || {
+            echo "fewer dist-info directories than pins: $distinfos < $locked" >&2; exit 1; }
+          [ "$licences" -gt 0 ] || {
+            echo "no licence file survived into the archive" >&2; exit 1; }
+          stat -f 'archive bytes: %z' "$out"
+          shasum -a 256 "$out"
+          echo "WORKER PAYLOAD: PASS ($distinfos dist-info for $locked pins, $licences licence files, $files entries)"
+
+      # Extract with ditto, the same tool the archive was made with, so symlinks
+      # inside the runtime survive. The imports then run under the environment
+      # `AIRuntimeValidation` constructs: the payload's own framework as home,
+      # the payload root and site-packages on PYTHONPATH, no user site.
+      - name: Import from the extracted runtime
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/runtime"
+          ditto -x -k "$RUNTIME_ZIP" "$RUNNER_TEMP/runtime"
+          root="$RUNNER_TEMP/runtime"
+          home=$(ls -d "$root"/Python.framework/Versions/3.13)
+          PYTHONHOME="$home" \
+          PYTHONPATH="$root:$root/site-packages" \
+          PYTHONNOUSERSITE=1 \
+          PYTHONDONTWRITEBYTECODE=1 \
+            "$root/bin/python3" worker/tools/import_smoke.py
 
   windows-core:
     name: Windows StudioCore
