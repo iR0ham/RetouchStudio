@@ -29,6 +29,26 @@ capability probe names a shipped package — `capabilities.py` asks
 `find_spec("sam2")` to decide whether a capability is available, and that
 answer is allowed to be "no".
 
+An import this walk cannot read is not silently dropped. A functional import
+whose module name is not a string literal reachable statically —
+`__import__(module_variable)`, `importlib.import_module(computed)` — is a
+violation naming its file and line, because a gate that reported nothing for an
+import it could not see would be an escape hatch. `audit(..., allow_dynamic=True)`
+opts a specific call site out when an unreadable import is genuinely expected;
+nothing in the shipped package needs it today.
+
+The precise residual limit, stated so nobody has to re-derive it: recognition
+needs to know that a call imports something. A literal name inside a recognised
+importer is audited; a call to a recognised importer with a non-literal name is
+reported as unreadable; but code that hides the importer itself behind a
+computation — `getattr(importlib, "import_module")`, `globals()["__import__"]`,
+an alias assigned from something other than a `from importlib import ...`
+statement — presents no function name to classify, so it is invisible to this
+walk exactly as it was before. Closing that would mean evaluating arbitrary
+Python during the audit; the honest mitigation is that such code is loud in
+review, and `import_smoke.run` still fails if the module it imports is missing
+from a real lock install.
+
 Usage:
     python worker/tools/lock_closure.py [--report report.json]
                                         [--lock PATH] [--package DIR]
@@ -221,13 +241,77 @@ def _import_guard(handler: ast.ExceptHandler) -> str | None:
     return _handler_text(handler)
 
 
+def _import_call_kind(func: str) -> str | None:
+    """Which importer a resolved call name is, or None if it is not one.
+
+    `__import__` is the interpreter's importer and can only be called by that
+    name, so an attribute of any module reaching it (`builtins.__import__`) is
+    treated as one. `import_module` is importlib's: `_bind` gives its qualified
+    spelling back in full, because that prefix is what proves which module owns
+    it, and gives its bare spelling back unchanged for `_import_call_kind` to
+    look up — see `IMPORT_FUNCS` for why the bare name is believed too. An
+    attribute call on something that is not a plain name
+    (`factory().import_module(...)`) is not believed either: `_bind` returns
+    empty for it, so it cannot hide behind this rule.
+
+    The returned value is also the parameter each function takes the module name
+    in, which is why both are `name` today yet neither is assumed to be the
+    other's spelling.
+    """
+    if func == "__import__" or func.endswith(".__import__"):
+        return "__import__"
+    if func in ("import_module", "importlib.import_module"):
+        return "import_module"
+    return None
+
+
+def _literal_import_name(node: ast.Call, parameter: str) -> str | None:
+    """The string literal a functional import names its module with.
+
+    Positional first argument or the keyword the function documents — nothing
+    else. A name this cannot read statically returns None so the caller can
+    report the import as unresolvable rather than pretend it is absent.
+    """
+    if node.args and isinstance(node.args[0], ast.Constant) \
+            and isinstance(node.args[0].value, str):
+        return node.args[0].value
+    for keyword in node.keywords:
+        if keyword.arg == parameter and isinstance(keyword.value, ast.Constant) \
+                and isinstance(keyword.value.value, str):
+            return keyword.value.value
+    return None
+
+
 class _Imports(ast.NodeVisitor):
     """Collects top-level module names, remembering which are guarded.
 
     Walking the tree rather than reading lines is what reaches the lazy
     imports inside job methods (torch, transformers, mlx, mflux) — the exact
     place an unpinned dependency hides.
+
+    A functional import (`__import__(...)`, `importlib.import_module(...)`) is
+    recognised only when its name is a string literal reachable statically, in
+    one of four spellings: positional (`import_module("cv2")`), keyword
+    (`__import__(name="cv2")`), reached through a module attribute
+    (`builtins.__import__("cv2")`), or reached through a name that this file
+    bound with `from importlib import import_module`. Every other spelling — a
+    name held in a variable, an attribute of something other than a known
+    module, a call whose func is not a plain name or dotted name — is recorded
+    as an entry in `dynamic` rather than dropped, so a gate can fail closed on
+    an import it cannot read instead of reporting nothing at all.
     """
+
+    # The two functions that import by name, keyed by the qualified name each is
+    # reached by and valued with the parameter carrying the module name. Both
+    # spellings of `import_module` are listed because `_bind` only rewrites a
+    # bare local when its binding is seen before the call: a file that does
+    # `import_module("x")` above `from importlib import import_module` still
+    # binds that name at runtime, so the unqualified spelling is believed too.
+    # A same-named helper defined in the audited package would be read as an
+    # import — fail-safe in direction, and reported rather than skipped.
+    IMPORT_FUNCS = {"__import__": "name",
+                    "import_module": "name",
+                    "importlib.import_module": "name"}
 
     def __init__(self, filename: str) -> None:
         self.filename = filename
@@ -236,6 +320,47 @@ class _Imports(ast.NodeVisitor):
         self.found: dict[str, dict[str, set]] = {}
         self.guards: set[str] = set()
         self.broad: set[str] = set()
+        # Import-like calls this walk could not resolve to a literal name.
+        self.dynamic: set[str] = set()
+        # Local names bound by `from importlib import import_module`, plus the
+        # aliases of modules imported for their attributes
+        # (`import builtins` -> `builtins`). Both are per-file and track the
+        # enclosing definition, because a name bound inside a function is not
+        # visible outside it.
+        self._func_alias: dict[str, str] = {}
+        # Top-level names bound by `import x` / `import x.y [as z]`, used to
+        # expand the module part of an attribute call. Kept separate from
+        # `_func_alias`: `importlib` is both a package that may be imported and
+        # the owner of `import_module`, and the two must not overwrite each
+        # other.
+        self._module_alias: dict[str, str] = {}
+
+    def _bind(self, node: ast.AST) -> str:
+        """The qualified name a call's `func` resolves to, else an empty string.
+
+        A dotted importlib function reached through a submodule
+        (`importlib.import_module`) is the importer itself, so it keeps its full
+        dotted name — that prefix is what proves it. Any other attribute call is
+        judged by the final name alone, because `__import__` can only be reached
+        through the module that owns it.
+        """
+        if isinstance(node, ast.Name):
+            return self._func_alias.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            if not isinstance(node.value, ast.Name):
+                return ""
+            if node.attr == "import_module":
+                prefix = self._module_alias.get(node.value.id, node.value.id)
+                return f"{prefix}.{node.attr}"
+            return node.attr
+        return ""
+
+    def _note_dynamic(self, node: ast.Call) -> None:
+        try:
+            text = ast.unparse(node)[:80]
+        except (AttributeError, RecursionError):  # pragma: no cover - py<3.9
+            text = "<unprintable call>"
+        self.dynamic.add(f"{self.filename}:{node.lineno}: {text}")
 
     def _record(self, names: list[str]) -> None:
         for name in names:
@@ -254,6 +379,11 @@ class _Imports(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import) -> None:
         self._record([alias.name for alias in node.names])
+        for alias in node.names:
+            # `import builtins` / `import importlib` make an attribute call on
+            # that name a real importer; `import x.y as z` binds `z`.
+            self._module_alias[alias.asname or alias.name.split(".")[0]] = \
+                alias.name
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.level == 0 and node.module:
@@ -261,18 +391,20 @@ class _Imports(ast.NodeVisitor):
             names += [f"{node.module}.{alias.name}" for alias in node.names
                       if alias.name != "*"]
             self._record(names)
+            if node.module == "importlib":
+                for alias in node.names:
+                    if alias.name in self.IMPORT_FUNCS:
+                        self._func_alias[alias.asname or alias.name] = alias.name
 
     def visit_Call(self, node: ast.Call) -> None:
-        if node.args and isinstance(node.args[0], ast.Constant) \
-                and isinstance(node.args[0].value, str):
-            target = ""
-            func = node.func
-            if isinstance(func, ast.Name):
-                target = func.id
-            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-                target = f"{func.value.id}.{func.attr}"
-            if target in ("__import__", "importlib.import_module"):
-                self._record([node.args[0].value])
+        func = self._bind(node.func)
+        kind = _import_call_kind(func)
+        if kind is not None:
+            literal = _literal_import_name(node, self.IMPORT_FUNCS[kind])
+            if literal is None:
+                self._note_dynamic(node)
+            else:
+                self._record([literal])
         self.generic_visit(node)
 
     def visit_Try(self, node: ast.Try) -> None:
@@ -304,11 +436,19 @@ class _Imports(ast.NodeVisitor):
         body does run at definition time, which an enclosing handler would
         cover, but treating it the same keeps the classifier conservative for
         a shape nobody in the shipped package uses.
+
+        The name bindings that decide whether a call is an importer are lexical
+        too, so function-local `from importlib import import_module` cannot leak
+        out to module level. Module-level `import x` aliases stay visible: they
+        are the common case behind `builtins.__import__`.
         """
         guards, broad = self.guards, self.broad
+        funcs = self._func_alias
         self.guards, self.broad = set(), set()
+        self._func_alias = {}
         self.generic_visit(node)
         self.guards, self.broad = guards, broad
+        self._func_alias = funcs
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_definition(node)
@@ -323,12 +463,20 @@ class _Imports(ast.NodeVisitor):
         self._visit_definition(node)
 
 
-def imported_modules(package: Path) -> dict[str, dict[str, set]]:
+def imported_modules(package: Path) -> tuple[dict[str, dict[str, set]], set[str]]:
+    """Return ({top-level module: entry}, import-like calls with no literal name).
+
+    The second value is the set of unresolvable functional imports found in the
+    package, each already prefixed with its file and line. A caller that only
+    cares about names it can read ignores it; a gate uses it to fail closed.
+    """
     found: dict[str, dict[str, set]] = {}
+    dynamic: set[str] = set()
     for source in sorted(package.rglob("*.py")):
         visitor = _Imports(str(source.relative_to(package.parent)))
         visitor.visit(ast.parse(source.read_text(encoding="utf-8"),
                                 filename=str(source)))
+        dynamic |= visitor.dynamic
         for module, entry in visitor.found.items():
             merged = found.setdefault(
                 module, {"files": set(), "guarded": set(), "guards": set(),
@@ -338,10 +486,12 @@ def imported_modules(package: Path) -> dict[str, dict[str, set]]:
             merged["guards"] |= entry["guards"]
             merged["broad"] |= entry["broad"]
             merged["names"] |= entry["names"]
-    return found
+    return found, dynamic
 
 
-def audit(lock: Lock, package: Path) -> tuple[list[str], dict[str, str], dict[str, str]]:
+def audit(lock: Lock, package: Path,
+          *, allow_dynamic: bool = False
+          ) -> tuple[list[str], dict[str, str], dict[str, str]]:
     """Return (violations, {module: distribution}, {module: why it is optional})."""
     try:
         stdlib = sys.stdlib_module_names
@@ -350,7 +500,16 @@ def audit(lock: Lock, package: Path) -> tuple[list[str], dict[str, str], dict[st
     violations: list[str] = []
     resolved: dict[str, str] = {}
     optional: dict[str, str] = {}
-    for module, entry in sorted(imported_modules(package).items()):
+    imported, dynamic = imported_modules(package)
+    if dynamic and not allow_dynamic:
+        where = "; ".join(sorted(dynamic))
+        violations.append(
+            f"{where}: an import whose module name this walk cannot read "
+            f"statically. It is not evidence of a missing pin, so it is "
+            f"reported rather than skipped: name the module in a literal "
+            f"`__import__(...)`/`importlib.import_module(...)` call, or pass "
+            f"`allow_dynamic=True` where an unreadable import is expected")
+    for module, entry in sorted(imported.items()):
         if module in stdlib or module in FIRST_PARTY:
             continue
         distribution = distribution_for(module, entry["names"])

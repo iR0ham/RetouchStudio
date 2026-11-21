@@ -213,6 +213,54 @@ class ImportSmokePlanTest(unittest.TestCase):
         smoke.run(result.targets, imported.append)
         self.assertEqual(imported, [])
 
+    def test_a_functional_import_is_derived_or_named_never_invisible(self):
+        """The smoke shares the closure's AST walk, so it sees the same imports.
+
+        A pinned module imported by call must become a derived target and be
+        imported; an unpinned one must be named; and a name the walk cannot read
+        must be named too, so an empty target list can never mean "nothing to
+        check". The three escapes measured on the reviewer's probe — aliased
+        `import_module`, the `name=` keyword, `builtins.__import__` — are each
+        asserted against both gates here, because a hole in the shared walk is a
+        hole in both.
+        """
+        write_package(self.package, {
+            "engine.py": ("from importlib import import_module\n"
+                          "import_module('numpy')\n"),
+        })
+        result = smoke.plan(self.package, self.lock, fixed=())
+        self.assertEqual([target.module for target in result.derived], ["numpy"])
+        self.assertEqual(result.stale, [])
+        imported: list[str] = []
+        smoke.run(result.targets, imported.append)
+        self.assertIn("numpy", imported)
+
+        write_package(self.package, {
+            "engine.py": "__import__(name='cv2')\n"})
+        result = smoke.plan(self.package, self.lock, fixed=())
+        unpinned = {module for module, _files, _guard in result.unpinned}
+        self.assertIn("cv2", unpinned)
+        self.assertNotIn("cv2", [t.module for t in result.targets])
+
+        write_package(self.package, {
+            "engine.py": "import builtins\nbuiltins.__import__('cv2')\n"})
+        result = smoke.plan(self.package, self.lock, fixed=())
+        self.assertIn("cv2", {module for module, _f, _g in result.unpinned})
+
+        # An unreadable name is reported by both gates rather than skipped.
+        write_package(self.package, {
+            "engine.py": "import importlib\nimportlib.import_module(which)\n"})
+        result = smoke.plan(self.package, self.lock, fixed=())
+        self.assertEqual(len(result.unpinned), 1, result.unpinned)
+        module, files, guard = result.unpinned[0]
+        self.assertIn("engine.py:", module)
+        self.assertEqual((files, guard), ("dynamic import", ""))
+        self.assertEqual(result.targets, [])
+        violations, _resolved, _optional = lock_closure.audit(
+            self.lock, self.package)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("cannot read", violations[0])
+
     def test_the_shipped_package_has_no_stale_targets(self):
         """The real TARGETS still describe the real worker."""
         real_lock = lock_closure.read_lock(WORKER / "requirements.lock")

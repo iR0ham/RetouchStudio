@@ -102,11 +102,17 @@ def _stdlib() -> frozenset[str]:
 def plan(package: Path, lock: lock_closure.Lock,
          fixed: tuple[tuple[str, str], ...] = TARGETS) -> Plan:
     """Combine the fixed floor with the imports the code actually has."""
-    imported = lock_closure.imported_modules(package)
+    imported, dynamic = lock_closure.imported_modules(package)
     names: set[str] = set()
     for entry in imported.values():
         names |= entry.get("names", set())
     result = Plan()
+    for call in sorted(dynamic):
+        # The AST walk could not read this import's module name, so no target
+        # can be derived from it. It is named rather than dropped: an empty
+        # plan must not look like a clean one. `lock_closure.audit` fails
+        # closed on the same set, so this cannot become an escape route.
+        result.unpinned.append((call, "dynamic import", ""))
     for module, why in fixed:
         if not any(name == module or name.startswith(module + ".")
                    for name in names):

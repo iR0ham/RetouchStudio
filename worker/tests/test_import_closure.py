@@ -461,6 +461,116 @@ class ImportClosureTest(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertNotIn("google", resolved)
 
+    def _audit_source(self, lock, source: str):
+        """Audit one file of source the way the gate sees it."""
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(source, encoding="utf-8")
+            return closure.audit(lock, package)
+
+    def test_a_functional_import_is_an_import_whatever_its_spelling(self):
+        """`import cv2` and a call that imports `cv2` are the same dependency.
+
+        The walk used to recognise only a positional string literal passed to
+        `__import__` or `importlib.import_module`. Three other spellings were
+        measured to produce no violation, no target and no unpinned entry — an
+        unpinned dependency could be added to the shipped package and pass every
+        gate with `from importlib import import_module` plus
+        `import_module("cv2")`. Each spelling below is now audited on a lock
+        without a `cv2` pin and must name `cv2`.
+        """
+        lock = closure.read_lock(WORKER / "requirements.lock")
+        self.assertNotIn("cv2", lock.pins)
+        forms = {
+            # The reviewer's three escapes.
+            "aliased import_module":
+                "from importlib import import_module\nimport_module('cv2')\n",
+            "keyword argument": "__import__(name='cv2')\n",
+            "builtins attribute":
+                "import builtins\nbuiltins.__import__('cv2')\n",
+            # Spellings that already worked; pinned so a refactor cannot trade
+            # one escape for another.
+            "dotted positional":
+                "import importlib\nimportlib.import_module('cv2')\n",
+            "dunder positional": "__import__('cv2')\n",
+            "aliased module":
+                "from importlib import import_module as imp\nimp('cv2')\n",
+            "inside a function":
+                "from importlib import import_module\n"
+                "def job():\n    return import_module('cv2')\n",
+        }
+        for label, source in forms.items():
+            with self.subTest(form=label):
+                violations, resolved, optional = self._audit_source(lock, source)
+                self.assertEqual(len(violations), 1, f"{label}: {violations}")
+                self.assertIn("cv2", violations[0])
+                self.assertEqual(optional, {})
+                self.assertNotIn("cv2", resolved)
+
+    def test_a_pinned_functional_import_resolves(self):
+        """The point is to see the import, not to forbid the spelling."""
+        lock = closure.read_lock(WORKER / "requirements.lock")
+        self.assertIn("numpy", lock.pins)
+        violations, resolved, _optional = self._audit_source(
+            lock, "from importlib import import_module\nimport_module('numpy')\n")
+        self.assertEqual(violations, [])
+        self.assertEqual(resolved.get("numpy"), "numpy")
+
+    def test_an_unreadable_functional_import_fails_closed_and_can_be_allowed(self):
+        """A name the walk cannot read is reported, never dropped.
+
+        Failing closed is what stops the four recognised spellings from becoming
+        a whitelist to dodge: `import_module(module_variable)` and
+        `getattr(importlib, "import_module")(...)` have no literal to audit, so
+        each produces a violation naming its file and line. That is also why the
+        real tree must stay clean without the opt-out — nothing shipped imports a
+        computed name — and `allow_dynamic=True` exists for a caller that expects
+        one.
+        """
+        lock = closure.read_lock(WORKER / "requirements.lock")
+        unreadable = {
+            "variable name":
+                "from importlib import import_module\nimport_module(which)\n",
+            "f-string name":
+                "from importlib import import_module\n"
+                "import_module(f'cv{2}')\n",
+            "dunder attribute of a module":
+                "import builtins\nbuiltins.__import__(which)\n",
+            "keyword variable": "__import__(name=which)\n",
+        }
+        for label, source in unreadable.items():
+            with self.subTest(form=label):
+                violations, _resolved, _optional = self._audit_source(lock, source)
+                self.assertEqual(len(violations), 1, f"{label}: {violations}")
+                self.assertIn("engine.py:", violations[0])
+                self.assertIn("cannot read", violations[0])
+
+        # The one shape that is still invisible, pinned so the limit stays
+        # documented rather than quietly widened: hiding the importer itself
+        # behind a computation leaves no function name to classify.
+        hidden = ("import importlib\n"
+                  "getattr(importlib, 'import_module')('cv2')\n")
+        violations, _resolved, _optional = self._audit_source(lock, hidden)
+        self.assertEqual(violations, [],
+                         "the walk cannot know this call imports anything")
+        # The opt-out is per-call-site evidence, not a global mute: with it the
+        # file is silent, without it the same file fails.
+        source = unreadable["variable name"]
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            (package / "engine.py").write_text(source, encoding="utf-8")
+            violations, _resolved, _optional = closure.audit(
+                lock, package, allow_dynamic=True)
+        self.assertEqual(violations, [])
+
+        # Nothing in the shipped package needs the opt-out.
+        strict, resolved, _optional = closure.audit(
+            lock, WORKER / "retouch_ai_worker")
+        self.assertEqual(strict, [])
+        self.assertTrue(resolved)
+
     def test_lock_is_exact_hashed_and_covers_the_test_lock(self):
         lock = closure.read_lock(WORKER / "requirements.lock")
         self.assertEqual(lock.violations, [])
