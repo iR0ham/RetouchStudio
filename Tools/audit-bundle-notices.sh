@@ -11,7 +11,8 @@
 # per-file content check, and the Contents/Resources/Worker/** tree gets one
 # owner row per file — for that tree the audit only requires the helper's own
 # non-empty LICENSE and THIRD_PARTY_NOTICES.md, plus a requirements.lock whose
-# every pinned distribution the helper notice names by its exact name. The
+# every pinned distribution the helper notice names by its exact name (the
+# per-file content of the installed packages is not verified here). The
 # checker only reads the bundle; it never modifies or signs it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
