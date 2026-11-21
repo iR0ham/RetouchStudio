@@ -160,8 +160,9 @@ jobs:
       - name: Assert every suite reported a verdict
         run: |
           set -euo pipefail
+          expected_worker_tests=$(tr -d '[:space:]' < Tests/expected-worker-tests.txt)
           for verdict in \
-            'Ran 176 tests' \
+            "Ran ${expected_worker_tests} tests" \
             'StudioCore: [0-9]+ checks passed' \
             'Upscale ETA: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
@@ -288,8 +289,10 @@ jobs:
   # It is `continue-on-error` on purpose: this is the first time the payload is
   # built in CI, so a failure is evidence to act on, not a merge gate. It
   # removes nothing, changes no dependency and downloads no model. The owner's
-  # promotion criteria (2026-11-21) are recorded in `Docs/CI_GATES.md`; this
-  # job is not a required context. Measured locally: the full
+  # promotion criteria (2026-11-21) are recorded in `Docs/CI_GATES.md`; the
+  # commands, expected evidence and remaining unverified paths are in
+  # `Docs/WORKER_CI_VALIDATION_PLAN.md`. This job is not a required context.
+  # Measured locally: the full
   # lock unpacks to 1.4 GB of site-packages (67 pinned distributions plus the
   # venv's own pip), and the source runtime is built from source here exactly
   # as the macOS Integration job builds it.
@@ -346,6 +349,13 @@ jobs:
           set -euo pipefail
           worker/.venv/bin/python3 worker/tools/pip_check_gate.py
 
+      # The fixed eight targets are a critical-path floor, not the coverage.
+      # `import_smoke.py` adds every third-party top-level module the shipped
+      # package imports (the same AST walk `lock_closure.py` uses), fails a
+      # fixed target the code no longer imports, and names an unpinned import
+      # as the lock closure's failure instead of importing it. The required
+      # macOS job runs the lock closure tests, so an unpinned import cannot
+      # escape both checks. Seedings: `worker/tests/test_import_smoke.py`.
       - name: Import the modules the shipped worker loads lazily
         run: |
           set -euo pipefail

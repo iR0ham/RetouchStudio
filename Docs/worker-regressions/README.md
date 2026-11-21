@@ -1,7 +1,9 @@
 # Worker regression artifacts
 
 The Python worker source now lives at `worker/` in this repository. Its complete
-regression suite runs with `Tests/run-worker.sh` (176 tests) and the macOS CI job
+regression suite runs with `Tests/run-worker.sh`; the expected size is the
+single value in `Tests/expected-worker-tests.txt`, which the runner and the
+macOS CI job both check. The macOS CI job
 creates the hashed environment with `Tools/setup-worker-venv.sh`.
 
 This directory keeps the P0-06 download regression as a historical standalone

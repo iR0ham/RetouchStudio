@@ -217,7 +217,8 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-176 tests, no GPU and no model download: framing, contract versioning, request
+The suite size is pinned once, in `Tests/expected-worker-tests.txt`. No GPU
+and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing
@@ -235,6 +236,14 @@ claim is covered from both sides: `test_server.py` submits a slow job and shows
 its `<workdir>/.lock` refused to a second descriptor and to a real child process
 until `job.finished`, then granted once the job lets go, and `test_provenance.py`
 shows the same startup sweep leaving that lock file alone.
+
+The CI-only gates are covered by the same discover, without their heavy
+dependencies: `test_import_closure.py` proves the lock closes over the shipped
+imports, `test_import_smoke.py` proves the smoke derives a newly pinned import,
+reports a fixed target the code dropped, and leaves an unpinned import to the
+lock closure, and `test_pip_check_gate.py` / `test_payload_verification.py`
+prove the payload gate can judge a crashed `pip check`, zero licence files, an
+empty archive, a short archive and missing root documents without an abort.
 
 ## Acceptance
 
