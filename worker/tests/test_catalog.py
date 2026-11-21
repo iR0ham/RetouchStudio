@@ -2,6 +2,8 @@ import fcntl
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -19,6 +21,16 @@ from retouch_ai_worker.protocol import (BUSY, CATALOG_INVALID, CHECKSUM_MISMATCH
 
 WEIGHTS = b"weights"
 SHA_OF_WEIGHTS = hashlib.sha256(WEIGHTS).hexdigest()
+
+# The worker package's parent, so a subprocess can import the real module.
+WORKER_DIR = Path(catalog_module.__file__).resolve().parent.parent
+PROBE_TEMPLATE = """
+import json, sys
+sys.path.insert(0, %r)
+from retouch_ai_worker.catalog import Catalog
+catalog = Catalog(%r, allow_uncleared=False)
+print(json.dumps({"proofs": len(catalog._proofs)}))
+"""
 
 # The catalog only ships models whose weights are cleared. The gate still has
 # to refuse an uncleared entry if one is ever added, so the test supplies one.
@@ -787,6 +799,76 @@ class CatalogTests(unittest.TestCase):
                          "the worker used the version the pointer names, not the stale path")
         self.assertNotIn((LEGACY.id, LEGACY_LEASE), catalog._leases,
                          "the stale flat lease is released")
+
+    def test_a_cached_proof_never_crosses_a_process_boundary(self):
+        # The cache is the one part of this design an attacker only has to wait
+        # for, so its blast radius is pinned: it lives in the Catalog instance and
+        # nothing about it is written to disk. A second process - a fresh worker,
+        # or the `models verify` subprocess - must hash the same bytes again, even
+        # though it stats the very same inode the first one proved.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        first = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            first.require_verified(VERIFIED.id)
+        self.assertEqual(len(first._proofs), 1)
+
+        probe = PROBE_TEMPLATE % (str(WORKER_DIR), str(self.root))
+        result = subprocess.run([sys.executable, "-c", probe], capture_output=True,
+                                text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["proofs"], 0)
+        # And nothing under the model root could have carried it: `.locks` holds
+        # lease files, which are empty advisory locks and never a digest.
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()
+                                if path.name.startswith(".")), [".locks"])
+        for lock in (self.root / ".locks").iterdir():
+            self.assertEqual(lock.stat().st_size, 0,
+                             "a lease file grew content that another process "
+                             "could read as a verification result")
+
+    def test_a_replaced_file_with_a_forged_mtime_is_still_rehashed(self):
+        # Attempted bypass of the cache by the cheapest means available: write
+        # tampered bytes, then restore the modification time the honest file had.
+        # Length and mtime alone would read as "the same artifact I already
+        # verified"; ctime cannot be forged from userspace without extra
+        # privileges, and every write moves it.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        target = folder / "weights.bin"
+        target.write_bytes(WEIGHTS)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            catalog.require_verified(VERIFIED.id)
+            self.assertEqual(len(catalog._proofs), 1)
+            stamp = target.stat()
+            target.write_bytes(b"TAMPRED")               # same length, wrong bytes
+            os.utime(target, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            self.assertEqual(target.stat().st_mtime_ns, stamp.st_mtime_ns)
+            self.assertNotEqual(target.stat().st_ctime_ns, stamp.st_ctime_ns)
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require_verified(VERIFIED.id)
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(caught.exception.data["reason"], "digest")
+
+    def test_the_same_bytes_replaced_by_a_new_inode_are_rehashed(self):
+        # Attempted bypass by renaming a good file away and a bad one in: the
+        # inode changes, so the proof key changes, whatever the names do.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        target = folder / "weights.bin"
+        target.write_bytes(WEIGHTS)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            catalog.require_verified(VERIFIED.id)
+            keeper = folder / "keeper.bin"
+            os.replace(target, keeper)                   # keeps the proven inode
+            target.write_bytes(b"TAMPRED")               # fresh inode, same name
+            self.assertEqual(len(catalog._proofs), 1)
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require_verified(VERIFIED.id)
+        self.assertEqual(caught.exception.data["reason"], "digest")
 
     def test_every_entry_has_a_license_id(self):
         for entry in CATALOG:

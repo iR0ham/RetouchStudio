@@ -8,8 +8,9 @@ from tempfile import TemporaryDirectory
 from retouch_ai_worker.catalog import Catalog, ModelEntry, ModelFile
 from retouch_ai_worker.downloads import (ConsentStore, Downloader, manifest,
                                         consent_hash_matches)
-from retouch_ai_worker.protocol import (CHECKSUM_MISMATCH, CONSENT_REQUIRED,
-                                        LICENSE_BLOCKED, WorkerError)
+from retouch_ai_worker.protocol import (CATALOG_INVALID, CHECKSUM_MISMATCH,
+                                        CONSENT_REQUIRED, LICENSE_BLOCKED,
+                                        WorkerError)
 
 PAYLOAD = b"retouch-studio-test-payload-" * 4096
 
@@ -201,6 +202,56 @@ class DownloadTests(unittest.TestCase):
         with self.assertRaises(WorkerError) as caught:
             manifest(["fake-model"], blocked)
         self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+
+    def test_plan_refuses_a_pin_it_could_never_verify(self):
+        # Mandate §4 case 6/11 on the transfer side. A pinless entry used to reach
+        # the plan with `bytes: None`, quietly contributing zero to the consent
+        # total, and the downloaded bytes would then be refused at every load — a
+        # multi-gigabyte transfer that can never run. Admission now runs before the
+        # consent manifest is even computed, so the user is never asked to approve
+        # a download this worker would refuse to load.
+        for defect in ("sha256", "bytes"):
+            with self.subTest(pin=defect):
+                broken = FakeCatalog(self.root, self.url, self.sha)
+                broken.entry = ModelEntry(
+                    id="fake-model", name="Fake", task="test",
+                    license_id="Apache-2.0", commercial_ok=True, source="test",
+                    files=(ModelFile("weights.bin",
+                                     None if defect == "sha256" else self.sha,
+                                     None if defect == "bytes" else len(PAYLOAD),
+                                     self.url),))
+                with self.assertRaises(WorkerError) as caught:
+                    manifest(["fake-model"], broken)
+                self.assertEqual(caught.exception.code, CATALOG_INVALID)
+                self.assertEqual(caught.exception.data["reason"],
+                                 "missing-digest" if defect == "sha256"
+                                 else "missing-size")
+                self.assertEqual(RangeHandler.requests, [])
+
+    def test_plan_refuses_an_escaping_path_before_offering_it(self):
+        # The path is joined onto the install root by the downloader too, so a
+        # catalog entry naming `../` would write outside the model store.
+        broken = FakeCatalog(self.root, self.url, self.sha)
+        broken.entry = ModelEntry(
+            id="fake-model", name="Fake", task="test", license_id="Apache-2.0",
+            commercial_ok=True, source="test",
+            files=(ModelFile("../escaped.bin", self.sha, len(PAYLOAD), self.url),))
+        with self.assertRaises(WorkerError) as caught:
+            manifest(["fake-model"], broken)
+        self.assertEqual(caught.exception.code, CATALOG_INVALID)
+        self.assertEqual(caught.exception.data["reason"], "unsafe-path")
+
+    def test_plan_reports_an_aggregate_the_host_can_cross_check(self):
+        # Mandate §4 case 11 asked for the aggregate-vs-per-file relationship to
+        # be checkable instead of declarative. The worker has no aggregate fields,
+        # so it publishes the derived totals next to the consent hash; a host that
+        # carries its own (the app's JSON catalog) can now compare rather than
+        # trust `total_bytes`.
+        plan = manifest(["fake-model"], self.catalog)
+        self.assertEqual(plan["aggregate"]["size_bytes"], plan["total_bytes"])
+        self.assertEqual(plan["aggregate"]["files"], len(plan["files"]))
+        self.assertEqual(sum(item["bytes"] or 0 for item in plan["files"]),
+                         plan["aggregate"]["size_bytes"])
 
 
 if __name__ == "__main__":
