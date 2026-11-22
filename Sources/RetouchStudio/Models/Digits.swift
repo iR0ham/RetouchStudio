@@ -35,13 +35,17 @@ enum Digits {
     /// A size already formatted by `ByteCountFormatter` ("48.5 MB"). English
     /// gets it back untouched; Persian converts the digits and the decimal
     /// separator, keeps the unit token Latin, and isolates the run.
+    ///
+    /// The conversion is per character rather than per token, because that
+    /// formatter spells some readings out in words: 0 bytes is "Zero KB" and a
+    /// one-byte file is "1 byte", so a split into number plus unit does not
+    /// always apply. Every Persian reading this produces is still one isolated
+    /// left-to-right run — a spelled-out unit is two Latin words, and inside an
+    /// RTL paragraph an unisolated pair of them can flip.
     static func size(_ formatted: String, language: AppLanguage = .current) -> String {
         guard language == .persian else { return formatted }
-        let parts = formatted.split(maxSplits: 1, omittingEmptySubsequences: true,
-                                    whereSeparator: { $0.isWhitespace })
-        guard parts.count == 2 else { return persian(formatted) }
-        let number = persian(String(parts[0])).replacingOccurrences(of: ".", with: "٫")
-        return isolate("\(number) \(parts[1])")
+        let number = persian(formatted).replacingOccurrences(of: ".", with: "٫")
+        return isolate(number)
     }
 
     /// A left-to-right run inside right-to-left prose. The isolate pair

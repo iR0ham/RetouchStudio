@@ -687,7 +687,7 @@ final class PersianL10n: L10n {
     }
     override func modelsDownloadTitle(_ name: String) -> String { "دانلود \(name)؟" }
     override func modelsDownloadBody(files: Int, size: String, license: String) -> String {
-        "\(Digits.persian(String(files))) فایل، \(size). مجوز: \(license). این تنها مرحله‌ای است که از اینترنت استفاده می‌کند."
+        "\(Digits.persian(String(files))) فایل، \(L10n.byteSize(size)). مجوز: \(license). این تنها مرحله‌ای است که از اینترنت استفاده می‌کند."
     }
     override var modelsDownloadAction: String { "دانلود" }
     override var modelsCancel: String { "انصراف" }
@@ -719,14 +719,14 @@ final class PersianL10n: L10n {
         "قابل نصب نیست: \(reason)"
     }
     override func modelsLegacyFound(_ size: String) -> String {
-        "یک نصب قدیمی‌تر (\(size)) روی دیسک هست."
+        "یک نصب قدیمی‌تر (\(L10n.byteSize(size))) روی دیسک هست."
     }
     override var modelsAdopt: String { "پذیرفتن…" }
     override func modelsAdoptTitle(_ name: String) -> String {
         "فایل‌های موجود \(name) پذیرفته شوند؟"
     }
     override func modelsAdoptBody(_ size: String) -> String {
-        "اپ \(size) موجود روی این مک را با کاتالوگ هش می‌کند. اگر همهٔ فایل‌ها مطابق باشند، بدون دانلود و بدون اینترنت به انبار نسخه‌دار منتقل می‌شوند. اگر چیزی متفاوت باشد، هیچ فایلی جابه‌جا نمی‌شود."
+        "اپ \(L10n.byteSize(size)) موجود روی این مک را با کاتالوگ هش می‌کند. اگر همهٔ فایل‌ها مطابق باشند، بدون دانلود و بدون اینترنت به انبار نسخه‌دار منتقل می‌شوند. اگر چیزی متفاوت باشد، هیچ فایلی جابه‌جا نمی‌شود."
     }
     override func modelsMigrated(_ name: String) -> String {
         "\(name) به انبار نسخه‌دار منتقل شد."
@@ -749,14 +749,19 @@ final class PersianL10n: L10n {
     override func modelsConsentBody(files: Int, size: String, codeLicense: String,
                                     weightsLicense: String, host: String, sha: String) -> String {
         """
-        \(Digits.persian(String(files))) فایل، \(size)، از \(host).
+        \(Digits.persian(String(files))) فایل، \(L10n.byteSize(size))، از \(host).
         مجوز کد: \(codeLicense). مجوز وزن‌ها: \(weightsLicense).
         SHA-256 (مانیفست): \(sha)…
         این تنها مرحله‌ای است که از اینترنت استفاده می‌کند. چیزی نصب نمی‌شود مگر آنکه هر فایل با اندازه و چک‌سام خودش مطابقت داشته باشد.
         """
     }
+    /// The sizes arrive as the Latin strings their formatters write, so this
+    /// table converts each one here: Persian digits, the Latin unit token and
+    /// one isolated left-to-right run (`Digits.size`). Doing it in two places —
+    /// the formatter here, the row's own converter there — is what used to leave
+    /// `۹۶٫۷ MB` mixed in the middle of a Persian sentence.
     override func modelsDiskUsage(used: String, free: String) -> String {
-        "روی دیسک: \(used) · آزاد: \(free)"
+        "روی دیسک: \(L10n.byteSize(used)) · آزاد: \(L10n.byteSize(free))"
     }
     override var aiRuntimeTitle: String { "دستیار هوش مصنوعی" }
     override var aiRuntimeInstalledChip: String { "نصب شده" }
@@ -767,7 +772,7 @@ final class PersianL10n: L10n {
     override var aiRuntimeInstall: String { "دانلود دستیار" }
     override var aiRuntimeDownloadTitle: String { "دستیار هوش مصنوعی دانلود شود؟" }
     override func aiRuntimeDownloadBody(file: String, size: String, hash: String) -> String {
-        "فایل \(file) (\(size)) از github.com دانلود می‌شود و SHA256 آن (\(hash)) پیش از نصب بررسی می‌شود. وزن مدل‌ها همچنان جداگانه و با تأیید خودشان دانلود می‌شوند."
+        "فایل \(file) (\(L10n.byteSize(size))) از github.com دانلود می‌شود و SHA256 آن (\(hash)) پیش از نصب بررسی می‌شود. وزن مدل‌ها همچنان جداگانه و با تأیید خودشان دانلود می‌شوند."
     }
     override var aiRuntimeDownloading: String { "در حال دانلود دستیار…" }
     override var aiRuntimeVerifying: String { "در حال بررسی دانلود…" }
