@@ -11,7 +11,7 @@ Built with SwiftUI, Core Image and Vision, and shipped as a self-contained `.app
 - **Twelve tools in one inspector**: Skin, Healing, Reshape, Eyes & Teeth, Makeup, Color & Light, Looks, Crop, Body, Background, Stickers and Analysis.
 - **Non-destructive edits**: every adjustment is a value in a project, so a saved `.retouch` file can be reopened and changed later. Up to 100 steps of undo and redo.
 - **Automatic analysis** with a face overlay: skin, eyes, teeth and background are measured, and Auto Retouch only moves what the measurement justifies.
-- **Optional local AI helper**: remove an object from a marked region, continue texture over a small area, reimagine the frame from a prompt, or upscale 4×. The models are downloaded on request; nothing is uploaded.
+- **Optional local AI helper** on macOS: remove an object from a marked region, continue texture over a small area, reimagine the frame from a prompt, or upscale 4×. The models are downloaded on request; nothing is uploaded. Windows has no AI tools — see the platform paragraph under Requirements.
 - **Project files and recovery**: `.retouch` projects, editable presets, and a debounced recovery copy while unsaved work exists.
 - **Export control**: JPEG, PNG, TIFF or HEIC, long-edge cap, quality slider, watermark, optional face overlay, and GPS/camera identity stripped from the saved copy.
 - **Bilingual UI**: complete English and Persian localisation (including Persian digits), switchable in Settings.
@@ -44,7 +44,7 @@ The screenshots use an AI-generated fictional portrait. No personal photo is inc
 - To run a release build: nothing else. The app is self-contained.
 - To build from source: Xcode Command Line Tools (`xcode-select --install`). Xcode itself is not required; `build.sh` compiles directly with `swiftc`.
 
-Windows is the second platform under development. The shared `StudioCore` module (document model, project codec, render contract and update policy) is Foundation-only, and its portability job runs on a native `windows-2025` GitHub runner, where the 260 core checks, the 86-check C ABI suite and the conformance gate pass. A C#/WPF light editor in [`Windows/`](Windows/README.md) — WIC decode/encode, crop, orientation, nine global sliders, shared project files and history — builds there, passes its 55 headless host checks and loads its window. It has no published artifact, installer, AI tools or macOS pixel parity, so Windows is **not** a shipping target. Linux comes only after a verified Windows release candidate; the Linux `StudioCore` script is supplementary today and no Linux build is shipped.
+Windows is the second platform, and as of 2026-11-22 it builds, packages, installs and runs on CI. The shared `StudioCore` module (document model, project codec, render contract and update policy) is Foundation-only, and its portability job runs on a native `windows-2025` GitHub runner, where the 288 core checks, the 104-check C ABI suite and the conformance gate pass. A C#/WPF light editor in [`Windows/`](Windows/README.md) — WIC decode/encode, crop, orientation, nine global sliders, shared project files and history, zoom and pan, compare, live histogram, batch export and a recovery prompt — passes 396 headless host checks there, is driven through fourteen Windows UI Automation passes, and is packaged into a zip and an unsigned MSI that CI installs into `Program Files`, upgrades in place, starts and uninstalls. What is still **not** true of Windows: no 2.0.0 artifact has been published yet — the only published release is the archived 1.0.0 macOS prerelease, and the Windows package reaches a GitHub Release when a version tag is cut with `WINDOWS_APP_READY` set, which it currently is — the installer is unsigned, there is no macOS pixel parity claim, and there is **no AI on Windows**: all four catalogue models are `macos-arm64`-only, every AI capability reports `blocked` or `unsupported` with a reason, and 4× upscale stays blocked until an approved Windows artifact exists. So the Windows release claim is a first-class light editor with AI explicitly absent. Linux comes only after a verified Windows release candidate; the Linux `StudioCore` script is supplementary today and no Linux build is shipped.
 
 ## Run a release build
 
@@ -163,7 +163,7 @@ Sources/RetouchStudio/
 Resources/             Info.plist, app icon, Vazir fonts (OFL)
 Tests/                 engine, model, runtime and corpus suites, benchmarks, run.sh
 Tools/                 bundle-worker.sh (optional Python runtime), make-dmg.sh, make-runtime.sh
-Windows/               C#/WPF light editor for Windows and its build scripts (not shipped)
+Windows/               C#/WPF light editor for Windows, its build scripts, zip and MSI packaging (no AI)
 Docs/                  AI runtime, privacy audit, technical audit, benchmarks, release notes
 build.sh               compile + assemble + sign + self-test
 ```

@@ -27,7 +27,7 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 iRoham. All rights reserved.</string>
+	<string>© 2026 iRoham. Licensed under the MIT License; provided as is, without warranty.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>ATSApplicationFontsPath</key>

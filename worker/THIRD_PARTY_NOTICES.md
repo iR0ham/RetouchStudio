@@ -9,7 +9,7 @@ upstream project ships; those files are copied into the app bundle and are the
 authoritative license text for each package.
 
 Direct dependencies: numpy (BSD-3-Clause AND 0BSD AND MIT AND Zlib AND
-CC0-1.0), Pillow (MIT-CMU), MLX (MIT), mflux (MIT),
+CC0-1.0), Pillow (MIT-CMU) — distribution name `pillow`, MLX (MIT), mflux (MIT),
 torch (Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND
 BSD-3-Clause AND BSL-1.0 AND ISC AND MIT AND Zlib), spandrel (MIT), onnxruntime
 (MIT). Transitive packages pinned by the lock:
