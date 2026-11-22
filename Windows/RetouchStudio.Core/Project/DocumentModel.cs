@@ -47,6 +47,13 @@ public sealed class DocumentModel
         "vibrance", "warmth", "clarity", "vignette",
     };
 
+    /// <summary>
+    /// The raw value macOS writes into <c>lookID</c> when no look is selected —
+    /// <c>FilmLook.none</c>. It carries the same meaning here as an absent or
+    /// empty identifier: nothing to render.
+    /// </summary>
+    public const string NoLookIdentifier = "none";
+
     private JsonObject _root;
 
     public DocumentModel(JsonObject root)
@@ -245,7 +252,7 @@ public sealed class DocumentModel
             // host renders. Every other amount macOS writes is named here so
             // an export cannot silently drop it.
             if (AnyAmount("smooth", "blemish", "wrinkle", "skinToneEvens",
-                          "darkCircles", "skinBrighten"))
+                          "darkCircles", "skinBrighten", "texturePreserve"))
             {
                 found.Add("skin retouching");
             }
@@ -271,7 +278,19 @@ public sealed class DocumentModel
             {
                 found.Add("makeup");
             }
-            if (ReadAdjustmentString("lookID") is { Length: > 0 })
+            // The look is the one edit macOS writes as two fields: the
+            // identifier names the grade, the strength blends it in. Either
+            // half alone can ask for a grade this host cannot render — a
+            // strength with no identifier decodes as FilmLook.none on macOS,
+            // which draws nothing, but a crafted or externally written file can
+            // carry the pair, so it is refused rather than exported silently.
+            // Clearing the rail is the exception: it writes FilmLook.none under
+            // its raw value, the string "none", and an older document can keep a
+            // stale strength beside it. That pair renders no grade and nothing on
+            // this host can rewrite the field, so naming it would refuse the
+            // document forever; the sentinel counts as no identifier on both
+            // halves of the check.
+            if (LookIdentifier() is { Length: > 0 } || LookStrengthAmount() != 0)
             {
                 found.Add("a look");
             }
@@ -313,6 +332,49 @@ public sealed class DocumentModel
             // macOS writes, while an applied Smart Analyze result is merged
             // into the normal adjustments. Treating them as edits warned on
             // every new document, so they are deliberately absent here.
+            //
+            // The full re-count of the wire format, so a reviewer does not have
+            // to redo it. StudioCore's Adjustments CodingKeys write 78 keys; 64
+            // of them are amounts (the rest are the seven colour records, whose
+            // colour rides with the amount that switches the region on, plus
+            // backgroundImage / backgroundImageName / backgroundRemove, named by
+            // the background check, and lookID, named above). Every one of the 64
+            // lands in exactly one of these three buckets:
+            //
+            //   Rendered here — the nine global sliders, read by
+            //   GlobalAdjustments.FromDocument, deliberately unguarded:
+            //     exposure contrast blacks whites saturation vibrance warmth
+            //     clarity vignette
+            //
+            //   Unguarded and not rendered — checked against macOS' render path,
+            //   each changes nothing on its own:
+            //     backgroundImageAmount  a blend weight for a replacement image
+            //       (ImageProcessor.swift:1009), which this host already refuses
+            //       through backgroundImage/backgroundRemove. A document carries
+            //       it at its default 100 beside no image, so guarding the number
+            //       would warn on every cleared background.
+            //
+            //   Guarded, grouped by the name an export shows: skin retouching
+            //   (smooth blemish wrinkle skinToneEvens darkCircles skinBrighten
+            //   texturePreserve), skin finish (skinFinish shine splitTone), teeth
+            //   whitening (teethWhiten teethAlign), eye enhancement (eyeBrighten
+            //   eyeSharpen irisEnhance lashDarken), face reshaping (eyeSize
+            //   noseSize noseTip lipSize cheekSize jawWidth chinLength faceWidth
+            //   faceLength), makeup (lipTint blush browDefine eyeshadow eyeliner
+            //   contour lipGloss), a look (lookStrength, or a real lookID), film
+            //   grain (grain), curves (curveShadows curveMidtones curveHighlights),
+            //   HSL colour (hslHue hslSaturation hslLuminance, per band), body
+            //   adjustments (bodySmooth bodyTone bodySlim bodyWaist bodyArms
+            //   bodyLegs), background adjustments (backgroundBlur backgroundTone
+            //   backgroundSaturation backgroundFill), hair adjustments (hairColor
+            //   hairShine hairVolume), lens tint (lensTint).
+            //
+            // texturePreserve belongs to the last bucket rather than to the first
+            // two: macOS feeds it to SkinEngine.smoothSkin for the face (800) and
+            // to the body pass (823), where it decides how much skin detail the
+            // smoothing keeps, so it moves pixels on its own. It is a live slider,
+            // and its default is not zero, which is why a document can carry a
+            // non-zero value without any other skin amount.
             return found;
         }
     }
@@ -329,6 +391,32 @@ public sealed class DocumentModel
     private string? ReadAdjustmentString(string key) =>
         Adjustments?[key] is JsonValue value
         && value.TryGetValue<string>(out var text) ? text : null;
+
+    /// <summary>
+    /// The look the document asks for, or nothing when it asks for none. macOS
+    /// stores a <c>FilmLook</c> raw value, so clearing the selection writes the
+    /// literal "none" rather than an empty string; both mean no grade, and the
+    /// guard must not refuse a document that renders nothing. Only the sentinel
+    /// is folded away here — an absent or empty identifier still counts as a
+    /// half of the edit, because a file can pair it with a strength.
+    /// </summary>
+    private string? LookIdentifier() =>
+        ReadAdjustmentString("lookID") is { } id
+        && !id.Equals(NoLookIdentifier, StringComparison.OrdinalIgnoreCase) ? id : null;
+
+    /// <summary>
+    /// The look's blend amount, or zero beside the cleared-look sentinel. macOS
+    /// spends <c>lookStrength</c> through a grade alone, so under
+    /// <c>FilmLook.none</c> it changes no pixel and would otherwise refuse a
+    /// document this host has no way to repair. A missing identifier keeps its
+    /// amount live: that pairing comes from a crafted or externally written
+    /// file, and refusing it is what this branch is for.
+    /// </summary>
+    private double LookStrengthAmount() =>
+        string.Equals(ReadAdjustmentString("lookID"), NoLookIdentifier,
+                      StringComparison.OrdinalIgnoreCase)
+        ? 0
+        : Amount("lookStrength");
 
     private bool ReadAdjustmentBool(string key) =>
         Adjustments?[key] is JsonValue value
