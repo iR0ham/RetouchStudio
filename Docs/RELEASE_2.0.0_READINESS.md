@@ -2404,7 +2404,7 @@ only if he says so: make the tag build derive `CFBundleVersion` from an owned co
 itself) instead of `GITHUB_RUN_NUMBER`, and have `check-versions.sh` assert it — otherwise the first 2.0.0
 build number is an accident and the second one is unreproducible.
 
-Two doc corrections fell out of this and are **not** applied here, deliberately: `Docs/RELEASING.md:27` says
+Two doc corrections fell out of this and are **not** applied here, deliberately: `Docs/RELEASING.md:28` says
 "Bump `CFBundleVersion` for every uploaded build", which the pipeline contradicts by overwriting it, and its
 §2 example uses `RETOUCH_BUILD=42`. `Docs/RELEASING.md:13` (`Version / build | 1.0.0 / 1`) is **not** stale —
 the table header reads "values for the first public release", so it is correct history; I initially recorded
@@ -2469,9 +2469,14 @@ that no fourth path bypasses `pin_problem`, so this row says "closed, by these n
 ### S.12.6 The acceptance pack re-reviewed (G-ACC), and what was wrong in it
 
 `Docs/RELEASE_2.0.0_ACCEPTANCE.md` was checked mechanically, not by skimming: a script extracted every
-`file:line` citation and re-read each one against `origin/main`. **113 unique citations, 112 valid, 1
-drifted** — §6 cited `Localization.swift:307` for the Batch Export label, which is now `:309`
-(`batchExportMenu`), the shift caused by `eee3e4b`/`9e43e14` landing after the pack was written. Corrected.
+`file:line` citation, resolved each path through the tree, and printed the cited line so it could be compared
+with the prose. **113 unique citations at `5ce98ec`, 112 valid, 1 drifted** — §6 cited
+`Localization.swift:307` for the Batch Export label, which is now `:309` (`batchExportMenu`), the shift caused
+by `eee3e4b`/`9e43e14` landing after the pack was written. Corrected, and the same tool re-run over the
+revised pack reports **124 citations, 0 suspects** — including every anchor this addendum adds. Three
+pre-existing suspects survive elsewhere in *this* ledger (two `AMBIGUOUS` bare filenames and three
+`EMPTY`/stale anchors at `InfoViews.swift:95`, `ModelStoreTests.swift:2004`, `RELEASING.md:187`); they sit
+inside earlier addenda, so the append-only rule keeps their text and this sentence is the correction record.
 
 Three substantive defects, all fixed in the same PR as this addendum:
 
