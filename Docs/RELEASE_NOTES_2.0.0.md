@@ -277,10 +277,10 @@ uploaded, in either language, in either direction.
   measured above what that machine has.
 - One catalogued model, SAM 2.1 tiny, is listed but not downloadable today because the runtime
   package that loads it is missing; weights already on disk are verified and used.
+- The Windows interface is English only today; the Persian interface belongs to the Mac app.
 - The consent sheet names the licences; it does not link to the licence evidence behind them.
 - On Windows the installer is unsigned, so Windows warns about it before the first run, and the
-  package carries fewer third-party notices than the macOS app does. The Windows interface is English
-  only today; the Persian interface belongs to the Mac app.
+  package carries fewer third-party notices than the macOS app does.
 - Output is sRGB by policy: a wide-gamut photo is converted and colours outside sRGB are clipped, and
   JPEG and PNG exports declare sRGB without embedding a colour profile.
 - The very first export after starting the Mac can differ from later ones by one level in a channel,
@@ -304,10 +304,10 @@ uploaded, in either language, in either direction.
   اندازه‌گیری شده است.
 - یک مدل در فهرست — SAM 2.1 tiny — امروز قابل دانلود نیست، چون بستهٔ زمان‌اجرای بارگذاری آن موجود
   نیست؛ اگر وزن‌هایش از پیش روی دیسک باشند، بررسی و استفاده می‌شوند.
+- رابط ویندوز امروز انگلیسی است؛ رابط فارسی مخصوص اپ مک است.
 - برگهٔ رضایت نام مجوزها را می‌نویسد، ولی به مدرک پشت آن مجوز پیوند نمی‌دهد.
 - روی ویندوز فایل نصب امضا ندارد، پس ویندوز پیش از نخستین اجرا دربارهٔ آن هشدار می‌دهد، و بستهٔ ویندوز
-  کمتر از اپ مک یادداشت‌های اشخاص ثالث را همراه دارد. رابط ویندوز امروز انگلیسی است و رابط فارسی مخصوص
-  اپ مک است.
+  کمتر از اپ مک یادداشت‌های اشخاص ثالث را همراه دارد.
 - خروجی بر پایهٔ sRGB تولید می‌شود: عکس با فضای رنگ گسترده تبدیل می‌شود و رنگ‌های بیرون از sRGB بریده
   می‌شوند؛ در JPEG و PNG هم sRGB اعلام می‌شود بی‌آنکه پروفایل رنگ به فایل چسبانده شود.
 - نخستین خروجی پس از روشن شدن مک ممکن است در یک کانال رنگ تا یک سطح با خروجی‌های بعدی فرق کند، چون
@@ -324,13 +324,13 @@ uploaded, in either language, in either direction.
 ### English
 
 Retouch Studio is released under the MIT licence; the app also carries the notice text for the
-third-party components it ships, including the bundled Vazir typeface, which is under the SIL Open
+third-party components it ships, including the bundled Vazirmatn typeface, which is under the SIL Open
 Font License. Model weights are never bundled — you download them yourself, and each set carries its
 own licence, shown in the table above and repeated in the app before you approve a download.
 
 ### فارسی
 
 Retouch Studio تحت مجوز MIT منتشر می‌شود؛ برنامه متن اطلاع‌رسانی اجزای اشخاص ثالثی را که همراه می‌آورد
-هم دارد، از جمله قلم Vazir که زیر مجوز SIL Open Font License است. وزن مدل‌ها هرگز در بستهٔ برنامه
+هم دارد، از جمله قلم Vazirmatn که زیر مجوز SIL Open Font License است. وزن مدل‌ها هرگز در بستهٔ برنامه
 نیستند؛ خودتان دانلودشان می‌کنید و هر مجموعه مجوز خودش را دارد که در جدول بالا آمده و پیش از تأیید
 دانلود درون برنامه هم نشان داده می‌شود.
