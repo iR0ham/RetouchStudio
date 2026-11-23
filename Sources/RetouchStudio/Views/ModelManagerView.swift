@@ -621,7 +621,9 @@ struct ModelManagerView: View {
     private func sourceLine(_ entry: ModelCatalogEntry) -> String {
         let host = sourceHost(entry) ?? "—"
         let sha = String((entry.sha256 ?? "").prefix(16))
-        return "\(host) · \(entry.codeLicense) / \(entry.weightsLicense) · SHA-256 \(sha)…"
+        // The hex run stays Latin and is isolated: inside a right-to-left
+        // paragraph an unisolated run can move out of place next to the label.
+        return "\(host) · \(entry.codeLicense) / \(entry.weightsLicense) · SHA-256 \u{2066}\(sha)\u{2069}…"
     }
 
     private func sourceHost(_ entry: ModelCatalogEntry) -> String? {
@@ -630,12 +632,18 @@ struct ModelManagerView: View {
 
     private func sizeText(_ bytes: Int?) -> String {
         guard let bytes, bytes > 0 else { return editor.s.modelsSizeUnknown }
-        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return Self.size(Int64(bytes))
     }
 
     private func sizeText(_ bytes: Int64?) -> String {
         guard let bytes, bytes > 0 else { return editor.s.modelsSizeUnknown }
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        return Self.size(bytes)
+    }
+
+    /// English keeps the system formatter untouched; Persian follows the same
+    /// unit policy as every other readout (`Digits.size`).
+    private static func size(_ bytes: Int64) -> String {
+        Digits.size(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
     }
 
     private func chipButton(_ title: String, action: @escaping () -> Void) -> some View {

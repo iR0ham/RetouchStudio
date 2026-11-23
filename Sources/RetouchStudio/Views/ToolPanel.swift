@@ -358,7 +358,7 @@ struct ToolPanel: View {
                 Spacer(minLength: 6)
                 Text(percent
                      ? Digits.percent(Int((value.wrappedValue * 100).rounded()))
-                     : "\(Digits.num(Int(value.wrappedValue.rounded()))) px")
+                     : Digits.pixels(Int(value.wrappedValue.rounded())))
                     .font(Theme.Font.value)
                     .foregroundStyle(Theme.text)
             }
@@ -484,7 +484,7 @@ private struct HealCard: View {
                         .font(Theme.Font.label)
                         .foregroundStyle(Theme.text)
                     Spacer(minLength: 6)
-                    Text("\(Digits.num(model.healBrushPixels)) px")
+                    Text(Digits.pixels(model.healBrushPixels))
                         .font(Theme.Font.value)
                         .foregroundStyle(Theme.text)
                         .contentTransition(.numericText())
@@ -598,9 +598,11 @@ private struct CropCard: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 infoRow(model.s.cropSize,
-                        "\(Digits.num(Int(model.cropDraftPixelSize.width))) × \(Digits.num(Int(model.cropDraftPixelSize.height))) px")
+                        Digits.pixelSize(Int(model.cropDraftPixelSize.width),
+                                         Int(model.cropDraftPixelSize.height)))
                 infoRow(model.s.workingSize,
-                        "\(Digits.num(Int(model.workingPixelSize.width))) × \(Digits.num(Int(model.workingPixelSize.height))) px")
+                        Digits.pixelSize(Int(model.workingPixelSize.width),
+                                         Int(model.workingPixelSize.height)))
             }
 
             VStack(spacing: 8) {

@@ -1,5 +1,11 @@
 # Product acceptance matrix
 
+**Scope note 2026-11-21.** This file stays the evidence ledger for **shipping (first-release)
+scope**. Planning state for capabilities that are deliberately *outside* the first release
+lives in [`PRODUCT_CAPABILITY_MATRIX.md`](PRODUCT_CAPABILITY_MATRIX.md), governed by
+[`POST_RELEASE_ROADMAP.md`](POST_RELEASE_ROADMAP.md). Neither is a substitute for the other,
+and nothing in the post-release matrix may be treated as release readiness.
+
 **Basis:** `main` at `4e31596` (PR #54 milestone merge), 2026-11-14, with the evidence recorded in §5 of the ledger (run 43631106819, PR run 43632188008), plus the Windows UI-automation run 43647604771 on `bb06e28`. Evidence is the verification ledger
 in [`MASTER_PRODUCT_COMPLETION_STATUS.md`](MASTER_PRODUCT_COMPLETION_STATUS.md)
 (§5) and the CI runs named there. Windows evidence is CI-only: there is no

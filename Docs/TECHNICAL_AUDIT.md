@@ -37,7 +37,7 @@ Evidence rules applied throughout:
 
 ### 1.1 Verdict
 
-Retouch Studio is a **complete, self-contained, local-only professional portrait retoucher** with an unusually deep image engine for its size. All twelve tools in the request exist as working code, the preview/export pipeline is a single deterministic Core Image graph, the app speaks English and Persian throughout, and both automated suites pass on the audited revision.
+Retouch Studio is a **complete, self-contained, local-only professional portrait retoucher** with an unusually deep image engine for its size. All twelve tools in the request exist as working code, the preview/export pipeline is a single deterministic Core Image graph (deterministic in *graph and order*; exported file bytes carry a cold-Metal first-render caveat — see `Docs/EXPORT_DETERMINISM.md`), the app speaks English and Persian throughout, and both automated suites pass on the audited revision.
 
 The engine is the strongest part of the product: masks are built once per frame, retouch runs before geometry so features and their masks stay aligned, colour grading is ordered deliberately, and the build refuses to produce an app if the 154-check synthetic self-test fails. The data model is genuinely non-destructive: a project stores slider state, crop, heal stamps, stickers and analysis settings against the untouched original photo.
 
