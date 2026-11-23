@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import CoreImage
+import CoreText
 import Dispatch
 import Foundation
 import StudioCore
@@ -7860,13 +7861,13 @@ func testStatusToastStaysClearOfCompareChrome() {
     }
 
     func placement(canvas: CGSize, photo: CGRect, split: Double = 0.45,
-                   compare: Bool = true, peeking: Bool = false)
+                   compare: Bool = true, peeking: Bool = false, toolOwns: Bool = false)
         -> (frame: CGRect, obstacles: ToastObstacles, dock: CGRect) {
         let dock = dockRect(in: canvas)
         let obstacles = ToastObstacles.compareWorkspace(canvas: canvas, photo: photo,
                                                         compareEnabled: compare,
                                                         comparePosition: split,
-                                                        toolOwnsCanvas: false,
+                                                        toolOwnsCanvas: toolOwns,
                                                         peeking: peeking,
                                                         dock: dock)
         return (ToastPlacement.frame(in: canvas, toast: toast, obstacles: obstacles),
@@ -7985,11 +7986,54 @@ func testStatusToastStaysClearOfCompareChrome() {
     check(plain.frame.origin == CGPoint(x: ToastPlacement.margin, y: ToastPlacement.margin),
           "Compare off keeps the top-leading pill")
 
-    // The held-Space peek covers the tags; only the original is on the stage.
+    // Holding Space paints the original over the split, so the AFTER tag and the
+    // divider leave the stage — but a single BEFORE badge stays, drawn against
+    // the canvas' own top-leading corner and ungated by Compare or by the tool
+    // mode (CompareCanvas.swift:339-348). The pill has to clear it like any
+    // other piece of chrome; treating the peek as tag-free parked the toast
+    // straight on top of it, which is the defect this test is for.
     let peek = placement(canvas: fullCanvas, photo: fullPhoto, peeking: true)
-    check(peek.obstacles.beforeLabel == nil && peek.obstacles.compareHandle == nil,
-          "the peek drops the tags and the handle from the obstacles")
+    check(peek.obstacles.afterLabel == nil && peek.obstacles.compareHandle == nil,
+          "the peek drops the AFTER tag and the handle")
+    check(peek.obstacles.beforeLabel
+            == CGRect(x: ToastPlacement.labelInset, y: ToastPlacement.labelInset,
+                      width: ToastPlacement.labelReserveWidth,
+                      height: ToastPlacement.labelHeight),
+          "the peek keeps a BEFORE badge against the canvas corner",
+          String(describing: peek.obstacles.beforeLabel))
     assertClear(peek.frame, peek.obstacles, dock: peek.dock, canvas: fullCanvas, "peek")
+    if let badge = peek.obstacles.beforeLabel {
+        check(peek.frame.minX >= badge.maxX + ToastPlacement.clearance - 0.01
+                || peek.frame.minY >= badge.maxY + ToastPlacement.clearance - 0.01,
+              "the toast keeps its clearance beside or below the peek badge",
+              "\(peek.frame) vs \(badge)")
+    }
+
+    check(overlaps(oldCorner, peek.obstacles.beforeLabel!),
+          "the old top-leading pill would have covered the peek badge too")
+
+    // Compare off and a tool holding the canvas both still draw that badge, so
+    // neither may hand the corner back to the pill.
+    let peekPlain = placement(canvas: fullCanvas, photo: fullPhoto,
+                              compare: false, peeking: true)
+    check(peekPlain.obstacles.beforeLabel != nil,
+          "Compare off peeks with a BEFORE badge")
+    assertClear(peekPlain.frame, peekPlain.obstacles, dock: peekPlain.dock, canvas: fullCanvas,
+                "peek with Compare off")
+    let peekTool = placement(canvas: fullCanvas, photo: fullPhoto,
+                             peeking: true, toolOwns: true)
+    check(peekTool.obstacles.beforeLabel != nil,
+          "a tool on the canvas peeks with a BEFORE badge")
+    assertClear(peekTool.frame, peekTool.obstacles, dock: peekTool.dock, canvas: fullCanvas,
+                "peek with a tool owning the canvas")
+
+    // A canvas barely wider than the badge cannot get out of its way sideways, so
+    // the search has to drop the pill below the badge instead of covering it.
+    let tightCanvas = CGSize(width: 220, height: 150)
+    let tight = placement(canvas: tightCanvas,
+                          photo: CGRect(origin: .zero, size: tightCanvas), peeking: true)
+    assertClear(tight.frame, tight.obstacles, dock: tight.dock, canvas: tightCanvas,
+                "peek in a tight canvas")
 
     // The sizes reach the toast through preferences, whose reduce runs once per
     // child. A child that never measured reports the default, and taking that
@@ -8003,4 +8047,40 @@ func testStatusToastStaysClearOfCompareChrome() {
     let newer = CGSize(width: 208, height: 27)
     check(ToastPlacement.mergedMeasurement(measured, newer) == newer,
           "a newer measurement wins")
+
+    // The reservations only protect the owner if they describe what the shell
+    // actually draws. The badge is `Text` in Vazirmatn-SemiBold at 9 pt with
+    // tracking 0.6 and 3 pt vertical / 7 pt horizontal padding
+    // (CompareCanvas.swift:442-458), so measure that face from the file the app
+    // ships instead of trusting a hand-picked constant: a type change that
+    // grows the tag must not leave the pill believing it cleared a taller one.
+    let faceURL = testsDirectory().deletingLastPathComponent()
+        .appendingPathComponent("Resources/Fonts/Vazirmatn-SemiBold.ttf")
+    let descriptors = CTFontManagerCreateFontDescriptorsFromURL(faceURL as CFURL) as? [CTFontDescriptor]
+    guard let descriptor = descriptors?.first else {
+        check(false, "the badge face can be measured from the shipped font", faceURL.path)
+        return
+    }
+    let badgeFont = CTFontCreateWithFontDescriptor(descriptor, 9, nil)
+    let badgeHeight = CTFontGetAscent(badgeFont) + CTFontGetDescent(badgeFont)
+        + CTFontGetLeading(badgeFont) + 6
+
+    func tagWidth(_ text: String) -> CGFloat {
+        let attributes: [NSAttributedString.Key: Any] = [.font: badgeFont, .kern: 0.6]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text.uppercased(),
+                                                                      attributes: attributes))
+        return ceil(CTLineGetTypographicBounds(line, nil, nil, nil)) + 14
+    }
+
+    let widestTag = max(tagWidth(L10n().before), tagWidth(L10n().after),
+                        tagWidth(PersianL10n.table.before), tagWidth(PersianL10n.table.after))
+    check(ToastPlacement.labelHeight + 0.01 >= badgeHeight,
+          "the label reservation is at least as tall as the badge",
+          "badge \(badgeHeight) pt vs reserve \(ToastPlacement.labelHeight) pt")
+    check(ToastPlacement.labelReserveWidth >= widestTag,
+          "the label reservation is wide enough for the widest localised tag",
+          "widest \(widestTag) pt vs reserve \(ToastPlacement.labelReserveWidth) pt")
+    // The divider obstacle models the strip that grabs it, not the 1 pt line.
+    check(ToastPlacement.handleWidth == 28,
+          "the handle reservation matches the drag strip in CompareCanvas.swift:403")
 }

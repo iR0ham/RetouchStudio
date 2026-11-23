@@ -5,8 +5,10 @@ struct ToastObstacles: Equatable {
     /// The part of the photo inside the canvas. A soft obstacle: crossing it
     /// hides pixels, but it hides no control.
     var photo: CGRect?
-    /// The corner tags of the compare split. Each rect reserves room for the
-    /// widest tag the shell can draw, so no localisation can grow past it.
+    /// The corner tags of the compare split, and during a held-Space peek the
+    /// single BEFORE badge drawn against the canvas corner. Each rect reserves
+    /// room for the widest tag the shell can draw, so no localisation can grow
+    /// past it.
     var beforeLabel: CGRect?
     var afterLabel: CGRect?
     /// The compare divider together with the strip that grabs it.
@@ -36,14 +38,34 @@ struct ToastObstacles: Equatable {
         guard !visible.isNull, visible.width > 0, visible.height > 0 else { return result }
         result.photo = visible
 
+        let inset = ToastPlacement.labelInset
+
+        // The held-Space peek paints the original over the split, so the AFTER
+        // tag and the divider leave the stage. The label saying what is on
+        // screen does not: CompareCanvas draws a single BEFORE badge against
+        // the canvas' own top-leading corner, ungated by Compare or by the tool
+        // mode (CompareCanvas.swift:339-348), and the toast floats above that
+        // chrome. Dropping it here was the same defect in another state — the
+        // pill sat straight on the badge.
+        if peeking {
+            let peekReserve = min(ToastPlacement.labelReserveWidth,
+                                  max(0, canvas.width - inset * 2))
+            if peekReserve > 0 {
+                result.beforeLabel = CGRect(x: inset,
+                                            y: inset,
+                                            width: peekReserve,
+                                            height: ToastPlacement.labelHeight)
+            }
+            return result
+        }
+
         // The tags only exist while the split itself is on the stage; with the
         // boundary off-screen one side fills the canvas and the tags go away.
-        guard compareEnabled, !toolOwnsCanvas, !peeking else { return result }
+        guard compareEnabled, !toolOwnsCanvas else { return result }
         let fraction = min(1, max(0, comparePosition))
         let splitX = photo.minX + photo.width * CGFloat(fraction)
         guard splitX >= 0, splitX <= canvas.width else { return result }
 
-        let inset = ToastPlacement.labelInset
         let reserve = min(ToastPlacement.labelReserveWidth, max(0, visible.width - inset * 2))
         if reserve > 0 {
             result.beforeLabel = CGRect(x: visible.minX + inset,
@@ -80,7 +102,13 @@ enum ToastPlacement {
     /// width rather than a label or a control.
     static let minimumWidth: CGFloat = 132
     static let labelInset: CGFloat = 10
-    static let labelHeight: CGFloat = 17
+    /// The badge is `Text` at Vazirmatn-SemiBold 9 pt with 3 pt of vertical
+    /// padding (CompareCanvas.swift:442-458). Measured from the shipped face:
+    /// ascent 9.23 + descent 4.83 + leading 0 = 14.06 line, plus 6 = 20.06, so
+    /// the reservation is the next point up. Under-reserving it means the pill
+    /// can crowd the tag while the placement believes it cleared it; the suite
+    /// re-measures the font file so a type change cannot silently shrink this.
+    static let labelHeight: CGFloat = 21
     /// "BEFORE"/"AFTER" at the tag font, widened generously for any language.
     static let labelReserveWidth: CGFloat = 96
     static let handleWidth: CGFloat = 28
