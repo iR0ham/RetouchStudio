@@ -367,3 +367,106 @@ Failed fetches: `https://places2.csail.mit.edu/download.html` and `https://place
 ## Appendix C — Constraints honoured
 
 No model was downloaded; no application was launched; no file outside a temporary scratch directory was written; `~/Library/Application Support/RetouchStudio/AI` was read only; the repository working tree was not modified. Prior scratch artefacts (the earlier updater-design, updater-feasibility and round-6 folders, held outside the repository) untouched.
+
+---
+
+## 11. Addendum, 2026-11-22 — `swin2sr-x4` weights: the `unknown` row is superseded
+
+This addendum appends; nothing above is rewritten. Every §0.1, §2.1 and Appendix A
+row written on 2026-11-21 stays exactly as it was filed, including the
+`MEASURED (tag) + INFERRED (that the tag is the author's grant for the weights)`
+cell in §2.1 and the "Whether the dossier should upgrade it is the owner's
+decision" note in `Docs/MODEL_LICENCE_EVIDENCE.md` §9. This is that decision —
+taken by the release manager on 2026-11-22 under the owner's standing execution
+authority, which directs the team to decide on evidence rather than ask the owner
+to choose between candidates, so it is not an owner ruling — recorded with the
+evidence it rests on.
+
+### 11.1 What changed in the shipped record
+
+| Field | Before (PR #114 as first written) | After (this decision) |
+|---|---|---|
+| `permitted_use.weights.verdict` | `unknown` | **`approved-with-conditions`** |
+| `permitted_use.weights.statedBy` | `inferred` | **`rights-holder`** |
+| `canAcquire` / `canRedistribute` / `canUse` | `null` / `null` / `null` | **`true` / `true` / `true`** |
+| `readOn` | `2026-11-21` | **`2026-11-22`** |
+| `conditions` | *(none — an unknown record may not carry a grant)* | **four, all `met: true`** |
+| `PermittedUse.admitted` | `false` | **`true`** |
+| `capability.list` → `upscale.4x` | `blocked` ("no established permission …") | **`requires_model`** when uninstalled |
+
+`trainingData` was **not** upgraded: it stays `unknown` / `not-established` with all
+three axes blank. Its note gained the dataset quote below and no permission.
+
+### 11.2 The evidence, read 2026-11-22 at primary sources
+
+Three statements, each quoted from the source named with its URL. All three were
+re-read on 2026-11-23 while applying this decision and still hold verbatim.
+
+1. **The uploader is the rights holder, not a mirror.**
+   `https://huggingface.co/api/organizations/caidas/overview` returns
+   `"isVerified": true` and `"fullname": "Computer Vision Lab, CAIDAS, University of Würzburg"`
+   — the same lab the Swin2SR paper is authored from (README affiliation line:
+   "Computer Vision Lab, CAIDAS, University of Würzburg"). A repository published by
+   the verified account of the paper's own lab is the author's publication of their
+   checkpoint, so its licence statement is a statement *by* the rights holder about
+   the weights rather than our inference about a third-party upload.
+2. **The project states its own licence in a sentence.**
+   `https://github.com/mv-lab/swin2sr` (README, "Citation and Acknowledgement"):
+   > "This project is released under the Apache 2.0 license."
+   The repository also carries an `Apache-2.0` `LICENSE` file
+   (`https://raw.githubusercontent.com/mv-lab/swin2sr/main/LICENSE`, 11,348 B, whose
+   text begins "Apache License / Version 2.0, January 2004"), appendix
+   "Copyright [2021] [SwinIR Authors]" — already logged as A27 on 2026-11-21.
+3. **The training-data provenance the project itself reports.**
+   Same README, "Results":
+   > "We use mainly the DIV2K Dataset and Flickr2K datasets for training, and for
+   > testing: RealSRSet, 5images/Classic5/Set5, Set14, BSD100, Urban100 and Manga109"
+   DIV2K is distributed "made available for academic research purpose only"
+   (Appendix A2, read 2026-11-21). This product is a free, non-commercial
+   application under the owner's standing mandate, so a research-only *training
+   corpus* does not refuse the recorded use class `public-non-commercial-use-and-distribution`.
+   The constraint is therefore recorded, not ignored, and not treated as a term of
+   the Apache grant either.
+
+### 11.3 The four conditions now carried by the record
+
+Each is stored in `worker/retouch_ai_worker/catalog.py` with `met: true`, mirrored
+verbatim into `Resources/model-catalog.json` by `Docs/licence-evidence-apply.py`,
+and pinned by `Tests/ModelStoreTests.swift` [19] and `worker/tests/test_catalog.py`:
+
+1. Rights-holder identity documented with evidence URL and read date (the
+   `caidas` verified-organisation overview, §11.2 item 1).
+2. The Apache grant documented with evidence URL and read date (§11.2 item 2).
+3. Training-data provenance recorded in this register and in the dossier rather
+   than ignored (§11.2 item 3), including the open item in §11.4.
+4. The artefact stays download-only at release — no bytes mirrored or bundled —
+   and the recorded Apache notice is preserved wherever the checkpoint is
+   redistributed.
+
+An `approved-with-conditions` record may not stand with an unmet condition: both
+validators refuse it, so these four are checked, not decorative.
+
+### 11.4 NOT VERIFIED, stated plainly
+
+- **The per-checkpoint training mix beyond DIV2K/Flickr2K is NOT VERIFIED.** The
+  quote names the corpora the project says it used "mainly"; it does not state what
+  `swin2SR-realworld-sr-x4-64-bsrgan-psnr` specifically saw, nor whether the
+  BSRGAN degradation pipeline's source images carry their own terms. §9 item 2
+  ("Swin2SR training set … Read §4/§5 of arXiv 2209.11345") remains **open**; this
+  addendum does not close it, and the `trainingData` record stays `unknown`.
+- The Hugging Face model card for this repo was re-checked for a licence sentence
+  about the checkpoint. What is recorded is the repository-level `license:apache-2.0`
+  tag plus the organisation's verified identity plus the upstream README sentence;
+  there is still no HF-card paragraph naming the `.bin` file the way SAM 2's README
+  names its checkpoints (A28). The upgrade rests on the README sentence and the
+  authorship of the uploading account, not on a file-level statement.
+- Nothing was measured against a downloaded model for this decision: no weights
+  were fetched, no run was performed. It is a documentary decision on primary
+  sources, read on 2026-11-22 and re-read 2026-11-23.
+
+### 11.5 What this decision deliberately did not touch
+
+`sam2.1-hiera-tiny`, `migan` and `flux2-klein-4b-q4` keep the records PR #114
+wrote for them. `mask.click` still reports `blocked` because the `sam2` Python
+package is not in `worker/requirements.lock` — that is a missing runtime, correctly
+reported, and out of scope here. No other verdict moved in either direction.

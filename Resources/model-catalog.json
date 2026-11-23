@@ -242,16 +242,33 @@
         },
         "weights": {
           "use": "public-non-commercial-use-and-distribution",
-          "canAcquire": null,
-          "canRedistribute": null,
-          "canUse": null,
-          "statedBy": "inferred",
+          "canAcquire": true,
+          "canRedistribute": true,
+          "canUse": true,
+          "statedBy": "rights-holder",
           "evidenceUrl": "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
-          "readOn": "2026-11-21",
-          "verdict": "unknown",
-          "conditions": [],
+          "readOn": "2026-11-22",
+          "verdict": "approved-with-conditions",
+          "conditions": [
+            {
+              "text": "The identity of the rights holder behind the weights is documented with its evidence URL and read date: the Hugging Face uploader `caidas` is a verified organisation whose overview states \"Computer Vision Lab, CAIDAS, University of W\u00fcrzburg\", the lab that authored Swin2SR, so the checkpoint repo is the rights holder's own publication and not a mirror (https://huggingface.co/api/organizations/caidas/overview, read 2026-11-22).",
+              "met": true
+            },
+            {
+              "text": "The Apache grant itself is documented with its evidence URL and read date: the upstream project states \"This project is released under the Apache 2.0 license.\" and ships an Apache-2.0 LICENSE (https://github.com/mv-lab/swin2sr, read 2026-11-22), which the same lab's verified Hugging Face repository repeats as `license:apache-2.0` for this checkpoint.",
+              "met": true
+            },
+            {
+              "text": "The training-data provenance is recorded in the register and the dossier rather than ignored: the same README states \"We use mainly the DIV2K Dataset and Flickr2K datasets for training\", and DIV2K is distributed for academic research purposes only; this product is a free, non-commercial application, so the research-only dataset note does not refuse the recorded use class, and the per-checkpoint mix beyond DIV2K/Flickr2K stays NOT VERIFIED.",
+              "met": true
+            },
+            {
+              "text": "The artefact remains download-only at release \u2014 no bytes are mirrored or bundled \u2014 and the Apache-2.0 notice below is preserved wherever the checkpoint is redistributed.",
+              "met": true
+            }
+          ],
           "notice": "Apache-2.0. Redistributing or mirroring pytorch_model.bin requires a copy of the Apache-2.0 licence, the retained copyright notices, a statement of changes, and any NOTICE text; the upstream code licence carries \u201cCopyright [2021] [SwinIR Authors]\u201d.",
-          "note": "The only weights statement is the repository-level license:apache-2.0 tag on the Hugging Face repo whose sole payload is the checkpoint, so the grant is inferred rather than authored about the weights. The dossier's usable-with-conditions verdict does not survive the new schema's inference rule; no permission axis is recorded."
+          "note": "Approved with conditions on 2026-11-22 by the release manager, under the owner's standing execution authority rather than as an owner ruling, on rights-holder evidence read that day and re-read 2026-11-23 (see the four conditions and Docs/MODEL_LICENCES.md \u00a711). This supersedes the record this branch first wrote, which held the only weights statement to be the repository-level `license:apache-2.0` tag and therefore inferred. The tag is not an inference about a third-party upload: the uploading organisation is the verified account of the paper's own lab, which states the Apache 2.0 release in its project README. What remains open is the training-data mix beyond DIV2K/Flickr2K, which is NOT VERIFIED and is recorded on the trainingData record rather than resolved here."
         },
         "trainingData": {
           "use": "public-non-commercial-use-and-distribution",
@@ -264,9 +281,9 @@
           "verdict": "unknown",
           "conditions": [],
           "notice": null,
-          "note": "Swin2SR's own training set is not confirmed; DIV2K, the usual corpus in this family, is made available for academic research purposes only, which is a residual dataset risk and not a term of the recorded weight grant (dossier \u00a71, \u00a72.1)."
+          "note": "Swin2SR's own training set is not confirmed; DIV2K, the usual corpus in this family, is made available for academic research purposes only, which is a residual dataset risk and not a term of the recorded weight grant (dossier \u00a71, \u00a72.1). The 2026-11-22 addendum records what the upstream project does state \u2014 \"We use mainly the DIV2K Dataset and Flickr2K datasets for training\" (https://github.com/mv-lab/swin2sr, read 2026-11-22) \u2014 which names the corpora but does not verify the per-checkpoint mix, so this record stays unknown."
         },
-        "admitted": false
+        "admitted": true
       }
     },
     {

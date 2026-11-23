@@ -142,22 +142,45 @@ class CatalogTests(unittest.TestCase):
                 self.assertTrue(record.evidence_url, f"{entry.id} {name}")
                 self.assertTrue(record.read_on, f"{entry.id} {name}")
 
-    def test_a_tag_only_weights_statement_is_not_an_admission(self):
-        # The mandate's central rule and the review finding (4): inferred
-        # evidence can never be a grant, so swin2sr's repository tag is recorded
-        # as an inference and the gate refuses it.
+    def test_swin_weights_are_approved_with_met_conditions(self):
+        # The release manager's 2026-11-22 decision under the owner's standing
+        # execution mandate, on evidence read that day and re-read 2026-11-23: the
+        # Hugging Face uploader `caidas` is the verified organisation of the
+        # paper's own lab ("Computer Vision Lab, CAIDAS, University of
+        # Würzburg"), and the upstream project states its own Apache 2.0
+        # release. That is a rights-holder statement about the weights, not an
+        # inference by us, so the record carries the grant with four conditions
+        # and the gate admits it. This entry used to be recorded `unknown` /
+        # `inferred`, which reported `upscale.4x` — the one shipped AI
+        # capability — as blocked; see Docs/MODEL_LICENCES.md §8.
         entry = next(item for item in CATALOG if item.id == "swin2sr-x4")
         weights = entry.permitted_use.weights
-        self.assertEqual(weights.stated_by, STATED_BY_INFERRED)
-        self.assertEqual(weights.verdict, UNKNOWN)
-        self.assertIsNone(weights.permitted)
-        self.assertFalse(entry.permitted_use.admitted)
+        self.assertEqual(weights.stated_by, STATED_BY_RIGHTS_HOLDER)
+        self.assertEqual(weights.verdict, APPROVED_WITH_CONDITIONS)
+        self.assertIs(weights.permitted, True)
+        self.assertTrue(weights.conditions)
+        self.assertTrue(all(condition.met for condition in weights.conditions))
+        self.assertTrue(entry.permitted_use.admitted)
+        # The training-data axis stays unknown: the addendum records the
+        # DIV2K/Flickr2K quote and does not resolve the per-checkpoint mix.
+        training = entry.permitted_use.training_data
+        self.assertEqual(training.verdict, UNKNOWN)
+        self.assertIsNone(training.permitted)
+        self.assertIn("DIV2K", training.note)
+        self.assertIn("Flickr2K", training.note)
+        # A condition-bearing record must state every condition it depends on.
         catalog = Catalog(self.root, allow_uncleared=False)
+        listed = {item["id"]: item for item in catalog.list()}
+        record = listed["swin2sr-x4"]["permitted_use"]
+        self.assertTrue(record["admitted"])
+        self.assertEqual([item["met"] for item in record["weights"]["conditions"]],
+                         [True] * len(weights.conditions))
+        # And the load gate really lets it through: no weights file is installed
+        # here, so the refusal must be the ordinary missing-model error and never
+        # the licence error.
         with self.assertRaises(WorkerError) as caught:
             catalog.require("swin2sr-x4")
-        self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
-        self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
-        self.assertEqual(caught.exception.data["artefact"], "weights")
+        self.assertNotEqual(caught.exception.code, LICENSE_BLOCKED)
 
     def test_an_inferred_statement_can_never_grant_an_axis(self):
         inferred = terms(stated_by=STATED_BY_INFERRED)

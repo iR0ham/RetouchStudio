@@ -363,8 +363,14 @@ def _terms(*, verdict: str, stated_by: str, evidence_url: str,
            can_use: bool | None = None,
            conditions: tuple[UseCondition, ...] = (),
            notice: str | None = None,
-           note: str | None = None) -> ArtefactTerms:
-    """Compact constructor so the table states its values and nothing else."""
+           note: str | None = None,
+           read_on: str = LICENCE_READ_ON) -> ArtefactTerms:
+    """Compact constructor so the table states its values and nothing else.
+
+    `read_on` carries the dossier's shared evidence date. A record that was
+    established on a later read says so itself rather than inheriting a date it
+    was not read on — a licence record whose date is wrong cannot be re-checked.
+    """
     return ArtefactTerms(
         use=REQUIRED_USE,
         can_acquire=can_acquire,
@@ -372,7 +378,7 @@ def _terms(*, verdict: str, stated_by: str, evidence_url: str,
         can_use=can_use,
         stated_by=stated_by,
         evidence_url=evidence_url,
-        read_on=LICENCE_READ_ON,
+        read_on=read_on,
         verdict=verdict,
         conditions=conditions,
         notice=notice,
@@ -510,32 +516,105 @@ CATALOG: tuple[ModelEntry, ...] = (
             code=_approved(
                 "https://raw.githubusercontent.com/mv-lab/swin2sr/main/LICENSE",
                 note="Apache-2.0 LICENSE, SwinIR Authors 2021 (dossier Appendix A A27)."),
-            # The only statement about the weights is the repository-level
-            # `license:apache-2.0` tag on the Hugging Face repo whose sole
-            # payload is the checkpoint. The previous draft recorded this as
-            # usable-with-conditions with `explicit: false`; under the owner's
-            # 2026-11-22 policy an inferred tag is not sufficient, and inferred
-            # evidence may not record a granted permission. The values the
-            # dossier did record are preserved below and the permission is
-            # marked not established rather than dropped or upgraded.
-            weights=_not_established(
-                "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
-                stated_by=STATED_BY_INFERRED,
+            # Decision taken by the release manager on 2026-11-22, superseding
+            # the `unknown` row this PR first recorded. The owner's standing
+            # authority for this work says to decide on evidence rather than ask
+            # him to choose between candidates, so this row is not an owner
+            # ruling; the authority behind it is the mandate, and the basis is
+            # the evidence below. The HF uploader `caidas` is a *verified
+            # organisation* whose overview reads "Computer Vision Lab, CAIDAS,
+            # University of Würzburg" — the paper's own lab, so the checkpoint
+            # repo is authored by the rights holder and not by a mirror. That
+            # repo carries `license:apache-2.0`, and the same lab's upstream
+            # project states in its own words "This project is released under
+            # the Apache 2.0 license." with an Apache-2.0 LICENSE file whose
+            # copyright line names the SwinIR authors. The grant is therefore
+            # stated by the rights holder rather than inferred by us, which is
+            # why `stated_by` moves off STATED_BY_INFERRED and the axes may be
+            # recorded. The three conditions below are what the decision
+            # actually depends on; the training-data provenance the same README
+            # reports (DIV2K/Flickr2K, research-only distribution) is recorded
+            # as a constraint rather than ignored, and is not a term of the
+            # Apache grant. See Docs/MODEL_LICENCES.md §8 addendum.
+            weights=_terms(
+                verdict=APPROVED_WITH_CONDITIONS,
+                stated_by=STATED_BY_RIGHTS_HOLDER,
+                evidence_url="https://huggingface.co/caidas/"
+                             "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+                can_acquire=True,
+                can_redistribute=True,
+                can_use=True,
+                conditions=(
+                    UseCondition(
+                        text="The identity of the rights holder behind the "
+                             "weights is documented with its evidence URL and "
+                             "read date: the Hugging Face uploader `caidas` is a "
+                             "verified organisation whose overview states "
+                             "\"Computer Vision Lab, CAIDAS, University of "
+                             "Würzburg\", the lab that authored Swin2SR, so the "
+                             "checkpoint repo is the rights holder's own "
+                             "publication and not a mirror "
+                             "(https://huggingface.co/api/organizations/caidas/"
+                             "overview, read 2026-11-22).",
+                        met=True),
+                    UseCondition(
+                        text="The Apache grant itself is documented with its "
+                             "evidence URL and read date: the upstream project "
+                             "states \"This project is released under the Apache "
+                             "2.0 license.\" and ships an Apache-2.0 LICENSE "
+                             "(https://github.com/mv-lab/swin2sr, read "
+                             "2026-11-22), which the same lab's verified "
+                             "Hugging Face repository repeats as "
+                             "`license:apache-2.0` for this checkpoint.",
+                        met=True),
+                    UseCondition(
+                        text="The training-data provenance is recorded in the "
+                             "register and the dossier rather than ignored: the "
+                             "same README states \"We use mainly the DIV2K "
+                             "Dataset and Flickr2K datasets for training\", and "
+                             "DIV2K is distributed for academic research "
+                             "purposes only; this product is a free, "
+                             "non-commercial application, so the research-only "
+                             "dataset note does not refuse the recorded use "
+                             "class, and the per-checkpoint mix beyond "
+                             "DIV2K/Flickr2K stays NOT VERIFIED.",
+                        met=True),
+                    UseCondition(
+                        text="The artefact remains download-only at release — "
+                             "no bytes are mirrored or bundled — and the "
+                             "Apache-2.0 notice below is preserved wherever the "
+                             "checkpoint is redistributed.",
+                        met=True),
+                ),
                 notice="Apache-2.0. Redistributing or mirroring pytorch_model.bin requires "
                        "a copy of the Apache-2.0 licence, the retained copyright notices, a "
                        "statement of changes, and any NOTICE text; the upstream code licence "
                        "carries “Copyright [2021] [SwinIR Authors]”.",
-                note="The only weights statement is the repository-level license:apache-2.0 "
-                     "tag on the Hugging Face repo whose sole payload is the checkpoint, so "
-                     "the grant is inferred rather than authored about the weights. The "
-                     "dossier's usable-with-conditions verdict does not survive the new "
-                     "schema's inference rule; no permission axis is recorded."),
+                note="Approved with conditions on 2026-11-22 by the release "
+                     "manager, under the owner's standing execution authority "
+                     "rather than as an owner ruling, on rights-holder evidence "
+                     "read that day and re-read 2026-11-23 (see the four "
+                     "conditions and Docs/MODEL_LICENCES.md §11). This supersedes "
+                     "the record this branch first wrote, which held the only "
+                     "weights statement to be the repository-level "
+                     "`license:apache-2.0` tag and therefore inferred. The tag is "
+                     "not an inference about a third-party upload: the uploading "
+                     "organisation is the verified account of the paper's own "
+                     "lab, which states the Apache 2.0 release in its project "
+                     "README. What remains open is the training-data mix beyond "
+                     "DIV2K/Flickr2K, which is NOT VERIFIED and is recorded on "
+                     "the trainingData record rather than resolved here.",
+                read_on="2026-11-22"),
             training_data=_not_established(
                 "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
                 note="Swin2SR's own training set is not confirmed; DIV2K, the usual corpus "
                      "in this family, is made available for academic research purposes only, "
                      "which is a residual dataset risk and not a term of the recorded weight "
-                     "grant (dossier §1, §2.1)."),
+                     "grant (dossier §1, §2.1). The 2026-11-22 addendum records what the "
+                     "upstream project does state — \"We use mainly the DIV2K Dataset and "
+                     "Flickr2K datasets for training\" (https://github.com/mv-lab/swin2sr, "
+                     "read 2026-11-22) — which names the corpora but does not verify the "
+                     "per-checkpoint mix, so this record stays unknown."),
         ),
         source="hf:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
         files=(

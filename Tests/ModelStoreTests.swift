@@ -1619,7 +1619,6 @@ do {
     let shippedURL = testsRoot.appendingPathComponent("Resources/model-catalog.json")
     let shippedRaw = try! Data(contentsOf: shippedURL)
     let shipped = try! ModelCatalog.load(url: shippedURL)
-    let readOn = "2026-11-21"
     let requiredUse = "public-non-commercial-use-and-distribution"
     let shippedIDs = Set(shipped.entries.map(\.id))
 
@@ -1692,6 +1691,13 @@ do {
         }
     }
 
+    // Every pin carries its own read date; the literal below is the dossier's
+    // §19 date, which most rows share. One row is newer than the rest and says
+    // so in its own pin: a record that does not state when it was read cannot be
+    // re-checked later, and swin2sr's weights grant was decided on 2026-11-22
+    // evidence by the release manager under the owner's standing execution
+    // authority, not by the owner and not on 2026-11-21.
+
     // (c) The shipped values, pinned one artefact at a time. The dossier these
     // came from is `Docs/MODEL_LICENCES.md`; the assertions exist so that
     // editing a URL, a date, a statement source or a verdict in
@@ -1703,6 +1709,22 @@ do {
         let statedBy: String
         let evidenceURL: String
         let grantsAll: Bool
+        let readOn: String
+        // The conditions an `approved-with-conditions` verdict depends on.
+        var conditionCount: Int = 0
+
+        init(model: String, artefact: String, verdict: String, statedBy: String,
+             evidenceURL: String, grantsAll: Bool,
+             readOn: String = "2026-11-21", conditionCount: Int = 0) {
+            self.model = model
+            self.artefact = artefact
+            self.verdict = verdict
+            self.statedBy = statedBy
+            self.evidenceURL = evidenceURL
+            self.grantsAll = grantsAll
+            self.readOn = readOn
+            self.conditionCount = conditionCount
+        }
     }
     let pins: [ArtefactPin] = [
         ArtefactPin(model: "flux2-klein-4b-q4", artefact: "code",
@@ -1734,10 +1756,12 @@ do {
                     evidenceURL: "https://raw.githubusercontent.com/mv-lab/swin2sr/main/LICENSE",
                     grantsAll: true),
         ArtefactPin(model: "swin2sr-x4", artefact: "weights",
-                    verdict: "unknown", statedBy: "inferred",
+                    verdict: "approved-with-conditions", statedBy: "rights-holder",
                     evidenceURL: "https://huggingface.co/caidas/"
                         + "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
-                    grantsAll: false),
+                    grantsAll: true,
+                    readOn: "2026-11-22",
+                    conditionCount: 4),
         ArtefactPin(model: "swin2sr-x4", artefact: "trainingData",
                     verdict: "unknown", statedBy: "not-established",
                     evidenceURL: "https://huggingface.co/caidas/"
@@ -1760,7 +1784,7 @@ do {
     let expectedAdmitted: [String: Bool] = [
         "flux2-klein-4b-q4": true,
         "sam2.1-hiera-tiny": true,
-        "swin2sr-x4": false,
+        "swin2sr-x4": true,
         "migan": true,
     ]
     check(Set(pins.map(\.model)) == shippedIDs,
@@ -1778,7 +1802,7 @@ do {
         check(got.statedBy == pin.statedBy, "\(label) statement source is pinned", got.statedBy)
         check(got.evidenceUrl == pin.evidenceURL, "\(label) evidence URL is pinned",
               got.evidenceUrl)
-        check(got.readOn == readOn, "\(label) was read on the dossier date", got.readOn)
+        check(got.readOn == pin.readOn, "\(label) was read on its pinned date", got.readOn)
         check(got.use == requiredUse, "\(label) names the required use class", got.use)
         let axes = [got.canAcquire, got.canRedistribute, got.canUse]
         check(pin.grantsAll ? axes.allSatisfy({ $0 == true }) : axes.allSatisfy({ $0 == nil }),
@@ -1790,18 +1814,46 @@ do {
               "\(label) is admitted exactly when the evidence admits it")
         check(got.verdict == "approved" ? got.conditions.isEmpty : true,
               "\(label) carries no condition without a conditional approval")
+        // A conditional approval is only worth its conditions, so their number
+        // and their met flags are pinned rather than left to the note text.
+        check(got.conditions.count == pin.conditionCount,
+              "\(label) carries exactly the pinned conditions",
+              "\(got.conditions.count)")
+        check(got.conditions.allSatisfy(\.met),
+              "\(label) claims no condition that has not been met")
+        check(pin.verdict == "approved-with-conditions" ? pin.conditionCount > 0 : true,
+              "\(label) does not approve with conditions while listing none")
         if got.verdict == "unknown" {
             check(!(got.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   "\(label) says what the evidence could not establish")
         }
     }
-    // The rule the whole schema exists for: swin2sr's only weights statement is
-    // a repository tag, so it is recorded as an inference and never as a grant.
-    // The old record called the same fact "commercially usable with conditions".
-    check(shipped.entry(id: "swin2sr-x4")?.permittedUse?.weights.statedBy == "inferred"
-            && shipped.entry(id: "swin2sr-x4")?.permittedUse?.weights.verdict == "unknown"
-            && shipped.entry(id: "swin2sr-x4")?.permittedUse?.isAdmitted == false,
-          "a tag-only weights statement is an inference, not an admission")
+    // The rule the whole schema exists for, in both directions: an inference is
+    // never a grant, and a rights-holder statement is. swin2sr's weights row is
+    // the second case — the 2026-11-22 re-adjudication found the grant stated
+    // by the verified organisation that authored the checkpoint, so the record
+    // carries the permission with four met conditions instead of withholding it.
+    // The earlier draft of this branch recorded the same fact as `inferred` /
+    // `unknown`, which reported `upscale.4x` blocked; see Docs/MODEL_LICENCES.md §8.
+    let swinWeights = shipped.entry(id: "swin2sr-x4")?.permittedUse?.weights
+    check(swinWeights?.statedBy == "rights-holder"
+            && swinWeights?.verdict == "approved-with-conditions"
+            && shipped.entry(id: "swin2sr-x4")?.permittedUse?.isAdmitted == true,
+          "a rights-holder weights grant is admitted, with its conditions recorded",
+          "\(swinWeights?.statedBy ?? "nil")/\(swinWeights?.verdict ?? "nil")")
+    check(shipped.entry(id: "swin2sr-x4")?.permittedUse?.trainingData.verdict == "unknown"
+            && (shipped.entry(id: "swin2sr-x4")?.permittedUse?.trainingData.note ?? "")
+                .contains("DIV2K"),
+          "the training-data axis stays unknown and names the dataset provenance")
+    // No shipped record may state a permission from inferred evidence; that is
+    // the invariant the previous swin2sr row honoured by stating nothing.
+    check(shipped.entries.allSatisfy { entry in
+        ["code", "weights", "trainingData"].allSatisfy { name in
+            guard let terms = terms(entry, name) else { return false }
+            return terms.statedBy != "inferred"
+                || [terms.canAcquire, terms.canRedistribute, terms.canUse].allSatisfy { $0 == nil }
+        }
+    }, "no shipped record grants an axis from inferred evidence")
     check(shipped.entries.allSatisfy {
         $0.permittedUse?.weights.notice != nil && !($0.permittedUse?.weights.notice ?? "").isEmpty
     }, "every weights record keeps the attribution its licence would require")
@@ -1971,8 +2023,13 @@ do {
         check(plain?.entry(id: probeID) == flagged?.entry(id: probeID),
               "a retired commercialOk flag cannot change an excluded record")
 
-        // The claimed flag must agree with the record. Flipping it is the one
-        // thing the mandate's "do not invent permissions" forbids outright.
+        // The claimed flag must agree with the record, in both directions. Every
+        // shipped record derives `true` now, so the disagreement has to be built
+        // by withdrawing a permission rather than by editing the flag: swin2sr's
+        // code artefact is excluded with none of its axes granted, which is a
+        // legal record by itself and makes the entry derive `false` while the
+        // file still claims `true`. Flipping a claim is the one thing the
+        // mandate's "do not invent permissions" forbids outright.
         refuses(catalogue(probeID, "weights", syncAdmitted: false) {
             $0["verdict"] = "unknown"
             $0["canAcquire"] = NSNull()
@@ -1984,12 +2041,23 @@ do {
         for index in flippedEntries.indices
         where flippedEntries[index]["id"] as? String == "swin2sr-x4" {
             var record = flippedEntries[index]["permitted_use"] as! [String: Any]
+            var code = record["code"] as! [String: Any]
+            code["verdict"] = "excluded"
+            // An exclusion may not carry a granted axis, so the axes leave with
+            // the verdict. This fixture is about the flag, not about the axes.
+            code["canAcquire"] = NSNull()
+            code["canRedistribute"] = NSNull()
+            code["canUse"] = NSNull()
+            record["code"] = code
+            // The claim stays `true` while the record behind it no longer admits
+            // the model, which is exactly the invention the loader must refuse.
             record["admitted"] = true
             flippedEntries[index]["permitted_use"] = record
         }
         flipped["entries"] = flippedEntries
         refuses(try! JSONSerialization.data(withJSONObject: flipped),
-                "records admitted: true", "swin2sr cannot be claimed as admitted")
+                "records admitted: true",
+                "an admitted claim cannot outlive the permission it was derived from")
     }
 
     // (f) Both directions of the wire comparison. The resource is produced from
@@ -2075,16 +2143,54 @@ do {
                 check(joined.contains(record.weights.evidenceUrl),
                       "\(row.id) records the same weights evidence URL in the worker",
                       record.weights.evidenceUrl)
-                switch record.weights.statedBy {
-                case "rights-holder":
-                    check(block.contains("_approved("),
-                          "\(row.id) is an explicit grant on both surfaces")
-                case "inferred":
-                    check(block.contains("STATED_BY_INFERRED"),
-                          "\(row.id) is an inference on both surfaces")
-                default:
-                    check(block.contains("_not_established("),
-                          "\(row.id) is not established on both surfaces")
+                // The two surfaces must agree artefact by artefact. Checking one
+                // helper name per entry was not enough once a single row could be
+                // an explicit grant while its sibling rows stayed unknown, so each
+                // artefact's own block is now compared with its own verdict.
+                func artefactBlock(_ artefact: String) -> String {
+                    guard let start = joined.range(of: "\(artefact)=") else { return "" }
+                    let rest = joined[start.upperBound...]
+                    // `_approved(...)` / `_not_established(...)` end at the next
+                    // top-level artefact or at the closing of permitted_use.
+                    let end = ["weights=PermittedUse", "training_data=", "),\n        source"]
+                        .compactMap { marker in
+                            rest.range(of: marker)
+                                .map { rest.distance(from: rest.startIndex,
+                                                     to: $0.lowerBound) }
+                        }
+                        .min() ?? rest.count
+                    return String(rest.prefix(max(end, 0)))
+                }
+                for (artefact, terms) in [("code", record.code),
+                                          ("weights", record.weights),
+                                          ("trainingData", record.trainingData)] {
+                    let slice = artefactBlock(artefact == "trainingData" ? "training_data" : artefact)
+                    switch terms.statedBy {
+                    case "rights-holder":
+                        check(terms.verdict == "approved"
+                                ? slice.contains("_approved(")
+                                : slice.contains("verdict=APPROVED_WITH_CONDITIONS")
+                                    && slice.contains("stated_by=STATED_BY_RIGHTS_HOLDER"),
+                              "\(row.id)/\(artefact) is a rights-holder statement on both surfaces",
+                              slice.prefix(80).replacingOccurrences(of: "\n", with: " "))
+                    case "inferred":
+                        check(slice.contains("STATED_BY_INFERRED"),
+                              "\(row.id)/\(artefact) is an inference on both surfaces")
+                    default:
+                        check(slice.contains("_not_established("),
+                              "\(row.id)/\(artefact) is not established on both surfaces")
+                    }
+                    check(slice.contains(terms.verdict)
+                            || (terms.verdict == "approved" && slice.contains("_approved("))
+                            || (terms.verdict == "unknown" && slice.contains("_not_established("))
+                            // The worker spells a conditional approval as its enum
+                            // constant, so the hyphenated wire word cannot appear
+                            // literally in its source. The check above pins the
+                            // constant beside the same rights-holder source.
+                            || (terms.verdict == "approved-with-conditions"
+                                    && slice.contains("verdict=APPROVED_WITH_CONDITIONS")),
+                          "\(row.id)/\(artefact) states the same verdict in the worker",
+                          terms.verdict)
                 }
             }
         } else {

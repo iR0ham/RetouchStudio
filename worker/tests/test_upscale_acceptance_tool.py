@@ -120,24 +120,28 @@ class HarnessToolTests(unittest.TestCase):
             capture_output=True, text=True, timeout=180)
 
     def test_a_blocked_capability_is_refused_with_nothing_claimed(self):
-        # No model installed and no admitted weights record: the report names
-        # the licence refusal, and the harness must answer exit 2 with the
-        # recorded refusal instead of submitting a job that cannot run.
+        # Nothing installed: the report says `requires_model`, and the harness
+        # must still answer exit 2 with the recorded refusal instead of
+        # submitting a job that cannot run. Being admitted by the licence is not
+        # being runnable, and the weights were never downloaded here.
         process = self._run()
         self.assertEqual(process.returncode, 2, process.stderr)
         record = json.loads((self.tmp / "record.json").read_text())
         self.assertEqual(record["verdict"], "not-runnable")
-        self.assertIn("blocked", record["reason"])
-        self.assertIn("no established permission", record["reason"])
+        self.assertIn("requires_model", record["reason"])
+        self.assertNotIn("no established permission", record["reason"])
+        # The worker's own sentence is carried into the record, so a claim about
+        # the licence can only come from the report and never from the harness.
+        self.assertEqual(record["capability"]["state"], "requires_model")
 
     def test_a_proven_capability_runs_to_a_judged_pass(self):
         # The same fixture the server tests use: exact-size install, active
         # version, and an evidence ledger naming this platform, so the gate
         # admits the capability for the reason it is really admitted. The
-        # catalogue runs behind the evaluation switch because swin2sr's weights
-        # record is not admitted; the licence gate itself is pinned by
-        # `test_catalog` and `test_server`.
-        catalog = Catalog(self.tmp / "models", allow_uncleared=True)
+        # shipping catalogue is used unmodified: swin2sr's weights record is
+        # approved-with-conditions and admitted, so no evaluation switch is
+        # needed to reach the runtime paths.
+        catalog = Catalog(self.tmp / "models", allow_uncleared=False)
         self.server.catalog = catalog
         entry = catalog.get("swin2sr-x4")
         version = catalog.root / entry.id / "1.0.0"
