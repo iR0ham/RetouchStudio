@@ -119,7 +119,14 @@ enum UpdateInstaller {
         try fileManager.createDirectory(at: workspace, withIntermediateDirectories: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = ["-x", "-k", archive.path, workspace.path]
+        // A downloaded archive carries `com.apple.quarantine`, and ditto copies
+        // that flag onto every file it writes. The swapped-in bundle would then
+        // be a quarantined, ad-hoc-signed application, which Gatekeeper and AMFI
+        // treat as an unreviewed download the moment it relaunches. `--noqtn`
+        // unpacks without carrying the flag across; it does not change what is
+        // extracted, or the signature, size or SHA-256 checks around it — those
+        // all run on the archive before this call.
+        process.arguments = ["-x", "-k", "--noqtn", archive.path, workspace.path]
         do { try process.run() } catch {
             throw UpdateInstallError.unpackFailed(error.localizedDescription)
         }

@@ -2010,6 +2010,108 @@ do {
     } catch {
         check(true, "an archive whose version differs from the manifest is refused")
     }
+
+    // Quarantine: an update archive arrives as a download, so the file carries
+    // `com.apple.quarantine`, and `ditto -x -k` copies that flag onto every path
+    // it writes — directories included, which is what makes the whole swapped-in
+    // bundle read as an unreviewed download on relaunch. `UpdateInstaller.unpack`
+    // must not carry the flag across. The fixture is a real application bundle in
+    // a real archive marked quarantined with /usr/bin/xattr; the control run
+    // proves the same archive does leak the flag through the bare ditto call, so
+    // the assertion below fails if `--noqtn` ever leaves the arguments.
+    print("\n[U2] the unpacked update bundle never carries quarantine")
+    let quarantineAttribute = "com.apple.quarantine"
+    func quarantineValue(_ path: String) -> String? {
+        var size = getxattr(path, quarantineAttribute, nil, 0, 0, 0)
+        guard size > 0 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        size = getxattr(path, quarantineAttribute, &buffer, size, 0, 0)
+        guard size > 0 else { return nil }
+        return String(decoding: buffer.prefix(size), as: UTF8.self)
+    }
+    /// Every path under `root` (directories included) holding the flag. The
+    /// bundle itself is named explicitly: its temp directory lives under a short
+    /// /var → /private/var symlink, so a stripped relative path reads wrong.
+    func quarantinedPaths(_ root: URL) -> [String] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: nil) else { return [] }
+        var found: [String] = []
+        if quarantineValue(root.path) != nil { found.append(root.lastPathComponent) }
+        for url in enumerator.compactMap({ $0 as? URL }) where quarantineValue(url.path) != nil {
+            let prefix = root.path + "/"
+            found.append(url.path.hasPrefix(prefix)
+                ? String(url.path.dropFirst(prefix.count))
+                : url.lastPathComponent)
+        }
+        return found
+    }
+    func runTool(_ executable: String, _ arguments: [String]) -> Int32 {
+        let tool = Process()
+        tool.executableURL = URL(fileURLWithPath: executable)
+        tool.arguments = arguments
+        tool.standardOutput = Pipe()
+        tool.standardError = Pipe()
+        do { try tool.run() } catch { return -1 }
+        tool.waitUntilExit()
+        return tool.terminationStatus
+    }
+
+    let qnRoot = updateRoot.appendingPathComponent("quarantine", isDirectory: true)
+    do {
+        try FileManager.default.createDirectory(at: qnRoot, withIntermediateDirectories: true)
+        let qnSource = try makeApp("quarantine/Retouch Studio.app", version: "1.1.0",
+                                   bundleID: "app.retouchstudio.mac", marker: "downloaded")
+        let qnArchive = qnRoot.appendingPathComponent("release.zip")
+        check(runTool("/usr/bin/ditto", ["-c", "-k", "--keepParent",
+                                         qnSource.path, qnArchive.path]) == 0,
+              "the quarantined fixture archive is written")
+        let mark = "0081;00000000;TestAgent;00000000-0000-0000-0000-000000000000"
+        let marked = runTool("/usr/bin/xattr",
+                             ["-w", quarantineAttribute, mark, qnArchive.path]) == 0
+        let onArchive = quarantineValue(qnArchive.path)
+        check(marked && onArchive == mark,
+              "BLOCKER: the archive really carries com.apple.quarantine before unpack",
+              onArchive ?? "xattr could not be set (marked=\(marked))")
+
+        let control = qnRoot.appendingPathComponent("control", isDirectory: true)
+        try FileManager.default.createDirectory(at: control, withIntermediateDirectories: true)
+        let plain = runTool("/usr/bin/ditto", ["-x", "-k", qnArchive.path, control.path])
+        let leaked = quarantinedPaths(control)
+        check(plain == 0 && !leaked.isEmpty,
+              "control: bare `ditto -x -k` copies the flag onto the extracted bundle",
+              "\(leaked.count) quarantined paths: \(leaked.prefix(3).joined(separator: ", "))")
+
+        let qnWorkspace = qnRoot.appendingPathComponent("unpacked", isDirectory: true)
+        var unpackedApp: URL?
+        var unpackError: Error?
+        do {
+            unpackedApp = try UpdateInstaller.unpack(archive: qnArchive, into: qnWorkspace,
+                                                     expectedVersion: "1.1.0",
+                                                     bundleIdentifier: "app.retouchstudio.mac")
+        } catch {
+            unpackError = error
+        }
+        check(unpackError == nil && unpackedApp != nil,
+              "the production unpacker accepts the quarantined archive",
+              unpackError.map { "\($0)" } ?? "")
+        if let app = unpackedApp {
+            let carried = quarantinedPaths(app)
+            check(carried.isEmpty,
+                  "quarantine leaked into the unpacked bundle",
+                  "\(carried.count) quarantined paths: \(carried.prefix(4).joined(separator: ", "))")
+            check(quarantineValue(app.path) == nil,
+                  "quarantine leaked into the unpacked bundle (its .app directory)",
+                  quarantineValue(app.path) ?? "")
+            check(quarantineValue(app.appendingPathComponent("Contents/Info.plist").path) == nil,
+                  "quarantine leaked into the unpacked bundle (Contents/Info.plist)",
+                  quarantineValue(app.appendingPathComponent("Contents/Info.plist").path) ?? "")
+        } else {
+            check(false, "quarantine leaked into the unpacked bundle",
+                  "the bundle was never unpacked, so nothing was proven")
+        }
+    } catch {
+        check(false, "the quarantine updater fixture is written", "\(error)")
+    }
 }
 
 print("\n" + String(repeating: "-", count: 60))
