@@ -1752,7 +1752,8 @@ there is no stale-binary path. What `build.sh` does do and does not skip is exec
 §3 line 88 and §7 line 156 both say the checksums are generated and "independently re-checked — NOT VERIFIED".
 Reading the workflow instead of the row separates two facts the ledger had merged:
 
-- **Generation is executed evidence.** `Tools/make-dmg.sh:31` writes the sidecar next to each DMG, and the
+- **Generation is executed evidence.** `Tools/make-dmg.sh:30` writes the sidecar next to each DMG (`shasum -a 256`,
+  the same `<hash>  <path>` form the verifier reads), and the
   `Release` workflow has run three times by `workflow_dispatch` (latest success 2026-11-15 against `main`), in
   which the macOS packaging jobs — the ones that produce the sidecars — completed.
 - **The independent re-check is encoded but has never executed.** `release.yml:181-187` re-verifies every
