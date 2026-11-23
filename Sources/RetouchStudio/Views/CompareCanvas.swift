@@ -80,18 +80,31 @@ struct CompareCanvas: View {
         .onDisappear { events.stop() }
         // A hidden twin keeps the pill's natural size current even while no
         // toast is showing; the visible pill is fitted to whatever width the
-        // placement can spare.
+        // placement can spare. It is gated to the states a pill can reach:
+        // `showsToast` already requires `model.hasImage`, so a photo on the
+        // stage or a running operation is exactly the window in which the next
+        // toast may be placed, and the twin stays live across all of it. On an
+        // idle stage it was measuring a line that can never be placed — the
+        // drop hint once the view has appeared, an empty pill before that — and
+        // preference propagation lands a render pass later, so the first toast
+        // after a document loaded was fitted to that stale width. Gating leaves
+        // the deliberate 200 pt default in place instead. The gate opens with
+        // `hasImage`, so on the very first toast after a load one frame can
+        // still use that default; a real width arrives on the next pass, which
+        // is the intended fallback rather than an unrelated measurement.
         .overlay(alignment: .topLeading) {
-            statusPill
-                .fixedSize()
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: ToastSizeKey.self, value: proxy.size)
-                    }
-                )
-                .hidden()
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            if model.hasImage || model.isBusy {
+                statusPill
+                    .fixedSize()
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: ToastSizeKey.self, value: proxy.size)
+                        }
+                    )
+                    .hidden()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
         .overlay { statusOverlay }
         .animation(Motion.smooth, value: model.status)

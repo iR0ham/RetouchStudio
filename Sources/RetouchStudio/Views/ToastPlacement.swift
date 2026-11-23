@@ -44,9 +44,9 @@ struct ToastObstacles: Equatable {
         // tag and the divider leave the stage. The label saying what is on
         // screen does not: CompareCanvas draws a single BEFORE badge against
         // the canvas' own top-leading corner, ungated by Compare or by the tool
-        // mode (CompareCanvas.swift:339-348), and the toast floats above that
-        // chrome. Dropping it here was the same defect in another state — the
-        // pill sat straight on the badge.
+        // mode (`model.isPeekingOriginal` in the canvas overlay), and the toast
+        // floats above that chrome. Dropping it here was the same defect in
+        // another state — the pill sat straight on the badge.
         if peeking {
             let peekReserve = min(ToastPlacement.labelReserveWidth,
                                   max(0, canvas.width - inset * 2))
@@ -101,16 +101,25 @@ enum ToastPlacement {
     /// Below this the message cannot be read; the search then gives up a little
     /// width rather than a label or a control.
     static let minimumWidth: CGFloat = 132
+    /// The inset the tag strip keeps from the visible corners — the
+    /// `.padding(10)` around the `HStack` of `compareBadge` views.
     static let labelInset: CGFloat = 10
     /// The badge is `Text` at Vazirmatn-SemiBold 9 pt with 3 pt of vertical
-    /// padding (CompareCanvas.swift:442-458). Measured from the shipped face:
-    /// ascent 9.23 + descent 4.83 + leading 0 = 14.06 line, plus 6 = 20.06, so
-    /// the reservation is the next point up. Under-reserving it means the pill
-    /// can crowd the tag while the placement believes it cleared it; the suite
-    /// re-measures the font file so a type change cannot silently shrink this.
+    /// padding (`compareBadge` in CompareCanvas.swift). Measured from the
+    /// shipped face: ascent 9.23 + descent 4.83 + leading 0 = 14.06 line, plus
+    /// 6 = 20.06, so the reservation is the next point up. Under-reserving it
+    /// means the pill can crowd the tag while the placement believes it cleared
+    /// it; the suite re-measures the font file so a type change cannot silently
+    /// shrink this.
     static let labelHeight: CGFloat = 21
-    /// "BEFORE"/"AFTER" at the tag font, widened generously for any language.
+    /// Room for the widest tag the shell can draw. Measured from the shipped
+    /// face at the badge font: "BEFORE" is 51 pt, "AFTER" 45, the Persian tags
+    /// 30 and 29, so 96 leaves the reservation comfortably above the localised
+    /// pair rather than sized to it. The test suite measures both tables, so a
+    /// tag that outgrows this floor fails there instead of silently overlapping.
     static let labelReserveWidth: CGFloat = 96
+    /// The divider's grab strip, not the 1 pt line — `hitWidth` in
+    /// `compareHandle(displayed:canvas:center:)`.
     static let handleWidth: CGFloat = 28
 
     /// Preference reduction runs once per child of the view that reads the key,
