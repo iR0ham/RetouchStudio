@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 
 from retouch_ai_worker import provenance
-from retouch_ai_worker.catalog import Catalog
+from retouch_ai_worker.catalog import CATALOG as SHIPPED, Catalog
 from retouch_ai_worker.engine import (Cancelled, Context, Engine, _square_box,
                                       composite, mask_policy, region_alpha)
 from retouch_ai_worker.protocol import (CHECKSUM_MISMATCH, CONTRACT_VERSION,
@@ -409,7 +409,7 @@ class LoaderIntegrityTests(unittest.TestCase):
         }), encoding="utf-8")
         entry = ModelEntry(
             id="swin2sr-x4", name="Swin2SR x4", task="upscaling",
-            license_id="Apache-2.0", commercial_ok=True, source="local",
+            license_id="Apache-2.0", permitted_use=SHIPPED[0].permitted_use, source="local",
             files=(ModelFile("weights.bin",
                              hashlib.sha256(b"trusted").hexdigest(), 7),))
         (version / "weights.bin").write_bytes(b"tampere")

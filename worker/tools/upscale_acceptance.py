@@ -283,7 +283,7 @@ def main() -> int:
         reply = client.call("models.verify", {"model": EXPECTED_MODEL})
         verify = reply.get("result") or {"error": reply.get("error")}
         measure["model"] = {"license": entry.get("license"),
-                            "commercialOk": entry.get("commercial_ok"),
+                            "permittedUse": entry.get("permitted_use"),
                             "verify": verify}
 
         # --- the acceptance job -------------------------------------------

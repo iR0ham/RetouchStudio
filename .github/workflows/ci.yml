@@ -78,6 +78,25 @@ jobs:
       - name: Assert the macOS and Windows version sources agree
         run: ./Tools/check-versions.sh
 
+      # The app's licence records are the worker table's own, and this is the
+      # only step that can prove it: regenerate the resource from the table and
+      # require that the committed bytes are already the result. `--check`
+      # fails first with the precise message; the two full runs then prove the
+      # write is idempotent, so the recorded position cannot depend on how many
+      # times the generator has run. If anything is written, the golden-corpus
+      # step below also refuses the dirty tree.
+      - name: Assert the licence records match the worker table
+        run: |
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          python3 Docs/licence-evidence-apply.py --check
+          python3 Docs/licence-evidence-apply.py
+          first="$(sha256sum Resources/model-catalog.json)"
+          python3 Docs/licence-evidence-apply.py
+          second="$(sha256sum Resources/model-catalog.json)"
+          test "$first" = "$second"
+          echo "catalogue idempotent: $first"
+
       - name: Run conformance gate
         run: |
           set -euo pipefail
@@ -160,8 +179,9 @@ jobs:
       - name: Assert every suite reported a verdict
         run: |
           set -euo pipefail
+          expected_worker_tests=$(tr -d '[:space:]' < Tests/expected-worker-tests.txt)
           for verdict in \
-            'Ran 166 tests' \
+            "Ran ${expected_worker_tests} tests" \
             'StudioCore: [0-9]+ checks passed' \
             'Upscale ETA: [0-9]+ checks passed' \
             'ENGINE TESTS: PASS' \
@@ -280,15 +300,19 @@ jobs:
   # inspected on a runner. This job builds it end to end into a scratch app
   # bundle, packages the archive with `Tools/make-runtime.sh`, and inspects
   # it: the three payload documents and the interpreter at the archive root,
-  # one dist-info per lock pin, licence files inside those dist-info
-  # directories, the archive's byte size and SHA-256, and the import smoke run
-  # by the extracted runtime with the same PYTHONHOME/PYTHONPATH the app sets
-  # at launch.
+  # the exact locked distribution set read from each dist-info's `METADATA`
+  # with only the venv's pip as a verified allowance, licence files inside
+  # those dist-info directories, the archive's byte size and SHA-256, and the
+  # import smoke run by the extracted runtime with the same
+  # PYTHONHOME/PYTHONPATH the app sets at launch.
   #
   # It is `continue-on-error` on purpose: this is the first time the payload is
   # built in CI, so a failure is evidence to act on, not a merge gate. It
-  # removes nothing, changes no dependency and downloads no model; promote it
-  # to a blocking check once it has a green streak. Measured locally: the full
+  # removes nothing, changes no dependency and downloads no model. The owner's
+  # promotion criteria (2026-11-21) are recorded in `Docs/CI_GATES.md`; the
+  # commands, expected evidence and remaining unverified paths are in
+  # `Docs/WORKER_CI_VALIDATION_PLAN.md`. This job is not a required context.
+  # Measured locally: the full
   # lock unpacks to 1.4 GB of site-packages (67 pinned distributions plus the
   # venv's own pip), and the source runtime is built from source here exactly
   # as the macOS Integration job builds it.
@@ -333,22 +357,25 @@ jobs:
       # runs — the lock deliberately leaves it out, and the setup script's
       # --no-deps comment records that. Anything else is the missing-pin
       # failure this job exists to catch.
+      #
+      # The gate judges status, stdout and stderr together. The previous
+      # `check=$(... || true)` captured stdout only: a pip that crashed before
+      # printing left an empty capture and the step passed. `pip_check_gate.py`
+      # accepts status 0 only with the clean verdict and status 1 only with the
+      # documented line, and fails on any other status, empty output or a
+      # traceback. Seedings: `worker/tests/test_pip_check_gate.py`.
       - name: Every installed requirement is satisfied except the documented one
         run: |
           set -euo pipefail
-          check=$(worker/.venv/bin/python3 -m pip check || true)
-          printf '%s\n' "$check"
-          unexpected=$(printf '%s\n' "$check" \
-            | grep -v '^No broken requirements found\.$' \
-            | grep -vE '^mflux [^ ]+ requires opencv-python, which is not installed\.$' \
-            || true)
-          [ -z "$unexpected" ] || {
-            echo "requirements the lock does not satisfy:" >&2
-            printf '%s\n' "$unexpected" >&2
-            exit 1
-          }
-          echo "only the documented mflux -> opencv-python gap is reported"
+          worker/.venv/bin/python3 worker/tools/pip_check_gate.py
 
+      # The fixed eight targets are a critical-path floor, not the coverage.
+      # `import_smoke.py` adds every third-party top-level module the shipped
+      # package imports (the same AST walk `lock_closure.py` uses), fails a
+      # fixed target the code no longer imports, and names an unpinned import
+      # as the lock closure's failure instead of importing it. The required
+      # macOS job runs the lock closure tests, so an unpinned import cannot
+      # escape both checks. Seedings: `worker/tests/test_import_smoke.py`.
       - name: Import the modules the shipped worker loads lazily
         run: |
           set -euo pipefail
@@ -369,38 +396,29 @@ jobs:
 
       # `make-runtime.sh` zips the Worker folder itself, so these names are
       # exactly what extraction puts at the root of an installed runtime. The
-      # listing is the evidence that the payload carries its own documents and
+      # archive is the evidence that the payload carries its own documents and
       # every locked distribution's metadata and licences.
+      #
+      # The comparison is identity, not count. `dist-info directories >= pinned
+      # requirements` passed because the venv ships 68 for 67 pins (the extra is
+      # pip), and it also passed for a duplicated, renamed or wrong-version
+      # distribution. `verify_payload.py` reads each `METADATA` and compares the
+      # `(canonical name, version)` set with the lock, requires a `RECORD` in
+      # every dist-info and a directory name that matches its metadata, and
+      # allows exactly one extra: pip, at the version the building interpreter
+      # reports. Seedings: `worker/tests/test_payload_verification.py`.
       - name: Inspect the runtime archive
         run: |
           set -euo pipefail
           out="$RUNTIME_ZIP"
-          locked=$(grep -cE '^[A-Za-z0-9]' worker/requirements.lock)
-          # Not `grep -q`: it exits at the first match, closing the pipe under
-          # `pipefail` while the printf is still writing 5 MB of entries.
-          entries=$(unzip -Z1 "$out")
-          for name in LICENSE THIRD_PARTY_NOTICES.md requirements.lock; do
-            printf '%s\n' "$entries" | grep -x "$name" >/dev/null || {
-              echo "the archive has no $name at its root" >&2; exit 1; }
-          done
-          printf '%s\n' "$entries" | grep -x 'bin/python3' >/dev/null || {
-            echo "the archive has no bundled interpreter" >&2; exit 1; }
-          package_files=$(printf '%s\n' "$entries" | grep -c '^retouch_ai_worker/' | tr -d ' ')
-          distinfos=$(printf '%s\n' "$entries" \
-            | sed -nE 's#^site-packages/([^/]+)\.dist-info/.*#\1#p' | sort -u | wc -l | tr -d ' ')
-          licences=$(printf '%s\n' "$entries" \
-            | grep -cE '^site-packages/[^/]+\.dist-info/(licenses/)?(LICENSE|COPYING|NOTICE)' | tr -d ' ')
-          files=$(printf '%s\n' "$entries" | wc -l | tr -d ' ')
-          echo "entries: $files (worker package files: $package_files)"
-          echo "dist-info directories: $distinfos (the lock pins $locked)"
-          echo "licence files inside dist-info: $licences"
-          [ "$distinfos" -ge "$locked" ] || {
-            echo "fewer dist-info directories than pins: $distinfos < $locked" >&2; exit 1; }
-          [ "$licences" -gt 0 ] || {
-            echo "no licence file survived into the archive" >&2; exit 1; }
+          pip_version=$(worker/.venv/bin/python3 -m pip --version | awk '{print $2}')
+          echo "environment pip: $pip_version"
           stat -f 'archive bytes: %z' "$out"
           shasum -a 256 "$out"
-          echo "WORKER PAYLOAD: PASS ($distinfos dist-info for $locked pins, $licences licence files, $files entries)"
+          worker/.venv/bin/python3 worker/tools/verify_payload.py \
+            --archive "$out" \
+            --lock worker/requirements.lock \
+            --pip-version "$pip_version"
 
       # Extract with ditto, the same tool the archive was made with, so symlinks
       # inside the runtime survive. The imports then run under the environment

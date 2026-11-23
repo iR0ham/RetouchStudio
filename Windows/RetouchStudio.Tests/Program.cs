@@ -3826,22 +3826,25 @@ internal static class Program
     private static void UnsupportedEditGuard(string root)
     {
         var repo = RepoRoot();
+        // The names a macOS project must be refused, written out once. Both
+        // fixtures are the same picture at two schema versions, so they share
+        // this list; a count is never asserted on its own.
+        var fullProjectEdits = new[]
+        {
+            "heal spots", "stickers", "AI patches", "analysis callouts",
+            "skin retouching", "face reshaping", "a look", "film grain",
+        };
         using (var session = ProjectSession.Open(Path.Combine(
                    repo, "Tests/Fixtures/ProjectV4/project-v4-full.retouch")))
         {
-            var edits = session.Document.UnsupportedEdits;
-            Check("a macOS project names every edit this host cannot render",
-                  edits.Count == 8
-                  && edits.Contains("heal spots") && edits.Contains("stickers")
-                  && edits.Contains("AI patches") && edits.Contains("analysis callouts")
-                  && edits.Contains("skin retouching") && edits.Contains("face reshaping")
-                  && edits.Contains("a look") && edits.Contains("film grain"));
+            CheckEdits("a macOS project names every edit this host cannot render",
+                       session.Document, fullProjectEdits);
         }
         using (var session = ProjectSession.Open(Path.Combine(
                    repo, "Tests/Fixtures/ProjectV3/project-v3-full.retouch")))
         {
-            Check("a v3 project is checked the same way",
-                  session.Document.UnsupportedEdits.Count == 8);
+            CheckEdits("a v3 project is checked the same way",
+                       session.Document, fullProjectEdits);
         }
 
         using (var session = ProjectSession.Create(Path.Combine(root, "fresh.png")))
@@ -3853,7 +3856,7 @@ internal static class Program
         }
 
         var empty = new DocumentModel(new JsonObject());
-        Check("a project with no extra edits names none", empty.UnsupportedEdits.Count == 0);
+        CheckEdits("a project with no extra edits names none", empty);
 
         empty.Root["healSpots"] = new JsonArray();
         empty.Root["stickers"] = new JsonArray();
@@ -3874,6 +3877,9 @@ internal static class Program
                 ["smooth"] = 30.0,
                 ["lookID"] = "kodachrome",
                 ["backgroundImageAmount"] = 100.0,
+                // A skin amount and its texture are one edit, not two: the name
+                // has to appear once however many of its amounts the file carries.
+                ["texturePreserve"] = 70.0,
             },
         });
         Check("a skin amount and a look are named",
@@ -3907,11 +3913,108 @@ internal static class Program
             ["adjustments"] = new JsonObject
             {
                 ["exposure"] = 20.0, ["contrast"] = 10.0, ["clarity"] = 15.0,
-                ["texturePreserve"] = 70.0,
             },
         });
-        Check("the nine renderable sliders are not edits",
-              renderable.UnsupportedEdits.Count == 0);
+        CheckEdits("the nine sliders this host draws are not edits", renderable);
+
+        // texturePreserve is not one of those nine. macOS hands it to the skin
+        // smoothing pass, where it sets how much detail the blur keeps, so a
+        // project that carries a non-zero value asks for pixels this host cannot
+        // make — even though its own slider never appears here. Certifying it as
+        // a no-op would be the false success this guard exists to refuse.
+        var textureOnly = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject { ["texturePreserve"] = 70.0 },
+        });
+        CheckEdits("a texture amount alone is named", textureOnly, "skin retouching");
+
+        var textureZero = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject { ["texturePreserve"] = 0.0 },
+        });
+        CheckEdits("a zero texture amount names nothing", textureZero);
+
+        // The look is two fields: the identifier names the grade, the strength
+        // blends it in. A project can carry one without the other — macOS only
+        // zeroes the strength when the rail selection goes back to .none, and
+        // the decode reads each field independently — so each half alone must
+        // prompt rather than export a picture without the grade.
+        var strengthOnly = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "", ["lookStrength"] = 45.0,
+            },
+        });
+        Check("a look amount with no identifier is named",
+              strengthOnly.UnsupportedEdits.Count == 1
+              && strengthOnly.UnsupportedEdits[0] == "a look");
+
+        var missingId = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject { ["lookStrength"] = -20.0 },
+        });
+        Check("a negative look amount with no identifier at all is named",
+              missingId.UnsupportedEdits.Count == 1
+              && missingId.UnsupportedEdits[0] == "a look");
+
+        var clearedLook = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "", ["lookStrength"] = 0.0,
+            },
+        });
+        Check("an empty identifier and a zero strength name nothing",
+              clearedLook.UnsupportedEdits.Count == 0);
+
+        var identifierOnly = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "kodachrome", ["lookStrength"] = 0.0,
+            },
+        });
+        Check("an identifier with a zero strength is still named",
+              identifierOnly.UnsupportedEdits.Count == 1
+              && identifierOnly.UnsupportedEdits[0] == "a look");
+
+        var bothHalves = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "warmGold", ["lookStrength"] = 55.0,
+            },
+        });
+        Check("both halves of one look name it once",
+              bothHalves.UnsupportedEdits.Count == 1
+              && bothHalves.UnsupportedEdits[0] == "a look");
+
+        // Clearing the rail on macOS writes FilmLook.none, whose raw value is
+        // the string "none", and only zeroes the strength in that same edit —
+        // a document from an older build can therefore carry the sentinel next
+        // to a stale amount. That pair renders no grade and nothing on this host
+        // can rewrite the field, so a guard naming it would refuse the document
+        // forever. The sentinel means "no look" on both halves of the check.
+        var sentinelLook = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "none", ["lookStrength"] = 0.8,
+            },
+        });
+        CheckEdits("the cleared-look sentinel with a stale amount names nothing",
+                   sentinelLook);
+
+        var realLook = new DocumentModel(new JsonObject
+        {
+            ["adjustments"] = new JsonObject
+            {
+                ["lookID"] = "kodachrome", ["lookStrength"] = 0.8,
+            },
+        });
+        CheckEdits("a real identifier with the same amount is still named",
+                   realLook, "a look");
     }
 
     /// <summary>
@@ -4380,6 +4483,35 @@ internal static class Program
         else
         {
             Fail(name, "condition was false");
+        }
+    }
+
+    /// <summary>
+    /// Asserts the exact set of names a document's guard reports. A count is
+    /// never compared with a hand-typed number: where a caller needs one it
+    /// comes from the same literal list it passes here, so an edit that adds or
+    /// drops a name cannot stay green by bumping a figure somewhere else. The
+    /// comparison is order-insensitive; the failure prints what the guard
+    /// actually named beside what was expected.
+    /// </summary>
+    private static void CheckEdits(string name, DocumentModel model,
+                                   params string[] expected)
+    {
+        var actual = model.UnsupportedEdits;
+        var matches = actual.OrderBy(edit => edit, StringComparer.Ordinal)
+                            .SequenceEqual(expected.OrderBy(edit => edit,
+                                                            StringComparer.Ordinal));
+        if (matches)
+        {
+            Pass(name);
+        }
+        else
+        {
+            var named = string.Join(", ",
+                actual.OrderBy(edit => edit, StringComparer.Ordinal));
+            var wanted = string.Join(", ",
+                expected.OrderBy(edit => edit, StringComparer.Ordinal));
+            Fail(name, $"named [{named}], expected [{wanted}]");
         }
     }
 

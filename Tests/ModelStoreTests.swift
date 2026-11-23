@@ -168,6 +168,21 @@ func catalogData(containing ids: Set<String>, base: String) throws -> Data {
     return Data(text.replacingOccurrences(of: "{base}", with: base).utf8)
 }
 
+/// Drops keys from selected entries of the full fixture catalog. Used to prove a
+/// field is optional on decode: an entry with the key absent must still load.
+func catalogData(dropping keys: [String], from ids: Set<String>, base: String) throws -> Data {
+    let full = try Data(contentsOf: URL(fileURLWithPath: fixturePath("catalog-fixture.json")))
+    var object = try JSONSerialization.jsonObject(with: full) as! [String: Any]
+    var entries = object["entries"] as! [[String: Any]]
+    for index in entries.indices where ids.contains(entries[index]["id"] as? String ?? "") {
+        for key in keys { entries[index].removeValue(forKey: key) }
+    }
+    object["entries"] = entries.filter { ids.contains($0["id"] as? String ?? "") }
+    let filtered = try JSONSerialization.data(withJSONObject: object)
+    return Data(String(data: filtered, encoding: .utf8)!
+        .replacingOccurrences(of: "{base}", with: base).utf8)
+}
+
 func fixturePath(_ name: String) -> String {
     fixtureDirectory.appendingPathComponent(name).path
 }
@@ -1588,6 +1603,679 @@ do {
               "the model list and the capability list agree after adoption")
         check(manager.install == nil, "the adoption bar is gone")
     }
+}
+
+// MARK: - [19] Permitted-use record (G-CAT)
+
+// The owner's 2026-11-22 mandate replaced the single "commercially usable"
+// boolean with a record that states, separately for a model's code, its weight
+// files and its training data: the use class, the three permission axes, who
+// made the statement, the evidence URL and read date, and one of four
+// statuses. This section freezes the shipped records, proves the record cannot
+// admit a model the evidence does not admit, and holds the two surfaces — the
+// app's resource and the worker's table — to one position in both directions.
+print("\n[19] permitted-use records decode, validate and pin the evidence")
+do {
+    let shippedURL = testsRoot.appendingPathComponent("Resources/model-catalog.json")
+    let shippedRaw = try! Data(contentsOf: shippedURL)
+    let shipped = try! ModelCatalog.load(url: shippedURL)
+    let requiredUse = "public-non-commercial-use-and-distribution"
+    let shippedIDs = Set(shipped.entries.map(\.id))
+
+    func object(_ data: Data) -> [String: Any] {
+        try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+    }
+    func entryObjects(_ data: Data) -> [[String: Any]] {
+        object(data)["entries"] as! [[String: Any]]
+    }
+    let shippedObject = object(shippedRaw)
+    let shippedEntries = entryObjects(shippedRaw)
+
+    // (a) An old-format catalog — every permitted-use record stripped — must
+    // still decode, because ModelCatalog.load uses a strict JSONDecoder and a
+    // build that meets a catalog written before this schema must not lose its
+    // models. The store then shows "no recorded position" instead of guessing.
+    var legacyEntries = shippedEntries
+    for index in legacyEntries.indices {
+        legacyEntries[index].removeValue(forKey: "permitted_use")
+    }
+    var legacyObject = shippedObject
+    legacyObject["entries"] = legacyEntries
+    let legacyData = try! JSONSerialization.data(withJSONObject: legacyObject)
+    let legacyText = String(data: legacyData, encoding: .utf8)!
+    check(!legacyText.contains("permitted_use") && !legacyText.contains("weightsEvidence")
+            && !legacyText.contains("commercialOk"),
+          "the old-format fixture really carries none of the licence keys")
+    var legacy: ModelCatalog?
+    do {
+        legacy = try ModelCatalog.load(data: legacyData)
+    } catch {
+        check(false, "an old-format catalog without the record loads", "\(error)")
+    }
+    check(legacy?.entries.count == shipped.entries.count,
+          "the old-format catalog decodes with the same entry count",
+          "\(legacy?.entries.count ?? -1) vs \(shipped.entries.count)")
+
+    // (b) No behaviour change: the two DR-5 accessors and the platform decision
+    // are pure functions of fields this record does not touch, so they must be
+    // identical with and without it present.
+    if let legacy {
+        let sameDecisions = zip(legacy.entries, shipped.entries).allSatisfy {
+            $0.isVerifiable == $1.isVerifiable
+                && $0.verificationProblem == $1.verificationProblem
+                && $0.unverifiableReason == $1.unverifiableReason
+                && $0.supports(platform: "macos-arm64") == $1.supports(platform: "macos-arm64")
+                && $0.supports(platform: "windows-x64") == $1.supports(platform: "windows-x64")
+        }
+        check(sameDecisions,
+              "the record changes no verifiability, refusal or platform decision")
+        let onlyDifference = zip(legacy.entries, shipped.entries).allSatisfy {
+            var older = $0
+            older.permittedUse = $1.permittedUse
+            return older == $1
+        }
+        check(onlyDifference,
+              "the decoded entries differ from the old-format ones in no field but the record")
+        check(legacy.entries.allSatisfy { $0.permittedUse == nil },
+              "an old-format entry decodes its record to nil rather than to a guess")
+    }
+
+    func terms(_ entry: ModelCatalogEntry,
+               _ artefact: String) -> ModelCatalogEntry.ModelArtefactTerms? {
+        guard let use = entry.permittedUse else { return nil }
+        switch artefact {
+        case "code": return use.code
+        case "weights": return use.weights
+        case "trainingData": return use.trainingData
+        default: return nil
+        }
+    }
+
+    // Every pin carries its own read date; the literal below is the dossier's
+    // §19 date, which most rows share. One row is newer than the rest and says
+    // so in its own pin: a record that does not state when it was read cannot be
+    // re-checked later, and swin2sr's weights grant was decided on 2026-11-22
+    // evidence by the release manager under the owner's standing execution
+    // authority, not by the owner and not on 2026-11-21.
+
+    // (c) The shipped values, pinned one artefact at a time. The dossier these
+    // came from is `Docs/MODEL_LICENCES.md`; the assertions exist so that
+    // editing a URL, a date, a statement source or a verdict in
+    // Resources/model-catalog.json fails here, not at load time in the field.
+    struct ArtefactPin {
+        let model: String
+        let artefact: String
+        let verdict: String
+        let statedBy: String
+        let evidenceURL: String
+        let grantsAll: Bool
+        let readOn: String
+        // The conditions an `approved-with-conditions` verdict depends on.
+        var conditionCount: Int = 0
+
+        init(model: String, artefact: String, verdict: String, statedBy: String,
+             evidenceURL: String, grantsAll: Bool,
+             readOn: String = "2026-11-21", conditionCount: Int = 0) {
+            self.model = model
+            self.artefact = artefact
+            self.verdict = verdict
+            self.statedBy = statedBy
+            self.evidenceURL = evidenceURL
+            self.grantsAll = grantsAll
+            self.readOn = readOn
+            self.conditionCount = conditionCount
+        }
+    }
+    let pins: [ArtefactPin] = [
+        ArtefactPin(model: "flux2-klein-4b-q4", artefact: "code",
+                    verdict: "unknown", statedBy: "not-established",
+                    evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+                    grantsAll: false),
+        ArtefactPin(model: "flux2-klein-4b-q4", artefact: "weights",
+                    verdict: "approved", statedBy: "rights-holder",
+                    evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+                    grantsAll: true),
+        ArtefactPin(model: "flux2-klein-4b-q4", artefact: "trainingData",
+                    verdict: "unknown", statedBy: "not-established",
+                    evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+                    grantsAll: false),
+        ArtefactPin(model: "sam2.1-hiera-tiny", artefact: "code",
+                    verdict: "approved", statedBy: "rights-holder",
+                    evidenceURL: "https://github.com/facebookresearch/sam2",
+                    grantsAll: true),
+        ArtefactPin(model: "sam2.1-hiera-tiny", artefact: "weights",
+                    verdict: "approved", statedBy: "rights-holder",
+                    evidenceURL: "https://huggingface.co/facebook/sam2.1-hiera-tiny",
+                    grantsAll: true),
+        ArtefactPin(model: "sam2.1-hiera-tiny", artefact: "trainingData",
+                    verdict: "unknown", statedBy: "not-established",
+                    evidenceURL: "https://huggingface.co/facebook/sam2.1-hiera-tiny",
+                    grantsAll: false),
+        ArtefactPin(model: "swin2sr-x4", artefact: "code",
+                    verdict: "approved", statedBy: "rights-holder",
+                    evidenceURL: "https://raw.githubusercontent.com/mv-lab/swin2sr/main/LICENSE",
+                    grantsAll: true),
+        ArtefactPin(model: "swin2sr-x4", artefact: "weights",
+                    verdict: "approved-with-conditions", statedBy: "rights-holder",
+                    evidenceURL: "https://huggingface.co/caidas/"
+                        + "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+                    grantsAll: true,
+                    readOn: "2026-11-22",
+                    conditionCount: 4),
+        ArtefactPin(model: "swin2sr-x4", artefact: "trainingData",
+                    verdict: "unknown", statedBy: "not-established",
+                    evidenceURL: "https://huggingface.co/caidas/"
+                        + "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+                    grantsAll: false),
+        ArtefactPin(model: "migan", artefact: "code",
+                    verdict: "approved", statedBy: "rights-holder",
+                    evidenceURL: "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/LICENSE",
+                    grantsAll: true),
+        ArtefactPin(model: "migan", artefact: "weights",
+                    verdict: "approved", statedBy: "rights-holder",
+                    evidenceURL: "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/"
+                        + "LICENSE-WEIGHTS",
+                    grantsAll: true),
+        ArtefactPin(model: "migan", artefact: "trainingData",
+                    verdict: "unknown", statedBy: "not-established",
+                    evidenceURL: "https://huggingface.co/andraniksargsyan/migan",
+                    grantsAll: false),
+    ]
+    let expectedAdmitted: [String: Bool] = [
+        "flux2-klein-4b-q4": true,
+        "sam2.1-hiera-tiny": true,
+        "swin2sr-x4": true,
+        "migan": true,
+    ]
+    check(Set(pins.map(\.model)) == shippedIDs,
+          "every shipped entry is covered by the evidence pin table", "\(pins.map(\.model))")
+    check(Set(expectedAdmitted.keys) == shippedIDs,
+          "every shipped entry states whether its record admits it")
+    for pin in pins {
+        guard let entry = shipped.entry(id: pin.model),
+              let got = terms(entry, pin.artefact) else {
+            check(false, "\(pin.model) carries a recorded \(pin.artefact) position")
+            continue
+        }
+        let label = "\(pin.model)/\(pin.artefact)"
+        check(got.verdict == pin.verdict, "\(label) verdict is pinned", got.verdict)
+        check(got.statedBy == pin.statedBy, "\(label) statement source is pinned", got.statedBy)
+        check(got.evidenceUrl == pin.evidenceURL, "\(label) evidence URL is pinned",
+              got.evidenceUrl)
+        check(got.readOn == pin.readOn, "\(label) was read on its pinned date", got.readOn)
+        check(got.use == requiredUse, "\(label) names the required use class", got.use)
+        let axes = [got.canAcquire, got.canRedistribute, got.canUse]
+        check(pin.grantsAll ? axes.allSatisfy({ $0 == true }) : axes.allSatisfy({ $0 == nil }),
+              "\(label) records its three axes as the evidence has them",
+              "\(axes.map { $0.map(String.init(describing:)) ?? "nil" })")
+        check(got.permitted == (pin.grantsAll ? Bool?(true) : nil),
+              "\(label) derives the same tri-state permission", "\(String(describing: got.permitted))")
+        check(got.isAdmitted == pin.grantsAll,
+              "\(label) is admitted exactly when the evidence admits it")
+        check(got.verdict == "approved" ? got.conditions.isEmpty : true,
+              "\(label) carries no condition without a conditional approval")
+        // A conditional approval is only worth its conditions, so their number
+        // and their met flags are pinned rather than left to the note text.
+        check(got.conditions.count == pin.conditionCount,
+              "\(label) carries exactly the pinned conditions",
+              "\(got.conditions.count)")
+        check(got.conditions.allSatisfy(\.met),
+              "\(label) claims no condition that has not been met")
+        check(pin.verdict == "approved-with-conditions" ? pin.conditionCount > 0 : true,
+              "\(label) does not approve with conditions while listing none")
+        if got.verdict == "unknown" {
+            check(!(got.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  "\(label) says what the evidence could not establish")
+        }
+    }
+    // The rule the whole schema exists for, in both directions: an inference is
+    // never a grant, and a rights-holder statement is. swin2sr's weights row is
+    // the second case — the 2026-11-22 re-adjudication found the grant stated
+    // by the verified organisation that authored the checkpoint, so the record
+    // carries the permission with four met conditions instead of withholding it.
+    // The earlier draft of this branch recorded the same fact as `inferred` /
+    // `unknown`, which reported `upscale.4x` blocked; see Docs/MODEL_LICENCES.md §8.
+    let swinWeights = shipped.entry(id: "swin2sr-x4")?.permittedUse?.weights
+    check(swinWeights?.statedBy == "rights-holder"
+            && swinWeights?.verdict == "approved-with-conditions"
+            && shipped.entry(id: "swin2sr-x4")?.permittedUse?.isAdmitted == true,
+          "a rights-holder weights grant is admitted, with its conditions recorded",
+          "\(swinWeights?.statedBy ?? "nil")/\(swinWeights?.verdict ?? "nil")")
+    check(shipped.entry(id: "swin2sr-x4")?.permittedUse?.trainingData.verdict == "unknown"
+            && (shipped.entry(id: "swin2sr-x4")?.permittedUse?.trainingData.note ?? "")
+                .contains("DIV2K"),
+          "the training-data axis stays unknown and names the dataset provenance")
+    // No shipped record may state a permission from inferred evidence; that is
+    // the invariant the previous swin2sr row honoured by stating nothing.
+    check(shipped.entries.allSatisfy { entry in
+        ["code", "weights", "trainingData"].allSatisfy { name in
+            guard let terms = terms(entry, name) else { return false }
+            return terms.statedBy != "inferred"
+                || [terms.canAcquire, terms.canRedistribute, terms.canUse].allSatisfy { $0 == nil }
+        }
+    }, "no shipped record grants an axis from inferred evidence")
+    check(shipped.entries.allSatisfy {
+        $0.permittedUse?.weights.notice != nil && !($0.permittedUse?.weights.notice ?? "").isEmpty
+    }, "every weights record keeps the attribution its licence would require")
+    check((shipped.entry(id: "migan")?.permittedUse?.weights.notice ?? "").hasPrefix("MIT.")
+            && (shipped.entry(id: "swin2sr-x4")?.permittedUse?.weights.notice ?? "")
+                .hasPrefix("Apache-2.0."),
+          "the recorded notices name the same licences the dossier read")
+    for (id, admitted) in expectedAdmitted {
+        check(shipped.entry(id: id)?.permittedUse?.isAdmitted == admitted,
+              "\(id) is \(admitted ? "admitted" : "refused") by its own record")
+    }
+
+    // (d) Malformed records are rejected by validate(), not silently loaded.
+    // Each case rewrites one artefact of one shipped entry; the claimed flag is
+    // recomputed from the rewritten record so that the mismatch rule, which has
+    // its own case below, cannot mask the rule under test.
+    func recordAdmitted(_ record: [String: Any]) -> Bool {
+        func artefact(_ terms: [String: Any]) -> Bool {
+            guard let verdict = terms["verdict"] as? String,
+                  verdict == "approved" || verdict == "approved-with-conditions" else {
+                return false
+            }
+            let axes = ["canAcquire", "canRedistribute", "canUse"].map { terms[$0] as? Bool }
+            guard axes.allSatisfy({ $0 == true }) else { return false }
+            let conditions = terms["conditions"] as? [[String: Any]] ?? []
+            return conditions.allSatisfy { ($0["met"] as? Bool) == true }
+        }
+        let excluded = ["code", "weights", "trainingData"].contains {
+            (record[$0] as? [String: Any])?["verdict"] as? String == "excluded"
+        }
+        return artefact(record["weights"] as? [String: Any] ?? [:]) && !excluded
+    }
+    let probeID = "flux2-klein-4b-q4"
+    func catalogue(_ modelID: String, _ artefact: String, syncAdmitted: Bool = true,
+                   _ mutate: (inout [String: Any]) -> Void) -> Data {
+        var root = shippedObject
+        var entries = shippedEntries
+        for index in entries.indices where entries[index]["id"] as? String == modelID {
+            var record = entries[index]["permitted_use"] as! [String: Any]
+            var row = record[artefact] as! [String: Any]
+            mutate(&row)
+            record[artefact] = row
+            if syncAdmitted { record["admitted"] = recordAdmitted(record) }
+            entries[index]["permitted_use"] = record
+        }
+        root["entries"] = entries
+        return try! JSONSerialization.data(withJSONObject: root)
+    }
+    func refusal(_ data: Data) -> String {
+        do {
+            _ = try ModelCatalog.load(data: data)
+            return ""
+        } catch {
+            return "\(error)"
+        }
+    }
+    func refuses(_ data: Data, _ fragment: String, _ what: String) {
+        let reason = refusal(data)
+        check(!reason.isEmpty && reason.contains(fragment), what,
+              reason.isEmpty ? "the catalog loaded" : reason)
+    }
+    func loads(_ data: Data) -> ModelCatalog? {
+        (try? ModelCatalog.load(data: data))
+    }
+
+    refuses(catalogue(probeID, "weights") {
+        $0["statedBy"] = "inferred"
+        $0["canUse"] = true
+    }, "inferred evidence", "an inferred statement can never grant a permission axis")
+    refuses(catalogue(probeID, "weights") {
+        $0["verdict"] = "approved-with-conditions"
+        $0["conditions"] = []
+    }, "lists none", "an approval with conditions must list at least one")
+    refuses(catalogue(probeID, "weights") {
+        $0["verdict"] = "approved-with-conditions"
+        $0["conditions"] = [["text": "carry the notice", "met": false]]
+    }, "condition is unmet", "an approval with conditions must have met every one")
+    refuses(catalogue(probeID, "weights") {
+        $0["verdict"] = "unknown"
+    }, "without an approving verdict",
+          "a record that grants every axis needs an approving verdict")
+    refuses(catalogue(probeID, "weights") {
+        $0["canUse"] = NSNull()
+    }, "without every permission granted",
+          "an approval needs every axis granted rather than blank")
+    refuses(catalogue(probeID, "weights") {
+        $0["statedBy"] = "not-established"
+    }, "marks the statement not established",
+          "a record marked not established cannot carry a decision")
+    refuses(catalogue(probeID, "weights") {
+        $0["evidenceUrl"] = ""
+    }, "has no evidence URL", "a record without its evidence URL is invalid")
+    refuses(catalogue(probeID, "weights") {
+        $0["readOn"] = ""
+    }, "has no evidence read date", "a record without a read date is invalid")
+    refuses(catalogue(probeID, "weights") {
+        $0["readOn"] = "2026-11-31"
+    }, "impossible licence read date", "a day the month does not have is refused")
+    refuses(catalogue(probeID, "weights") {
+        $0["readOn"] = "yesterday"
+    }, "not an ISO-8601 calendar date", "a free-text read date is refused")
+    refuses(catalogue(probeID, "weights") {
+        $0["readOn"] = 20_261_121
+    }, "unreadable", "a non-string read date fails the strict decode")
+    refuses(catalogue(probeID, "weights") {
+        $0["evidenceUrl"] = "http://example.com/licence"
+    }, "non-HTTPS", "a plain-HTTP evidence URL is refused")
+    refuses(catalogue(probeID, "weights") {
+        $0["evidenceUrl"] = "https://user:pw@example.com/licence"
+    }, "non-HTTPS", "credentials in an evidence URL are refused")
+    refuses(catalogue(probeID, "weights") {
+        $0["use"] = "commercial-use"
+    }, "not the required", "a grant for another use class is refused")
+    refuses(catalogue(probeID, "weights") {
+        $0["verdict"] = "excluded"
+        $0["canUse"] = true
+    }, "excluded but records a granted permission",
+          "an exclusion cannot sit beside a granted axis")
+    refuses(catalogue(probeID, "weights") {
+        $0["verdict"] = "probably-fine"
+    }, "unknown licence verdict", "a verdict outside the closed set is refused")
+
+    // An unknown verdict word survives the strict decode and is rejected by
+    // validate(), so the rejection names the word instead of the whole file
+    // failing to decode, and the word round-trips out unchanged.
+    do {
+        let data = catalogue(probeID, "weights") { $0["verdict"] = "probably-fine" }
+        let parsed = try JSONDecoder().decode(ModelCatalog.self, from: data)
+        let row = parsed.entries.first { $0.id == probeID }?.permittedUse?.weights
+        let encoded = String(data: try! JSONEncoder().encode(row!), encoding: .utf8)!
+        check(row?.verdict == "probably-fine",
+              "an unknown verdict word survives decoding")
+        check(encoded.contains("\"verdict\":\"probably-fine\""),
+              "the unknown verdict round-trips through encode instead of vanishing", encoded)
+        refuses(data, "probably-fine", "validate() names the rejected verdict word")
+    } catch {
+        check(false, "an unknown verdict word does not fail the strict decode", "\(error)")
+    }
+
+    // (e) The review finding: `verdict: excluded` beside a permissive boolean
+    // used to load and be treated as usable. Now the boolean is not read at all,
+    // and exclusion can only ever admit nothing.
+    do {
+        let excluded = catalogue(probeID, "weights") {
+            $0["verdict"] = "excluded"
+            $0["canAcquire"] = false
+            $0["canRedistribute"] = false
+            $0["canUse"] = false
+        }
+        let withFlag = catalogue(probeID, "weights") {
+            $0["verdict"] = "excluded"
+            $0["canAcquire"] = false
+            $0["canRedistribute"] = false
+            $0["canUse"] = false
+            $0["commercialOk"] = true
+        }
+        var plain: ModelCatalog?
+        var flagged: ModelCatalog?
+        do {
+            plain = try ModelCatalog.load(data: excluded)
+            flagged = try ModelCatalog.load(data: withFlag)
+        } catch {
+            check(false, "an excluded record loads as a refusal, not an error", "\(error)")
+        }
+        check(plain?.entry(id: probeID)?.permittedUse?.isAdmitted == false,
+              "an excluded artefact admits nothing")
+        check(plain?.entry(id: probeID) == flagged?.entry(id: probeID),
+              "a retired commercialOk flag cannot change an excluded record")
+
+        // The claimed flag must agree with the record, in both directions. Every
+        // shipped record derives `true` now, so the disagreement has to be built
+        // by withdrawing a permission rather than by editing the flag: swin2sr's
+        // code artefact is excluded with none of its axes granted, which is a
+        // legal record by itself and makes the entry derive `false` while the
+        // file still claims `true`. Flipping a claim is the one thing the
+        // mandate's "do not invent permissions" forbids outright.
+        refuses(catalogue(probeID, "weights", syncAdmitted: false) {
+            $0["verdict"] = "unknown"
+            $0["canAcquire"] = NSNull()
+            $0["canRedistribute"] = NSNull()
+            $0["canUse"] = NSNull()
+        }, "records admitted:", "a claimed admitted flag that disagrees is refused")
+        var flipped = shippedObject
+        var flippedEntries = shippedEntries
+        for index in flippedEntries.indices
+        where flippedEntries[index]["id"] as? String == "swin2sr-x4" {
+            var record = flippedEntries[index]["permitted_use"] as! [String: Any]
+            var code = record["code"] as! [String: Any]
+            code["verdict"] = "excluded"
+            // An exclusion may not carry a granted axis, so the axes leave with
+            // the verdict. This fixture is about the flag, not about the axes.
+            code["canAcquire"] = NSNull()
+            code["canRedistribute"] = NSNull()
+            code["canUse"] = NSNull()
+            record["code"] = code
+            // The claim stays `true` while the record behind it no longer admits
+            // the model, which is exactly the invention the loader must refuse.
+            record["admitted"] = true
+            flippedEntries[index]["permitted_use"] = record
+        }
+        flipped["entries"] = flippedEntries
+        refuses(try! JSONSerialization.data(withJSONObject: flipped),
+                "records admitted: true",
+                "an admitted claim cannot outlive the permission it was derived from")
+    }
+
+    // (f) Both directions of the wire comparison. The resource is produced from
+    // the worker's table by `Docs/licence-evidence-apply.py` (and CI re-runs it,
+    // so the resource cannot drift); encoding the decoded record must reproduce
+    // that exact object — same keys, same values, no field dropped and none
+    // invented — which is what "mirrored field for field" has to mean.
+    for entry in shipped.entries {
+        guard let record = entry.permittedUse,
+              let index = shippedEntries.firstIndex(where: { $0["id"] as? String == entry.id }),
+              let original = shippedEntries[index]["permitted_use"] as? [String: Any] else {
+            check(false, "\(entry.id) carries a permitted-use record")
+            continue
+        }
+        let encoded = try! JSONEncoder().encode(record)
+        let round = try! JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        check(Set(round.keys) == Set(original.keys),
+              "\(entry.id) encodes exactly the recorded wire keys",
+              "\(round.keys.sorted()) vs \(original.keys.sorted())")
+        check(Set(round.keys) == ["code", "weights", "trainingData", "admitted"],
+              "\(entry.id) writes the four permitted-use keys", "\(round.keys.sorted())")
+        check((round as NSDictionary).isEqual(to: original),
+              "\(entry.id) re-encodes to the same record, field for field")
+        check((round["admitted"] as? Bool) == record.isAdmitted,
+              "\(entry.id) writes the admission the record itself derives")
+        for artefact in ["code", "weights", "trainingData"] {
+            let left = round[artefact] as? [String: Any] ?? [:]
+            let right = original[artefact] as? [String: Any] ?? [:]
+            check(Set(left.keys) == Set(right.keys) && Set(left.keys).count == 11,
+                  "\(entry.id)/\(artefact) writes all eleven artefact fields",
+                  "\(left.keys.sorted())")
+            check((left as NSDictionary).isEqual(to: right),
+                  "\(entry.id)/\(artefact) agrees with the resource value by value")
+        }
+    }
+
+    // The resource is only a mirror because the generator is run in CI; without
+    // that step this comparison would be the app checking itself against itself.
+    let workflowURL = testsRoot.appendingPathComponent(".github/workflows/ci.yml")
+    let workflow = (try? String(contentsOf: workflowURL, encoding: .utf8)) ?? ""
+    check(workflow.contains("Docs/licence-evidence-apply.py --check"),
+          "CI refuses a catalogue that no longer matches the worker table")
+
+    // Cross-surface agreement with the worker's own table, in both directions:
+    // the worker lists exactly the app's models, and each entry names the same
+    // SPDX and the same weights evidence, with the same statement source.
+    do {
+        let workerURL = testsRoot.appendingPathComponent("worker/retouch_ai_worker/catalog.py")
+        if let worker = try? String(contentsOf: workerURL, encoding: .utf8) {
+            let blocks = worker.components(separatedBy: "\n    ModelEntry(").dropFirst()
+            let workerIDs = Set(blocks.compactMap { block -> String? in
+                guard let start = block.range(of: "id=\"") else { return nil }
+                let rest = block[start.upperBound...]
+                guard let end = rest.firstIndex(of: "\"") else { return nil }
+                return String(rest[..<end])
+            })
+            check(workerIDs == shippedIDs,
+                  "the worker table lists exactly the app's models, not a superset or subset",
+                  "\(workerIDs.symmetricDifference(shippedIDs).sorted())")
+            check(workerIDs.count == blocks.count,
+                  "every worker ModelEntry names an id", "\(blocks.count) blocks")
+            check(!worker.contains("commercial_ok"),
+                  "the retired commercial flag is gone from the worker table")
+            for row in shipped.entries {
+                guard let block = blocks.first(where: { $0.contains("id=\"\(row.id)\"") }),
+                      let record = row.permittedUse else {
+                    check(false, "\(row.id) has one block on both surfaces")
+                    continue
+                }
+                check(Set(workerIDs).contains(row.id),
+                      "\(row.id) exists in the worker table")
+                // One requirement, on the field the badge actually prints. An `||`
+                // over `codeLicense` and `weightsLicense` passed whenever either
+                // matched, so a table that disagreed with both visible strings
+                // except one would still have been called agreement.
+                check(block.contains("license_id=\"\(row.weightsLicense)\""),
+                      "\(row.id) states the same SPDX on both surfaces", row.weightsLicense)
+                // Python joins adjacent string literals at compile time, and the
+                // long URLs are written that way. Undo the line breaks and the
+                // quote pair they leave behind, so the comparison is against the
+                // URL Python actually records rather than its source spelling.
+                // Comment lines are dropped first: the join has no separator, so a
+                // comment left in place would merge its prose into the artefact
+                // slices below and let a licence word merely *mentioned* in a
+                // comment satisfy a check about the record underneath it.
+                let joined = block.split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                    .joined()
+                    .replacingOccurrences(of: "\"\"", with: "")
+                check(joined.contains(record.weights.evidenceUrl),
+                      "\(row.id) records the same weights evidence URL in the worker",
+                      record.weights.evidenceUrl)
+                // The two surfaces must agree artefact by artefact. Checking one
+                // helper name per entry was not enough once a single row could be
+                // an explicit grant while its sibling rows stayed unknown, so each
+                // artefact's own block is now compared with its own verdict.
+                func artefactBlock(_ artefact: String) -> Substring? {
+                    guard let start = joined.range(of: "\(artefact)=") else { return nil }
+                    let rest = joined[start.upperBound...]
+                    // The next artefact's own keyword closes the slice; `source=`
+                    // closes the last one. `joined` carries no newlines, so the
+                    // markers have to be keywords rather than indented lines — and
+                    // an unbounded slice fails instead of silently running to the
+                    // end of the entry, because a slice that includes its siblings
+                    // lets one artefact's spelling answer another's check.
+                    let marker: String
+                    switch artefact {
+                    case "code": marker = "weights="
+                    case "weights": marker = "training_data="
+                    default: marker = "source="
+                    }
+                    guard let end = rest.range(of: marker) else { return nil }
+                    return rest[..<end.lowerBound]
+                }
+                for (artefact, terms) in [("code", record.code),
+                                          ("weights", record.weights),
+                                          ("trainingData", record.trainingData)] {
+                    let slice = artefactBlock(artefact == "trainingData" ? "training_data" : artefact)
+                    guard let slice else {
+                        check(false, "\(row.id)/\(artefact) has its own bounded slice in the worker")
+                        continue
+                    }
+                    // One spelling per (verdict, source) pair, written the way the
+                    // joined source actually reads: the join leaves no spaces
+                    // between the keyword arguments. A pair the table has never
+                    // used maps to no spelling at all, so adding one has to be
+                    // taught here deliberately rather than passing by accident.
+                    // `approved-with-conditions` is the worker's enum constant, not
+                    // the hyphenated wire word, which is why the expectation is
+                    // spelled that way instead of searching for `terms.verdict`.
+                    let spellings: [String]
+                    switch (terms.verdict, terms.statedBy) {
+                    case ("approved", "rights-holder"):
+                        spellings = ["_approved("]
+                    case ("approved-with-conditions", "rights-holder"):
+                        spellings = ["_terms(verdict=APPROVED_WITH_CONDITIONS,",
+                                     "stated_by=STATED_BY_RIGHTS_HOLDER"]
+                    case ("unknown", "not-established"):
+                        spellings = ["_not_established("]
+                    case ("unknown", "inferred"):
+                        spellings = ["stated_by=STATED_BY_INFERRED"]
+                    default:
+                        spellings = []
+                    }
+                    check(!spellings.isEmpty
+                            && slice.hasPrefix(spellings[0])
+                            && spellings.dropFirst().allSatisfy { slice.contains($0) },
+                          "\(row.id)/\(artefact) states the same verdict and statement "
+                          + "source in the worker",
+                          "\(terms.verdict)/\(terms.statedBy) as \(slice.prefix(70))")
+                }
+            }
+        } else {
+            check(false, "the worker catalog is readable for the cross-surface check")
+        }
+    }
+
+    // (f2) The flat licence strings the consent sheet and the Model Manager
+    // actually print. `Docs/licence-evidence-apply.py` regenerates the
+    // `permitted_use` record, and its `--check` gate cannot see these older
+    // fields, so without a pin here the sentence a user reads could be edited
+    // while every record-level check stayed green. Pinned to the values the
+    // dossier records for each entry; the worker-side SPDX agreement is asserted
+    // in the cross-surface check above, which covers the same string from the
+    // other side.
+    let badgePins: [(id: String, code: String, weights: String, evidenceURL: String)] = [
+        ("flux2-klein-4b-q4", "Apache-2.0", "Apache-2.0",
+         "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4"),
+        ("sam2.1-hiera-tiny", "Apache-2.0", "Apache-2.0",
+         "https://huggingface.co/facebook/sam2.1-hiera-tiny"),
+        ("swin2sr-x4", "Apache-2.0", "Apache-2.0",
+         "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"),
+        ("migan", "MIT", "MIT", "https://huggingface.co/andraniksargsyan/migan"),
+    ]
+    for pin in badgePins {
+        guard let row = shipped.entry(id: pin.id) else {
+            check(false, "\(pin.id) is still in the shipped catalog for its badge pin")
+            continue
+        }
+        check(row.codeLicense == pin.code && row.weightsLicense == pin.weights,
+              "\(pin.id) prints the licence strings the dossier records",
+              "\(row.codeLicense) / \(row.weightsLicense)")
+        check(row.licenseEvidenceUrl == pin.evidenceURL,
+              "\(pin.id) names the evidence URL it prints", row.licenseEvidenceUrl)
+    }
+
+    // (g) The untouched accessors, frozen independently of the old-format
+    // comparison above: the four current entries must reach exactly the
+    // decisions they reached before this record existed.
+    let frozen: [(String, Bool, String?)] = [
+        ("flux2-klein-4b-q4", true, nil),
+        ("sam2.1-hiera-tiny", false, "Downloading is refused: the sam2 runtime package is not installed in the bundled worker, so these weights would have nothing to run on. The checkpoint's size and SHA-256 are recorded, so an install that is already on disk can be verified and adopted into a version."),
+        ("swin2sr-x4", true, nil),
+        ("migan", true, nil),
+    ]
+    for (id, verifiable, problem) in frozen {
+        guard let row = shipped.entry(id: id) else {
+            check(false, "\(id) is still in the shipped catalog")
+            continue
+        }
+        check(row.isVerifiable == verifiable, "\(id) verifiability is unchanged",
+              "\(row.isVerifiable)")
+        check(row.verificationProblem == problem, "\(id) refusal reason is unchanged",
+              row.verificationProblem ?? "nil")
+    }
+    // A store built from the shipped catalog must expose the same licence
+    // strings and the whole record, because the consent sheet reads them here.
+    let frozenRoot = scratchRoot.appendingPathComponent(UUID().uuidString)
+    try! FileManager.default.createDirectory(at: frozenRoot, withIntermediateDirectories: true)
+    let frozenStore = ModelStore(root: frozenRoot, catalog: shipped, platform: "macos-arm64",
+                                 allowLocalHTTP: false)
+    let frozenRecords = frozenStore.records()
+    check(frozenRecords.map(\.id).sorted() == shipped.entries.map(\.id).sorted(),
+          "the shipped catalog still lists all four models")
+    check(frozenRecords.allSatisfy {
+        $0.entry.permittedUse != nil && !$0.entry.codeLicense.isEmpty
+    }, "a store built from the shipped catalog carries licence strings and the record")
 }
 
 print("\n\(failures.isEmpty ? "✓ all model-store checks passed" : "✗ \(failures.count) checks failed")")

@@ -301,11 +301,16 @@ struct RetouchStudioApp: App {
                     .keyboardShortcut("0")
                     .disabled(!model.hasImage || model.zoom <= 1.0001)
             }
-        }
-
-        // ⌘, — the standard preferences window, using the app's own shell.
-        Settings {
-            SettingsView(model: model)
+            // The Settings scene would add its own item with a system title
+            // that ignores the app's language. The window is hosted the same
+            // way About and Help are, so its menu item is the app's own and
+            // follows the table. System chrome stays untouched.
+            CommandGroup(replacing: .appSettings) {
+                Button(model.s.settingsMenu) {
+                    InfoWindows.shared.showSettings(model: model)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
         }
     }
 }

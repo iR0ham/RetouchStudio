@@ -4,8 +4,9 @@
 #   Tools/validate-bundle.sh "Retouch Studio.app" [arm64|x86_64|universal]
 #
 # Exits non-zero on a missing identity key, a wrong executable, an invalid
-# signature, or a Homebrew path leaking into the bundled helper. It never
-# modifies the bundle.
+# signature, a Homebrew path leaking into the bundled helper, or a bundle that
+# does not carry the MIT licence, the third-party notice, and honest copyright
+# wording. It never modifies the bundle.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,6 +28,42 @@ if [ -f "$PLIST" ]; then
   [ -n "$VERSION" ] || fail "CFBundleShortVersionString is empty"
   [ -n "$BUILD" ] || fail "CFBundleVersion is empty"
   [ -n "$EXECUTABLE" ] || fail "CFBundleExecutable is empty"
+  COPYRIGHT=$(/usr/libexec/PlistBuddy -c "Print :NSHumanReadableCopyright" "$PLIST" 2>/dev/null || true)
+  if [ -z "$COPYRIGHT" ]; then
+    fail "NSHumanReadableCopyright is empty"
+  else
+    echo "  · copyright: $COPYRIGHT"
+    # The app is MIT-licensed, so the Finder-level copyright line must say so
+    # and must not keep the all-rights-reserved claim it used to carry.
+    case "$COPYRIGHT" in
+      *"All rights reserved"*|*"all rights reserved"*)
+        fail "NSHumanReadableCopyright still claims all rights reserved: $COPYRIGHT" ;;
+    esac
+    case "$COPYRIGHT" in
+      *MIT*) ;;
+      *) fail "NSHumanReadableCopyright does not name the MIT licence: $COPYRIGHT" ;;
+    esac
+  fi
+fi
+
+RESOURCES="$APP/Contents/Resources"
+BUNDLE_LICENSE="$RESOURCES/LICENSE"
+BUNDLE_NOTICES="$RESOURCES/THIRD_PARTY_NOTICES.txt"
+# MIT requires its notice to accompany copies, and the bundled font's licence
+# requires the same for the fonts. A release bundle without either is invalid.
+[ -f "$BUNDLE_LICENSE" ] \
+  || fail "Contents/Resources/LICENSE is missing"
+if [ -f "$BUNDLE_LICENSE" ]; then
+  grep -q "MIT License" "$BUNDLE_LICENSE" \
+    || fail "Contents/Resources/LICENSE is not an MIT licence text"
+  grep -q "Copyright (c).*iRoham" "$BUNDLE_LICENSE" \
+    || fail "Contents/Resources/LICENSE does not name this project's copyright"
+fi
+[ -f "$BUNDLE_NOTICES" ] \
+  || fail "Contents/Resources/THIRD_PARTY_NOTICES.txt is missing"
+if [ -f "$BUNDLE_NOTICES" ]; then
+  grep -qi "Vazirmatn" "$BUNDLE_NOTICES" \
+    || fail "Contents/Resources/THIRD_PARTY_NOTICES.txt does not attribute Vazirmatn"
 fi
 
 BINARY="$APP/Contents/MacOS/$EXECUTABLE"
@@ -79,6 +116,16 @@ if [ -d "$WORKER" ]; then
   fi
 else
   echo "  · helper runtime not bundled (AI tools unavailable)"
+fi
+
+# Ownership audit: every app file in the bundle must have a name on it, and a
+# notice may not claim a font the bundle does not carry. Existence alone is not
+# enough. The helper tree under Contents/Resources/Worker is covered by its own
+# notices — the audit requires those files to exist, be non-empty and name every
+# pinned distribution; see Tools/audit-bundle-notices.sh for the full scope.
+echo "  · notice ownership:"
+if ! ./Tools/audit-bundle-notices.sh "$APP"; then
+  failures=$((failures + 1))
 fi
 
 if [ "$failures" -ne 0 ]; then

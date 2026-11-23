@@ -132,8 +132,12 @@ no patch files.
    `protocol.py`, `catalog.py` and `plan.py` contain no `urllib`, `http.client`,
    `requests` or `socket.socket`; a unit test fails if that changes. Only
    `downloads.py` has transfer code, and the server never imports it.
-3. **License gate before disk.** `Catalog.require()` raises `LICENSE_BLOCKED`
-   for any entry without `commercial_ok`, before it looks at the files.
+3. **Licence gate before disk.** Every entry carries a `permitted_use` record —
+   code, weights and training data separately — and `Catalog.require()` raises
+   `LICENSE_BLOCKED` before it looks at the files when the record does not admit
+   the model (`unknown`, `approved-with-conditions` with an unmet condition, or
+   any `excluded` artefact). The same record travels whole through `models.list`
+   and `Catalog.public()`, so the app reads the worker's own position.
    Real-ESRGAN remains evaluation-only until Phase 4. LaMa was removed from the
    catalog entirely (weights have no license); MI-GAN is MIT and is the shipped
    small-hole inpaint model.
@@ -165,14 +169,27 @@ no patch files.
    `RETOUCH_AI_MEMORY_BUDGET_GB` (default 7.5). The upscale path never reads
    it: upscale is bounded by the 40 MP output ceiling and the host's own wait.
 10. **Digests are checked where a model is loaded.** `Catalog.require_verified`
-    runs `require` and then hashes every file the catalog gives a SHA-256 for,
-    before the loader receives a path; a mismatch releases the lease so the
-    install stays repairable and fails with `-32019`. Only `upscale` uses it:
-    hashing that checkpoint costs 0.036 s for its 48,460,141-byte
-    `pytorch_model.bin` (measured on this M3/16 GB Mac on 2026-11-17), once per
-    process, while hashing 4.6 GB of FLUX weights before every render is not a
-    startup cost the 16 GB budget can pay. Those entries keep the size gate in
-    `require` and the on-demand `models verify`.
+    runs `require` and then hashes **every file the catalog lists** — pin
+    admission guarantees each listed file carries a 64-character digest, so there
+    is no "hash the ones we know" branch left to fall through. Before the loader
+    receives a path it also refuses a listed weight that is a symlink, and any
+    file inside the install that the catalog does not name
+    (`reason: "unlisted-file"`, `-32019`); both releases the lease so the install
+    stays repairable. The second refusal is what makes the digest pass a *net*
+    rather than a checklist: a convention-following loader picks an unpinned
+    `model.safetensors` over the pinned `pytorch_model.bin` beside it, so the old
+    code could report every pin correct while different bytes reached the runtime.
+    `health`, `models verify` and `capability.list` carry the same two refusals,
+    because a model manager that promises a load the worker will not perform is a
+    false statement to the user, not a cheaper check.
+    Only `upscale` uses `require_verified`: hashing that checkpoint costs
+    0.036 s for its 48,460,141-byte `pytorch_model.bin` (measured on this M3/16 GB
+    Mac on 2026-11-17), once per process, while hashing 4.6 GB of FLUX weights
+    before every render is not a startup cost the 16 GB budget can pay. Those
+    entries keep the size and payload gates in `require` and the on-demand
+    `models verify`. Added 2026-11-23 under mandate §4 (PR #115): before it the
+    digest pass visited only the names the catalog carried, and all three report
+    paths accepted both shapes.
 11. **A provider is named only after it initialised.** `Engine.execution_providers`
     reports the device a loader actually used (`mps` or `cpu`), and nothing plus
     a reason before the first model. Probing torch during the handshake would
@@ -217,7 +234,8 @@ no patch files.
 ./Tests/run-worker.sh
 ```
 
-166 tests, no GPU and no model download: framing, contract versioning, request
+The suite size is pinned once, in `Tests/expected-worker-tests.txt`. No GPU
+and no model download: framing, contract versioning, request
 validation, generation and nonce pairing, the readiness registry, catalog
 licensing, download resume and checksums against a local HTTP server, job
 lifecycle, BUSY, cancel, notifications, path denial, mask policy, compositing
@@ -235,6 +253,14 @@ claim is covered from both sides: `test_server.py` submits a slow job and shows
 its `<workdir>/.lock` refused to a second descriptor and to a real child process
 until `job.finished`, then granted once the job lets go, and `test_provenance.py`
 shows the same startup sweep leaving that lock file alone.
+
+The CI-only gates are covered by the same discover, without their heavy
+dependencies: `test_import_closure.py` proves the lock closes over the shipped
+imports, `test_import_smoke.py` proves the smoke derives a newly pinned import,
+reports a fixed target the code dropped, and leaves an unpinned import to the
+lock closure, and `test_pip_check_gate.py` / `test_payload_verification.py`
+prove the payload gate can judge a crashed `pip check`, zero licence files, an
+empty archive, a short archive and missing root documents without an abort.
 
 ## Acceptance
 

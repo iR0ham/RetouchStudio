@@ -7,8 +7,10 @@ run binds that platform, provider, model id and version to a valid artifact
 (DR-4). A fourth condition decides before the other three: the Python package
 that loads the model has to be importable in this interpreter. Weights with no
 runtime to run on are a blocked capability, not a supported one that fails.
-Everything else carries a reason: `requires_model`, `blocked` or
-`unsupported`.
+A fifth condition decides before everything: a model whose permitted-use record
+does not admit distribution is a blocked capability, never a `requires_model`
+download offer. Everything else carries a reason: `requires_model`, `blocked`
+or `unsupported`.
 
 This module never loads a model, never takes a lease and never hashes weights:
 listing capabilities must stay cheap and must not disturb a running job. The
@@ -24,7 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .catalog import Catalog, pin_problem, resolve_model_root
+from .catalog import (Catalog, pin_problem, resolve_model_root,
+                      unlisted_payload)
 from .protocol import CONTRACT_VERSION
 
 VOCABULARY = "capabilities/1"
@@ -164,6 +167,14 @@ def _inspect(catalog: Catalog, model_id: str) -> tuple[str, str | None, str | No
             "manager before a capability can bind it")
     for spec in entry.files:
         target = root / spec.path
+        if target.is_symlink():
+            # The size below is read through the link, so it cannot describe the
+            # bytes this install pins. `_check_sizes` refuses the load, and a
+            # capability that advertised `supported` over that refusal would make
+            # the same two-layer disagreement the pin admission rule closes.
+            return "damaged", root.name, (
+                f"{entry.id} {root.name} has {spec.path} as a symlink rather than "
+                "a regular file; verify it in the model manager")
         try:
             actual = target.stat().st_size
         except OSError:
@@ -177,6 +188,15 @@ def _inspect(catalog: Catalog, model_id: str) -> tuple[str, str | None, str | No
             return "damaged", root.name, (
                 f"{entry.id} {root.name} failed its size check; verify it in the "
                 "model manager")
+    extra = unlisted_payload(entry, root)
+    if extra:
+        # A file the catalog does not name is invisible to every pin, yet the
+        # convention-following loaders here would prefer it (a dropped
+        # `model.safetensors` beats the pinned `pytorch_model.bin`). The load path
+        # refuses it, so the report must too.
+        return "damaged", root.name, (
+            f"{entry.id} {root.name} holds {', '.join(extra)} which the catalog "
+            "does not list; verify it in the model manager")
     return "ok", root.name, None
 
 
@@ -208,6 +228,33 @@ def report(catalog: Catalog, evidence: tuple[dict, ...] | None = None,
             records.append(_record(spec, spec.state, provider, reason=spec.reason))
             continue
         model_id = spec.models[0]
+        entry = catalog.get(model_id)
+        try:
+            entry.validate()
+        except ValueError as error:
+            records.append(_record(
+                spec, BLOCKED, provider, model_id,
+                reason=f"{error}, so this build will not download or run it"))
+            continue
+        excluded = entry.permitted_use.excluded
+        if excluded:
+            # No switch admits an excluded model, so the report must not either.
+            records.append(_record(
+                spec, BLOCKED, provider, model_id,
+                reason=(f"{model_id} is excluded ({', '.join(excluded)} terms "
+                        f"refuse distribution), so no configuration downloads "
+                        f"or runs it")))
+            continue
+        if not catalog.allow_uncleared and not entry.permitted_use.admitted:
+            # Asked before the install state: a licence refusal must not become
+            # a download offer (`requires_model`) for the same weights.
+            verdict = entry.permitted_use.weights.verdict
+            records.append(_record(
+                spec, BLOCKED, provider, model_id,
+                reason=(f"{model_id} has no established permission for public "
+                        f"non-commercial use and distribution (weights verdict: "
+                        f"{verdict}), so this build will not download or run it")))
+            continue
         absent = [name for name in spec.packages if not have(name)]
         if absent:
             # Asked before the model, because downloading cannot answer it.

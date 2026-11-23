@@ -1,10 +1,30 @@
-"""Model catalog: what the worker may load, and under which license.
+"""Model catalog: what the worker may load, and under which licence.
 
-The catalog is data, not comments. Every entry carries an SPDX license id and a
-`commercial_ok` flag; the worker refuses to load anything that is not cleared
-for the product unless the explicit evaluation switch is on. A model that is
-missing on disk is a distinct error from one that is not licensed, so the UI can
-offer "download" in one case and nothing in the other.
+The catalog is data, not comments. Every entry carries an SPDX licence id and a
+`permitted_use` record that states, separately for the model's code, its weight
+files and its training data, the use class this product needs, three permission
+axes (may an end user acquire the file from where we ship it; may we publish its
+URL, size and SHA-256 and install it; is the intended non-commercial use
+permitted), where the statement came from, the evidence URL and read date, and a
+licence verdict drawn from the four statuses the gate allows.
+
+The gate is DR-15 in `Docs/RELEASE_2.0.0_READINESS.md`: the release manager's
+2026-11-22 restatement of the licence test for a non-commercial use class, written
+under the owner's standing execution mandate. DR-15 evaluates four rights per
+artefact; the first three are the axes above, and the fourth — Conditions:
+attribution, ShareAlike, dataset limits — is not a boolean, so it lives in
+`verdict` together with the `conditions` list, each entry stamped `met`. The
+owner's mandate states the principles; DR-15 is this project's implementation of
+them, and attributing a decision to the wrong author is how a project ends up
+believing a rule is immutable when it is its own.
+
+The boolean this replaced could not express "we do not know", and that is how an
+inferred permission once became an approval. The record makes unknown a
+first-class value and the validator refuses the two silent upgrades: inferred
+evidence may not record a granted permission, and a verdict of `unknown` may not
+be admitted to run inference. A model that is missing on disk is a distinct
+error from one whose licence is not established, so the UI can offer "download"
+in one case and nothing in the other.
 
 Integrity is fail-closed at three layers, and each has its own reason string:
 
@@ -24,6 +44,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import datetime
 import json
 import os
 import re
@@ -42,6 +63,31 @@ _HF_FLUX = "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4/resol
 _HF_SWIN2SR = ("https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr/"
                "resolve/main/")
 
+# The one use class this product needs. Every recorded term must state it, so a
+# grant for a different use (commercial resale, for example) cannot be read as
+# covering this application.
+REQUIRED_USE = "public-non-commercial-use-and-distribution"
+
+# The owner's four statuses. Nothing outside this set is a verdict.
+APPROVED = "approved"
+APPROVED_WITH_CONDITIONS = "approved-with-conditions"
+UNKNOWN = "unknown"
+EXCLUDED = "excluded"
+VERDICTS = (APPROVED, APPROVED_WITH_CONDITIONS, UNKNOWN, EXCLUDED)
+
+# Who made the statement. `not-established` records that the search happened and
+# produced no usable statement; it is the honest shape of "we do not know", and
+# it is what an existing record becomes when it cannot survive the new schema.
+STATED_BY_RIGHTS_HOLDER = "rights-holder"
+STATED_BY_INFERRED = "inferred"
+STATED_BY_NOT_ESTABLISHED = "not-established"
+STATED_BY = (STATED_BY_RIGHTS_HOLDER, STATED_BY_INFERRED,
+             STATED_BY_NOT_ESTABLISHED)
+
+# The dossier's own read date. A record carries the date it was read, never the
+# date of the commit that copied it.
+LICENCE_READ_ON = "2026-11-21"
+
 
 @dataclass(frozen=True)
 class ModelFile:
@@ -52,15 +98,219 @@ class ModelFile:
 
 
 @dataclass(frozen=True)
+class UseCondition:
+    """A condition attached to an `approved-with-conditions` verdict.
+
+    `met` is the recorded claim that the project has actually satisfied it. The
+    validator refuses an empty list and any unmet entry, so the status can never
+    stand in for work that has not been done.
+    """
+    text: str
+    met: bool
+
+
+@dataclass(frozen=True)
+class ArtefactTerms:
+    """What the recorded evidence says about one artefact (code, weights, data).
+
+    The three permission axes are stored separately because DR-15 answers them
+    separately, and collapsing them to one boolean is exactly
+    the conflation this record exists to prevent:
+
+    - `can_acquire`: the end user may obtain this file from `evidence_url`.
+    - `can_redistribute`: the project may publish that URL, the recorded size
+      and SHA-256 and install from it. This application mirrors no bytes, so
+      this axis says nothing about mirroring.
+    - `can_use`: the recorded use class is permitted.
+
+    A False answer on any axis is a refusal, so the validator requires the
+    `excluded` verdict for it. `permitted` is derived from the three, and
+    `admitted` is what the load gate asks.
+    """
+    use: str
+    can_acquire: bool | None
+    can_redistribute: bool | None
+    can_use: bool | None
+    stated_by: str
+    evidence_url: str
+    read_on: str
+    verdict: str
+    conditions: tuple[UseCondition, ...] = ()
+    # Attribution/notice text to reproduce if a file were ever mirrored or
+    # bundled. Recorded evidence, not a claim that mirroring happens.
+    notice: str | None = None
+    # Why the verdict is what it is, or why the position is not established.
+    note: str | None = None
+
+    @property
+    def permitted(self) -> bool | None:
+        """True only when every permission axis is granted; unknown otherwise.
+
+        A single refusal makes it False; a single blank makes it None, because
+        "we know one answer and not the others" is still not a permission.
+        """
+        axes = (self.can_acquire, self.can_redistribute, self.can_use)
+        if any(value is False for value in axes):
+            return False
+        if all(value is True for value in axes):
+            return True
+        return None
+
+    @property
+    def admitted(self) -> bool:
+        """Whether this artefact alone satisfies the admission rule."""
+        return (
+            self.verdict in (APPROVED, APPROVED_WITH_CONDITIONS)
+            and self.permitted is True
+            and all(condition.met for condition in self.conditions)
+        )
+
+    def validate(self) -> None:
+        """Rejects every record the mandate would otherwise have to infer.
+
+        Called for the shipped table at import time and again before a load, so
+        an edited table can never be admitted by accident. Messages name the
+        field, because this is the audit trail when something is wrong.
+        """
+        if self.use != REQUIRED_USE:
+            raise ValueError(
+                f"records use {self.use!r}, not the required {REQUIRED_USE!r}")
+        if self.stated_by not in STATED_BY:
+            raise ValueError(f"has an unknown statement source {self.stated_by!r}")
+        if self.verdict not in VERDICTS:
+            raise ValueError(f"has an unknown licence verdict {self.verdict!r}")
+        for name, value in (("can_acquire", self.can_acquire),
+                            ("can_redistribute", self.can_redistribute),
+                            ("can_use", self.can_use)):
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"has a non-boolean {name} {value!r}")
+        if not self.evidence_url:
+            raise ValueError("has no evidence URL")
+        if not self.read_on:
+            raise ValueError("has no evidence read date")
+        _check_read_on(self.read_on)
+
+        axes = (self.can_acquire, self.can_redistribute, self.can_use)
+        if self.stated_by == STATED_BY_INFERRED and any(value is True for value in axes):
+            # The central rule: an inference is never a grant.
+            raise ValueError("records a permitted axis from inferred evidence")
+        if self.stated_by == STATED_BY_NOT_ESTABLISHED:
+            if self.verdict != UNKNOWN or any(value is not None for value in axes):
+                raise ValueError(
+                    "marks the statement not established but records a decision")
+        if any(value is False for value in axes) and self.verdict != EXCLUDED:
+            raise ValueError("records a refused permission without the excluded verdict")
+        if self.verdict == EXCLUDED and any(value is True for value in axes):
+            raise ValueError("is excluded but records a granted permission")
+        if self.permitted is True and self.verdict not in (APPROVED,
+                                                           APPROVED_WITH_CONDITIONS):
+            raise ValueError("records every permission without an approving verdict")
+        if self.verdict in (APPROVED, APPROVED_WITH_CONDITIONS) and self.permitted is not True:
+            raise ValueError("approves the artefact without every permission granted")
+        if self.verdict == APPROVED and self.conditions:
+            raise ValueError("is approved but carries conditions")
+        if self.verdict == APPROVED_WITH_CONDITIONS:
+            if not self.conditions:
+                raise ValueError("is approved with conditions but lists none")
+            if not all(condition.met for condition in self.conditions):
+                raise ValueError("is approved with conditions but a condition is unmet")
+        if self.verdict == UNKNOWN and not (self.note or "").strip():
+            raise ValueError("records an unknown verdict without saying what is missing")
+
+    def to_json(self) -> dict:
+        """The wire shape shared with the app catalog, field for field."""
+        return {
+            "use": self.use,
+            "canAcquire": self.can_acquire,
+            "canRedistribute": self.can_redistribute,
+            "canUse": self.can_use,
+            "statedBy": self.stated_by,
+            "evidenceUrl": self.evidence_url,
+            "readOn": self.read_on,
+            "verdict": self.verdict,
+            "conditions": [{"text": item.text, "met": item.met}
+                           for item in self.conditions],
+            "notice": self.notice,
+            "note": self.note,
+        }
+
+
+@dataclass(frozen=True)
+class PermittedUse:
+    """The three artefact records a model entry carries."""
+    code: ArtefactTerms
+    weights: ArtefactTerms
+    training_data: ArtefactTerms
+
+    def validate(self) -> None:
+        for name, terms in (("code", self.code), ("weights", self.weights),
+                            ("training data", self.training_data)):
+            try:
+                terms.validate()
+            except ValueError as error:
+                raise ValueError(f"{name} {error}") from None
+
+    @property
+    def excluded(self) -> tuple[str, ...]:
+        """Artefacts whose verdict is `excluded`, in record order."""
+        return tuple(
+            name for name, terms in (("code", self.code),
+                                     ("weights", self.weights),
+                                     ("training data", self.training_data))
+            if terms.verdict == EXCLUDED)
+
+    @property
+    def admitted(self) -> bool:
+        """The load gate.
+
+        The weight file is the artefact this product distributes and runs, so
+        the mandate's "unclear weight permissions must not enter a distributable
+        build" is enforced on its record. Code and training-data terms are
+        recorded and may remain unknown — that is the dossier's residual-risk
+        position — but an excluded code or dataset verdict refuses the model,
+        and an approved-with-conditions record can never pass with an unmet
+        condition because `validate()` rejects it first.
+        """
+        return self.weights.admitted and not self.excluded
+
+    def to_json(self) -> dict:
+        return {
+            "code": self.code.to_json(),
+            "weights": self.weights.to_json(),
+            "trainingData": self.training_data.to_json(),
+            "admitted": self.admitted,
+        }
+
+
+def _check_read_on(value: str) -> None:
+    """An ISO-8601 calendar date, not free text nobody can compare later."""
+    parts = value.split("-")
+    if (len(parts) != 3 or len(parts[0]) != 4 or len(parts[1]) != 2
+            or len(parts[2]) != 2
+            or not all(part.isdigit() for part in parts)):
+        raise ValueError(f"has a read date that is not an ISO-8601 date: {value!r}")
+    try:
+        datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        raise ValueError(f"has an impossible read date: {value!r}") from None
+
+
+@dataclass(frozen=True)
 class ModelEntry:
     id: str
     name: str
     task: str
     license_id: str
-    commercial_ok: bool
+    permitted_use: PermittedUse
     source: str
     files: tuple[ModelFile, ...] = field(default_factory=tuple)
     notes: str = ""
+
+    def validate(self) -> None:
+        try:
+            self.permitted_use.validate()
+        except ValueError as error:
+            raise ValueError(f"{self.id} {error}") from None
 
     def public(self, root: Path) -> dict:
         return {
@@ -68,11 +318,13 @@ class ModelEntry:
             "name": self.name,
             "task": self.task,
             "license": self.license_id,
-            "commercial_ok": self.commercial_ok,
             "installed": self.installed(root),
             "source": self.source,
             "notes": self.notes,
             "bytes": sum(f.bytes or 0 for f in self.files) or None,
+            # The whole recorded position, not a summary: the host's consent
+            # surface and the cross-surface test read every field.
+            "permitted_use": self.permitted_use.to_json(),
         }
 
     def installed(self, root: Path) -> bool:
@@ -109,6 +361,17 @@ REASON_INVALID_DIGEST = "invalid-digest"
 REASON_INCOMPLETE_ENTRY = "incomplete-entry"
 REASON_UNSAFE_PATH = "unsafe-path"
 REASON_SIZE = "size"
+REASON_UNLISTED = "unlisted-file"
+
+# Files that legitimately sit inside an install directory without being payload.
+# `manifest.json` is the host's own receipt: `ModelStore` writes it into the
+# staging directory before the atomic rename, so every real versioned install has
+# one and the catalog does not list it. `.DS_Store` is Finder metadata, written
+# by the operating system the moment a user opens the folder in a window. Neither
+# name can be picked up by a model loader, which is the only thing the unlisted
+# check exists to stop; any *other* unlisted file is refused, because naming is
+# exactly what an attacker controls.
+HOUSEKEEPING_NAMES = ("manifest.json", ".DS_Store")
 REASON_DIGEST = "digest"
 REASON_UNREADABLE = "unreadable"
 
@@ -127,10 +390,48 @@ def _sha256(path: Path) -> str:
 
 
 def _pins_of(entry: ModelEntry) -> tuple:
-    """The entry's whole pin set, normalised, for catalog-identity hashing."""
-    return (entry.id, entry.commercial_ok, entry.license_id,
+    """The entry's whole pin set, normalised, for catalog-identity hashing.
+
+    The licence record belongs in this tuple. The catalog generation invalidates
+    the memoised digest proof, and until the record existed a single retired
+    boolean was the whole permission answer, so naming it here was enough.
+    `permitted_use` is a structure, so it enters as its canonical JSON: a verdict
+    or condition flip must invalidate a proof exactly as a digest flip does."""
+    return (entry.id, entry.license_id,
+            json.dumps(entry.permitted_use.to_json(), sort_keys=True),
             tuple((spec.path, normalize_digest(spec.sha256), spec.bytes)
                   for spec in entry.files))
+
+
+def unlisted_payload(entry: ModelEntry, model_root: Path) -> list[str]:
+    """Names, relative to the install, of files the catalog does not list.
+
+    The digest pass checks the files the catalog *names*, so a file it does not
+    name is invisible to it. That gap is not theoretical for the loaders this
+    product uses: `transformers` picks a checkpoint by convention and prefers
+    `model.safetensors` over `pytorch_model.bin` when a directory holds both. One
+    dropped file therefore swaps the weights a job runs on while every pin in the
+    catalog still reads correct — the exact substitution the pins exist to refuse,
+    arriving as bytes that reach a runtime without ever being hashed.
+
+    Symlinks are reported through the same net: `Path.is_file` follows a link, so
+    a linked file appears here by name and is refused even when its target's bytes
+    would hash clean.
+    """
+    listed = {spec.path for spec in entry.files}
+    found = []
+    for path in sorted(model_root.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            name = path.relative_to(model_root).as_posix()
+        except ValueError:      # a link that escaped the install: name it as found
+            found.append(str(path))
+            continue
+        if name in listed or path.name in HOUSEKEEPING_NAMES:
+            continue
+        found.append(name)
+    return found
 
 
 def normalize_digest(value: object) -> str | None:
@@ -235,13 +536,97 @@ def resolve_model_root(root: Path, model_id: str) -> Path:
     return target
 
 
+def _terms(*, verdict: str, stated_by: str, evidence_url: str,
+           can_acquire: bool | None = None,
+           can_redistribute: bool | None = None,
+           can_use: bool | None = None,
+           conditions: tuple[UseCondition, ...] = (),
+           notice: str | None = None,
+           note: str | None = None,
+           read_on: str = LICENCE_READ_ON) -> ArtefactTerms:
+    """Compact constructor so the table states its values and nothing else.
+
+    `read_on` carries the dossier's shared evidence date. A record that was
+    established on a later read says so itself rather than inheriting a date it
+    was not read on — a licence record whose date is wrong cannot be re-checked.
+    """
+    return ArtefactTerms(
+        use=REQUIRED_USE,
+        can_acquire=can_acquire,
+        can_redistribute=can_redistribute,
+        can_use=can_use,
+        stated_by=stated_by,
+        evidence_url=evidence_url,
+        read_on=read_on,
+        verdict=verdict,
+        conditions=conditions,
+        notice=notice,
+        note=note,
+    )
+
+
+def _approved(evidence_url: str, *, notice: str | None = None,
+              note: str | None = None) -> ArtefactTerms:
+    """A statement made by the rights holder that grants all three axes."""
+    return _terms(
+        verdict=APPROVED,
+        stated_by=STATED_BY_RIGHTS_HOLDER,
+        evidence_url=evidence_url,
+        can_acquire=True,
+        can_redistribute=True,
+        can_use=True,
+        notice=notice,
+        note=note,
+    )
+
+
+def _not_established(evidence_url: str, *, note: str,
+                     stated_by: str = STATED_BY_NOT_ESTABLISHED,
+                     notice: str | None = None) -> ArtefactTerms:
+    """The search happened and produced no usable statement.
+
+    Axes stay blank rather than false: blank means "not known", false means
+    "refused", and only the latter is an exclusion.
+    """
+    return _terms(
+        verdict=UNKNOWN,
+        stated_by=stated_by,
+        evidence_url=evidence_url,
+        notice=notice,
+        note=note,
+    )
+
+
 CATALOG: tuple[ModelEntry, ...] = (
     ModelEntry(
         id="flux2-klein-4b-q4",
         name="FLUX.2 klein 4B (q4)",
         task="generative-edit",
         license_id="Apache-2.0",
-        commercial_ok=True,
+        permitted_use=PermittedUse(
+            # No separate code-licence read exists for this entry in the
+            # dossier. Recording the entry-level codeLicense string as a grant
+            # would invent one, so the artefact is marked not established; the
+            # weights record below is what the load gate enforces.
+            code=_not_established(
+                "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+                note="The dossier records the FLUX.2-klein-4B weights grant at this "
+                     "repository and no separate code-licence read for this entry. The "
+                     "entry's codeLicense string is preserved unchanged."),
+            weights=_approved(
+                "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+                notice="Apache-2.0. Redistributing or mirroring these weights requires a "
+                       "copy of the Apache-2.0 licence, the retained copyright and licence "
+                       "notices, a statement of changes, and any NOTICE text from the "
+                       "source repository.",
+                note="The FLUX.2-klein-4B card states the weights are open for commercial "
+                     "use under Apache-2.0, so the grant is explicit rather than inferred "
+                     "from a repository tag."),
+            training_data=_not_established(
+                "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
+                note="The dossier records no training-data row for this entry, so no "
+                     "dataset terms are asserted."),
+        ),
         source="hf:mflux-community/flux2-klein-4b-mflux-q4",
         files=(
             ModelFile("text_encoder/0.safetensors",
@@ -267,7 +652,24 @@ CATALOG: tuple[ModelEntry, ...] = (
         name="SAM 2.1 tiny",
         task="segmentation",
         license_id="Apache-2.0",
-        commercial_ok=True,
+        permitted_use=PermittedUse(
+            code=_approved(
+                "https://github.com/facebookresearch/sam2",
+                note="Apache-2.0, recorded pin @2b90b9f in Docs/AI_RUNTIME.md §6 "
+                     "(dossier §3.1)."),
+            weights=_approved(
+                "https://huggingface.co/facebook/sam2.1-hiera-tiny",
+                notice="Apache-2.0. Redistributing or mirroring this checkpoint requires a "
+                       "copy of the Apache-2.0 licence, the retained copyright and licence "
+                       "notices, a statement of changes, and any NOTICE text from "
+                       "facebookresearch/sam2.",
+                note="The SAM 2 README explicitly licenses the model checkpoints under "
+                     "Apache-2.0, separately from the repository licence."),
+            training_data=_not_established(
+                "https://huggingface.co/facebook/sam2.1-hiera-tiny",
+                note="SAM 2's training data is described in the paper, not as a licence "
+                     "term; the position is not confirmed (dossier §3.1)."),
+        ),
         source="hf:facebook/sam2.1-hiera-tiny",
         files=(ModelFile(
             "sam2.1_hiera_tiny.pt",
@@ -289,7 +691,110 @@ CATALOG: tuple[ModelEntry, ...] = (
         name="Swin2SR x4 (real-world)",
         task="upscaling",
         license_id="Apache-2.0",
-        commercial_ok=True,
+        permitted_use=PermittedUse(
+            code=_approved(
+                "https://raw.githubusercontent.com/mv-lab/swin2sr/main/LICENSE",
+                note="Apache-2.0 LICENSE, SwinIR Authors 2021 (dossier Appendix A A27)."),
+            # Decision taken by the release manager on 2026-11-22, superseding
+            # the `unknown` row this PR first recorded. The owner's standing
+            # authority for this work says to decide on evidence rather than ask
+            # him to choose between candidates, so this row is not an owner
+            # ruling; the authority behind it is the mandate, and the basis is
+            # the evidence below. The HF uploader `caidas` is a *verified
+            # organisation* whose overview reads "Computer Vision Lab, CAIDAS,
+            # University of Würzburg" — the paper's own lab, so the checkpoint
+            # repo is authored by the rights holder and not by a mirror. That
+            # repo carries `license:apache-2.0`, and the same lab's upstream
+            # project states in its own words "This project is released under
+            # the Apache 2.0 license." with an Apache-2.0 LICENSE file whose
+            # copyright line names the SwinIR authors. The grant is therefore
+            # stated by the rights holder rather than inferred by us, which is
+            # why `stated_by` moves off STATED_BY_INFERRED and the axes may be
+            # recorded. The four conditions below are what the decision
+            # actually depends on; the training-data provenance the same README
+            # reports (DIV2K/Flickr2K, research-only distribution) is recorded
+            # as a constraint rather than ignored, and is not a term of the
+            # Apache grant. See Docs/MODEL_LICENCES.md §8 addendum.
+            weights=_terms(
+                verdict=APPROVED_WITH_CONDITIONS,
+                stated_by=STATED_BY_RIGHTS_HOLDER,
+                evidence_url="https://huggingface.co/caidas/"
+                             "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+                can_acquire=True,
+                can_redistribute=True,
+                can_use=True,
+                conditions=(
+                    UseCondition(
+                        text="The identity of the rights holder behind the "
+                             "weights is documented with its evidence URL and "
+                             "read date: the Hugging Face uploader `caidas` is a "
+                             "verified organisation whose overview states "
+                             "\"Computer Vision Lab, CAIDAS, University of "
+                             "Würzburg\", the lab that authored Swin2SR, so the "
+                             "checkpoint repo is the rights holder's own "
+                             "publication and not a mirror "
+                             "(https://huggingface.co/api/organizations/caidas/"
+                             "overview, read 2026-11-22).",
+                        met=True),
+                    UseCondition(
+                        text="The Apache grant itself is documented with its "
+                             "evidence URL and read date: the upstream project "
+                             "states \"This project is released under the Apache "
+                             "2.0 license.\" and ships an Apache-2.0 LICENSE "
+                             "(https://github.com/mv-lab/swin2sr, read "
+                             "2026-11-22), which the same lab's verified "
+                             "Hugging Face repository repeats as "
+                             "`license:apache-2.0` for this checkpoint.",
+                        met=True),
+                    UseCondition(
+                        text="The training-data provenance is recorded in the "
+                             "register and the dossier rather than ignored: the "
+                             "same README states \"We use mainly the DIV2K "
+                             "Dataset and Flickr2K datasets for training\", and "
+                             "DIV2K is distributed for academic research "
+                             "purposes only; this product is a free, "
+                             "non-commercial application, so the research-only "
+                             "dataset note does not refuse the recorded use "
+                             "class, and the per-checkpoint mix beyond "
+                             "DIV2K/Flickr2K stays NOT VERIFIED.",
+                        met=True),
+                    UseCondition(
+                        text="The artefact remains download-only at release — "
+                             "no bytes are mirrored or bundled — and the "
+                             "Apache-2.0 notice below is preserved wherever the "
+                             "checkpoint is redistributed.",
+                        met=True),
+                ),
+                notice="Apache-2.0. Redistributing or mirroring pytorch_model.bin requires "
+                       "a copy of the Apache-2.0 licence, the retained copyright notices, a "
+                       "statement of changes, and any NOTICE text; the upstream code licence "
+                       "carries “Copyright [2021] [SwinIR Authors]”.",
+                note="Approved with conditions on 2026-11-22 by the release "
+                     "manager, under the owner's standing execution authority "
+                     "rather than as an owner ruling, on rights-holder evidence "
+                     "read that day and re-read 2026-11-23 (see the four "
+                     "conditions and Docs/MODEL_LICENCES.md §11). This supersedes "
+                     "the record this branch first wrote, which held the only "
+                     "weights statement to be the repository-level "
+                     "`license:apache-2.0` tag and therefore inferred. The tag is "
+                     "not an inference about a third-party upload: the uploading "
+                     "organisation is the verified account of the paper's own "
+                     "lab, which states the Apache 2.0 release in its project "
+                     "README. What remains open is the training-data mix beyond "
+                     "DIV2K/Flickr2K, which is NOT VERIFIED and is recorded on "
+                     "the trainingData record rather than resolved here.",
+                read_on="2026-11-22"),
+            training_data=_not_established(
+                "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+                note="Swin2SR's own training set is not confirmed; DIV2K, the usual corpus "
+                     "in this family, is made available for academic research purposes only, "
+                     "which is a residual dataset risk and not a term of the recorded weight "
+                     "grant (dossier §1, §2.1). The 2026-11-22 addendum records what the "
+                     "upstream project does state — \"We use mainly the DIV2K Dataset and "
+                     "Flickr2K datasets for training\" (https://github.com/mv-lab/swin2sr, "
+                     "read 2026-11-22) — which names the corpora but does not verify the "
+                     "per-checkpoint mix, so this record stays unknown."),
+        ),
         source="hf:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
         files=(
             ModelFile("config.json",
@@ -310,7 +815,23 @@ CATALOG: tuple[ModelEntry, ...] = (
         name="MI-GAN (512, Places2)",
         task="inpainting",
         license_id="MIT",
-        commercial_ok=True,
+        permitted_use=PermittedUse(
+            code=_approved(
+                "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/LICENSE",
+                note="MIT, Picsart AI Research 2024 (dossier Appendix A A26)."),
+            weights=_approved(
+                "https://raw.githubusercontent.com/Picsart-AI-Research/MI-GAN/main/"
+                "LICENSE-WEIGHTS",
+                notice="MIT. Redistributing or mirroring this ONNX requires the copyright "
+                       "line and the full permission notice from LICENSE-WEIGHTS (Picsart AI "
+                       "Research, 2024).",
+                note="The authors ship a dedicated MIT LICENSE-WEIGHTS next to the MIT code "
+                     "licence, and the ONNX is their own pipeline export."),
+            training_data=_not_established(
+                "https://huggingface.co/andraniksargsyan/migan",
+                note="Places2 terms could not be fetched (dossier §9 item 1), so the dataset "
+                     "position stays unconfirmed."),
+        ),
         source="hf:andraniksargsyan/migan",
         files=(ModelFile(
             "migan_pipeline_v2.onnx",
@@ -321,6 +842,11 @@ CATALOG: tuple[ModelEntry, ...] = (
               "author's own export. Used for small holes.",
     ),
 )
+
+# The shipped table is validated at import: a catalogue that cannot be audited
+# must not start a worker that would then load its weights.
+for _entry in CATALOG:
+    _entry.validate()
 
 
 class Catalog:
@@ -418,11 +944,43 @@ class Catalog:
                           {"model": model_id})
 
     def _require_licensed(self, entry: ModelEntry) -> None:
-        if not entry.commercial_ok and not self.allow_uncleared:
+        """Refuse a model the licence record does not admit, before any disk state.
+
+        Re-validates rather than trusting import time: a table patched in after
+        import must be refused by the same rules. The structured refusal is the
+        licence class (`-32010`), never an unrelated capability failure, because
+        the caller's remedy is a licence record, not a download. Both accessors
+        call this first, so a licence answer can never depend on what is on disk
+        and the verified job path cannot out-run the reporting one.
+        """
+        try:
+            entry.validate()
+        except ValueError as error:
             raise WorkerError(
                 LICENSE_BLOCKED,
-                f"{entry.id} is not cleared for commercial use ({entry.license_id})",
-                {"model": entry.id, "license": entry.license_id},
+                str(error),
+                {"model": entry.id, "license": entry.license_id,
+                 "reason": "invalid-evidence"},
+            ) from None
+        excluded = entry.permitted_use.excluded
+        if excluded:
+            # No switch admits an excluded model: the mandate says it must not
+            # enter a build, and an evaluation flag is not a licence.
+            raise WorkerError(
+                LICENSE_BLOCKED,
+                f"{entry.id} is excluded ({', '.join(excluded)} terms refuse "
+                "distribution), so no configuration downloads or runs it",
+                {"model": entry.id, "license": entry.license_id,
+                 "reason": "excluded", "artefacts": list(excluded)},
+            )
+        if not entry.permitted_use.admitted and not self.allow_uncleared:
+            verdict = entry.permitted_use.weights.verdict
+            raise WorkerError(
+                LICENSE_BLOCKED,
+                f"{entry.id} has no established permission for non-commercial use "
+                f"and distribution (weights verdict: {verdict})",
+                {"model": entry.id, "license": entry.license_id,
+                 "artefact": "weights", "verdict": verdict},
             )
 
     def _resolve_under_lease(self, entry: ModelEntry) -> tuple[Path, str]:
@@ -515,6 +1073,18 @@ class Catalog:
                                    "expected_bytes": spec.bytes,
                                    "actual_bytes": stamp.st_size})
             stamps[spec.path] = stamp
+        extra = unlisted_payload(entry, model_root)
+        if extra:
+            # Same class as a digest failure: the install disagrees with the
+            # record, and the repair is a reinstall, not a catalog edit — which
+            # is why this is `-32019` and not `-32021`. It runs on the size-only
+            # accessor too, so a report cannot call an install healthy that the
+            # loader would refuse.
+            raise WorkerError(
+                CHECKSUM_MISMATCH,
+                f"{entry.id} has {len(extra)} file(s) the catalog does not list, "
+                "so its bytes are not the bytes this record pins",
+                {"model": entry.id, "files": extra, "reason": REASON_UNLISTED})
         return stamps
 
     def require(self, model_id: str) -> Path:
@@ -651,7 +1221,10 @@ class Catalog:
         digest, a malformed digest, an empty file list — **is** a failure: it used
         to be reported `ok`, because both checks were skipped when the pin was
         null. Refusing to claim health for bytes it never checked costs nothing
-        and needs no hashing.
+        and needs no hashing. A listed file that is a symlink and any payload the
+        catalog does not name are reported too, because both are conditions
+        `_check_sizes` refuses at load time: a report that called either healthy
+        would promise a load that then fails.
         """
         models, ok = [], True
         for entry in CATALOG:
@@ -679,19 +1252,29 @@ class Catalog:
                     models.append(state)
                     ok = False
                     continue
+                def problem(file: str, reason: str) -> None:
+                    state["ok"] = False
+                    state.setdefault("problems", []).append(
+                        {"file": file, "reason": reason})
+
                 for spec in entry.files:
                     target = model_root / spec.path
                     try:
                         actual = target.stat().st_size
                     except OSError:
-                        state["ok"] = False
-                        state.setdefault("problems", []).append(
-                            {"file": spec.path, "reason": "missing"})
+                        problem(spec.path, "missing")
+                        continue
+                    if os.path.islink(target):
+                        # `stat()` followed the link, so a correct size here proves
+                        # nothing about the bytes this install pins. The load path
+                        # refuses the same file; a health report that accepted it
+                        # would promise a load that then fails.
+                        problem(spec.path, REASON_UNSAFE_PATH)
                         continue
                     if actual != spec.bytes:
-                        state["ok"] = False
-                        state.setdefault("problems", []).append(
-                            {"file": spec.path, "reason": "size"})
+                        problem(spec.path, REASON_SIZE)
+                for name in unlisted_payload(entry, model_root):
+                    problem(name, REASON_UNLISTED)
                 ok = ok and state["ok"]
             models.append(state)
         return {"ok": ok, "root": str(self.root), "models": models}
@@ -717,6 +1300,11 @@ class Catalog:
             raise WorkerError(MODEL_MISSING, f"{entry.id} has no usable active version",
                               {"model": entry.id, "reason": str(error)})
         checked, failed = 0, []
+        for name in unlisted_payload(entry, model_root):
+            # The deep scan is what the model manager trusts after a manual fix,
+            # so it must not limit itself to the names the catalog happens to
+            # carry. An unlisted payload is what a digest pass used to miss.
+            failed.append({"file": name, "reason": REASON_UNLISTED})
         for spec in entry.files:
             expected = normalize_digest(spec.sha256)
             target = model_root / spec.path
@@ -724,6 +1312,11 @@ class Catalog:
                 actual_size = target.stat().st_size
             except OSError:
                 failed.append({"file": spec.path, "reason": "missing"})
+                continue
+            if os.path.islink(target):
+                # Hashing this would report the bytes of whatever the link points
+                # at, which is exactly the claim `verify` exists to make.
+                failed.append({"file": spec.path, "reason": REASON_UNSAFE_PATH})
                 continue
             if actual_size != spec.bytes:
                 # A short or padded file fails on length before it is hashed, so

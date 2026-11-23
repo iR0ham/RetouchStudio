@@ -5,12 +5,38 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from retouch_ai_worker.catalog import Catalog, ModelEntry, ModelFile
+from retouch_ai_worker.catalog import (APPROVED, LICENCE_READ_ON, REQUIRED_USE,
+                                       STATED_BY_NOT_ESTABLISHED,
+                                       STATED_BY_RIGHTS_HOLDER, UNKNOWN,
+                                       ArtefactTerms, Catalog, ModelEntry,
+                                       ModelFile, PermittedUse)
 from retouch_ai_worker.downloads import (ConsentStore, Downloader, manifest,
                                         consent_hash_matches)
 from retouch_ai_worker.protocol import (CATALOG_INVALID, CHECKSUM_MISMATCH,
                                         CONSENT_REQUIRED, LICENSE_BLOCKED,
                                         WorkerError)
+
+
+def _terms(**overrides) -> ArtefactTerms:
+    fields = dict(
+        use=REQUIRED_USE, can_acquire=True, can_redistribute=True, can_use=True,
+        stated_by=STATED_BY_RIGHTS_HOLDER, evidence_url="https://example.test/L",
+        read_on=LICENCE_READ_ON, verdict=APPROVED)
+    fields.update(overrides)
+    return ArtefactTerms(**fields)
+
+
+def _use(**overrides) -> PermittedUse:
+    record = dict(code=_terms(), weights=_terms(), training_data=_terms())
+    record.update(overrides)
+    return PermittedUse(**record)
+
+
+CLEARED_USE = _use()
+UNCLEARED_USE = _use(weights=_terms(
+    can_acquire=None, can_redistribute=None, can_use=None,
+    stated_by=STATED_BY_NOT_ESTABLISHED, verdict=UNKNOWN,
+    note="no rights-holder statement was found"))
 
 PAYLOAD = b"retouch-studio-test-payload-" * 4096
 
@@ -42,12 +68,13 @@ class RangeHandler(BaseHTTPRequestHandler):
 
 
 class FakeCatalog(Catalog):
-    def __init__(self, root, url, sha256, commercial=True):
+    def __init__(self, root, url, sha256, admitted=True):
         super().__init__(root, allow_uncleared=True)
         self.entry = ModelEntry(
             id="fake-model", name="Fake", task="test",
-            license_id="Apache-2.0" if commercial else "NOASSERTION",
-            commercial_ok=commercial, source="test",
+            license_id="Apache-2.0" if admitted else "NOASSERTION",
+            permitted_use=CLEARED_USE if admitted else UNCLEARED_USE,
+            source="test",
             files=(ModelFile("weights.bin", sha256, len(PAYLOAD), url),),
         )
 
@@ -64,7 +91,7 @@ class TwoFileCatalog(Catalog):
         super().__init__(root, allow_uncleared=True)
         self.entry = ModelEntry(
             id="fake-model", name="Fake", task="test", license_id="Apache-2.0",
-            commercial_ok=True, source="test",
+            permitted_use=CLEARED_USE, source="test",
             files=(
                 ModelFile("a.bin", sha256, len(PAYLOAD), first_url),
                 ModelFile("b.bin", sha256, len(PAYLOAD), second_url),
@@ -187,7 +214,7 @@ class DownloadTests(unittest.TestCase):
     def test_checksum_mismatch_leaves_nothing_installed(self):
         self.catalog.entry = ModelEntry(
             id="fake-model", name="Fake", task="test", license_id="Apache-2.0",
-            commercial_ok=True, source="test",
+            permitted_use=CLEARED_USE, source="test",
             files=(ModelFile("weights.bin", "0" * 64, len(PAYLOAD), self.url),),
         )
         plan = self.downloader.plan(["fake-model"])
@@ -198,10 +225,13 @@ class DownloadTests(unittest.TestCase):
         self.assertFalse((self.root / "fake-model" / "weights.bin").exists())
 
     def test_plan_refuses_unlicensed_models(self):
-        blocked = FakeCatalog(self.root, self.url, self.sha, commercial=False)
+        # The plan carries the figure the consent hash covers, so it must not
+        # even be offered for weights whose record does not admit distribution.
+        blocked = FakeCatalog(self.root, self.url, self.sha, admitted=False)
         with self.assertRaises(WorkerError) as caught:
             manifest(["fake-model"], blocked)
         self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+        self.assertEqual(caught.exception.data["verdict"], "unknown")
 
     def test_plan_refuses_a_pin_it_could_never_verify(self):
         # Mandate §4 case 6/11 on the transfer side. A pinless entry used to reach
@@ -215,7 +245,7 @@ class DownloadTests(unittest.TestCase):
                 broken = FakeCatalog(self.root, self.url, self.sha)
                 broken.entry = ModelEntry(
                     id="fake-model", name="Fake", task="test",
-                    license_id="Apache-2.0", commercial_ok=True, source="test",
+                    license_id="Apache-2.0", permitted_use=CLEARED_USE, source="test",
                     files=(ModelFile("weights.bin",
                                      None if defect == "sha256" else self.sha,
                                      None if defect == "bytes" else len(PAYLOAD),
@@ -234,7 +264,7 @@ class DownloadTests(unittest.TestCase):
         broken = FakeCatalog(self.root, self.url, self.sha)
         broken.entry = ModelEntry(
             id="fake-model", name="Fake", task="test", license_id="Apache-2.0",
-            commercial_ok=True, source="test",
+            permitted_use=CLEARED_USE, source="test",
             files=(ModelFile("../escaped.bin", self.sha, len(PAYLOAD), self.url),))
         with self.assertRaises(WorkerError) as caught:
             manifest(["fake-model"], broken)

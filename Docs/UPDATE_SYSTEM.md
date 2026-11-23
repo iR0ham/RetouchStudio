@@ -4,6 +4,11 @@ Status: core implemented and tested on macOS arm64 and x86_64; **no production
 feed is published**, so no end-to-end notification or install has been
 exercised. Everything below is labelled by what was actually verified.
 
+Scope note (2026-11-22): "tested" here means the unit checks in
+`Tests/EngineTests.swift`, which run on macOS. Steps 1–9 are a macOS-only flow;
+the Windows host ships no updater. See also step 9, whose trigger was
+overstated in earlier revisions of this document.
+
 ## What exists
 
 | Layer | File | Portable? |
@@ -125,10 +130,43 @@ Only a throwaway key is used inside the tests.
    failure the old bundle is restored and the journal removed.
 8. On success the backup and journal are removed and the About window offers a
    relaunch.
-9. `UpdateInstaller.recover` runs on every launch before the editor opens. It
-   decides from what is on disk, so a crash between the renames is completed
-   (new bundle present, backup present) or rolled back (new bundle missing,
-   backup present) without a stored phase.
+9. `UpdateInstaller.recover` is called from `init()` of the single
+   `UpdateController`, and that controller is only ever built as the
+   `@StateObject` of `AboutView` (`Sources/RetouchStudio/Views/InfoViews.swift`).
+   As of 2026-11-22 it therefore does **not** run on every launch before the
+   editor opens: nothing in `App.swift` or `AppDelegate` constructs an
+   `UpdateController` or calls `recover(journalURL:)` (`App.swift:17-29` is the
+   whole startup sweep), so recovery runs when the
+   owner opens the About window (Retouch Studio → About) in that process, and
+   not at startup. Re-verified 2026-11-23 against this tree: `UpdateController()`
+   still occurs exactly once in `Sources/`, as that `@StateObject`
+   (`InfoViews.swift:106`), reachable only through `InfoWindows.shared.showAbout()`
+   from the app-menu item (`App.swift:210`). What an earlier revision of this
+   document claimed — launch
+   coverage — holds only for the early phase: `AppDelegate.attach(model:)` does
+   run startup sweeps (`ModelManager.cleanupAtStartup()`,
+   `AIWorker.cleanupJobsAtStartup()`), but those clean the model store and the
+   helper's job folders and never touch the update journal. The decision logic
+   itself is unchanged and still decides from what is on disk — completed (new
+   bundle present, backup present), rolled back (new bundle missing, backup
+   present) or cleared (journal only) — without a stored phase; only its trigger
+   was overstated here. The consequence for a user: a swap interrupted between
+   the two renames leaves the old bundle under
+   its `.…backup-<uuid>` name and the journal at
+   `~/Library/Application Support/RetouchStudio/update-journal.json`
+   (`UpdateController.journalURL`, `UpdateController.swift:25-33`, written by
+   `swap` at `UpdateVerification.swift:174`; the backup name comes from
+   `UpdateVerification.swift:171`), and no
+   later launch repairs that on its own — the app keeps running whatever bundle
+   the rename left in place, and the backup folder and journal persist until an
+   About panel is opened. Two further properties of this path are worth stating
+   plainly: the call site is `try? UpdateInstaller.recover(...)`, so a thrown
+   `unreadableJournal` (the journal exists but cannot be decoded) or
+   `unrecoverableJournal` (neither the current nor the backup bundle is on disk)
+   is discarded silently and nothing is reported to the owner; and when both the
+   current and the staged bundle are absent, `recover` moves the backup into
+   place and returns `.rolledBack` without checking whether that move actually
+   succeeded.
 
 Nothing is forced: an available update is only installed when the owner presses
 the button, and a refused/incompatible update is reported rather than applied.
@@ -136,6 +174,11 @@ There is also no automatic background check, by design: the app makes no
 outbound request until the owner presses Check, which matches the
 no-background-requests claim in `Docs/PRIVACY_AUDIT.md`. The "notification" is
 the status line and button in About.
+
+**The updater is dormant in 2.0.0.** No feed URL is configured (step 1), so the
+app never contacts anybody, and no signed release artifact exists; every layer
+below is implemented and unit-tested code that a user cannot currently drive end
+to end.
 
 ## Tests
 
@@ -155,8 +198,13 @@ zip unpack with a wrong-version refusal. All pass on arm64 and x86_64.
   automated test.
 - The feed must be hosted by the owner. The repository does not contain a
   publisher, server configuration or CDN.
-- Windows updates are **not implemented**: the portable rules accept a
-  `windows` artifact, but there is no Windows host or installer yet.
+- Windows updates are **not implemented on the Windows host**: the portable
+  rules accept a `windows` artifact, and a Windows zip and MSI are built,
+  installed, upgraded and uninstalled on CI. What is missing is the receiving
+  half — `Windows/README.md` records that the Windows host has no updater and no
+  update feed; a new version is a new MSI replacing the old one through the same
+  `UpgradeCode`. (Corrected 2026-11-22: this bullet's claim that there is "no
+  Windows host or installer yet" was stale.)
 - Signature/notarization of the updated bundle is not checked by the updater;
   Gatekeeper evaluates the new bundle on first launch exactly as it does a
   fresh download. Signing is documented in `Docs/RELEASING.md`.

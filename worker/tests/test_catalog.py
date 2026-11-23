@@ -13,8 +13,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from retouch_ai_worker import catalog as catalog_module
-from retouch_ai_worker.catalog import (CATALOG, LEGACY_LEASE, Catalog, ModelEntry,
-                                       ModelFile, normalize_digest, pin_problem)
+from retouch_ai_worker.catalog import (APPROVED, APPROVED_WITH_CONDITIONS, CATALOG,
+                                       EXCLUDED, LEGACY_LEASE, LICENCE_READ_ON,
+                                       REQUIRED_USE, STATED_BY_INFERRED,
+                                       STATED_BY_NOT_ESTABLISHED,
+                                       STATED_BY_RIGHTS_HOLDER, UNKNOWN,
+                                       ArtefactTerms, Catalog, ModelEntry,
+                                       ModelFile, PermittedUse, UseCondition,
+                                       normalize_digest, pin_problem)
 from retouch_ai_worker.protocol import (BUSY, CATALOG_INVALID, CHECKSUM_MISMATCH,
                                         LICENSE_BLOCKED, MODEL_MISSING,
                                         UNKNOWN_MODEL, WorkerError)
@@ -32,63 +38,82 @@ catalog = Catalog(%r, allow_uncleared=False)
 print(json.dumps({"proofs": len(catalog._proofs)}))
 """
 
+def terms(**overrides) -> ArtefactTerms:
+    """A complete, admitted artefact record; overrides make the bad variants."""
+    fields = dict(
+        use=REQUIRED_USE, can_acquire=True, can_redistribute=True, can_use=True,
+        stated_by=STATED_BY_RIGHTS_HOLDER, evidence_url="https://example.test/L",
+        read_on=LICENCE_READ_ON, verdict=APPROVED)
+    fields.update(overrides)
+    return ArtefactTerms(**fields)
+
+
+def use_class(**overrides) -> PermittedUse:
+    record = dict(code=terms(), weights=terms(), training_data=terms())
+    record.update(overrides)
+    return PermittedUse(**record)
+
+
+CLEARED_USE = use_class()
+UNCLEARED_USE = use_class(weights=terms(
+    can_acquire=None, can_redistribute=None, can_use=None,
+    stated_by=STATED_BY_NOT_ESTABLISHED, verdict=UNKNOWN,
+    note="no rights-holder statement was found"))
+
 # The catalog only ships models whose weights are cleared. The gate still has
 # to refuse an uncleared entry if one is ever added, so the test supplies one.
 # Its pin is complete, because the licence answer must not depend on a catalog
-# defect: an entry with no digest would be refused as unverifiable first.
+# defect: an entry with no digest would be refused as unverifiable first, and the
+# test would prove nothing about the licence gate.
 UNCLEARED = ModelEntry(
     id="eval-only", name="Eval only", task="inpainting",
-    license_id="NOASSERTION", commercial_ok=False, source="local",
-    files=(ModelFile("weights.bin", hashlib.sha256(WEIGHTS).hexdigest(),
-                     len(WEIGHTS)),))
+    license_id="NOASSERTION", permitted_use=UNCLEARED_USE, source="local",
+    files=(ModelFile("weights.bin", SHA_OF_WEIGHTS, len(WEIGHTS)),))
 
 # A flat install that a test can adopt while a reader waits on the legacy lease.
 LEGACY = ModelEntry(
     id="legacy-race", name="Legacy race", task="inpainting",
-    license_id="MIT", commercial_ok=True, source="local",
+    license_id="MIT", permitted_use=CLEARED_USE, source="local",
     files=(ModelFile("weights.bin", hashlib.sha256(b"w").hexdigest(), 1),))
-
 # A model small enough for a test to write whole, so its load path can be
 # checked against a real digest instead of only a recorded size.
 VERIFIED = ModelEntry(
     id="tiny-model", name="Tiny", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local",
+    permitted_use=CLEARED_USE, source="local",
     files=(ModelFile("weights.bin", hashlib.sha256(WEIGHTS).hexdigest(),
                      len(WEIGHTS)),))
 UNDIGESTED = ModelEntry(
     id="size-only", name="Size only", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local", files=(ModelFile("weights.bin", None,
-                                                         len(WEIGHTS)),))
+    permitted_use=CLEARED_USE, source="local", files=(ModelFile("weights.bin", None,
+                                                               len(WEIGHTS)),))
 NOSIZE = ModelEntry(
     id="no-size", name="No size", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local",
-    files=(ModelFile("weights.bin", hashlib.sha256(WEIGHTS).hexdigest(), None),))
+    permitted_use=CLEARED_USE, source="local",
+    files=(ModelFile("weights.bin", SHA_OF_WEIGHTS, None),))
 BAD_DIGEST = ModelEntry(
     id="bad-digest", name="Bad digest", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local",
+    permitted_use=CLEARED_USE, source="local",
     files=(ModelFile("weights.bin", "g" * 64, len(WEIGHTS)),))
 SHORT_DIGEST = ModelEntry(
     id="short-digest", name="Short digest", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local",
+    permitted_use=CLEARED_USE, source="local",
     files=(ModelFile("weights.bin", "abc", len(WEIGHTS)),))
 EMPTY_DIGEST = ModelEntry(
     id="empty-digest", name="Empty digest", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local",
+    permitted_use=CLEARED_USE, source="local",
     files=(ModelFile("weights.bin", "", len(WEIGHTS)),))
 UPPER_DIGEST = ModelEntry(
-    id="upper-digest", name="Upper digest", task="upscaling",
-    license_id="Apache-2.0", commercial_ok=True, source="local",
-    files=(ModelFile("weights.bin",
-                     hashlib.sha256(WEIGHTS).hexdigest().upper(), len(WEIGHTS)),))
+    id="upper-digest", name="Upper digest", task="upscaling", license_id="Apache-2.0",
+    permitted_use=CLEARED_USE, source="local",
+    files=(ModelFile("weights.bin", SHA_OF_WEIGHTS.upper(), len(WEIGHTS)),))
 NO_FILES = ModelEntry(
     id="no-files", name="No files", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local", files=())
+    permitted_use=CLEARED_USE, source="local", files=())
 
 
 def _with(*entries):
     """The shipped catalog plus synthetic fixtures, for one `with` block."""
     return patch("retouch_ai_worker.catalog.CATALOG", CATALOG + entries)
-
 
 class _FakeClock:
     """Advances only when the lease loop sleeps, so the 5 s wait is instant."""
@@ -107,12 +132,34 @@ class CatalogTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
 
-    def test_flux_is_commercial_and_listed(self):
+    def test_flux_is_admitted_and_listed(self):
         catalog = Catalog(self.root, allow_uncleared=False)
         listed = {entry["id"]: entry for entry in catalog.list()}
-        self.assertTrue(listed["flux2-klein-4b-q4"]["commercial_ok"])
+        flux = listed["flux2-klein-4b-q4"]["permitted_use"]
+        self.assertTrue(flux["admitted"])
+        self.assertEqual(flux["weights"]["verdict"], APPROVED)
         self.assertEqual(listed["flux2-klein-4b-q4"]["license"], "Apache-2.0")
         self.assertEqual(len(listed), len(CATALOG))
+
+    def test_every_shipped_record_carries_the_whole_position(self):
+        # Finding (3): `Catalog.public()` must carry the record field for field,
+        # not a summary of it, so the host and this table cannot disagree.
+        catalog = Catalog(self.root, allow_uncleared=False)
+        for model in catalog.list():
+            record = model["permitted_use"]
+            self.assertEqual(set(record),
+                             {"code", "weights", "trainingData", "admitted"},
+                             model["id"])
+            for name in ("code", "weights", "trainingData"):
+                self.assertEqual(
+                    set(record[name]),
+                    {"use", "canAcquire", "canRedistribute", "canUse",
+                     "statedBy", "evidenceUrl", "readOn", "verdict",
+                     "conditions", "notice", "note"},
+                    f"{model['id']} {name}")
+                self.assertEqual(record[name]["use"], REQUIRED_USE)
+                self.assertTrue(record[name]["evidenceUrl"])
+                self.assertTrue(record[name]["readOn"])
 
     def test_sam_tiny_weights_are_recorded_as_measured(self):
         # Measured 2026-11-18 three ways that agree: the pinned URL streams this
@@ -128,7 +175,110 @@ class CatalogTests(unittest.TestCase):
             spec.sha256,
             "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69")
 
-    def test_unlicensed_model_is_refused(self):
+    def test_every_shipped_record_validates(self):
+        for entry in CATALOG:
+            entry.validate()
+            self.assertTrue(entry.license_id, entry.id)
+            for name, record in (("code", entry.permitted_use.code),
+                                 ("weights", entry.permitted_use.weights),
+                                 ("training data", entry.permitted_use.training_data)):
+                self.assertIn(record.verdict,
+                              (APPROVED, APPROVED_WITH_CONDITIONS, UNKNOWN, EXCLUDED),
+                              f"{entry.id} {name}")
+                self.assertTrue(record.evidence_url, f"{entry.id} {name}")
+                self.assertTrue(record.read_on, f"{entry.id} {name}")
+
+    def test_swin_weights_are_approved_with_met_conditions(self):
+        # The release manager's 2026-11-22 decision under the owner's standing
+        # execution mandate, on evidence read that day and re-read 2026-11-23: the
+        # Hugging Face uploader `caidas` is the verified organisation of the
+        # paper's own lab ("Computer Vision Lab, CAIDAS, University of
+        # Würzburg"), and the upstream project states its own Apache 2.0
+        # release. That is a rights-holder statement about the weights, not an
+        # inference by us, so the record carries the grant with four conditions
+        # and the gate admits it. This entry used to be recorded `unknown` /
+        # `inferred`, which reported `upscale.4x` — the one shipped AI
+        # capability — as blocked; see Docs/MODEL_LICENCES.md §8.
+        entry = next(item for item in CATALOG if item.id == "swin2sr-x4")
+        weights = entry.permitted_use.weights
+        self.assertEqual(weights.stated_by, STATED_BY_RIGHTS_HOLDER)
+        self.assertEqual(weights.verdict, APPROVED_WITH_CONDITIONS)
+        self.assertIs(weights.permitted, True)
+        self.assertTrue(weights.conditions)
+        self.assertTrue(all(condition.met for condition in weights.conditions))
+        self.assertTrue(entry.permitted_use.admitted)
+        # The training-data axis stays unknown: the addendum records the
+        # DIV2K/Flickr2K quote and does not resolve the per-checkpoint mix.
+        training = entry.permitted_use.training_data
+        self.assertEqual(training.verdict, UNKNOWN)
+        self.assertIsNone(training.permitted)
+        self.assertIn("DIV2K", training.note)
+        self.assertIn("Flickr2K", training.note)
+        # A condition-bearing record must state every condition it depends on.
+        catalog = Catalog(self.root, allow_uncleared=False)
+        listed = {item["id"]: item for item in catalog.list()}
+        record = listed["swin2sr-x4"]["permitted_use"]
+        self.assertTrue(record["admitted"])
+        self.assertEqual([item["met"] for item in record["weights"]["conditions"]],
+                         [True] * len(weights.conditions))
+        # And the load gate really lets it through: no weights file is installed
+        # here, so the refusal must be the ordinary missing-model error and never
+        # the licence error.
+        with self.assertRaises(WorkerError) as caught:
+            catalog.require("swin2sr-x4")
+        self.assertNotEqual(caught.exception.code, LICENSE_BLOCKED)
+
+    def test_an_inferred_statement_can_never_grant_an_axis(self):
+        inferred = terms(stated_by=STATED_BY_INFERRED)
+        with self.assertRaises(ValueError) as caught:
+            inferred.validate()
+        self.assertIn("inferred evidence", str(caught.exception))
+        # A tag may still be recorded as a blank inference; it just admits nothing.
+        blank = terms(stated_by=STATED_BY_INFERRED, can_acquire=None,
+                      can_redistribute=None, can_use=None, verdict=UNKNOWN,
+                      note="repository tag only")
+        blank.validate()
+        self.assertIsNone(blank.permitted)
+        self.assertFalse(blank.admitted)
+
+    def test_approved_with_conditions_must_list_a_met_condition(self):
+        for conditions in ((), (UseCondition("attribute the authors", False),)):
+            with self.assertRaises(ValueError):
+                terms(verdict=APPROVED_WITH_CONDITIONS,
+                      conditions=conditions).validate()
+        admitted = terms(verdict=APPROVED_WITH_CONDITIONS,
+                         conditions=(UseCondition("attribute the authors", True),))
+        admitted.validate()
+        self.assertTrue(admitted.admitted)
+
+    def test_a_record_without_its_evidence_is_invalid(self):
+        for fields in ({"evidence_url": ""}, {"read_on": ""},
+                       {"read_on": "2026-11-31"}, {"read_on": "yesterday"},
+                       {"use": "commercial-resale"}):
+            with self.assertRaises(ValueError, msg=fields):
+                terms(**fields).validate()
+
+    def test_an_excluded_model_is_refused_even_under_the_eval_switch(self):
+        # Finding (4): "excluded" plus a permissive boolean must never load.
+        excluded = ModelEntry(
+            id="excluded-model", name="Excluded", task="upscaling",
+            license_id="CC-BY-NC-ND-4.0", permitted_use=use_class(
+                weights=terms(verdict=EXCLUDED, can_acquire=False,
+                              can_redistribute=False, can_use=False,
+                              note="no redistribution or derivative use")),
+            source="local", files=(ModelFile("weights.bin"),))
+        for allow in (False, True):
+            catalog = Catalog(self.root, allow_uncleared=allow)
+            with patch("retouch_ai_worker.catalog.CATALOG",
+                       CATALOG + (excluded,)):
+                with self.assertRaises(WorkerError) as caught:
+                    catalog.require("excluded-model")
+            self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+            self.assertEqual(caught.exception.data["reason"], "excluded")
+
+    def test_a_refused_entry_still_reports_its_licence_class(self):
+        # Scope A: a refused model produces the licence refusal, never an
+        # unrelated capability failure, and the message names the artefact.
         catalog = Catalog(self.root, allow_uncleared=False)
         with _with(UNCLEARED):
             for accessor in (catalog.require, catalog.require_verified):
@@ -140,7 +290,8 @@ class CatalogTests(unittest.TestCase):
     def test_the_research_switch_never_bypasses_an_integrity_check(self):
         # `RETOUCH_AI_EVAL_MODELS` is a licence switch and nothing else. The
         # measured baseline let an entry pass under it on size alone; now the
-        # only thing it changes is the `commercial_ok` gate.
+        # only thing it changes is the admission gate in `_require_licensed`,
+        # which is a licence refusal and nothing else.
         folder = self.root / UNCLEARED.id
         folder.mkdir()
         (folder / "weights.bin").write_bytes(b"TAMPRED")   # right length, wrong bytes
@@ -155,7 +306,7 @@ class CatalogTests(unittest.TestCase):
 
         pinless = ModelEntry(
             id=UNCLEARED.id, name=UNCLEARED.name, task=UNCLEARED.task,
-            license_id=UNCLEARED.license_id, commercial_ok=False,
+            license_id=UNCLEARED.license_id, permitted_use=UNCLEARED_USE,
             source=UNCLEARED.source, files=(ModelFile("weights.bin", None, 7),))
         catalog = Catalog(self.root, allow_uncleared=True)
         with _with(pinless):
@@ -164,17 +315,19 @@ class CatalogTests(unittest.TestCase):
         # Admission outranks the switch: an uncleared *and* unverifiable entry is
         # still refused, and refused for the reason a repair can act on.
         self.assertEqual(caught.exception.code, CATALOG_INVALID)
-
-    def test_eval_switch_allows_but_then_requires_files(self):
+        with _with(UNCLEARED):
+            catalog = Catalog(self.root)
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require("eval-only")
+        self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+        self.assertEqual(caught.exception.data["model"], "eval-only")
+        self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
+    def test_the_eval_switch_does_not_skip_a_file_check(self):
         catalog = Catalog(self.root, allow_uncleared=True)
         with _with(UNCLEARED):
             with self.assertRaises(WorkerError) as caught:
                 catalog.require("eval-only")
         self.assertEqual(caught.exception.code, MODEL_MISSING)
-
-    def test_every_shipped_model_is_cleared(self):
-        self.assertTrue(all(entry.commercial_ok for entry in CATALOG),
-                        [entry.id for entry in CATALOG if not entry.commercial_ok])
 
     def test_missing_installed_model(self):
         catalog = Catalog(self.root, allow_uncleared=False)
@@ -308,7 +461,7 @@ class CatalogTests(unittest.TestCase):
                              (ModelEntry(
                                  id="odd-length", name="Odd length",
                                  task="upscaling", license_id="Apache-2.0",
-                                 commercial_ok=True, source="local",
+                                 permitted_use=CLEARED_USE, source="local",
                                  files=(ModelFile("weights.bin", SHA_OF_WEIGHTS + "a",
                                                   len(WEIGHTS)),),),
                               "65 chars")):
@@ -355,7 +508,7 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNone(pin_problem(VERIFIED))
         two_files = ModelEntry(
             id="mixed", name="Mixed", task="upscaling", license_id="MIT",
-            commercial_ok=True, source="local",
+            permitted_use=CLEARED_USE, source="local",
             files=(ModelFile("good.bin", SHA_OF_WEIGHTS, len(WEIGHTS)),
                    ModelFile("bad.bin", None, len(WEIGHTS))))
         problem = pin_problem(two_files)
@@ -482,7 +635,7 @@ class CatalogTests(unittest.TestCase):
         (folder / "weights.bin").write_bytes(WEIGHTS)
         other = ModelEntry(
             id=VERIFIED.id, name="Other pin", task="upscaling",
-            license_id="Apache-2.0", commercial_ok=True, source="local",
+            license_id="Apache-2.0", permitted_use=CLEARED_USE, source="local",
             files=(ModelFile("weights.bin", hashlib.sha256(b"different!").hexdigest(),
                              len(WEIGHTS)),))
         catalog = Catalog(self.root, allow_uncleared=False)
@@ -619,7 +772,7 @@ class CatalogTests(unittest.TestCase):
             with self.subTest(path=path):
                 bad = ModelEntry(
                     id="escape", name="Escape", task="upscaling",
-                    license_id="MIT", commercial_ok=True, source="local",
+                    license_id="MIT", permitted_use=CLEARED_USE, source="local",
                     files=(ModelFile(path, SHA_OF_WEIGHTS, len(WEIGHTS)),))
                 self.assertEqual(pin_problem(bad)[:2],
                                  ("unsafe-path", path))
@@ -641,7 +794,7 @@ class CatalogTests(unittest.TestCase):
         # passing admission or the fix would strand a shipped model.
         nested = ModelEntry(
             id="nested", name="Nested", task="upscaling", license_id="MIT",
-            commercial_ok=True, source="local",
+            permitted_use=CLEARED_USE, source="local",
             files=(ModelFile("vae/0.safetensors", SHA_OF_WEIGHTS, len(WEIGHTS)),))
         self.assertIsNone(pin_problem(nested))
 
@@ -665,6 +818,131 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
         self.assertEqual(caught.exception.data["reason"], "unsafe-path")
         self.assertEqual(catalog._leases, {})
+
+    def test_a_payload_the_catalog_does_not_name_is_refused_at_load(self):
+        # Attempted bypass by *addition* rather than substitution. The digest pass
+        # only reads names the catalog carries, so the old gate was blind to a file
+        # nobody listed. That blind spot is exploitable with the loaders shipped
+        # here: `transformers` chooses a checkpoint by convention and prefers
+        # `model.safetensors` over a pinned `pytorch_model.bin` in the same
+        # directory, so one dropped file swaps the weights a job runs on while
+        # every pin in the catalog still reads correct.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)          # the honest, pinned bytes
+        (folder / "model.safetensors").write_bytes(b"OTHER")   # what a loader would pick
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            for accessor in (catalog.require, catalog.require_verified):
+                with self.subTest(accessor=accessor.__name__):
+                    with self.assertRaises(WorkerError) as caught:
+                        accessor(VERIFIED.id)
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(caught.exception.data["reason"], "unlisted-file")
+        self.assertEqual(caught.exception.data["files"], ["model.safetensors"])
+        # A refusal is not a load: nothing may be left leased behind it.
+        self.assertEqual(catalog._leases, {})
+
+    def test_nested_and_hidden_additions_are_named_by_the_refusal(self):
+        # The net is a recursive listing, not a scan of the top layer, and the
+        # message carries the relative names so a user can delete what landed there.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        (folder / "vae").mkdir()
+        (folder / "vae" / "extra.bin").write_bytes(b"x")
+        (folder / ".hidden").write_bytes(b"x")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require(VERIFIED.id)
+        self.assertEqual(caught.exception.data["files"], [".hidden", "vae/extra.bin"])
+
+    def test_a_link_inside_the_install_is_caught_even_when_it_hashes_clean(self):
+        # A link the catalog does not name must not become an exception to the rule
+        # just because its target's bytes are honest: the pin describes this path,
+        # and a path that resolves outside the install is not this path.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "other.bin").write_bytes(b"OTHER")
+        os.symlink(elsewhere / "other.bin", folder / "other.bin")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require_verified(VERIFIED.id)
+        self.assertEqual(caught.exception.data["reason"], "unlisted-file")
+        self.assertEqual(caught.exception.data["files"], ["other.bin"])
+
+    def test_store_housekeeping_beside_the_weights_is_not_called_payload(self):
+        # The installer writes `manifest.json` into the version directory and macOS
+        # drops `.DS_Store` in anything a Finder user opens. Refusing those would
+        # make an honest install unloadable, so the exception is named rather than
+        # widened into "ignore anything unrelated".
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        (folder / "manifest.json").write_text("{}", encoding="utf-8")
+        (folder / ".DS_Store").write_bytes(b"\x00")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            self.assertEqual(catalog.require_verified(VERIFIED.id), folder)
+
+    def test_the_report_paths_refuse_what_the_loader_refuses(self):
+        # Three surfaces answer "is this install trustworthy" — launch health,
+        # `models verify`, and the load path. Each used to check only the names the
+        # catalog gave it, so a symlinked weight or an added file read healthy,
+        # verified clean and *then* failed at load. An honest model manager cannot
+        # promise a load the worker will refuse, so all three carry the same two
+        # refusals and agree on the reason code that says which one fired.
+        for defect in ("symlink", "unlisted"):
+            with self.subTest(defect=defect):
+                # A private root per shape: both defects live in the same install
+                # directory, and a fixture that leaked into the next iteration
+                # would report the first shape's refusal twice.
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    folder = root / VERIFIED.id
+                    folder.mkdir()
+                    if defect == "symlink":
+                        elsewhere = root / "elsewhere"
+                        elsewhere.mkdir()
+                        (elsewhere / "weights.bin").write_bytes(WEIGHTS)  # honest bytes
+                        os.symlink(elsewhere / "weights.bin", folder / "weights.bin")
+                        reason = "unsafe-path"
+                    else:
+                        (folder / "weights.bin").write_bytes(WEIGHTS)
+                        (folder / "lora.safetensors").write_bytes(b"X")
+                        reason = "unlisted-file"
+                    catalog = Catalog(root, allow_uncleared=False)
+                    with _with(VERIFIED):
+                        health = catalog.health()
+                        verified = catalog.verify(VERIFIED.id)
+                        with self.assertRaises(WorkerError) as caught:
+                            catalog.require(VERIFIED.id)
+                state = {m["model"]: m for m in health["models"]}[VERIFIED.id]
+                self.assertFalse(health["ok"], health)
+                self.assertEqual([p["reason"] for p in state["problems"]], [reason])
+                self.assertFalse(verified["ok"], verified)
+                self.assertEqual([f["reason"] for f in verified["failed"]], [reason])
+                self.assertEqual(caught.exception.data["reason"], reason)
+
+    def test_health_never_reports_a_payload_only_install_as_clean(self):
+        # `health()` is the launch gate, and it is the only check a start gets when
+        # nobody opens the model manager. The size loop passes when the pinned file
+        # is intact, so without the payload net a launch would report `ok` over an
+        # install that refuses every job.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        (folder / "extra.bin").write_bytes(b"X")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            self.assertFalse(catalog.health()["ok"])
+            (folder / "extra.bin").unlink()
+            self.assertTrue(catalog.health()["ok"])
 
     def test_no_accessor_returns_a_path_without_hashing_when_a_digest_is_recorded(self):
         # Structural proof that there is no way back to the old behaviour: the
@@ -862,7 +1140,10 @@ class CatalogTests(unittest.TestCase):
         catalog = Catalog(self.root, allow_uncleared=False)
         with _with(VERIFIED):
             catalog.require_verified(VERIFIED.id)
-            keeper = folder / "keeper.bin"
+            # The keeper goes outside the install on purpose. A file left inside
+            # it is now refused on its own by the unlisted-payload net, which would
+            # mask the inode change this test exists to exercise.
+            keeper = self.root / "keeper.bin"
             os.replace(target, keeper)                   # keeps the proven inode
             target.write_bytes(b"TAMPRED")               # fresh inode, same name
             self.assertEqual(len(catalog._proofs), 1)
@@ -873,9 +1154,9 @@ class CatalogTests(unittest.TestCase):
     def test_every_entry_has_a_license_id(self):
         for entry in CATALOG:
             self.assertTrue(entry.license_id, entry.id)
-            if entry.commercial_ok:
+            if entry.permitted_use.weights.verdict == APPROVED:
                 self.assertIn(entry.license_id, {"Apache-2.0", "MIT", "BSD-3-Clause"},
-                              f"{entry.id} claims to be commercial")
+                              f"{entry.id} claims its weights are approved")
 
 
 if __name__ == "__main__":

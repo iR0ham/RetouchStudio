@@ -13,12 +13,20 @@ from PIL import Image
 
 from retouch_ai_worker import __version__, provenance
 from retouch_ai_worker.capabilities import current_platform
-from retouch_ai_worker.catalog import ModelEntry, ModelFile
+from retouch_ai_worker.catalog import (APPROVED, LICENCE_READ_ON, REQUIRED_USE,
+                                       STATED_BY_RIGHTS_HOLDER, ArtefactTerms,
+                                       ModelEntry, ModelFile, PermittedUse)
 from retouch_ai_worker.engine import (Cancelled, Context, Engine, _axis_plan,
                                       _axis_tiles, _pad_to_window, _quantise,
                                       SWIN_WINDOW, UPSCALE_BAND_ROWS,
                                       UPSCALE_MAX_OUTPUT)
 from retouch_ai_worker.protocol import INTERNAL_ERROR, WorkerError
+
+_TERMS = ArtefactTerms(
+    use=REQUIRED_USE, can_acquire=True, can_redistribute=True, can_use=True,
+    stated_by=STATED_BY_RIGHTS_HOLDER, evidence_url="https://example.test/L",
+    read_on=LICENCE_READ_ON, verdict=APPROVED)
+CLEARED_USE = PermittedUse(code=_TERMS, weights=_TERMS, training_data=_TERMS)
 
 
 class UpscaleTilingTests(unittest.TestCase):
@@ -187,7 +195,7 @@ class _StubCatalog:
         self.model_root.mkdir(parents=True, exist_ok=True)
         self.entry = ModelEntry(
             id="swin2sr-x4", name="Swin2SR x4", task="upscaling",
-            license_id="Apache-2.0", commercial_ok=True, source="local",
+            license_id="Apache-2.0", permitted_use=CLEARED_USE, source="local",
             files=(ModelFile("pytorch_model.bin", "a" * 64, 48),))
 
     def get(self, model_id):

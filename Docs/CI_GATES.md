@@ -327,6 +327,7 @@ Read from the GitHub Actions API, not simulated locally.
 | 2026-11-15 | `089a413` (`reliability/completion`, PR #59) | `CI` run 43736047883, `workflow_dispatch` on `reliability/completion` | five jobs green; `WINDOWS HOST TESTS: PASS (370 checks)` and twelve UI-automation passes, including the corrupt-project, held-save and held-export reports; `StudioCore: 287 checks passed`, `ABI TESTS: PASS (104 checks)`, engine, model and runtime PASS. Adds to `ac75eb4`'s 368 checks two recovery checks: a restore that cannot write reports failure and re-locks the working slot, so the next autosave cannot replace the only unresolved copy. The `pull_request` trigger targets only `main`, so a PR into `develop` runs nothing on its own and this run was dispatched at the head. |
 | 2026-11-15 | `b90aa54` (`w4/color-corpus`, merged into `develop` as `75e4837`; PR #60) | `CI` run 43749112787, `workflow_dispatch` on `w4/color-corpus` | five jobs green; `WINDOWS HOST TESTS: PASS (384 checks)` and twelve UI-automation passes; `corpus lock: 13 fixtures, 78 cases, 21 references, 11 exports` and `corpus geometry (additive, approved): 7 cases, 7 references`; `GeometryEvidence()` prints `Q01_CROP_CENTER: mae 0 psnr 99`, `Q02_CROP_EDGE: mae 0 psnr 99`, `Q03_STRAIGHTEN_CW: mae 0.008 psnr 69.04`, `Q04_STRAIGHTEN_CCW: mae 0.008 psnr 68.85`, `Q05_STRAIGHTEN_CROP: mae 0.011 psnr 67.87`, `Q06_TURN_STRAIGHTEN_CROP: mae 0.014 psnr 66.7`, `Q07_MIRROR_CROP: mae 0 psnr 99`; the crop and mirror references are byte-exact on both hosts, the straighten numbers are measured but no tolerance is approved. The `pull_request` trigger targets only `main`, so a PR into `develop` runs nothing on its own and this run was dispatched at the head |
 | 2026-11-16 | `5fec82d` (`reliability/shutdown`) | `CI` run 43758837302, `workflow_dispatch` on `reliability/shutdown` | five jobs green; `WINDOWS HOST TESTS: PASS (396 checks)` and **fourteen** UI-automation passes, including `exportcancel` (the Cancel Export button clicked on a 4000×3000 16-bit photo — it opens, the button is disabled while idle, enabled once the export runs, and the click yields `Export cancelled.` with no destination and no temp sibling) and `exportclose` (the window closed mid-export answers the unsaved-work question, cancels, unwinds, exits 0, no destination, no temp); the +7 Windows checks are `SixteenBitGeometry`, which drives the two 16-bit resamplers and a real 16-bit straighten export after the byte-offset defect fixed in `59b4287`; `StudioCore: 288 checks passed` on both hosts, `ABI TESTS: PASS (104 checks)` on both, engine/model/runtime-process/runtime-v2 `PASS`, `R1 conformance: PASS`, `StudioCore Windows portability check: PASS`; the headless suite also refuses an export into a folder denied by a real ACE (`icacls /deny`, `714b142`) |
+| 2026-11-23 | `c68995b` (PR #120 head, merged as main `f356838`) | `CI` run 45101960656, `pull_request` targeting `main` | all seven jobs `completed/success`, i.e. the five strict contexts plus the two advisory worker jobs. `WINDOWS HOST TESTS: PASS (405 checks)` — the figure that supersedes the 55 checks still quoted as `28f8462`'s 2026-11-13 baseline in `Docs/WINDOWS_IMPLEMENTATION_PATH.md`, which is why that number is now dated where it reads. `macOS Integration` asserts every suite printed a verdict and reports `found: Ran 203 tests` for the worker, the count `#114` raises to 211 through the single source `Tests/expected-worker-tests.txt`. The run checked out `refs/pull/120/merge`, whose tree is `f356838`'s tree, so the merge itself is what these verdicts cover. |
 | 2026-11-14 | `be9a46d` (merge of PR #49) | no post-merge run | merge of `675ae0a` after five green required checks; no `main` push matrix was created, which is the behaviour PR #49 introduced. The `pull_request` run had checked out `refs/pull/49/merge`, whose tree is this commit's tree, so no tree went unvalidated |
 
 `ci.yml` runs on `pull_request` targeting `main` and on pushes to
@@ -722,3 +723,41 @@ was taken and the cause was in the harness, not in Rosetta.**
   (`ModelStore.swift:247`). That is consistent with the recorded arm64-only AI
   packaging decision, so nothing was changed here; making models available on
   Intel is a catalog, measurement and licensing decision, not a string edit.
+
+## Worker payload and lock jobs — advisory (2026-11-21)
+
+**Correction to the status line and to "What each check proves" above, which
+describe the gate set as it stood on 2026-11-14.** PR #104 (merged as
+`80b23eea7` on 2026-11-21, "Prove the shipping worker lock and payload in CI")
+added two jobs to `.github/workflows/ci.yml`; neither is a required context.
+The five contexts in the table at the top of this document remain the required
+set, and the branch protection check confirms it (the required list still names
+only `StudioCore Boundary`, `Platform-neutral Conformance`, `macOS Integration`,
+`Windows StudioCore` and `Windows App`).
+
+| Job | Runner | What it runs | Gate state |
+|---|---|---|---|
+| `Worker Lock Closure` | `macos-15` | Resolves `worker/requirements.lock` with `pip --dry-run --report`, then `worker/tools/lock_closure.py --report` proves the resolver picked exactly the locked set and that the shipped package's third-party imports are pinned | Advisory: not a required context. The job itself has no `continue-on-error`, so a failure marks the run failed even though it cannot block a merge |
+| `Worker Payload Bundle` | `macos-15` | Builds the pinned runtime, installs the full lock, runs `pip_check_gate.py`, bundles `Tools/bundle-worker.sh`, packages with `Tools/make-runtime.sh`, verifies the archive's distribution set with `worker/tools/verify_payload.py`, then imports from the extracted runtime | Advisory: `continue-on-error: true` and not a required context |
+
+**Owner ruling (2026-11-21).** Both jobs stay advisory until the fail-open
+paths in their first version are closed and the checks are shown to fail when a
+defect is seeded. That work is on the `w5-worker-gates-failclosed` branch and
+does not promote either job: the three holes were
+
+1. the import guard accepted `except Exception:`, a bare `except:` and
+   `BaseException` as proof that an import was optional, so a missing pin
+   behind the common defensive idiom passed;
+2. the `pip check` step discarded the exit status and stderr, so a crashed
+   check with empty stdout passed;
+3. the archive check compared dist-info *counts*, so a duplicated, renamed or
+   wrong-version distribution passed while the count stayed at 68 for 67 pins.
+
+The promotion criteria are: (a) those three checks judge identity and status,
+not presence or count; (b) each seeding runs in the required macOS job, not
+only by hand; (c) a deliberately seeded defect is shown to fail the job it
+targets; (d) a green streak on `main` long enough to show the jobs are not
+flaky on the hosted runners. Only then should the two names be added to the
+required contexts, and `continue-on-error` removed from `Worker Payload
+Bundle`. This addendum records the state; it does not change branch
+protection.

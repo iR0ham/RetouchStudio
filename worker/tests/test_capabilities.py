@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -67,10 +68,52 @@ class CapabilityReportTests(unittest.TestCase):
         self.assertEqual(report(self.catalog, evidence=())["vocabulary"], VOCABULARY)
 
     def test_a_missing_model_is_requires_model(self):
+        spot = self.by_id()["inpaint.spot"]
+        self.assertEqual(spot["state"], "requires_model")
+        self.assertEqual(spot["modelId"], MIGAN)
+        self.assertIn("not installed", spot["reason"])
+
+    def test_a_licence_admitted_model_is_offered_for_download(self):
+        # swin2sr's weights are approved-with-conditions and every condition is
+        # met (Docs/MODEL_LICENCES.md §11, decided 2026-11-22 under the
+        # standing execution authority), so the licence gate no longer refuses
+        # `upscale.4x` — the only AI capability
+        # this product ships. Nothing is installed in this report, so the answer
+        # is the honest download offer rather than `blocked`. The licence branch
+        # itself stays pinned by `test_an_excluded_model_is_never_offered_*`.
         upscale = self.by_id()["upscale.4x"]
         self.assertEqual(upscale["state"], "requires_model")
         self.assertEqual(upscale["modelId"], SWIN)
         self.assertIn("not installed", upscale["reason"])
+        self.assertNotIn("no established permission", upscale["reason"])
+
+    def test_an_excluded_model_is_never_offered_for_download(self):
+        # The licence refusal still wins over a download offer: `requires_model`
+        # would tell the UI to fetch weights the catalogue refuses at install.
+        # The shipping table admits every entry now, so the branch is shown by
+        # replacing one entry's weights record with a refusal and keeping the
+        # rest of the table intact.
+        shipped = {entry.id: entry for entry in catalog_module.CATALOG}
+        refused = replace(
+            shipped[SWIN],
+            permitted_use=replace(
+                shipped[SWIN].permitted_use,
+                weights=replace(
+                    shipped[SWIN].permitted_use.weights,
+                    verdict="excluded", can_acquire=False, can_redistribute=False,
+                    can_use=False, conditions=(),
+                    note="refused for this test")))
+        patched = tuple(refused if entry.id == SWIN else entry
+                        for entry in catalog_module.CATALOG)
+        self.assertEqual([entry.id for entry in patched],
+                         [entry.id for entry in catalog_module.CATALOG],
+                         "the substitution keeps the table itself intact")
+        with patch("retouch_ai_worker.catalog.CATALOG", patched):
+            upscale = self.by_id()["upscale.4x"]
+        self.assertEqual(upscale["state"], "blocked")
+        self.assertEqual(upscale["modelId"], SWIN)
+        self.assertIn("excluded", upscale["reason"])
+        self.assertNotIn("not installed", upscale["reason"])
 
     def test_installed_without_evidence_is_blocked(self):
         _versioned(self.root, MIGAN, "1.0.0",
@@ -197,6 +240,59 @@ class CapabilityReportTests(unittest.TestCase):
                                  "missing-digest" if defect == "sha256"
                                  else "missing-size")
 
+    def test_the_report_refuses_the_shapes_the_loader_refuses(self):
+        # The other agreement test covers a bad *pin*. These are bad *installs*
+        # that every recorded field still reads correct about: a listed weight
+        # reached through a symlink (its size is read through the link, so the size
+        # check passes) and a payload the catalog does not name (invisible to a pass
+        # that only visits listed names). `_inspect` used to accept both and could
+        # answer `supported` for an install `_check_sizes` refuses — the UI offering
+        # a job the worker would reject at load.
+        shipped = {entry.id: entry for entry in catalog_module.CATALOG}
+        sizes = {spec.path: spec.bytes for spec in shipped[SWIN].files}
+        evidence = ({"capabilityId": "upscale.4x", "platform": PLATFORM,
+                     "provider": PROVIDER, "modelId": SWIN,
+                     "modelVersion": "1.0.0", "evidence": "a recorded run"},)
+        for defect in ("clean", "symlink", "unlisted"):
+            with self.subTest(defect=defect):
+                root = Path(self.tmp.name) / f"store-{defect}"
+                _versioned(root, SWIN, "1.0.0", sizes)
+                install = root / SWIN / "1.0.0"
+                if defect == "symlink":
+                    name = sorted(sizes)[-1]
+                    _sparse(root / "outside.bin", sizes[name])
+                    os.unlink(install / name)
+                    os.symlink(root / "outside.bin", install / name)
+                elif defect == "unlisted":
+                    # The exact substitution the convention-following loaders allow:
+                    # a `model.safetensors` nobody pinned, beside honest weights.
+                    _sparse(install / "model.safetensors", 4_096)
+                catalog = Catalog(root, allow_uncleared=False)
+                item = {r["capabilityId"]: r for r in report(
+                    catalog, evidence=evidence, platform_name=PLATFORM,
+                    importable=lambda name: True)["capabilities"]}["upscale.4x"]
+                loader_reason = None
+                try:
+                    # `require`, not `require_verified`: these fixtures carry the
+                    # right *lengths* rather than the published bytes, so a digest
+                    # pass would fail for an unrelated reason. Both shapes under
+                    # test are caught by the size pass, which is the layer that used
+                    # to disagree with this report.
+                    catalog.require(SWIN)
+                except WorkerError as error:
+                    loader_reason = error.data.get("reason")
+                if defect == "clean":
+                    # Without this arm the test would pass on a fixture that never
+                    # installed anything readable, whatever the code did.
+                    self.assertIsNone(loader_reason, item)
+                    self.assertEqual(item["state"], SUPPORTED)
+                    continue
+                self.assertEqual(item["state"], BLOCKED)
+                self.assertIn("verify it in the model manager", item["reason"])
+                self.assertEqual(
+                    loader_reason,
+                    "unsafe-path" if defect == "symlink" else "unlisted-file")
+
     def test_an_uppercase_pin_does_not_block_a_capability(self):
         # Case is not a trust question. Normalising it here keeps a correctly
         # pinned model reportable, which the old string comparison could not.
@@ -231,12 +327,21 @@ class CapabilityReportTests(unittest.TestCase):
         self.assertEqual(entries[0]["modelVersion"], "1.0.0")
 
     def test_missing_ledger_supports_nothing(self):
+        # Installed and importable with no recorded run. The licence now admits
+        # this model without the evaluation switch (decided 2026-11-22),
+        # so `allow_uncleared` is no longer what gets the report past the
+        # licence gate — the missing ledger is.
+        catalog = Catalog(self.root, allow_uncleared=True)
         _versioned(self.root, SWIN, "1.0.0", {
             "config.json": 772,
             "preprocessor_config.json": 152,
             "pytorch_model.bin": 48_460_141,
         })
-        records = report(self.catalog, evidence=(), platform_name=PLATFORM)
+        records = report(catalog, evidence=(), platform_name=PLATFORM)
+        upscale = {item["capabilityId"]: item
+                   for item in records["capabilities"]}["upscale.4x"]
+        self.assertEqual(upscale["state"], "blocked")
+        self.assertIn("no recorded run", upscale["reason"])
         self.assertFalse(any(item["state"] == SUPPORTED
                              for item in records["capabilities"]))
 

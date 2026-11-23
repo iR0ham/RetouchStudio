@@ -1210,8 +1210,15 @@ func testHostJobSubmissionAgainstLiveWorker() {
     }
     check(published("upscale.2x")?["state"] as? String == "unsupported",
           "O: 2× is unsupported in the worker's own report")
+    // 4× is `requires_model` again: the release manager's 2026-11-22 decision
+    // swin2sr's weights as approved-with-conditions on rights-holder evidence,
+    // so the licence gate no longer refuses the one AI capability this product
+    // ships and an empty models root produces the honest download offer. The
+    // blocked-on-licence contract this file briefly carried is superseded; the
+    // refusal branch itself stays pinned in the worker suite.
     check(published("upscale.4x")?["state"] as? String == "requires_model",
-          "O: 4× needs weights this models root does not have")
+          "O: 4× needs weights this models root does not have",
+          published("upscale.4x")?["reason"] as? String ?? "not listed")
 
     let two = refusal("upscale.2x")
     check(two?.code == -32020 && two?.typedCode == "E_UNSUPPORTED",

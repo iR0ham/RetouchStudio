@@ -27,10 +27,28 @@ def manifest(model_ids: list[str], catalog: Catalog) -> dict:
     total = 0
     for model_id in model_ids:
         entry = catalog.get(model_id)
-        if not entry.commercial_ok:
-            raise WorkerError(LICENSE_BLOCKED,
-                              f"{entry.id} is not cleared for commercial use",
-                              {"model": entry.id, "license": entry.license_id})
+        try:
+            entry.validate()
+        except ValueError as error:
+            raise WorkerError(LICENSE_BLOCKED, str(error),
+                              {"model": entry.id, "license": entry.license_id,
+                               "reason": "invalid-evidence"}) from None
+        excluded = entry.permitted_use.excluded
+        if excluded:
+            raise WorkerError(
+                LICENSE_BLOCKED,
+                f"{entry.id} is excluded ({', '.join(excluded)} terms refuse "
+                "distribution), so no configuration downloads or runs it",
+                {"model": entry.id, "license": entry.license_id,
+                 "reason": "excluded", "artefacts": list(excluded)})
+        if not entry.permitted_use.admitted:
+            verdict = entry.permitted_use.weights.verdict
+            raise WorkerError(
+                LICENSE_BLOCKED,
+                f"{entry.id} has no established permission for non-commercial use "
+                f"and distribution (weights verdict: {verdict})",
+                {"model": entry.id, "license": entry.license_id,
+                 "artefact": "weights", "verdict": verdict})
         # The same admission rule the load path uses, before any bytes are asked
         # for. A pinless entry would otherwise contribute `None` sizes to the
         # consent total and download weights this worker then refuses to load —
