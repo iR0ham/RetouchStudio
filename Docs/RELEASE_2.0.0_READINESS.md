@@ -1805,3 +1805,69 @@ without inflating it:
 G-QA and G-PUB remain **BLOCKED** and **NOT AUTHORIZED** exactly as §9 and §11 define them: the owner runs the
 acceptance session, and publication, tags and release assets stay his. `Docs/RELEASE_2.0.0_ACCEPTANCE.md` exists
 as a deliberately blank form; it has not been filled because filling it requires the app to be launched.
+
+### S.7 — 2026-11-23: one S.1 row overstated its own evidence, and the overstatement is now measured
+
+The S.1 row titled **"#107, #110, #111, #113, #114, #99 | open / in progress / blocked"** concluded **"All
+resolved. Merged or closed-as-landed; each head is an ancestor of `ac18c1a` (`git merge-base --is-ancestor`)."**
+That sentence is false for two of the six PRs, and the command quoted to back it is a command that can report
+falsehood as fact: against a head object the local clone has never fetched, `git merge-base --is-ancestor` exits
+non-zero, which is indistinguishable from "not an ancestor". Re-measured after fetching each head explicitly
+(`git fetch origin pull/<n>/head`) against `origin/main` at `49786a0`, and again while this
+addendum was being committed:
+
+| PR | State | Head | Ancestor of `main`? | What is actually true |
+|---|---|---|---|---|
+| #107 | MERGED | `2c95eb7` | yes | Runtime `ditto --noqtn` fix, landed. |
+| #110 | MERGED | `830ea3d` | yes | Worker gates and the single suite-count source, landed. |
+| #111 | MERGED | `d4e4996` | yes | Bundle notices, landed. |
+| #99 | MERGED | `d6fccae` | yes | Wave-1 localisation/contrast batch, landed. |
+| **#113** | CLOSED | `c0ccce6` | **no** | **Closed-as-landed, fully.** Exactly one commit is unreachable from `main`:
+`c0ccce6` itself, "Merge main into w5-200-windows-look-guard" — a sync commit carrying no content. Every
+substantive commit is on `main` through Train A — `0caf9a7`, `eb9f869`, `33809e4`, `6f603d5`, `8406757` and the
+review head `7e09a6a`, each confirmed an ancestor of `origin/main`, under merge `bf9a4ca` — and the two files
+that PR owned are **byte-identical** between `c0ccce6` and `origin/main`:
+`Windows/RetouchStudio.Core/Project/DocumentModel.cs` and `Windows/RetouchStudio.Tests/Program.cs` (compared by
+`git rev-parse <rev>:<path>` blob OIDs). So the gate G-WIN-1 is genuinely closed; only the ancestry wording was
+wrong, and the correct proof is tree equality, not genealogy. |
+| **#114** | CLOSED | `7dec6bf` | **no** | **Superseded, not landed.** Four commits unique to that head never
+reached `main`: `2656db1` (docs), `1a74c79` "worker: replace commercial_ok with a four-status permitted-use
+record", `f4c4b3e` "app: mirror the permitted-use record and keep evidence in-repo", `7dec6bf` "tests: the host
+reads the licence refusal as blocked, not missing". Its `weightsEvidence` schema is absent from the shipped
+catalogue — `grep -c weightsEvidence` over `Resources/model-catalog.json` at `origin/main` returns **0**, against
+4 `permitted_use` entries. |
+
+### What G-CAT therefore rests on
+
+The gate called G-CAT is closed **on the `permitted_use` schema delivered through PR #121 (Train C)**, not on the
+schema #114 proposed, and this row is the record of that substitution. Checked against `origin/main` rather than
+inferred:
+
+- The refusal path exists and is named: `worker/retouch_ai_worker/protocol.py:24` defines `LICENSE_BLOCKED =
+  -32010`; `catalog.py:986`, `:996`, `:1005` and `plan.py:33`, `:39`, `:47` raise it; `capabilities.py` applies
+  the same admission test, so a record that does not admit its weights reports the capability blocked instead of
+  selectable.
+- Both hosts read that refusal as a licence refusal, which is the half #114 never delivered:
+  `Sources/RetouchStudio/Core/WorkerClient.swift:34` maps `-32010` to `E_LICENCE_REFUSED`, and
+  `Windows/RetouchStudio.AI/WorkerClient.cs:43` maps it to the same string. `opensModelManager`
+  (`WorkerClient.swift:59-64`) does **not** open the manager for `-32010`, so an unadmitted model cannot be
+  presented to the owner as "go download it" — which is the behaviour the S-FLUX remedy depends on.
+- Asymmetric test coverage worth naming rather than glossing: `-32021` has a host test on
+  Windows (`Windows/RetouchStudio.AI.Tests/Program.cs:326-341`); **`-32010` has no test pinning the mapping on
+  either host.** The mapping is real and readable in the source; it is not guarded against regression. Ticketed,
+  not closed.
+
+### Consequences for the open work
+
+Two rows that read as "all resolved" are not, and both stay open with their evidence class stated:
+
+1. **Task #134 stays open.** #114's regeneration-idempotency and bidirectional cross-check fixes died with that
+   branch; the tooling that writes `permitted_use` inherited none of them.
+2. **The G-UI half of G-CAT was never delivered by either PR.** Surfacing the grant URL, the read date and the
+   verdict in the consent sheet and the model row, in English and Persian, is listed as out-of-scope in #114's
+   own description and is not implemented on `main`. It remains task #115, and it needs a design agreement and a
+   live session, not a code change alone.
+
+And a process rule this measurement earns: in this ledger, an ancestry claim must name the object it compared
+and state whether that object was fetched, because "I could not see it" and "it is not there" produce the same
+exit code.
