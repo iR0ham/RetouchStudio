@@ -648,6 +648,9 @@ Windows** (ledger §3 G-WIN).
 Each row is sourced. *Clarified 2026-11-23:* most rows restate ledger evidence, but rows **8, 15 and 16**
 contain claims this document itself made or corrected during the pre-release audit — each carries its date and
 the file it was checked against, so treat those three as this pack's own findings rather than as ledger history.
+*Coverage note, same day:* the independent citation pass that confirmed the anchors in §2, §4b and §9 explicitly
+stopped short of rows **15 and 16**'s prose, so those two rest on the author's own source reading only; the
+ledger records this in S.12.6 pass 4.
 
 1. **No AI on Windows.** Every catalogue model is `macos-arm64` (`Resources/model-catalog.json`: all four
    entries), so Windows `job.submit` → `-32020`.

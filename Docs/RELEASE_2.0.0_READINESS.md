@@ -1776,7 +1776,7 @@ project has to stand behind.
 
 | ID | Item | Evidence |
 |---|---|---|
-| **S-FLUX** | **Two repository-owned records disagree about one shipped artefact.** §R.3 (2026-11-22, my own decision) states the `flux2-klein-4b-q4` pin "is not distributable as it stands… that fails F1 and F2 regardless of licence". PR #121 then wrote `weights=_approved(…, stated_by=STATED_BY_RIGHTS_HOLDER, verdict=APPROVED)` into `worker/retouch_ai_worker/catalog.py:446`, with `evidence_url` at `mflux-community/flux2-klein-4b-mflux-q4` — a mutable third-party conversion whose card disclaims authorship — and a note asserting the grant was read *at that repository*. The grant exists one level up (`black-forest-labs/FLUX.2-klein-4B`, Apache-2.0). The catalogue therefore attributes to the artefact it downloads a statement made about a different artefact. Read in the shipped surface, §7's G-NOC row lists this entry as selectable. Either re-record against the upstream revision with a pinned conversion commit and CI-generated hashes, or set the artefact's verdict to UNKNOWN so the gate refuses it. |**Measured at `ac18c1a`; unresolved.** **CLOSED 2026-11-23: the second option was taken (S.8), and the routing residue it left was closed the same day (S.9). This row is kept as written.** |
+| **S-FLUX** | **Two repository-owned records disagree about one shipped artefact.** §R.3 (2026-11-22, my own decision) states the `flux2-klein-4b-q4` pin "is not distributable as it stands… that fails F1 and F2 regardless of licence". PR #121 then wrote `weights=_approved(…, stated_by=STATED_BY_RIGHTS_HOLDER, verdict=APPROVED)` into `worker/retouch_ai_worker/catalog.py:446`, with `evidence_url` at `mflux-community/flux2-klein-4b-mflux-q4` — a mutable third-party conversion whose card disclaims authorship — and a note asserting the grant was read *at that repository*. The grant exists one level up (`black-forest-labs/FLUX.2-klein-4B`, Apache-2.0). The catalogue therefore attributes to the artefact it downloads a statement made about a different artefact. Read in the shipped surface, §7's G-NOC row lists this entry as selectable. Either re-record against the upstream revision with a pinned conversion commit and CI-generated hashes, or set the artefact's verdict to UNKNOWN so the gate refuses it. | **Measured at `ac18c1a`; unresolved.** **CLOSED 2026-11-23: the second option was taken (S.8), and the routing residue it left was closed the same day (S.9). This row is kept as written.** **Anchor note, 2026-11-23 (pass 4):** `catalog.py:446` was that record's line at `ac18c1a`; on the current tree `:446` is comment text inside `unlisted_payload` (`catalog.py:420`), the install-root walk, and the FLUX entry begins at `catalog.py:630`, whose weights record is now `_not_established` (UNKNOWN) because of S.8 — so this historical citation must not be read as a live pointer. |
 | **S-WIN-2** | Windows package attribution. `Tools/package-windows-msi.ps1` and `Windows/installer/Product.wxs` contain no licence/notice handling at all (case-insensitive grep: empty), so an MSI carries no MIT text and no third-party notices. Caveat against overstatement: `build-windows.ps1:226` *does* copy ONNX Runtime's own `LICENSE`/`ThirdPartyNotices.txt` into `AI/`, so "nothing" is too strong. |**Measured statically; no MSI was built here (`dotnet` absent).** |
 | **S-WIN-4** | No Windows counterpart to `Tools/validate-bundle.sh` exists in `Tools/`. | `git ls-tree` at `ac18c1a`. |
 | **S-WIN-6** | The ONNX Runtime MIT grant has never been read from the nupkg's own `LICENSE` by anyone in this project; every row asserting it cites an upstream claim. | No in-tree record of the read. **NOT VERIFIED.** |
@@ -2404,6 +2404,13 @@ the table header reads "values for the first public release", so it is correct h
 it as a defect and checked the header before writing that claim. The reason no line is inserted:
 `Tests/RuntimeTransferTests.swift:245` mirrors `Docs/RELEASING.md:186` as a line anchor, so an edit above it
 silently breaks a cited reference. Fix belongs in the same pass that converts that anchor to a symbol.
+**Pass-4 addition (2026-11-23): that mirrored anchor is already stale on `main`.** `RuntimeTransferTests.swift:245`
+is `let documentedDownload: Int64 = 390_000_000  // Docs/RELEASING.md:186`, but `Docs/RELEASING.md:186` reads
+"Confirm the About window and Settings show the stamped version." The 390 MB / 1.3 GB figures the constant
+mirrors live at `Docs/RELEASING.md:128` and `:192`. So the test comment points six-to-eight lines off its own
+source — evidence for converting it to a text anchor rather than a line number, and the reason a docs-only
+insert into `RELEASING.md` would not be caught by any check. Ticketed as **PROPOSED** (touches `Tests/`, so it
+falls outside this documentation freeze rather than inside it).
 
 ### S.12.4 AI capability: packaged, wired, and observed are three different claims
 
@@ -2646,19 +2653,38 @@ is — all seven run ungated, and `worker-payload-bundle` is `continue-on-error:
 §12 rather than here). `RELEASING.md:28`'s contradiction with pipeline stamping was re-checked and is **already**
 recorded as deliberately unapplied in S.12.3, with the `RuntimeTransferTests.swift:245` anchor reason.
 
+**Pass 4 (independent reviewer over the round-3 diff, adjudicated by me).** A bounded read-only check re-opened
+the citations added by `eb8083a..4144a88` and read those lines in source. It found **no mislabel in the round-3
+text**, which independently confirms the §2, §4b and §9 anchors this addendum repaired and the worker/Windows
+anchors (`_require_licensed` and its callers, `plan.py:33-47`, `server.py:344`, `pin_problem` `:470`/`:482-497`,
+`CapabilityAdapter.cs:19-21`/`:35-37`/`:40-44`, `Capabilities.cs:23-31`/`:32-67`) plus the 2×3×5×4 sweep
+decomposition and the dead-key call-site count. Two accepted findings, both about **this ledger's earlier
+addenda** rather than the pack: the S.3 row's `catalog.py:446` (true at `ac18c1a`; on the current tree it is
+comment text inside `unlisted_payload`, which begins at `catalog.py:420`, and the FLUX entry sits at `:630` with
+an UNKNOWN weights record after S.8) and `RuntimeTransferTests.swift:245`'s mirrored
+`Docs/RELEASING.md:186`, which is already six-to-eight lines off its own source on `main`. Both are now noted
+in place. One finding was **refused**: the reviewer called the probe figures contradictory ("174 / 0 after
+round 1" versus "174 clean after three passes"), but both scans genuinely read clean and S.12.6 says the passes
+found wrong-symbol anchors, which no scan can see — S.12.8 now attributes the count to the head, not to pass
+three. It also left §14.15/§14.16's prose ranges NOT CHECKED, so those two rows rest on my verification alone.
+
 Re-running the same out-of-tree probe over the working tree: the pack now carries **174 unique citations and
-0 suspects** (126 after round 1), and this ledger carries 204 — the same six pre-existing rows named above plus
-one citation the new text makes *on purpose*: `catalog.py:418`, quoted because it is a blank line. The probe
+0 suspects** (126 after round 1), and this ledger carries 208 — the same six pre-existing rows named above plus
+one citation the new text makes *on purpose*: `catalog.py:418`, quoted because it is a blank line. (The ledger's own
+figure moved 207 → 208 when the S-FLUX anchor note above added the `catalog.py:420` reference; the suspect count did
+not change.) The probe
 still cannot see a wrong-symbol anchor, which is why findings 1–4 above needed a human reading each cited line.
 
 A checklist that cannot be executed is worse than no checklist, because it spends a one-shot acceptance session.
 Every item above is fixed in this branch; none is left as a note.
 
-So the honest total for this document is **three passes**: mine (one drifted anchor, three stale claims, three
+So the honest total for this document is **four passes**: mine (one drifted anchor, three stale claims, three
 unusable instructions), the first independent review's (eight findings, five of them instructions an owner
-physically could not carry out), and the second adversarial re-read's (ten items above, dominated by §9's drifted
-anchors and one more dead key). Each pass also returned findings that source refuted, which is the strongest
-argument in this addendum for never merging a document on the strength of a reviewer's word — or of a script's.
+physically could not carry out), the second adversarial re-read's (ten items above, dominated by §9's drifted
+anchors and one more dead key), and the fourth pass over that pass's own diff, which confirmed the repaired
+pack and turned up two stale anchors in *older* addenda instead. Every pass also returned findings that source
+refuted, which is the strongest argument in this addendum for never merging a document on the strength of a
+reviewer's word — or of a script's.
 
 The pack's structure, its honesty rule and its seventeen numbered sections (§0–§16, eighteen headings once
 §4b is added) needed no change: this was a verification pass, **not** a rewrite.
@@ -2699,10 +2725,10 @@ opening paragraph of this addendum); a `workflow_dispatch` cannot publish (`rele
 permissions); the stamping mechanism (`build.sh:105-114`, `release.yml:38/68`, `check-versions.sh` source read
 end to end); the four catalogue entries' platforms; `pin_problem`'s shape and its seven call sites; the four
 `require_verified` load calls; `-32010 → aiLicenseBlocked` existing in both language tables; and the acceptance
-pack's citations — **174 of them resolving cleanly after three passes** (S.12.6). That last item is narrower than
-it sounds: the probe certifies that each `file:line` exists and is non-blank in the tree, while agreeing the
-anchor names the right code needed a human reading each cited line, which is how findings 1–4 in S.12.6 were
-found after the count already read clean.
+pack's citations — **174 of them resolving cleanly at this branch's head** (S.12.6). That last item is narrower than
+it sounds: the probe has read clean after every round, including the first, because it certifies only that each
+`file:line` exists and is non-blank in the tree; agreeing that the anchor names the right code needed a human
+reading each cited line, which is how findings 1–4 in S.12.6 were found after the count already read clean.
 
 **VERIFIED by handling the artefact (S.12.10):** the arm64 candidate image's sha256 matches its sidecar; it
 carries `CFBundleShortVersionString = 0.0.0-ci` and `CFBundleVersion = 5`; `Contents/Resources/Worker` does
