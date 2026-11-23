@@ -3073,3 +3073,44 @@ above.** Open owner decisions after this addendum: accept/reject the session out
 and decide the Windows artefact explicitly.
 
 
+---
+
+## Addendum S.15 — 2026-11-23 (night): S.14 merged, the tip moved, and the accepted code did not
+
+Merge provenance for the acceptance card the owner is about to run, recorded because the previous addendum's own
+rule ("merging S.14 advances the tip") needed exercising the moment it landed.
+
+| Fact | Value | Status |
+|---|---|---|
+| Pull request | #134, two docs files, four commits (`977202f`, `b65c584`, `822342d` under a merge commit) | merged |
+| Head merged | `822342d554841a58ef8a248d76d13b47ee19fbb1` | measured (`git ls-remote`, not `gh pr view`'s cached head) |
+| Merge commit on `main` | `4fe27071cf5fbda0e7aec5cc45fddfa918d350d4`, parents `0758ad8` + `822342d` | measured |
+| `develop` | fast-forwarded to `4fe2707`; main and develop are the same commit again | measured after push |
+| CI on the merged head | run `45234534045`, **7/7 success** (macOS Integration, Windows App, Windows StudioCore, StudioCore Boundary, Worker Payload Bundle, Worker Lock Closure, Platform-neutral Conformance) | measured on the PR's own run |
+| Earlier runs on the same PR | `45233115121` and `45233623462` ended **cancelled** | my own pushes superseded them; not a product signal |
+| Candidate rule after the merge | `git diff --name-only 5ce98ec..4fe2707` → exactly `Docs/RELEASE_2.0.0_ACCEPTANCE.md` and `Docs/RELEASE_2.0.0_READINESS.md` | re-run post-merge, passes |
+| Tags / releases | `v1.0.0` only, `latest=false`; no `v2.0.0` tag, no draft release, no asset | measured |
+| Owner's checkout | `~/RetouchStudio` still `develop @ 40b157f`, three dirty paths, two stashes | read-only `git status`, untouched |
+| Test object unchanged | the session's DMG is still built from `5ce98ec`, digest `b3711d0c…2ed2b4`; doc merges cannot alter those bytes | S.14.2 |
+
+Two honesty notes about the process itself:
+
+- `hdiutil verify` was re-run on the staged copy before S.14.2 quoted it, and the quoted line is the literal
+  `hdiutil: verify: checksum of "…" is VALID`. An earlier draft of that bullet paraphrased it as `CHECKSUM VALID`
+  under a heading that promised verbatim output; the paraphrase is gone rather than footnoted, because the heading
+  was the claim.
+- The pack's §0b originally answered "where is the DMG" with a download recipe only. That was a defensible
+  engineering preference (a path is not provenance) and a poor answer to the question actually asked, so it now
+  gives the path **and** keeps the recipe, with the reason in S.14.2.
+
+Status after this addendum: **implementation of the acceptance pack is done; the session itself has not run.**
+Every cell in §1–§13 is still blank, 7 of 60 rows are marked N/A for the shipped no-helper artefact, and no
+readiness percentage is stated anywhere in this ledger. Publication remains owner-blocked.
+
+- One measurable cost of shipping this card: the anchor probe's suspect list for this ledger grew from 7 to **8**,
+  and the new entry is not a new claim. S.13.3's historical sentence cites
+  `Docs/RELEASE_2.0.0_ACCEPTANCE.md:477`; the §0b and §10 additions on top of it pushed that paragraph to `:571`,
+  so line 477 of the pack is now **blank**. The number is left in place rather than rewritten because the sentence
+  is evidence of what was known when it was written — the resolution lives in the dated marker under it, and the
+  real answer is the section pointer: §9's chip paragraph. Any future edit to the pack moves those numbers again;
+  that is the known, accepted cost of appending to the document being cited.
