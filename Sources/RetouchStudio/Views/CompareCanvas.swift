@@ -80,18 +80,27 @@ struct CompareCanvas: View {
         .onDisappear { events.stop() }
         // A hidden twin keeps the pill's natural size current even while no
         // toast is showing; the visible pill is fitted to whatever width the
-        // placement can spare.
+        // placement can spare. It is gated to the states a pill can reach:
+        // `showsToast` already requires `model.hasImage`, so a photo on the
+        // stage or a running operation is exactly the window in which the next
+        // toast may be placed, and the twin stays live across all of it. On an
+        // empty idle stage it measured the drop hint instead — a sentence that
+        // can never be placed — and handed that width to the first toast after
+        // a document loaded, which is a worse fallback than the deliberate
+        // 200 pt default the state starts at.
         .overlay(alignment: .topLeading) {
-            statusPill
-                .fixedSize()
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: ToastSizeKey.self, value: proxy.size)
-                    }
-                )
-                .hidden()
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            if model.hasImage || model.isBusy {
+                statusPill
+                    .fixedSize()
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: ToastSizeKey.self, value: proxy.size)
+                        }
+                    )
+                    .hidden()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
         .overlay { statusOverlay }
         .animation(Motion.smooth, value: model.status)
