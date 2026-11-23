@@ -140,7 +140,7 @@ Only a throwaway key is used inside the tests.
    owner opens the About window (Retouch Studio → About) in that process, and
    not at startup. Re-verified 2026-11-23 against this tree: `UpdateController()`
    still occurs exactly once in `Sources/`, as that `@StateObject`
-   (`InfoViews.swift:95`), reachable only through `InfoWindows.shared.showAbout()`
+   (`InfoViews.swift:106`), reachable only through `InfoWindows.shared.showAbout()`
    from the app-menu item (`App.swift:210`). What an earlier revision of this
    document claimed — launch
    coverage — holds only for the early phase: `AppDelegate.attach(model:)` does
@@ -154,7 +154,7 @@ Only a throwaway key is used inside the tests.
    the two renames leaves the old bundle under
    its `.…backup-<uuid>` name and the journal at
    `~/Library/Application Support/RetouchStudio/update-journal.json`
-   (`UpdateController.journalURL`, `UpdateController.swift:25-32`, written by
+   (`UpdateController.journalURL`, `UpdateController.swift:25-33`, written by
    `swap` at `UpdateVerification.swift:174`; the backup name comes from
    `UpdateVerification.swift:171`), and no
    later launch repairs that on its own — the app keeps running whatever bundle
