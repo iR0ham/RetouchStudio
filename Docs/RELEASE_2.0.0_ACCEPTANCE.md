@@ -27,18 +27,45 @@ bundle's `Info.plist`, which `build.sh` stamps from environment variables:
 **Write the identity here before starting:** version `(build)` observed in About: `__________` ·
 DMG sha-256 match: `__________`.
 
-**Note on the source default.** `Resources/Info.plist` now carries the `2.0.0` / build `2` stamp in
-the source, so that is what a bundle built from this head shows unless `build.sh` overrides it. The
-instruction is unchanged: if About shows anything other than `2.0.0 (<build>)`, **stop** — you are not
-holding the RC, and every result below would be about the wrong artefact (ledger §3 G-VER). Confirm
-the stamp before you start: `./Tools/check-versions.sh 2.0.0` must agree, and the image itself must
-answer `shasum -a 256 -c "RetouchStudio-2.0.0-arm64.dmg.sha256"`.
+**Note on the source default, corrected 2026-11-23.** `Resources/Info.plist` carries `2.0.0` / build `2`
+in the source, but **no CI build has ever shipped that pair, and none will.** `release.yml` injects both
+values (`:38` and, on the Intel job, `:68`):
+`RETOUCH_VERSION="$VERSION" RETOUCH_BUILD="$GITHUB_RUN_NUMBER" ./build.sh release`, where `VERSION` is
+the tag minus `v` on a tag run and hard-coded `0.0.0-ci` otherwise (`:33-37`). Only the bundle copy is
+rewritten — `build.sh:105` copies `Resources/Info.plist` into the `.app`, then `:109` points `PLIST` at
+that copy and `:111`/`:114` `Set` the two keys with PlistBuddy — so the committed plist is a fallback a CI
+build never shows. And nothing guards the build number: `Tools/check-versions.sh` compares
+`CFBundleShortVersionString` against `Windows/Directory.Build.props`' `<Version>` and the tag, and never
+reads `CFBundleVersion` at all (ledger §3 G-VER describes the same mechanism).
+
+**Which artefact is this session allowed to run against?** Two cases, and conflating them would invalidate
+every row below, so pick one and write it in the identity line:
+
+- **Tag build** — only possible after the owner tags `v2.0.0` and publishes (ledger D7 reserves it). About
+  must then read `2.0.0 (<that run's number>)`, the image must be `RetouchStudio-2.0.0-<arch>.dmg`, and it
+  must answer `shasum -a 256 -c "RetouchStudio-2.0.0-arm64.dmg.sha256"`. Anything else means you are not
+  holding the artefact you think you are: **stop**.
+- **Pre-publication candidate** — what actually exists as of 2026-11-23. The packages come from a
+  `workflow_dispatch` run of the `Release` workflow, so they are named
+  `RetouchStudio-0.0.0-ci-<arch>.dmg` and About reads `0.0.0-ci (<run number>)`. **That label is correct
+  for an unpublished candidate, not a defect** — do not stop the session over it; record the exact pair and
+  the run number, and quote the run number in every FAIL block (§15). Two honest consequences: the download
+  comes from the *Actions run* page rather than a release page, and a GitHub artefact is a zip round-trip
+  that may not preserve `com.apple.quarantine`, so §1's Gatekeeper outcome taken from that path is
+  **indicative only** — a truthful §1 verdict needs the published image. Ledger §12 Addendum S.11/S.12
+  records which run was built and which head it used.
+
+**Before you start, confirm the source agrees:** `./Tools/check-versions.sh 2.0.0` must pass. It cannot
+tell you the build number, and it never will — that is the owner's open "build stamping" decision, not a
+gap in this checklist.
 
 ### Prerequisites (all must be true before minute 1)
 
-1. The RC DMG was downloaded fresh from the release page into a normal browser download folder —
-   **not** copied from a local build directory (a local copy carries no quarantine attribute and
-   would make §2 meaningless).
+1. The RC DMG was downloaded fresh over HTTPS — from the release page for a tag build, or from the
+   `Release` workflow run's Artefacts list for a pre-publication candidate (§0) — into a normal browser
+   download folder, **not** copied from a local build directory (a local copy carries no quarantine
+   attribute and would make §1 meaningless). If you obtained it from an Actions run, say so in §1's note
+   cell, because that zip round-trip weakens the Gatekeeper conclusion.
 2. You have: one portrait photo where a face is clearly visible, one large landscape photo with no
    face, and a free folder for exports.
 3. You have at least 30 minutes of uninterrupted time; the AI sections assume the network works once.
@@ -55,6 +82,7 @@ answer `shasum -a 256 -c "RetouchStudio-2.0.0-arm64.dmg.sha256"`.
 | 2 | Build identity + updater honesty | 5 |
 | 3 | Import a photo | 3 |
 | 4 | Non-AI edit + export | 5 |
+| 4b | Canvas toast vs compare chrome (PR #130/#131) | 4 |
 | 5 | Watermark size-percentage path | 5 |
 | 6 | Batch export + cancel | 5 |
 | 7 | Project save → quit → restore + recovery | 8 |
@@ -171,6 +199,60 @@ that is policy, not a defect.
 
 ---
 
+## 4b. The canvas status toast never hides behind the compare chrome *(added 2026-11-23)*
+
+**Why this section exists.** PR #130 (`9edd774`) and PR #131 (`5ce98ec`) moved the status pill so it
+reserves the BEFORE/AFTER tags, the divider's grab strip, and the zoom dock as hard obstacles and the photo
+as a soft one, and PR #131 gated the hidden measuring twin behind `model.hasImage || model.isBusy`
+(`CompareCanvas.swift`, the `.overlay(alignment: .topLeading)` on `statusPill`). **All of that is verified
+only headlessly** — `testToastObstaclesMirrorTheDrawnChrome` sweeps 120 zoom/pan/split states against a
+transcription of the view's own arithmetic, and the suite prints `MODEL TESTS: PASS` at 1252 `✓` — so how
+it looks and moves in a real window is still NOT VERIFIED. This section is the only thing that can close
+that. The code under test is `ToastPlacement.frame(in:toast:obstacles:)` reached from
+`CompareCanvas.statusToast(canvas:)`, and the obstacle set comes from
+`ToastObstacles.compareWorkspace(…)` fed by `model.compareEnabled`, `model.comparePosition`,
+`model.isPeekingOriginal`, `model.toolOwnsCanvas` and the measured dock.
+
+**Flow.** Keep a status message on screen (any long-running action prints one — an export, an upscale
+attempt, a save) and drive the chrome around it. The pill appears only while
+`model.hasImage && !model.status.isEmpty && model.status != model.faceStatusText`, so a standing face count
+is not a toast; trigger real actions to keep one visible.
+
+**Click path.**
+1. **Menu / toolbar Compare** (`Localization.compare` = **Compare**, help text `compareHelp` =
+   "Show the before/after comparison (hold Space to see the original)") on the portrait.
+2. Drag the divider to its two ends, then start an export so a toast is live while you watch it.
+3. Zoom to 4× and pan the photo well off-centre (⌘+/scroll and drag), still with a toast visible.
+4. Hold **Space** (peek the original), then release; repeat while compare is on.
+5. Enter **Crop** (⇧⌘X), **Heal** and the mask picker — each sets `model.toolOwnsCanvas`
+   (`EditorModel.swift:1422`) and drops the compare reservations.
+6. Quit back to the empty stage, then press ⌘O and watch the **first** toast that appears after the load.
+7. Repeat 2–6 with the shell in Persian (**Retouch Studio → Language → فارسی**), where the tags read
+   «قبل» / «بعد» (`PersianL10n.swift:497-498`).
+
+**Expected observable result.** The pill stays fully inside the visible stage and every word stays readable:
+never under the 28 pt divider strip, never behind a tag, never behind the zoom dock, and never clipped by
+the stage edge when the photo is panned off-stage. During the Space peek the BEFORE badge keeps its corner
+and the pill moves clear of it rather than of the compare chrome it no longer draws. In tool mode the pill
+may sit where the compare strip would have been — the reservations are deliberately dropped — but it must
+not sit under a tool's own overlay. On the very first toast after a load, expect the pill to be sized from
+the deliberate 200 pt default for a single frame before the measured width arrives; that is the intended
+fallback from PR #131, not a bug. **What to write in the note cell for each row:** which edge or control the
+pill came within a few points of, whether any text was unreadable, and whether the pill moved smoothly
+(`Motion.snappy`) or jumped.
+
+| # | Evidence |
+|---|---|
+| 4b.1 Divider at both extremes: pill clear of the strip and both tags | |
+| 4b.2 Zoomed and panned off-stage: pill stays on the stage, unclipped | |
+| 4b.3 Space peek: badge keeps its corner, pill clears it | |
+| 4b.4 Crop / Heal / mask: no reservation artifacts, pill readable | |
+| 4b.5 First toast after ⌘O is not mis-placed for a visible beat | |
+| 4b.6 Persian tags «قبل»/«بعد» never overlap the pill | |
+| 4b.7 Motion: the pill animates rather than teleporting between obstacles | |
+
+---
+
 ## 5. Watermark and the size-percentage path
 
 **Flow.** Sign an export and prove the two watermark sliders move in the units they claim.
@@ -206,7 +288,7 @@ drag **Opacity** (`:529`) and **Size** (`:530`).
 **Flow.** Start a multi-file batch, stop it partway, then let one finish.
 
 **Click path.** Menu **File → Batch Export…** (⇧⌘E, `App.swift:277-278`, label
-`Localization.swift:307`). Two panels open in order: **Choose photos to export** (multi-select,
+`Localization.swift:309`). Two panels open in order: **Choose photos to export** (multi-select,
 images only — `EditorModel.swift:3585-3590`) then **Choose a folder for the exported photos**
 (`:3592-3597`). The **Batch Export** sheet then shows `N selected` (`EditorView.swift:531`,
 `Localization.swift:326`) with two switches — **Healing stamps and stickers** and **Analysis
@@ -493,8 +575,15 @@ Windows** (ledger §3 G-WIN).
 
 Each row is sourced; none is a new claim by this document.
 
-1. **No AI on Windows.** Every catalogue model is `macos-arm64`; Windows `job.submit` → `-32020`.
+1. **No AI on Windows.** Every catalogue model is `macos-arm64` (`Resources/model-catalog.json`: all four
+   entries), so Windows `job.submit` → `-32020`.
    — `Docs/RELEASE_2.0.0_READINESS.md` §3 G-WIN, §12 Addendum D.
+   *Clarified 2026-11-23, because "no AI" is easy to misread:* the Windows **worker binaries do ship** —
+   `AI/RetouchStudio.AI.Worker.exe`, `RetouchStudio.AI.dll` and `onnxruntime.dll` are required by
+   `Tools/build-windows.ps1` and are the reason the MSI is 176 MB against a 4.5 MB DMG — and `migan`'s
+   `requiredProvider` is `cpu`, not `macos-python`. What does not exist is an approved model for that
+   platform and any capability the host will run, so the packaged transport is deliberately inert. Absent
+   capability, not a broken one.
 2. **Ad-hoc signed, never notarised; Gatekeeper will prompt on other Macs.** Owner decision D4/D5;
    `Docs/RELEASING.md:81,184`. Right-click → Open on first launch is the supported path.
 3. **`--noqtn` does not fix Gatekeeper for the downloaded `.app`** — it only covers extracted runtime
@@ -512,9 +601,19 @@ Each row is sourced; none is a new claim by this document.
    — `Docs/AI_RUNTIME.md` §1–§2, `Docs/TECHNICAL_AUDIT.md` addendum (2026-11-09/10).
 7. **Consent sheet shows SPDX names only — no licence-evidence URL rendered.** `licenseEvidenceUrl`
    is decoded and validated but never displayed. — ledger §3 **G-UI**.
-8. **Catalogue integrity enforcement is a confirmed fail-open defect on some paths** (a pin absent
-   from a manifest is trusted rather than refused on the legacy path). — ledger §3 **G-INT**
-   (`worker/retouch_ai_worker/catalog.py:330,358,401,418`).
+8. **Catalogue integrity is fail-closed at this head — this row used to say the opposite, and that was
+   the stale claim.** *Superseded (2026-11-22, ledger §3 G-INT):* "a pin absent from a manifest is trusted
+   rather than refused on the legacy path", citing `catalog.py:330,358,401,418`. *Measured at `5ce98ec` on
+   2026-11-23:* those lines no longer hold that shape (`:358` is `REASON_MISSING_SIZE = "missing-size"`,
+   `:418` a `json.dumps`); `pin_problem` (`worker/retouch_ai_worker/catalog.py:470`) is documented as "the
+   single admission rule", returns `missing-digest` / `invalid-digest` / `missing-size` instead of skipping,
+   and is consulted from `catalog.py:1173,1194,1258,1296,1357`, `capabilities.py:150` and `plan.py:56`. All
+   four model-load paths call `catalog.require_verified` (`engine.py:884,938,951,971`), which closes the
+   "only the upscaler hashes at load" half as well — pinned by
+   `test_a_same_length_substitution_fails_the_job_over_rpc` (`worker/tests/test_server.py`), whose comment
+   records the old behaviour on `cd5741b`. Landed as PR #115 (`0cf536b`) after adversarial review. **So a
+   model whose pin is missing must read `Not installable: …`, never installable: if you see one offered for
+   download, that is a NEW failure against this row, not a known limitation.**
 9. **`sam2.1-hiera-tiny` is catalogued but not installable** — missing `sam2` runtime package, shown
    as `Not installable: <reason>`. — ledger §3 G-NOC/§4, Addendum A, DR-5.
 10. **Generative FLUX work is excluded on 16 GB Apple silicon** (measured 16.7 GB peak) and its pin is
@@ -529,10 +628,21 @@ Each row is sourced; none is a new claim by this document.
 14. **Windows MSI ships no LICENSE/notice file yet.** — ledger §12 Q.3 final paragraph.
 15. **Every ledger item still marked NOT VERIFIED that this session can touch:** G-UI (rendered
     consent evidence), G-UPD's *UI* half, "Gatekeeper instructions in the release notes are truthful"
-    (§7), G-QA core behaviour on the release artefact (§3), and the user-visible `-32021` refusal
-    sentence in Persian (Addendum Q.2 — blocked by PR #99's ownership of the two localisation files).
-    Anything on this list that you do not exercise stays NOT VERIFIED after the session; do not let a
-    completed form imply it was covered.
+    (§7), G-QA core behaviour on the release artefact (§3), the canvas status-toast placement (§4b), and
+    the licence-refusal wording as a user actually reads it. *Corrected 2026-11-23:* this row previously
+    called the last item "blocked by PR #99's ownership of the two localisation files" — PR #99 merged as
+    `9e43e14` on 2026-11-23, and the sentence itself exists in both tables (`EditorModel.swift:1765` routes
+    `-32010` to `aiLicenseBlocked`, defined at `Localization.swift:1368` and overridden at
+    `PersianL10n.swift:1240`). What is missing is not code, it is **an eye on the rendered alert** in
+    either language. Anything on this list that you do not exercise stays NOT VERIFIED after the session;
+    do not let a completed form imply it was covered.
+16. **`ModelStore.install` gates on integrity, not on the licence record** (open work item #157, not yet
+    a defect you can trigger). Today FLUX is unreachable because its entry is `unverifiableReason`-refused,
+    so the consent sheet never offers it — but the download site itself asks only "does the hash match", not
+    "does the record permit this use class". Do not read the closure of row 8 as "licence admission is
+    enforced at every door": it is enforced at the capability gate and the plan gate, and the install door
+    inherits that only as a side effect. If a record with an unsettled use class ever shows an active
+    **Download…** chip, that is a FAIL worth reporting.
 
 ---
 

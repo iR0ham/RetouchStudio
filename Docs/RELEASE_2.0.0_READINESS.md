@@ -2317,3 +2317,236 @@ creating the release, uploading assets, publishing, and launching the app for th
 The decisions stacked in front of that are, in order: (1) the AI-shape question above, (2) build
 stamping, (3) accept or reject the candidate, (4) authorise publication, (5) run the bounded
 acceptance session, which only he can start.
+
+---
+
+## Addendum S.12 — 2026-11-23: the candidate moved under S.11, the acceptance pack was audited line by line, and the platform AI story was re-measured
+
+**Why this exists.** The owner ordered five preparation tasks after PR #131: review the acceptance pack,
+audit the real macOS/Windows AI differences, verify the build-number policy, triage the open work items,
+and update this record. Before touching anything the repository state was re-read rather than assumed:
+`git ls-remote` gives `refs/heads/main` **and** `refs/heads/develop` at
+`5ce98ec2ecf22e4e76e8333a44675db42fd72cea`; `gh pr list --state open` returns `[]`; the tag list is still
+exactly one entry, `refs/tags/v1.0.0` (`dde13e5` → commit `d4e7d58`); the only release is still
+"Archived — Retouch Studio 1.0.0 (Legacy)", pre-release, 2026-11-09; and the personal checkout at
+`/Users/roham/RetouchStudio` is on `develop` at `40b157f`, its two stashes intact, with the same three
+pre-existing dirty paths (`Views/CompareCanvas.swift`, `Tests/ModelTests.swift`, untracked
+`Views/ToastPlacement.swift`, all mtime 2026-11-17 19:41). Nothing here was staged, stashed, reset or
+cleaned. **All four conditions VERIFIED.**
+
+### S.12.1 S.11's packages are already historical, and the reason is my own merges
+
+S.11 recorded the candidate as `main == develop == d09ad7b`. Since then **nine commits landed**, in two
+merge commits and one docs merge:
+
+| Commit | What |
+|---|---|
+| `38400b1` / PR #129 | ledger Addendum S.11 itself (docs only) |
+| `9edd774` / PR #130 | `a6164a1` + `874f9f1` — the canvas status-toast placement, ported from the owner's own uncommitted work, plus the peek-badge correction (`labelHeight` 17 → 21, measured) |
+| `5ce98ec` / PR #131 | `a4fcc7f` + `06ca664` + `39ae988` — the three should-fixes: non-fatal font measurement, a 120-state geometry mirror test, and gating the hidden measuring twin |
+
+`git diff --stat d09ad7b..5ce98ec` is 4 files, **+1022/−6**: `Docs/RELEASE_2.0.0_READINESS.md`,
+`Sources/RetouchStudio/Views/CompareCanvas.swift`, `Sources/RetouchStudio/Views/ToastPlacement.swift` (new
+file in-tree at this point) and `Tests/ModelTests.swift`. **`Sources/StudioCore` is untouched**, so the C
+ABI, the render contract and every golden image remain valid — this is not an engine change.
+
+The consequence for the release is direct: **the three S.11 artefacts were built from `d09ad7b` and do not
+contain the toast work.** They are kept in this addendum as history, not as the candidate. A new
+pre-publication build was dispatched from the current head — the dispatch cannot publish, which I re-read
+myself rather than inheriting S.11's claim: the `release` job's `if` requires
+`startsWith(github.ref, 'refs/tags/v')` (`release.yml:159-166`), a non-tag run forces `VERSION="0.0.0-ci"`
+(`:33-37`), and the workflow's top-level `permissions` is `contents: read` with only the publish job
+escalating to `write`.
+
+### S.12.2 PR #130/#131: what is implemented, and what is only headless
+
+Landed, with evidence I checked rather than received: five required contexts green on #131's **own first
+attempt** at head `39ae988` (no retries, so no flake story), plus the two Worker contexts; local suite
+`MODEL TESTS: PASS` at **1252 `✓` / 0 `✗`** at both the pre-amend `b512ffd` and the pushed head; merge tree
+byte-identical to `39ae988`.
+
+What the product actually gained is one behaviour: the canvas status pill now reserves the BEFORE/AFTER
+tags, the divider's 28 pt grab strip and the zoom dock as hard obstacles, treats the photo as a soft one,
+and stops measuring its width against a stage that can never show a toast
+(`CompareCanvas.swift`, the `.overlay(alignment: .topLeading)` on `statusPill` now gated by
+`model.hasImage || model.isBusy`).
+
+**Implemented is not verified.** All of that is proved only against a *transcription* of the view's own
+arithmetic (`testToastObstaclesMirrorTheDrawnChrome`), never in a window — the no-GUI restriction held
+throughout. §4b of `Docs/RELEASE_2.0.0_ACCEPTANCE.md` was written for exactly this purpose, so the item now
+has an owner-side closure path instead of a silent gap. G-ACC therefore still reads **NOT RUN**, and G-QA on
+the release artefact is unchanged.
+
+### S.12.3 Build stamping: the committed number is dead weight, and I advanced it myself
+
+Read from the pipeline at `5ce98ec`, not from the prose:
+
+- `Resources/Info.plist:21-24` carries `CFBundleShortVersionString = 2.0.0` and `CFBundleVersion = 2`.
+  `Windows/Directory.Build.props:13` carries `<Version>2.0.0</Version>`.
+- `release.yml:38` (arm64) and `:68` (x86_64) run
+  `RETOUCH_VERSION="$VERSION" RETOUCH_BUILD="$GITHUB_RUN_NUMBER" ./build.sh release`, and
+  `build.sh:105` copies `Resources/Info.plist` into the bundle, `:109` points `PLIST` at **that copy**, then
+  `:111`/`:114` `Set` the two keys with PlistBuddy. **The committed plist is a fallback no CI build shows**,
+  and no repo file is ever rewritten.
+- `Tools/check-versions.sh` compares `CFBundleShortVersionString` against `<Version>` and, when given a tag,
+  against the tag. It **never reads `CFBundleVersion`** — so there is no gate on the build number at all.
+- Windows is stamped separately and consistently: `-PackageVersion` → `-p:Version=`
+  (`Tools/build-windows.ps1:214,221`, whose `-PackageVersion` defaults to that same `<Version>` at `:37-38`),
+  and `Tools/package-windows-msi.ps1:25-28` re-formats it to four octets, so a
+  `v2.0.0` tag yields assembly `2.0.0` and MSI `ProductVersion 2.0.0.0`.
+
+S.11 observed `0.0.0-ci (4)` from run number 4. **This addendum's own dispatch consumed run number 5**, so a
+`v2.0.0` tag built from now on yields **`2.0.0 (6)`** — not the `(2)` in the repo, and the number keeps moving
+with every Release run, including ones I start. That is disclosed here because `CFBundleVersion` is what
+macOS uses to decide whether a package is newer than the installed one, and because it is the owner's
+"build stamping" decision (D-item in #55), not an engineering preference. My recommendation, taking effect
+only if he says so: make the tag build derive `CFBundleVersion` from an owned counter (or from the tag
+itself) instead of `GITHUB_RUN_NUMBER`, and have `check-versions.sh` assert it — otherwise the first 2.0.0
+build number is an accident and the second one is unreproducible.
+
+Two doc corrections fell out of this and are **not** applied here, deliberately: `Docs/RELEASING.md:27` says
+"Bump `CFBundleVersion` for every uploaded build", which the pipeline contradicts by overwriting it, and its
+§2 example uses `RETOUCH_BUILD=42`. `Docs/RELEASING.md:13` (`Version / build | 1.0.0 / 1`) is **not** stale —
+the table header reads "values for the first public release", so it is correct history; I initially recorded
+it as a defect and checked the header before writing that claim. The reason no line is inserted:
+`Tests/RuntimeTransferTests.swift:245` mirrors `Docs/RELEASING.md:186` as a line anchor, so an edit above it
+silently breaks a cited reference. Fix belongs in the same pass that converts that anchor to a symbol.
+
+### S.12.4 AI capability: packaged, wired, and observed are three different claims
+
+Layers: **PACKAGED** = the shipping artefact carries it · **WIRED** = product code can drive it ·
+**OBSERVED** = a dated record shows a person-visible success.
+
+| AI operation | macOS RC DMG (`0.0.0-ci`) | Windows MSI (`0.0.0-ci`) |
+|---|---|---|
+| `upscale.4x` (swin2sr-x4) | WIRED + OBSERVED **once, and only on a locally built bundle** (`Docs/PHASE5_ACCEPTANCE.md` §4: 64×64 → 256×256, device `mps`, 0.46–2.37 s compute, §5.2 records "no second physical Mac") — **not PACKAGED in the RC**: `release.yml:25` sets `RETOUCH_SKIP_WORKER: '1'`, `build.sh:170-176` then prints `helper runtime skipped (RETOUCH_SKIP_WORKER=1)` and `Tools/validate-bundle.sh:118` reports `helper runtime not bundled (AI tools unavailable)` | PACKAGED transport, WIRED-as-refusal: `Tools/build-windows.ps1:238-241` *fails the build* unless `AI/RetouchStudio.AI.Worker.exe`, `AI/RetouchStudio.AI.dll` and `AI/onnxruntime.dll` are in the package ("with no Python"), and `WorkerServer.cs:171-172` routes **every** `job.submit` to `RefuseJob` → typed `-32020` `E_UNSUPPORTED` (`Protocol.cs:19`, `WorkerClient.cs:51`) — **never OBSERVED** |
+| `mask.click` (sam2.1-hiera-tiny) | WIRED, refused at the catalogue (`unverifiableReason`, entry shows `Not installable`), **never OBSERVED** | same refusal, by design |
+| `inpaint.spot` (migan) | WIRED; `onnxruntime==1.31.1` is locked; weights are an on-demand consented download; **never OBSERVED** | `Unsupported` in the Windows table |
+| `generative.*` (flux2-klein-4b-q4) | refused — `permitted_use` is UNKNOWN and S-FLUX/PR #126 made the gate refuse the download | refused |
+| `face.analysis`, `enhance.photo`, `restore.photo`, `upscale.2x`, `outpaint` | fixed `UNSUPPORTED`/`BLOCKED` specs; face analysis is host-side Vision, not a worker claim | `Blocked` / `Unsupported` |
+
+**The release-relevant sentence is this one: as CI builds them today, neither package has user-verifiable
+AI.** Both jobs set `RETOUCH_SKIP_WORKER: '1'` (`release.yml:25` for arm64, `:112` for `windows-app`), so no
+Python helper travels in either artefact; on macOS the remaining gap is that no model load is reachable
+without it, on Windows it is worse — the adapter refuses submissions by design, and the models are all
+`macos-arm64`. The sixteen ids (`Capabilities.cs:23-31`) share one vocabulary string with the worker, and
+`CapabilityAdapter.cs:19,40-44` refuses the report at *runtime* on vocabulary drift, a duplicate id, or a
+missing one — a parse guard, not a compile-time one.
+
+Two of my own researcher's conclusions had to be corrected before they entered this record, which is why the
+row above cites files rather than a report: it claimed G-WIN's "all four catalogue models are
+`macos-arm64`" was refuted because `migan` carries `requiredProvider: cpu`. Reading
+`Resources/model-catalog.json` myself: **all four entries do say `platforms: ["macos-arm64"]`**, and
+`requiredProvider` is a different field, so the G-WIN wording stands. Its other claim is right and belongs
+in the record, because "no AI on Windows" is otherwise read as "no code shipped": the Windows package does
+carry `AI/RetouchStudio.AI.Worker.exe`, `AI/RetouchStudio.AI.dll` and `AI/onnxruntime.dll` (the build throws
+if any is absent), which is what makes that artefact ~176 MB against 4.5 MB DMGs — the size measures shipped
+plumbing and ONNX Runtime, not a working model pipeline.
+
+### S.12.5 G-INT is closed at this head, and the acceptance pack was still promising the opposite
+
+§3's G-INT row (kept as history per the append-only rule) records a measured fail-open:
+`catalog.py:330` / `:358` / `:418` with `if spec.sha256 is None: continue`. **That is no longer the tree.**
+At `5ce98ec`, `:358` is `REASON_MISSING_SIZE = "missing-size"` and `:418` is a `json.dumps`; the fail-open
+shape is gone, and `pin_problem` (`catalog.py:470`) documents itself as "the single admission rule",
+returning `missing-digest` / `invalid-digest` / `missing-size` instead of skipping (`:486-494`), consulted
+from `catalog.py:1173,1194,1258,1296,1357`, `capabilities.py:150` and `plan.py:56`. The strongest single
+piece of evidence is a comment rather than a test: the last defensive branch at `:1190-1192` says it exists
+"so no future caller can reinstate the old `if spec.sha256 is None: continue` hole" and raises
+`CATALOG_INVALID` — the exact fail-open S.11 measured is now named in the source as forbidden. The load half is closed too:
+all four `_ensure_*` paths call `catalog.require_verified` (`engine.py:884,938,951,971`), and
+`test_a_same_length_substitution_fails_the_job_over_rpc` (`worker/tests/test_server.py`) pins a same-length
+tamper through the RPC, its comment recording that on `cd5741b` "only the upscaler hashed at load". Landed
+as PR #115 (`0cf536b`) after the adversarial review this mandate required.
+
+What I did **not** do is call the licence gate closed on the strength of that: `ModelStore.install` still
+gates on integrity rather than on the admission decision (open item #157, restated in the acceptance pack as
+new limitation 16), so FLUX today is un-downloadable because of its `unverifiableReason` path and the plan
+gate, not because the install door asks. I read the function and its call sites; I did not prove exhaustively
+that no fourth path bypasses `pin_problem`, so this row says "closed, by these named callers" rather than
+"closed, provably complete".
+
+### S.12.6 The acceptance pack re-reviewed (G-ACC), and what was wrong in it
+
+`Docs/RELEASE_2.0.0_ACCEPTANCE.md` was checked mechanically, not by skimming: a script extracted every
+`file:line` citation and re-read each one against `origin/main`. **113 unique citations, 112 valid, 1
+drifted** — §6 cited `Localization.swift:307` for the Batch Export label, which is now `:309`
+(`batchExportMenu`), the shift caused by `eee3e4b`/`9e43e14` landing after the pack was written. Corrected.
+
+Three substantive defects, all fixed in the same PR as this addendum:
+
+1. **§0 assumed an artefact that cannot exist before publication.** The pack told the owner to download the
+   RC "from the release page" and to **stop** if About says anything but `2.0.0 (…)`. There is no 2.0.0
+   release page — creating one is D7 — and per S.12.3 a CI build says `0.0.0-ci (N)` *by design*. §0 now
+   separates the tag case from the pre-publication case, and says plainly that `0.0.0-ci` on an unpublished
+   candidate is correct rather than a reason to abort. It also warns that an Actions-artefact zip
+   round-trip may not preserve `com.apple.quarantine`, so §1's Gatekeeper answer taken that way is indicative
+   only — the prerequisite's cross-reference is fixed to §1, which is the section quarantine actually feeds.
+2. **§14.8 told the owner to expect a fail-open integrity defect** that S.12.5 shows is closed — replaced
+   with the dated correction and the measurement, and turned into an assertion he can falsify (a
+   missing-pin entry must read `Not installable`).
+3. **§14.15 still blamed PR #99** for the unrendered licence-refusal sentence. #99 merged as `9e43e14` on
+   2026-11-23, and the sentence exists in both tables (`EditorModel.swift:1765` routes `-32010` to
+   `aiLicenseBlocked`, `Localization.swift:1368` / `PersianL10n.swift:1240`). What is missing is an eye on
+   the rendered alert, not code — so the row now says that, and new §4b carries the toast gap.
+
+The pack's structure, its honesty rule and its 13 sections needed no change: this was a verification pass
+that found one drifted anchor and three stale claims, not a rewrite.
+
+### S.12.7 Work items #152 / #156 / #157 / #158, and the freeze I chose
+
+Those four numbers are **this team's internal work items**, not GitHub issues — the repository's highest
+number of either kind is 131 (PR #131), so no GitHub-side object exists for them. Triage:
+
+| Item | Still valid at `5ce98ec`? | Class | Recommendation |
+|---|---|---|---|
+| #152 — untested `-32010 → E_LICENCE_REFUSED` host mapping | Yes. `WorkerClient.swift:46` maps `-32021`, `EditorModel.swift:1765` maps `-32010`, and only the Windows side has a sibling test for `-32021` | SAFE-INDEPENDENT-CODE, test-only, two files | Post-freeze; small, but it invalidates the audited packages for zero user-visible change |
+| #156 — gate routing residuals (invalid record reaches Manage Models; kind-only refusal loses `capabilityId`) | Yes, and the eval-mode sub-item is test-only by construction — both launch paths strip `RETOUCH_AI_EVAL_MODELS` | SAFE-INDEPENDENT-CODE, worker-side; **touches the pinned worker-test count** (`Tests/expected-worker-tests.txt`) | Post-freeze, as one slice with a worker test each |
+| #157 — `ModelStore.install` admits by hash, not by licence admission | Yes | SAFE-INDEPENDENT-CODE with a real fail-closed consequence, but unreachable from the current catalogue | The only one I would consider **before** a tag, if the owner wants the licence gate advertised as a shipped security property; otherwise 2.0.1 |
+| #158 — Windows CI failure diagnostics drop type/HRESULT/stack | Yes | SAFE-INDEPENDENT-CODE, semantics preserved, verifiable only by a Windows CI run | Post-freeze; it reduces the cost of every later Windows flake |
+| #55 — owner decision pack | Yes; now carries S.11's AI-shape question and S.12.3's stamping measurement | OWNER-DECISION | Below |
+
+**Decision taken (mine, under the standing authority):** the candidate is **code-frozen at `5ce98ec`**. None
+of #152/#156/#158 gates 2.0.0 — they are test-pinning, routing polish on paths the shipping app cannot reach,
+and CI diagnostics — and each merged PR makes S.11-style package evidence stale again while advancing
+`CFBundleVersion` a further step. #157 stays open with the reason recorded rather than being folded in at the
+last minute. If the owner wants any of them in 2.0.0, they land first, and the RC is rebuilt afterwards; the
+order matters and I am not making that call for him.
+
+### S.12.8 Evidence ladder after this addendum
+
+**VERIFIED now (my own reading at `5ce98ec`, not inherited):** branch/tag/release/checkout state (§
+"S.12.0"); a `workflow_dispatch` cannot publish (`release.yml:159-166`, `:33-37`, permissions); the stamping
+mechanism (`build.sh:105-114`, `release.yml:38/68`, `check-versions.sh` source read end to end); the four
+catalogue entries' platforms; `pin_problem`'s shape and its seven call sites; the four `require_verified`
+load calls; `-32010 → aiLicenseBlocked` existing in both language tables; 112 of 113 acceptance-pack
+citations.
+
+**VERIFIED by CI, this round:** `macOS arm64`, `macOS x86_64` and `Windows StudioCore` succeeded on the new
+candidate run `45197302277` (head `5ce98ec`, run number 5); the `Publish GitHub Release` job is gated out and
+does not run. *(Windows x64 application: result appended when it lands.)*
+
+**NOT VERIFIED, unchanged by anything here:** every user-visible property of either package. No DMG is
+mounted or launched in CI, the acceptance pack's 13 sections are **NOT RUN**, the toast placement is
+headless-only (§4b), live-app inference and the banded-path memory are unmeasured, the `-32010` host mapping
+has no test on either side (#152), the updater's inertness is argued from configuration, and Windows remains
+runner-only evidence with no real desktop.
+
+**No readiness percentage is stated**, per S.4: the honest shape is that every gate inside this team's
+control is green and every gate needing a window, a tag or the owner's machine is untouched.
+
+### S.12.9 The owner's decision list, reduced to what is genuinely his
+
+Everything else in this addendum was mine to settle. Four things are not, and only the first two block
+progress:
+
+1. **The AI shape of 2.0.0** (unchanged question from S.11, now with the S.12.4 evidence): publish with
+   "macOS editor-only + Windows carrying an inert helper", or land a published protocol-v2 runtime first?
+   This is a product-scope call, and the mandate forbids me changing packaging scope without approval.
+2. **Build stamping** (now measurable): keep `CFBundleVersion = GITHUB_RUN_NUMBER`, or take ownership of the
+   counter before the first `2.0.0` asset exists. A tag built today prints `(6)`.
+3. **Accept or reject `5ce98ec` as the candidate**, then authorise tagging/publishing — the only
+   irreversible public actions, all still undone.
+4. **Run §4b and the rest of the acceptance pack** in a real window. Nothing I can do closes it, and the
+   no-GUI restriction is his to lift.
+
