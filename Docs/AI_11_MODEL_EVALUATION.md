@@ -17,6 +17,23 @@ payload-size fix (PR #63); no model-evaluation finding changed.
 > landmark decision" now scopes to face/mask capabilities only; upscaling does
 > not depend on F1.
 
+> **Addendum 2026-11-23 (licence re-adjudication).** This stays the dated research record it
+> is — its `Base:` line pins it to `main` at `a559a0e` (2026-11-16) and nothing below is
+> rewritten. One entry is no longer current shipped state: `flux2-klein-4b-q4`, listed "Ships
+> today (opt-in download)" in §2 and "Apache-2.0" in the §6 and §8 tables, is **not**
+> downloadable. Its catalogue `permitted_use` record now reads `unknown` with
+> `statedBy: not-established` and `admitted: false`, and the capabilities it was the only
+> answer for — `generative.edit`, `generative.reimagine`, `inpaint.object` — report `blocked`.
+> The grant itself is real; it belongs to `black-forest-labs/FLUX.2-klein-4B`, while the pinned
+> bytes come from a third-party conversion repository that ships no licence copy and names no
+> upstream revision, so the link between the two is unestablished. Evidence and the corrections
+> to that re-reading: [MODEL_LICENCES.md](MODEL_LICENCES.md) §12 and
+> [MODEL_LICENCE_EVIDENCE.md](MODEL_LICENCE_EVIDENCE.md) §11. The same re-adjudication changes
+> the question this document asks: under the 2026-11-22 gate, admission is measured against
+> public **non-commercial** use and distribution, so "explicitly allows commercial use" is
+> neither a rejection reason when absent nor a sufficient approval reason when asserted by
+> someone other than the rights holder.
+
 ## 1. Method and labels
 
 - **VERIFIED** — read from the official repository, release asset, model card

@@ -1,6 +1,9 @@
 # G-CAT — Model licence evidence in the shipped catalog
 
 **§2–§3 describe a schema that §9 (2026-11-22) supersedes; read §9 first.**
+**§3, §9 and §10 each leave `flux2-klein-4b-q4` as `approved` / `usable` with every axis
+satisfied; §11 (2026-11-23) supersedes that for the FLUX entry alone. No other row's verdict
+changes.**
 
 Status: **data layer only**. This gate records licence evidence; it changes no
 install, download or refusal decision. Acting on the evidence is a separate,
@@ -376,3 +379,68 @@ record's conditions rather than dropped — and the `trainingData` axis stays `u
 - The consent sheet still does not render the record (UI ticket, PR #99 files, out of
   scope); `mask.click` still reports `blocked` for the missing `sam2` package, which
   is correct and unrelated.
+
+---
+
+## 11. Addendum, 2026-11-23: the FLUX row of §3, §9 and §10 is superseded to UNKNOWN
+
+**MEASURED against this branch. The artefact-level evidence is [MODEL_LICENCES.md](MODEL_LICENCES.md)
+§12, which this addendum summarises rather than replaces; nothing here edits §3, §9 or §10.**
+
+§3 calls `flux2-klein-4b-q4` "`usable` *on licence*", and the §9 and §10 row tables leave it at
+`approved` / `rights-holder` / all three axes `true`. Re-reading the artefact itself does not
+support that. The record now shipped in `Resources/model-catalog.json` is, for this entry:
+
+| field | value |
+|---|---|
+| `permitted_use.weights.verdict` | `unknown` |
+| `permitted_use.weights.statedBy` | `not-established` |
+| `permitted_use.weights.canAcquire` / `canRedistribute` / `canUse` | `null` on all three |
+| `permitted_use.code.verdict` | `unknown`, same shape |
+| `permitted_use.trainingData.verdict` | `unknown`, same shape |
+| `permitted_use.admitted` | `false` |
+
+The reason is not that a grant is missing from the world. It is that the bytes we pin are not
+the repository the grant lives in. The pinned download is
+`mflux-community/flux2-klein-4b-mflux-q4`, a community conversion which ships **no licence file
+of any kind**; the only bridge from it to Black Forest Labs' terms is an editable model card
+that names `black-forest-labs/FLUX.2-klein-4B` as `base_model`, calls the change "only
+conversion to MLX and quantization", and states **no upstream revision**. The upstream grant is
+real and is anchored in §12: that repository at revision
+`e7b7dc27f91deacad38e78976d1f2b499d76a294` ships `LICENSE.md` (9,584 bytes, verbatim Apache-2.0,
+no field-of-use clause, no `NOTICE` file). What cannot be established from a card read is the
+link from that revision to the pinned digests, and the converter's own head has moved since this
+entry was first recorded. §9's rule 2 — "`not-established` may only carry `unknown` with every
+axis blank" — is the rule this record now obeys. The record it replaces satisfied the schema's
+shape while asserting `rights-holder` for a statement the rights holder never made about
+*these* bytes, which is the inference rule 2 exists to make unrepresentable.
+
+Consequences worth stating rather than leaving implicit:
+
+- **§3's open question at "Closing it needs one dossier read of the FLUX.2-klein-4B card" is
+  now closed, and its answer is negative.** That read happened (§12.2–§12.3). `trainingData`
+  stays `not-established` because no training-data statement exists at *either* repository —
+  a claim §3 had already made for the other entries and had left blank here.
+- **The flat legacy strings are deliberately untouched.** `weightsLicense` and `codeLicense`
+  still read `Apache-2.0` for this entry, because §9's generator preserves the historical
+  strings and admission reads `permitted_use`. A reader who takes the flat string as the verdict
+  will over-trust it; that is a known cost of keeping the field. Inside the dossier, §12 already
+  supersedes the `USABLE (licence)` rows of §0 and §6 and the Appendix A evidence line; outside
+  it, `AI_RUNTIME.md` §6.3 and `AI_11_MODEL_EVALUATION.md` §2 each carry a dated correction
+  pointing here, because those two tables present themselves as current state.
+- **This document's own status line — "data layer only … it changes no install, download or
+  refusal decision" — is no longer true of the schema it documents.** Enforcement landed
+  separately: for this entry the manifest and load calls return `LICENSE_BLOCKED` (−32010), the
+  `generative.edit`, `generative.reimagine` and `inpaint.object` capabilities report `blocked`,
+  and both hosts map the code to `E_LICENCE_REFUSED` **without** opening Manage Models — an
+  unadmitted model is not offered as a download. `inpaint.spot` and `upscale.4x` are unaffected.
+  Behaviour table and its two stated limits: Addendum S.8 of
+  [RELEASE_2.0.0_READINESS.md](RELEASE_2.0.0_READINESS.md).
+- **No other entry moved.** `migan` keeps its own approved record, `swin2sr-x4` keeps the §10
+  record, and `sam2.1-hiera-tiny` is still refused for the packaging reason, which §10 already
+  called unrelated.
+- **Still open after this addendum:** the byte-level verification that would let this entry
+  return to `approved` (fetch the pinned digests, compare them against a captured upstream
+  revision — a large download, so it needs the owner's authorization); the untested `−32010`
+  host mapping on both hosts; and the G-UI half of G-CAT (§7), which still has no licence
+  evidence rendered in the consent sheet.
