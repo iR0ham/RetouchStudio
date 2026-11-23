@@ -639,19 +639,49 @@ CATALOG: tuple[ModelEntry, ...] = (
                 note="The dossier records the FLUX.2-klein-4B weights grant at this "
                      "repository and no separate code-licence read for this entry. The "
                      "entry's codeLicense string is preserved unchanged."),
-            weights=_approved(
+            # Downgraded from `approved` on 2026-11-23 (ledger item S-FLUX). The
+            # record this replaces quoted "Open weights available for commercial
+            # use under the Apache 2.0 license" — a sentence Black Forest Labs
+            # speaks about *its own* repository — as the permission of the
+            # artefact this entry actually downloads, and recorded it as
+            # `stated_by=rights-holder` with `evidence_url` at the converter.
+            # That is the exact inference this schema exists to refuse: a
+            # repository licence does not automatically cover a derivative's
+            # weight files, and the derivative here disclaims authorship in its
+            # own card. See the note for what remains unestablished, and
+            # Docs/MODEL_LICENCES.md §12 for the evidence.
+            weights=_not_established(
                 "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
-                notice="Apache-2.0. Redistributing or mirroring these weights requires a "
-                       "copy of the Apache-2.0 licence, the retained copyright and licence "
-                       "notices, a statement of changes, and any NOTICE text from the "
-                       "source repository.",
-                note="The FLUX.2-klein-4B card states the weights are open for commercial "
-                     "use under Apache-2.0, so the grant is explicit rather than inferred "
-                     "from a repository tag."),
+                notice="Apache-2.0 attribution duties preserved from the superseded "
+                       "record: redistributing FLUX.2-klein weights would require the "
+                       "licence copy, the retained copyright and licence notices, a "
+                       "statement of changes, and any NOTICE text from the source "
+                       "repository. Recorded as evidence; it is not a claim that "
+                       "permission to redistribute this conversion is established.",
+                note="UNKNOWN on 2026-11-23, superseding the approved/rights-holder "
+                     "record PR #121 wrote for this entry. The artefact ships no "
+                     "licence copy, so the only bridge from these bytes to Black "
+                     "Forest Labs' Apache-2.0 grant is an editable third-party card: "
+                     "it names the base model by repository and calls the change "
+                     "'only conversion to MLX and quantization', but states no "
+                     "upstream revision, and the converter head has moved since this "
+                     "entry was recorded. The upstream grant itself is real and is "
+                     "anchored here: black-forest-labs/FLUX.2-klein-4B at revision "
+                     "e7b7dc27f91deacad38e78976d1f2b499d76a294 ships LICENSE.md "
+                     "(9,584 B, verbatim Apache-2.0, no field-of-use clause, no "
+                     "NOTICE file). What is unestablished is the link from that "
+                     "revision to the pinned conversion, which needs byte-level "
+                     "verification of the published digests. Full evidence, the "
+                     "corrections to this slice's own first reading, and a separate "
+                     "non-licensing defect (the declared download set omits the "
+                     "tokenizer assets mflux requires) are in "
+                     "Docs/MODEL_LICENCES.md section 12."),
             training_data=_not_established(
                 "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
                 note="The dossier records no training-data row for this entry, so no "
-                     "dataset terms are asserted."),
+                     "dataset terms are asserted. Its converter-repository attribution "
+                     "is corrected by Docs/MODEL_LICENCES.md §12.3: the FLUX.2-klein-4B "
+                     "training-data position was never read at either repository."),
         ),
         source="hf:mflux-community/flux2-klein-4b-mflux-q4",
         files=(

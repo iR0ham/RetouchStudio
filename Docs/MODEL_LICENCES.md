@@ -476,3 +476,188 @@ validators refuse it, so these four are checked, not decorative.
 wrote for them. `mask.click` still reports `blocked` because the `sam2` Python
 package is not in `worker/requirements.lock` — that is a missing runtime, correctly
 reported, and out of scope here. No other verdict moved in either direction.
+
+---
+
+## 12. Addendum, 2026-11-23 — `flux2-klein-4b-q4`: the `approved` / `rights-holder` record is superseded by `unknown`
+
+This addendum appends; nothing above is rewritten, and the §0.1 row
+"`flux2-klein-4b-q4` — **USABLE** (licence)" and its reason column stay exactly as the
+Researcher filed them on 2026-11-21. This is the decision that replaces them, taken by
+the release manager on 2026-11-23 under the owner's standing execution authority (which
+directs the team to decide on evidence rather than put equivalent candidates in front of
+the owner), recorded with the evidence it rests on and with the parts that remain
+unproven named as such.
+
+Every fact below is **MEASURED 2026-11-23** unless it is labelled **TRANSCRIBED** or
+**NOT VERIFIED**. The measurement set is: both Hugging Face repository APIs with
+`?blobs=true`, `LICENSE.md` and `README.md` fetched at the upstream *pinned revision*,
+`README.md` fetched at the converter *head*, and `tokenizer_loader.py` plus
+`flux2_weight_definition.py` fetched at the pinned mflux tag. No model weights were
+downloaded: closing the digests would cost 4.6 GB, which this slice was not authorised
+to pull onto the owner's machine.
+
+### 12.1 What changed in the shipped record
+
+| Field | Before (the record PR #121 landed, replaying PR #114) | After (this decision) |
+|---|---|---|
+| `permitted_use.weights.verdict` | `approved` | **`unknown`** |
+| `permitted_use.weights.statedBy` | `rights-holder` | **`not-established`** |
+| `canAcquire` / `canRedistribute` / `canUse` | `true` / `true` / `true` | **`null` / `null` / `null`** |
+| `permitted_use.weights.note` | quoted BFL's own sentence | the paragraph this section documents |
+| `PermittedUse.admitted` | `true` | **`false`** |
+| `plan.py` `manifest()` for the entry | returned a download plan | **`LICENSE_BLOCKED` (−32010)** |
+| `catalog.py` `require_verified()` for the entry | loaded | **`LICENSE_BLOCKED` (−32010)** |
+| `capability.list` → `generative.edit`, `generative.reimagine`, `inpaint.object` | `requires_model` (a download was offered) | **`blocked`**, reason "no established permission … weights verdict: unknown" |
+
+The last two rows are the point of the change. Offering a 4.6 GB transfer as the remedy
+for a permission nobody has granted is exactly the failure mode DR-15 forbids, and the
+worker now answers `blocked` before it ever looks at the runtime package or the install
+directory — so the answer does not depend on this interpreter or this disk.
+
+### 12.2 The two artefacts, and what each one actually says
+
+**The upstream artefact — `black-forest-labs/FLUX.2-klein-4B`.** MEASURED at head
+`e7b7dc27f91deacad38e78976d1f2b499d76a294` (25 files). `LICENSE.md` is 9,584 bytes,
+sha256 `ca02bc51900ab07789d1b70283329e7137f5af98f5161c23a1c81fc38a4af1fe`, opens with the Apache 2.0 title block and ends at
+`END OF TERMS AND CONDITIONS`: verbatim Apache-2.0, **no appended field-of-use clause**,
+and the repository carries **no NOTICE file**. The card at that same revision says,
+verbatim: line 31 "Open weights available for commercial use under the [Apache 2.0
+license]", line 121 "This model is licensed under the
+https://www.apache.org/licenses/LICENSE-2.0.", line 2 "Fully open under Apache 2.0", and
+line 98 "Nothing contained in this Model Card should be interpreted as or deemed a
+restriction or modification to the license the model is released under." So the grant is
+real, it is the rights holder's own, it is nameable, and it is anchored to a revision.
+Nothing in this addendum disputes that.
+
+Two lines in the same card have to be read honestly rather than skimmed. Line 113 places
+mandatory inference filters "on the FLUX.2 [klein] **9B** models under the terms of the
+FLUX Non-Commercial License" — a different model, not the 4B we pin. Line 115 lists
+"FLUX Non-Commercial License (for our non-commercial open-weight users)" among BFL's
+policy instruments, which shows the organisation does operate a separate non-commercial
+licence for some artefacts; for *this* revision and *this* repository the licence file is
+the Apache text above, and even if line 115 were read to reach the 4B weights it would
+not bar RetouchStudio, whose intended use class is public non-commercial. An adversary
+will quote those two lines; the answer is that they do not carry the weight here.
+
+**The artefact we would actually download — `mflux-community/flux2-klein-4b-mflux-q4`.**
+MEASURED at head `794cd159538149ad9830848508c31f0ea7088e58` (13 files). It ships
+**no licence file of any kind** — no `LICENSE`, no `LICENSE.md`, no `NOTICE`. What it
+ships instead is a card, editable by its author, that says:
+
+> Community conversion by [MFlux-Community] -- not an official release from the original
+> model's authors. The original model's license applies unchanged, see [License](#license).
+
+> This repo inherits the license of the original model: **apache-2.0**. See the [original
+> model card](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) for the full terms
+> and any usage restrictions. The weights here were modified from the original release
+> only by conversion to MLX and quantization.
+
+The card's YAML declares `license: apache-2.0`, `base_model:
+black-forest-labs/FLUX.2-klein-4B` and `base_model_relation: quantized`, and states
+"Converted on 2026-08-03."
+
+**Why that is still not an established permission for our bytes.** Three links are
+missing, and each one is a different kind of gap:
+
+1. **The assertion is not the rights holder's.** The only statement tying these bytes to
+   the Apache grant is made by the converter, not by Black Forest Labs. Under the mandate,
+   a Hugging Face `license:` tag is not sufficient where the authorisation cannot be
+   traced to the rights holder, and the tag here sits on the third party's repo.
+2. **The bridge names no revision.** "The original model card" is a mutable URL. The card
+   never says which upstream commit these tensors were converted from, so the pinned
+   conversion cannot be tied to `e7b7dc27…` — the only revision at which this section
+   proves an Apache text exists.
+3. **The derivative claim is visibly incomplete.** The card says the weights changed "only
+   by conversion to MLX and quantization", yet the converter's `tokenizer/tokenizer.json`
+   is 11,422,650 bytes against upstream's 11,422,654 — MEASURED through the same API. Four
+   bytes apart proves the shipped tree is *not* the upstream tree, which is fine for a
+   conversion but shows the card's prose is a summary, not an audit. The upstream repo
+   also carries seven `tokenizer/` files; the converter carries three
+   (`chat_template.jinja`, `tokenizer.json`, `tokenizer_config.json`) and omits
+   `added_tokens.json`, `merges.txt`, `vocab.json`, `special_tokens_map.json`.
+
+Recording `unknown` here is not a claim that redistribution is forbidden — it is a claim
+that we have not established it, which under the licence gate is the operative question.
+The superseded record asserted `statedBy: rights-holder` about an artefact whose own
+repository contains no licence text, on the strength of a sentence written about a
+different repository.
+
+### 12.3 `trainingData` — the axis no read reached
+
+The earlier note in this entry, and the §0.1 reason column, talk as if the training-data
+position had been established. MEASURED 2026-11-23: it has not, at either repository. The
+upstream card at the pinned revision never names a training dataset. Its only statements
+on the subject are a caveat (line 82, "this checkpoint may represent or amplify biases
+observed in the training data") and two safety-process sentences (lines 109–110) about
+filtering pre-training data for NSFW/CSAM and about fine-tuning rounds — which describe
+mitigations, not a dataset licence. The converter card is silent. So `trainingData` stays
+`unknown` / `not-established` with all three axes blank, exactly as the shipped record now
+reads, and gains no permission from this section. Any future claim about FLUX training
+data has to start by naming a source.
+
+### 12.4 A separate defect, independent of licensing: the entry cannot load
+
+Recorded here so it is not lost when the licence question is eventually closed. The
+catalogue entry declares five files — `text_encoder/0.safetensors`,
+`text_encoder/1.safetensors`, `transformer/0.safetensors`, `transformer/1.safetensors`,
+`vae/0.safetensors` — and **no tokenizer assets**. `engine.py:977` hands the verified
+install directory itself to `Flux2KleinEdit(model_config=ModelConfig.flux2_klein_4b(),
+model_path=str(root))`, and the pinned runtime needs a tokenizer subtree:
+MEASURED in mflux at tag `v.0.24.0`, `src/mflux/models/flux2/weights/flux2_weight_definition.py`
+declares `hf_subdir="tokenizer"` with `download_patterns=["tokenizer/**",
+"added_tokens.json", "chat_template.jinja"]`, and
+`src/mflux/models/common/tokenizer/tokenizer_loader.py:329` raises
+`FileNotFoundError("No usable tokenizer files were found for local model path '…'")`
+when a local path has none. So installing the entry as declared and then loading it would
+fail after a 4.6 GB transfer. The omission is ours, not upstream's: the converter does
+publish `tokenizer/chat_template.jinja`, `tokenizer/tokenizer.json` and
+`tokenizer/tokenizer_config.json`. **NOT VERIFIED:** that this failure has ever been
+observed by running the worker — no inference was performed under this slice's
+constraints, and the reasoning is static (declared file set plus the pinned library's own
+loader).
+
+### 12.5 Corrections to this slice's own first reading
+
+The research package that produced this decision was re-checked against the network before
+it was allowed into the record, and two of its statements did not survive:
+
+| Claim as first written | Measured 2026-11-23 | Status |
+|---|---|---|
+| "The converter's head SHA was recorded at read time: `77090341902cb5f9217f05c664ff604236ca18cc`." | Current head is `794cd159538149ad9830848508c31f0ea7088e58`. | **Superseded — and the drift is itself evidence for the verdict.** A pin that silently moves is the concrete form of the risk §12.2 describes. |
+| "No base revision: the converter states no upstream link at all." | The card *does* declare `base_model` and `base_model_relation: quantized`, and *does* assert the original licence applies unchanged. | **Overstated.** What is missing is a *revision*, not a lineage claim. The verdict is unchanged; the reason is stated precisely instead of favourably to the conclusion. |
+| "Pinned mflux==0.24.0 requires `tokenizer/**`, `added_tokens.json`, `chat_template.jinja`." | Confirmed verbatim at tag `v.0.24.0`. | Was **TRANSCRIBED**, now **MEASURED**. |
+
+The pattern is worth keeping in the ledger rather than tidying away: three of the
+strongest-sounding sentences in a licence read were about a moving third-party page, and
+two of them needed correcting. That is why `evidenceUrl` alone does not clear an entry.
+
+### 12.6 What would close this, and what this decision deliberately did not touch
+
+To move `weights` to a defensible verdict, one of:
+
+1. **Verify the derivative.** Download the pinned conversion, recompute the digests of the
+   five weight files against the published values, and record upstream revision +
+   converter head + digests together. Needs 4.6 GB and explicit authorisation; the
+   published sizes are `sizeBytes 4608176697` with entry SHA-256
+   `9887b2a79ac6e691b7473667f47da3ae128fcbc34c7b6461121b5fd26d1b5e42`, values carried from
+   PR #121 and **NOT VERIFIED** against served content by this addendum (both repos are
+   Xet-backed, so a metadata read is not a digest check).
+2. **Pin the upstream artefact instead.** `black-forest-labs/FLUX.2-klein-4B` at
+   `e7b7dc27…` has the licence copy, the rights holder's own statement and the tokenizer
+   set. It is BF16-class and larger, and the measured M3 16 GB run of the 4B family peaked
+   at 16.7 GB, so this is a hardware question as much as a licence question.
+3. **Vendor our own conversion** from the pinned upstream revision, which makes us the
+   converter and lets the §7.1 Apache duties (licence copy, retained notices, statement of
+   changes) be discharged by us, in the repository, at a commit.
+
+Not touched by this decision: the `migan` entry and `inpaint.spot` (MIT code *and*
+`LICENSE-WEIGHTS`, unaffected); the `swin2sr-x4` §11 record; every other catalogue entry;
+the repo licence (MIT); any published release, tag or asset; the 1.0.0 artefacts. The
+code that implements FLUX inference stays in the tree — a refused record is a metadata
+decision, and deleting a working loader because its weights are unproven would destroy the
+only harness a future re-record can be tested with.
+
+For 2.0.0 the user-visible consequence is stated in `Docs/RELEASE_NOTES_2.0.0.md`:
+generative editing and object removal by diffusion are **not offered**; spot healing
+remains available through `migan`.

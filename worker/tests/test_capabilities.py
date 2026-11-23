@@ -315,9 +315,30 @@ class CapabilityReportTests(unittest.TestCase):
         # Legitimate optional-model behaviour, kept honest by the tightened
         # gates: nothing installed is `requires_model` (the UI offers a download),
         # which is a different answer from `blocked` (installed, not trustworthy).
-        _sparse(self.root / "migan" / "migan_pipeline_v2.onnx", 3)
+        # `inpaint.object` is deliberately absent from this list: it binds
+        # `flux2-klein-4b-q4`, whose record refuses it, and the licence answer is
+        # pinned by `test_the_flux_capabilities_are_blocked_on_licence_not_missing`.
         records = self.by_id()
-        self.assertEqual(records["inpaint.object"]["state"], REQUIRES_MODEL)
+        self.assertEqual(records["inpaint.spot"]["state"], REQUIRES_MODEL)
+        self.assertEqual(records["upscale.4x"]["state"], REQUIRES_MODEL)
+
+    def test_the_flux_capabilities_are_blocked_on_licence_not_missing(self):
+        # S-FLUX, and the distinction this report exists to make. Nothing is
+        # installed here either way, so the only reason `flux2-klein-4b-q4` could
+        # produce a download offer is its record — and its record says UNKNOWN.
+        # `requires_model` would tell the user a 4.6 GB transfer is the remedy for
+        # a permission nobody has granted, which is the failure mode DR-15 names.
+        records = self.by_id()
+        for capability in ("generative.edit", "generative.reimagine", "inpaint.object"):
+            with self.subTest(capability=capability):
+                record = records[capability]
+                self.assertEqual(record["state"], BLOCKED)
+                self.assertIn("no established permission", record["reason"])
+                self.assertIn("weights verdict: unknown", record["reason"])
+                self.assertNotEqual(record["state"], REQUIRES_MODEL)
+        # The refusal is ordered before the runtime-package probe and the install
+        # check, so it does not depend on this interpreter or this disk: an entry
+        # that is admitted answers differently with nothing installed.
         self.assertEqual(records["upscale.4x"]["state"], REQUIRES_MODEL)
 
     def test_shipped_ledger_supports_only_the_recorded_upscale_run(self):

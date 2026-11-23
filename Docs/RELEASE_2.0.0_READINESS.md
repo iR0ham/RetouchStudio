@@ -1871,3 +1871,57 @@ Two rows that read as "all resolved" are not, and both stay open with their evid
 And a process rule this measurement earns: in this ledger, an ancestry claim must name the object it compared
 and state whether that object was fetched, because "I could not see it" and "it is not there" produce the same
 exit code.
+
+### S.8 — later the same day, 2026-11-23: S-FLUX closes as `unknown`, and the gate now refuses the download
+
+S-FLUX above offered two ways out — re-record against the upstream revision, or set the
+artefact's verdict to `unknown`. **Chosen: `unknown`.** Not because the re-record is wrong
+but because it is not available under this slice's constraints: it needs 4.6 GB of weight
+downloads to verify the published digests, which the model-ecosystem authority forbids on
+this machine without authorisation. Recording a permission we cannot evidence would repeat
+the mistake S-FLUX describes.
+
+`Docs/MODEL_LICENCES.md` §12 carries the full evidence, the two corrections the research
+package needed before it was allowed into the record, and the three ways to close the item
+later. In one line: the Apache-2.0 grant is real and is now anchored to a revision
+(`black-forest-labs/FLUX.2-klein-4B` @ `e7b7dc27…`, `LICENSE.md` 9,584 bytes, sha256
+`ca02bc51900ab07789d1b70283329e7137f5af98f5161c23a1c81fc38a4af1fe`, verbatim, no
+field-of-use clause, no NOTICE file), and what cannot be established is the link from that
+revision to the pinned community conversion — whose repository ships no licence file at
+all, whose head has already moved from `77090341…` to `794cd159…`, and whose card asserts
+the lineage without naming a revision.
+
+**What the shipped behaviour becomes** (each row asserted by a test on this branch, none of
+it inferred):
+
+| Site | Before | After |
+|---|---|---|
+| `catalog.py` FLUX weights record | `approved` / `rights-holder` / axes `true` | **`unknown` / `not-established` / axes `null`** |
+| `Resources/model-catalog.json` | same claim, regenerated surface | **same claim as the worker, byte-for-byte, via `licence-evidence-apply.py`** |
+| `plan.py` `manifest()` | returned a 4.6 GB download plan | **`LICENSE_BLOCKED` (−32010)** |
+| `catalog.py` `require_verified()` | loaded | **`LICENSE_BLOCKED` (−32010)** |
+| `capability.list` → `generative.edit`, `generative.reimagine`, `inpaint.object` | `requires_model` | **`blocked`**, reason carries "no established permission" and "weights verdict: unknown" |
+| `capability.list` → `inpaint.spot`, `upscale.4x` | `requires_model` | **unchanged** — the refusal is entry-scoped, not feature-scoped |
+| Both hosts on −32010 | — | **`E_LICENCE_REFUSED`, and `opensModelManager` returns false** (`WorkerClient.swift:34`, `WorkerClient.cs:43`) so a refused licence is not presented as a missing model |
+
+Proven end-to-end against `origin/main`'s own worker code before the branch was cut: a
+baseline record loads, the mutated `unknown` record still passes `validate()` (so this is a
+licence decision, not a schema violation), and the same mutated record yields −32010 from
+both `manifest()` and `load()`.
+
+**Two honest limits on that sentence.** (1) `load()` accepts an `allow_uncleared` escape
+hatch, reachable in production only through `RETOUCH_AI_EVAL_MODELS=1`; both launch sites
+now strip that variable (`AIWorker.swift:599`, `AIRuntimeValidation.swift:211`), so the
+shipped app cannot reach it — but a person starting the worker by hand through
+`run-worker.sh` can, and that is a documented operator action, not a guarantee in code.
+(2) The −32010 → `E_LICENCE_REFUSED` mapping is **tested only for −32021** on Windows
+(`Windows/RetouchStudio.AI.Tests/Program.cs:326-341`); no test pins the −32010 branch or
+the `opensModelManager` answer on either host. Tracked as an open item, not closed here.
+
+**Not touched:** `migan` (MIT code *and* `LICENSE-WEIGHTS` — spot healing stays offered),
+the §11 `swin2sr-x4` record, every other catalogue entry, the MIT repository licence, and
+the FLUX inference code itself. A refused record is a metadata decision; deleting the
+loader would destroy the only harness a future re-record can be tested with.
+
+The user-visible consequence for 2.0.0 is what `Docs/RELEASE_NOTES_2.0.0.md` now says in
+both languages: generative editing and diffusion-based object removal are not offered.
