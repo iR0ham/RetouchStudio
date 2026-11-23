@@ -103,20 +103,15 @@ RETOUCH_ARCH=arm64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 RETOUCH_ARCH=x86_64 RETOUCH_SKIP_WORKER=1 ./build.sh release
 ./Tools/make-dmg.sh                                  # RetouchStudio-1.0.0-x86_64.dmg
 
-RETOUCH_ARCH=universal RETOUCH_SKIP_WORKER=1 ./build.sh release
-ditto -c -k --keepParent "Retouch Studio.app" "RetouchStudio-1.0.0-universal.zip"
-shasum -a 256 "RetouchStudio-1.0.0-universal.zip" > "RetouchStudio-1.0.0-universal.zip.sha256"
-
 git tag -a v1.0.0 -m "Retouch Studio 1.0.0"
 git push origin main --tags
 gh release create v1.0.0 \
   "RetouchStudio-1.0.0-arm64.dmg" "RetouchStudio-1.0.0-arm64.dmg.sha256" \
   "RetouchStudio-1.0.0-x86_64.dmg" "RetouchStudio-1.0.0-x86_64.dmg.sha256" \
-  "RetouchStudio-1.0.0-universal.zip" "RetouchStudio-1.0.0-universal.zip.sha256" \
   --title "Retouch Studio 1.0.0" --notes-file Docs/RELEASE_NOTES_1.0.0.md
 ```
 
-Attach a runtime archive only when an approved `AIRuntime.Package` points at that exact file; an archive without that entry cannot be installed by the app. Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 and x86_64 images are the same light editor, and the universal zip is a single-file alternative. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
+Attach a runtime archive only when an approved `AIRuntime.Package` points at that exact file; an archive without that entry cannot be installed by the app. Each DMG holds the app next to an `Applications` symlink, so installing is one drag. The arm64 and x86_64 images are the same light editor, and they are the only macOS artifacts: `Tools/make-dmg.sh` writes `<name>.dmg` and `<name>.dmg.sha256` and nothing else, and `.github/workflows/release.yml` uploads exactly those two per architecture (`RETOUCH_ARCH: arm64`, then `RETOUCH_ARCH: x86_64`) beside the Windows zip and MSI. A universal build is still worth cutting locally — `RETOUCH_ARCH=universal` exercises both slices and both self-tests in one pass — but its suffix only reaches `make-dmg.sh`'s `universal` branch when you run it by hand; no published release has ever carried such an image, so do not promise one in release notes. `ditto` preserves the code signature and resource forks; avoid `zip` from the command line for the app bundle.
 
 Release notes should include:
 
