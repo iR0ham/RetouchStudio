@@ -169,14 +169,27 @@ no patch files.
    `RETOUCH_AI_MEMORY_BUDGET_GB` (default 7.5). The upscale path never reads
    it: upscale is bounded by the 40 MP output ceiling and the host's own wait.
 10. **Digests are checked where a model is loaded.** `Catalog.require_verified`
-    runs `require` and then hashes every file the catalog gives a SHA-256 for,
-    before the loader receives a path; a mismatch releases the lease so the
-    install stays repairable and fails with `-32019`. Only `upscale` uses it:
-    hashing that checkpoint costs 0.036 s for its 48,460,141-byte
-    `pytorch_model.bin` (measured on this M3/16 GB Mac on 2026-11-17), once per
-    process, while hashing 4.6 GB of FLUX weights before every render is not a
-    startup cost the 16 GB budget can pay. Those entries keep the size gate in
-    `require` and the on-demand `models verify`.
+    runs `require` and then hashes **every file the catalog lists** — pin
+    admission guarantees each listed file carries a 64-character digest, so there
+    is no "hash the ones we know" branch left to fall through. Before the loader
+    receives a path it also refuses a listed weight that is a symlink, and any
+    file inside the install that the catalog does not name
+    (`reason: "unlisted-file"`, `-32019`); both releases the lease so the install
+    stays repairable. The second refusal is what makes the digest pass a *net*
+    rather than a checklist: a convention-following loader picks an unpinned
+    `model.safetensors` over the pinned `pytorch_model.bin` beside it, so the old
+    code could report every pin correct while different bytes reached the runtime.
+    `health`, `models verify` and `capability.list` carry the same two refusals,
+    because a model manager that promises a load the worker will not perform is a
+    false statement to the user, not a cheaper check.
+    Only `upscale` uses `require_verified`: hashing that checkpoint costs
+    0.036 s for its 48,460,141-byte `pytorch_model.bin` (measured on this M3/16 GB
+    Mac on 2026-11-17), once per process, while hashing 4.6 GB of FLUX weights
+    before every render is not a startup cost the 16 GB budget can pay. Those
+    entries keep the size and payload gates in `require` and the on-demand
+    `models verify`. Added 2026-11-23 under mandate §4 (PR #115): before it the
+    digest pass visited only the names the catalog carried, and all three report
+    paths accepted both shapes.
 11. **A provider is named only after it initialised.** `Engine.execution_providers`
     reports the device a loader actually used (`mps` or `cpu`), and nothing plus
     a reason before the first model. Probing torch during the handshake would

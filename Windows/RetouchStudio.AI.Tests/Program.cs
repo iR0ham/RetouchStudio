@@ -321,6 +321,37 @@ Console.WriteLine("[G] a stopped worker fails fast");
     }
 }
 
+Console.WriteLine("[H] the catalog defect is not an install");
+{
+    // The macOS host was measured to fall through -32021 to E_INTERNAL while
+    // -32011/-32016 queued a download that repairs nothing. The Windows host
+    // derives names from the same table, so the same class must stay out of
+    // the installable E_MODEL_MISSING name here too.
+    var error = AIWorkerException.FromRpc(new JsonObject
+    {
+        ["code"] = -32021,
+        ["message"] = "flux2-klein-4b-q4 models/flux2.safetensors has no recorded SHA-256, "
+                    + "so its bytes cannot be verified",
+        ["data"] = new JsonObject
+        {
+            ["model"] = "flux2-klein-4b-q4",
+            ["reason"] = "missing-digest",
+        },
+    });
+    Check(error.Code == -32021,
+        "the catalog code is kept for diagnostics", error.Code.ToString());
+    Check(error.TypedCode == "E_MODEL_UNVERIFIED",
+        "a catalog defect is the unverified class, not E_INTERNAL", error.TypedCode);
+    Check(error.TypedCode != AIWorkerException.TypedCodeFor(-32011)
+          && error.TypedCode != AIWorkerException.TypedCodeFor(-32016),
+        "it is not the installable class, so no download is offered for it",
+        error.TypedCode);
+    Check(error.Data?["model"] is JsonValue,
+        "the model the defect belongs to survives the mapping");
+    Check(AIWorkerException.TypedCodeFor(-32019) == error.TypedCode,
+        "damaged weights and an unusable catalog pin share the honest label");
+}
+
 ModelStoreChecks.Run((condition, label, detail) => Check(condition, label, detail));
 
 Console.WriteLine();

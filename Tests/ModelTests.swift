@@ -6912,6 +6912,28 @@ func testAIRefusalRouting() {
     check(!AIWorkerFailure(code: -32010, message: "licence").opensModelManager,
           "a licence refusal opens nothing")
 
+    // A catalog defect is a third class: the bytes exist, but the pin they
+    // would be checked against is missing or malformed, so no download can
+    // settle it. It used to fall through to E_INTERNAL, which also meant no
+    // sentence of its own. It is not the installable class either.
+    let unnamedPin = AIWorkerFailure(
+        code: -32021,
+        message: "flux2-klein-4b-q4 models/flux2.safetensors has no recorded SHA-256, "
+               + "so its bytes cannot be verified",
+        data: ["model": "flux2-klein-4b-q4", "reason": "missing-digest"])
+    check(unnamedPin.typedCode == "E_MODEL_UNVERIFIED",
+          "a catalog defect is the unverified class, not an internal error")
+    check(unnamedPin.typedCode != "E_MODEL_MISSING",
+          "it is never queued as an installable model")
+    check(!unnamedPin.opensModelManager && unnamedPin.blockedCapabilityId == nil
+          && unnamedPin.runtimeRefusal == nil,
+          "no download or Adopt step can settle it, so nothing opens")
+    check(unnamedPin.code == -32021
+          && unnamedPin.errorDescription == unnamedPin.message,
+          "the worker's own catalog sentence is what the owner reads")
+    check(AIWorkerFailure(code: -32019, message: "").typedCode == unnamedPin.typedCode,
+          "damaged weights and an unusable catalog pin share the honest label")
+
     let english = L10n.shared.statusText(.aiCapabilityBlocked("upscale.4x"))
     check(english == "Upscaling is installed on this Mac but not ready to run yet. "
           + "Manage Models… says what it is waiting for.",

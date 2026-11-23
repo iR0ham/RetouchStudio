@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -7,10 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from retouch_ai_worker import catalog as catalog_module
-from retouch_ai_worker.capabilities import (CAPABILITIES, PROVIDER, SUPPORTED,
-                                            VOCABULARY, load_evidence, record,
-                                            report)
+from retouch_ai_worker.capabilities import (BLOCKED, CAPABILITIES, PROVIDER,
+                                            REQUIRES_MODEL, SUPPORTED, VOCABULARY,
+                                            load_evidence, record, report)
 from retouch_ai_worker.catalog import Catalog
+from retouch_ai_worker.protocol import CATALOG_INVALID, WorkerError
 
 PLATFORM = "macos-arm64"
 MIGAN = "migan"
@@ -204,6 +206,119 @@ class CapabilityReportTests(unittest.TestCase):
             click = self.by_id()["mask.click"]
         self.assertEqual(click["state"], "blocked")
         self.assertIn("DR-5", click["reason"])
+
+    def test_a_capability_never_binds_bytes_the_worker_cannot_verify(self):
+        # The reporting layer and the load layer used to disagree: `_inspect`
+        # called a pinless entry unverifiable while `require_verified` loaded it.
+        # Both answers now come from the same admission rule, so an unavailable
+        # optional model stays distinguishable from a trusted one — a bad pin can
+        # never reach `supported`, whatever the evidence ledger claims.
+        for defect in ("sha256", "bytes"):
+            with self.subTest(pin=defect):
+                broken = tuple(
+                    replace(entry, files=tuple(
+                        replace(spec, **({defect: None})) for spec in entry.files))
+                    if entry.id == SWIN else entry
+                    for entry in catalog_module.CATALOG)
+                _versioned(self.root, SWIN, "1.0.0", {
+                    "config.json": 772,
+                    "preprocessor_config.json": 152,
+                    "pytorch_model.bin": 48_460_141,
+                })
+                evidence = ({"capabilityId": "upscale.4x", "platform": PLATFORM,
+                             "provider": PROVIDER, "modelId": SWIN,
+                             "modelVersion": "1.0.0", "evidence": "a recorded run"},)
+                with patch("retouch_ai_worker.catalog.CATALOG", broken):
+                    upscale = self.by_id(evidence=evidence)["upscale.4x"]
+                    catalog = Catalog(self.root, allow_uncleared=False)
+                    with self.assertRaises(WorkerError) as caught:
+                        catalog.require_verified(SWIN)
+                self.assertEqual(upscale["state"], BLOCKED)
+                self.assertNotEqual(upscale["state"], SUPPORTED)
+                self.assertEqual(caught.exception.code, CATALOG_INVALID)
+                self.assertEqual(caught.exception.data["reason"],
+                                 "missing-digest" if defect == "sha256"
+                                 else "missing-size")
+
+    def test_the_report_refuses_the_shapes_the_loader_refuses(self):
+        # The other agreement test covers a bad *pin*. These are bad *installs*
+        # that every recorded field still reads correct about: a listed weight
+        # reached through a symlink (its size is read through the link, so the size
+        # check passes) and a payload the catalog does not name (invisible to a pass
+        # that only visits listed names). `_inspect` used to accept both and could
+        # answer `supported` for an install `_check_sizes` refuses — the UI offering
+        # a job the worker would reject at load.
+        shipped = {entry.id: entry for entry in catalog_module.CATALOG}
+        sizes = {spec.path: spec.bytes for spec in shipped[SWIN].files}
+        evidence = ({"capabilityId": "upscale.4x", "platform": PLATFORM,
+                     "provider": PROVIDER, "modelId": SWIN,
+                     "modelVersion": "1.0.0", "evidence": "a recorded run"},)
+        for defect in ("clean", "symlink", "unlisted"):
+            with self.subTest(defect=defect):
+                root = Path(self.tmp.name) / f"store-{defect}"
+                _versioned(root, SWIN, "1.0.0", sizes)
+                install = root / SWIN / "1.0.0"
+                if defect == "symlink":
+                    name = sorted(sizes)[-1]
+                    _sparse(root / "outside.bin", sizes[name])
+                    os.unlink(install / name)
+                    os.symlink(root / "outside.bin", install / name)
+                elif defect == "unlisted":
+                    # The exact substitution the convention-following loaders allow:
+                    # a `model.safetensors` nobody pinned, beside honest weights.
+                    _sparse(install / "model.safetensors", 4_096)
+                catalog = Catalog(root, allow_uncleared=False)
+                item = {r["capabilityId"]: r for r in report(
+                    catalog, evidence=evidence, platform_name=PLATFORM,
+                    importable=lambda name: True)["capabilities"]}["upscale.4x"]
+                loader_reason = None
+                try:
+                    # `require`, not `require_verified`: these fixtures carry the
+                    # right *lengths* rather than the published bytes, so a digest
+                    # pass would fail for an unrelated reason. Both shapes under
+                    # test are caught by the size pass, which is the layer that used
+                    # to disagree with this report.
+                    catalog.require(SWIN)
+                except WorkerError as error:
+                    loader_reason = error.data.get("reason")
+                if defect == "clean":
+                    # Without this arm the test would pass on a fixture that never
+                    # installed anything readable, whatever the code did.
+                    self.assertIsNone(loader_reason, item)
+                    self.assertEqual(item["state"], SUPPORTED)
+                    continue
+                self.assertEqual(item["state"], BLOCKED)
+                self.assertIn("verify it in the model manager", item["reason"])
+                self.assertEqual(
+                    loader_reason,
+                    "unsafe-path" if defect == "symlink" else "unlisted-file")
+
+    def test_an_uppercase_pin_does_not_block_a_capability(self):
+        # Case is not a trust question. Normalising it here keeps a correctly
+        # pinned model reportable, which the old string comparison could not.
+        upper = tuple(
+            replace(entry, files=tuple(replace(spec, sha256=spec.sha256.upper())
+                                        for spec in entry.files))
+            if entry.id == SWIN else entry
+            for entry in catalog_module.CATALOG)
+        _versioned(self.root, SWIN, "1.0.0", {
+            "config.json": 772,
+            "preprocessor_config.json": 152,
+            "pytorch_model.bin": 48_460_141,
+        })
+        with patch("retouch_ai_worker.catalog.CATALOG", upper):
+            record = self.by_id()["upscale.4x"]
+        self.assertEqual(record["state"], BLOCKED)
+        self.assertIn("no recorded run", record["reason"])
+
+    def test_an_uninstalled_optional_model_is_still_reported_as_missing(self):
+        # Legitimate optional-model behaviour, kept honest by the tightened
+        # gates: nothing installed is `requires_model` (the UI offers a download),
+        # which is a different answer from `blocked` (installed, not trustworthy).
+        _sparse(self.root / "migan" / "migan_pipeline_v2.onnx", 3)
+        records = self.by_id()
+        self.assertEqual(records["inpaint.object"]["state"], REQUIRES_MODEL)
+        self.assertEqual(records["upscale.4x"]["state"], REQUIRES_MODEL)
 
     def test_shipped_ledger_supports_only_the_recorded_upscale_run(self):
         entries = load_evidence()

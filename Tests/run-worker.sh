@@ -1,7 +1,10 @@
 #!/bin/bash
 # Runs the worker's protocol, server and registry regressions. The expected
 # suite size lives only in Tests/expected-worker-tests.txt; this script fails
-# when discovery finds a different number.
+# when discovery finds a different number, so a test that silently stops being
+# collected cannot pass by disappearing. The final grep pins the run's own verdict
+# for the same reason: a suite that discovered the right number of tests and then
+# failed them prints `FAILED`, and only that word distinguishes it from a pass.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,3 +27,4 @@ if [ "${actual:-}" != "$expected" ]; then
        "Tests/expected-worker-tests.txt says $expected" >&2
   exit 1
 fi
+grep -qE '^OK$' "$log"
