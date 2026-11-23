@@ -2177,3 +2177,143 @@ operator's memory. Neither the Windows `-32010` mapping nor any live-app surface
 these retries: `Windows App` passing means the Windows build and its fourteen UIA modes are intact,
 which is not the same as the licence refusal being tested on that host, and that gap stays open
 exactly as S.9 stated it. S.4's rule still stands: no readiness percentage is given.
+
+## Addendum S.11 — 2026-11-23: the release candidate is built by CI from final `main`, and publishing is still the owner's
+
+S.10 left `main == develop == d09ad7b` with zero open pull requests, which was the precondition this
+mandate set for the one thing that can only be done last: build the candidate from the exact commit
+that will be published. That build has now run, its artefacts have been re-verified from outside CI,
+and one property of it needs the owner's attention more than any other entry in this ledger.
+
+**The run.** `Release` (`workflow_dispatch`) at ref `main`, head `d09ad7b`, run `45156446702` — that
+workflow's own run number 4 — 10:28:38→10:43:53Z, conclusion **success**. Before dispatching,
+`gh pr list --state open` returned `[]`, so the candidate is not "main plus an open branch".
+
+| Job | id | result |
+| --- | --- | --- |
+| macOS arm64 | `137630514475` | success |
+| macOS x86_64 | `137630514641` | success |
+| Windows StudioCore | `137630514325` | success |
+| Windows x64 application | `137630514039` | success |
+| Publish GitHub Release | `137638355037` | **skipped** |
+
+**Publishing was structurally impossible from this trigger, and I checked it twice rather than
+trusting the shape of the YAML.** The `release` job is gated at `release.yml:159-166` on
+`startsWith(github.ref, 'refs/tags/v')`, and a non-tag build stamps `VERSION="0.0.0-ci"`
+(`:34-36`). After the run: `gh api repos/iR0ham/RetouchStudio/tags` still lists exactly one tag,
+`refs/tags/v1.0.0`, and the only release is the archived v1.0.0 pre-release of 2026-11-09 with its
+8 assets, unchanged. **No tag was created, no release was created, no asset was uploaded, and v1.0.0
+was not touched.** Those remain the owner's reserved actions.
+
+### The packages, and what I re-measured rather than copied
+
+| Artefact | Contents | Size | SHA-256 |
+| --- | --- | --- | --- |
+| `macos-arm64` (id `14807709194`) | `RetouchStudio-0.0.0-ci-arm64.dmg` 4,507,771 B + `.sha256` | 4,486,109 B (zip) | DMG `9ce472b754e56f9b586d52c8c2c3a70d3a0c32690da365a2a1a129e04171e6b1` |
+| `macos-x86_64` (id `14809176395`) | `RetouchStudio-0.0.0-ci-x86_64.dmg` 4,729,336 B + `.sha256` | 4,705,846 B (zip) | DMG `86c10e70e13a067c84395f70fef38daa89e59aaf4114709ac0491c0f0eac1031` |
+| `windows-x64` (id `14809422769`) | `RetouchStudio-0.0.0-ci-windows-x64.msi` 176,354,224 B, `…-x64.zip` 195,171,886 B, each with `.sha256` | 369,365,433 B (zip) | MSI `b99b247113a6f80bdfa513755a25d9630161b0428bb0aa72c2b25c76d92c5d0b`, ZIP `a1c2bf473d12493a9af9f67681fa25583c630f8b322a25b69eb5c966a958d91c` |
+
+The two macOS artefacts I **downloaded and checked myself** (`shasum -a 256 -c` against the shipped
+sidecars): both `OK`. That is the promise a published release makes — the checksum file beside the
+image matches the image — verified off-runner. The 369 MB Windows artefact I did **not** download,
+under the standing rule against pulling large files onto the owner's machine; its digests above are
+the ones the packaging step printed into the sidecars (`rc-windows-x64.log:1677`, `:1690`), which is
+the same class of string that a tag build's publish step re-checks with `sha256sum -c`
+(`release.yml:181-186`) before it uploads anything. The log also shows the packaging self-test builds
+a second MSI, `RetouchStudio-0.0.1-ci-windows-x64.msi` (`:1703-1705`), and then states
+`dist holds the one package for this run: RetouchStudio-0.0.0-ci-windows-x64.msi` (`:1711`) — so the
+run ships one Windows package, not two. Retention for all three artefacts ends
+**2027-02-21T10:28:41Z**; the repository is PUBLIC and an anonymous request for an artefact page
+returns 404, but I did not test whether a signed-in non-collaborator can fetch it, so these packages
+are "unpublished", not "confidential".
+
+### What is inside them is not the same on each platform, and that is the acceptance-relevant fact
+
+`release.yml` sets `RETOUCH_SKIP_WORKER: '1'` at job level for **both** macOS arches (`:25`, `:55`),
+and `build.sh:170-176` honours it by parking the helper instead of shipping it. The build's own
+bundle report says so: `· helper runtime not bundled (AI tools unavailable)`. The fallback that would
+fetch a runtime is deliberately inert as well — `AIRuntime.package` is `nil` (`AIRuntime.swift:40`),
+with the comment recording why: no protocol-v2 package has been published and no URL, size or
+checksum is invented to pretend otherwise.
+
+**So a clean install of either RC DMG is the editor alone: no 4× upscale, no enhancer, no click
+mask, and no in-app route to obtain them.** That is not a regression introduced by this round — it is
+the standing runtime-delivery gap, recorded as such since Milestone R1 and in §8 of the mandate — but
+until now it has not been visible in an artefact. An acceptance session run against these DMGs must
+expect it, and anyone reading "AI capability matrix: green in CI" alongside "these DMGs cannot run AI"
+has to reconcile them the way this paragraph does: the capability code, its gates and its tests are
+green; the *shipping macOS package contains no helper to run them*.
+
+Windows differs, and the reason is a real asymmetry rather than a flag: `RETOUCH_SKIP_WORKER` is read
+only by `build.sh` (`build.sh:170` is its only consumer outside that file), so its presence on the
+`windows-app` job (`release.yml:113`) is **inert**, and
+`./Tools/build-windows.ps1 -RequireMsi` publishes the helper anyway — the log shows
+`-> publishing the AI worker and its native payload into the app` and
+`AI worker, protocol library and ORT CPU payload present` (`rc-windows-x64.log:816`, `:823`). That is
+why the MSI is 176 MB against a 4.5 MB DMG. Model weights remain separately consented downloads on
+both platforms and are still subject to the licence gate, which is the behaviour S.9 and S.10
+verified. **Open question for the owner before any tag:** is "macOS editor-only + Windows with its
+helper bundled" the intended 2.0.0 shape, or must a published protocol-v2 runtime land first?
+
+### Version identity, recorded because publishing cannot undo it
+
+The committed sources agree on the short version — `Resources/Info.plist` is `2.0.0` with
+`CFBundleVersion 2`, and `Windows/Directory.Build.props` is `<Version>2.0.0</Version>` — and
+`Tools/check-versions.sh` is what a tag build runs first (`release.yml:175`) to force tag, plist and
+props to agree. It does **not** compare build numbers, and `release.yml` passes
+`RETOUCH_BUILD="$GITHUB_RUN_NUMBER"` (`:38`, `:68`) into `build.sh:113-115`, which writes it into
+`CFBundleVersion`. The consequence is printed in this very build: `✓ آماده است … نسخهٔ 0.0.0-ci (4)`.
+A `v2.0.0` tag built today would therefore ship **`2.0.0 (5)`**, not the checked-in `(2)`, and the
+number would keep moving with each release-workflow run. Since `CFBundleVersion` is what macOS uses
+to decide whether a package is newer than what is installed, this belongs to the owner's existing
+"build stamping" decision rather than to engineering taste, and it is cheaper to settle before the
+first 2.0.0 asset exists than after.
+
+### Signing: this build confirms the limit, it does not clear it
+
+Both macOS jobs print `! امضای ad-hoc — فقط برای اجرای محلی؛ امضای انتشار عمومی نیست.` and
+`! signature: ad-hoc (runs locally; not a public distribution signature)`, and neither log contains a
+notarisation step or a `notarytool` invocation. `signtool` and `Authenticode` appear **zero** times in
+the Windows job, so the MSI is unsigned. This matches the owner's 2026-11-21 decision that the Apple
+Developer Program is declined and ad-hoc signing is permanent, and it means every installer in this
+candidate will meet a Gatekeeper "unverified developer" prompt (Windows: an SmartScreen "unknown
+publisher" prompt). The acceptance pack already assumes this; the release notes must not promise
+otherwise.
+
+### Evidence ladder after this addendum
+
+**VERIFIED (CI, this run):** the three packaging jobs build from final `main`; the DMG checksum
+sidecars match their images when re-checked off-runner; the publish job cannot fire on a dispatch and
+did not; the pipeline is re-runnable for a tag with `RELEASE_NOTES_2.0.0.md` (present, 32,015 B) and
+`WINDOWS_APP_READY=true` (`release.yml:112`) satisfying its two other gates. And one thing I nearly
+missed while writing this addendum, which is why I re-read the job logs instead of trusting my
+summary of them: **the Windows package is installed and run by CI.** `rc-windows-x64.log:1692-1711`
+records `installed C:\Program Files\Retouch Studio\RetouchStudio.exe as 0.0.0.0`, a window loading
+in 1224 ms, an uninstall that leaves no folder, shortcut or Add/Remove entry, and an in-place upgrade
+`0.0.0.0` to `0.0.1.0` whose window loads in 1203 ms — on a throwaway runner, not the owner's
+machine, so the no-GUI restriction is respected while the evidence is real.
+
+**NOT VERIFIED:** anything a person would notice. No DMG is ever mounted or launched — `hdiutil`,
+`attach` and any `open` of the image appear zero times in either macOS job, so the shipped macOS
+install path is untested and a broken `.app` inside a valid checksum could pass this gate. The
+Windows smoke test stops at "a window appeared": no AI inference was served from the installed
+package, and the fourteen UIA modes run against the build directory, not the installed product. The
+macOS first-run experience of "AI tools unavailable" is unobserved in a real window. The updater's
+inertness with no feed key is argued from code and from no 2.0.0 asset existing, not from a launch.
+The whole of `Docs/RELEASE_2.0.0_ACCEPTANCE.md` therefore remains **NOT RUN**, and the gaps S.9
+listed (Windows `-32010` mapping, live-app inference, banded-path memory) are unchanged by this
+build: CI-built packages are evidence about the *pipeline* and, on Windows only, about *installing*
+it — not about the product in use.
+
+Per the rule S.4 restated and S.10 followed, **no readiness percentage is given** — the honest summary
+is that every gate inside my control is green and every gate that needs a window or a tag is
+untouched.
+
+### What the owner now holds
+
+The candidate is `main == develop == d09ad7b`, zero open pull requests, three downloadable packages
+above, and this ledger as its dossier. Reserved to the owner, and none of it done: tagging `v2.0.0`,
+creating the release, uploading assets, publishing, and launching the app for the acceptance session.
+The decisions stacked in front of that are, in order: (1) the AI-shape question above, (2) build
+stamping, (3) accept or reject the candidate, (4) authorise publication, (5) run the bounded
+acceptance session, which only he can start.
