@@ -1675,3 +1675,133 @@ rights and DR-16's floors F1–F7 to the semantic-track dossier:
   downloading onto this machine — and `swin2sr-x4` stays in service as the upscaler while the restoration survey
   returns measured alternatives, because ejecting the only working upscaler on an unmeasured preference would be
   the same mistake in the other direction.
+
+---
+
+## Addendum S — 2026-11-23: the whole ledger re-checked against the tree, and most of its line-level citations were wrong
+
+### S.0 Why this addendum exists, and what it does not do
+
+Between Addendum R and now, three trains (A, B, C) and PR #121/#122 landed. Every row of this ledger that
+describes a *file* rather than a *decision* was written before them, so the record stopped matching the tree
+while the decisions in it stayed valid. I ran a ground-truth pass over the whole ledger against `ac18c1a`
+(`origin/main`) and re-read each cited site myself rather than accepting the pass's conclusions.
+
+This addendum is **additive**. The rows below correct the record going forward; no earlier text is deleted or
+silently rewritten, because those sections are also the log of what was believed when a decision was taken.
+Where a citation drifted, the corrected site is given. Where a claim was simply false, it is labelled false, not
+stale.
+
+### S.1 Rows that are now closed by merged work
+
+| Gate | What the ledger said | Measured at `ac18c1a` |
+|---|---|---|
+| G-CAT | licence evidence fields "absent"; `ModelCatalog.swift` stores only three strings, "no date, no notice text, no verdict" | **Closed.** `Sources/RetouchStudio/Models/ModelCatalog.swift:146-147` declares `let readOn: String` and `let verdict: String`, with the admission guard at `:170`. Landed through PR #121 (train C). |
+| G-WIN-1 | the Windows look guard names `lookID` but never `lookStrength` | **Closed.** `Windows/RetouchStudio.Core/Project/DocumentModel.cs:419` resolves the guard through `: Amount("lookStrength")` behind the `LookIdentifier()` sentinel test. Verified by reading the guard, not the PR title. |
+| G-WIN-3 | `README.md` falsely states Windows is "not a shipping target" | **Closed.** The paragraph dated 2026-11-22 replaced it; `grep -nE "not a shipping target|no published artifact"` over `README.md` returns nothing. |
+| Wave-1 localisation cluster (D2/D4/D7) | Persian readout spells zero as "Zero KB"; `faint` fails contrast | **Closed.** `Sources/RetouchStudio/Models/Digits.swift:57` defines `digitized(_:)`, and `Sources/RetouchStudio/Views/Theme.swift:40` is `Color(red: 0.588, …)`. (Note: `Theme.swift` lives under `Views/`, not at the root — a citation several earlier rows got wrong.) |
+| §13 "Ran 166 tests" / DR-12 | `ci.yml` hard-pins a literal worker suite count | **Closed by #110.** The pin now reads `Tests/expected-worker-tests.txt` (211 at `ac18c1a`; 279 on PR #115's head). |
+| G-SEP, G-PKG N3/N4/N5 | the three bundle-notice checks "cannot fail" | **Mostly closed, one residue.** `Tools/audit-bundle-notices.sh` fails unless the helper carries non-empty `LICENSE` + `THIRD_PARTY_NOTICES.md`, names every `requirements.lock` pin, and matches each font it claims (`:74-75`). **N6 is still real** — see S.2.4. |
+| #107, #110, #111, #113, #114, #99 | open / in progress / blocked | **All resolved.** Merged or closed-as-landed; each head is an ancestor of `ac18c1a` (`git merge-base --is-ancestor`). The §5 PR table is a snapshot of 2026-11-22 and should be read as one. |
+
+### S.2 Claims that were false, not stale
+
+**S.2.1 `--noqtn` coverage.** §7 carried "`--noqtn` fixes quarantine for extracted runtime files — IN PROGRESS
+(#107)". Two things were wrong there. #107 merged, so the runtime half is done:
+`Sources/RetouchStudio/Core/AIRuntime.swift:146` passes `--noqtn`. But `Sources/RetouchStudio/Core/UpdateVerification.swift:122` — the *updater's* extractor —
+still read `["-x", "-k", archive.path, workspace.path]`, so any row that implied quarantine handling was settled
+for the app's own update path overstated it. PR #122 closes the code (`--noqtn` plus an EngineTests section that
+extracts a marked archive twice and fails if the flag is removed) and corrects `Docs/UPDATE_SYSTEM.md` step 6.
+The §7 row that must never be claimed remains unclaimed: `--noqtn` does nothing for the downloaded `.app` itself.
+
+**S.2.2 The sam2 blocker.** §8c and later rows described the sam2 obstacle variously as a missing pin, a missing
+digest, and a licence question. None of those is true on `main`: the pin, size (`156008466`) and SHA-256
+(`7402e0d8…`) are present in `Resources/model-catalog.json` (now at `:118-119`; earlier rows cite `:77`). What is
+missing is the **runtime package**: `grep -icE "sam2|facebookresearch" worker/requirements.lock` returns **0**
+against 67 pins, and no `sam2` source is vendored under `worker/`. `capabilities.py` still declares
+`packages=("sam2",)` and probes it by import at runtime, so the capability reports BLOCKED for a packaging reason
+that has nothing to do with its licence verdict. G-SAM2 stays open, correctly scoped.
+
+**S.2.3 Windows "fail-open" look guard.** §9 called the Windows edit-presence guard fail-open in principle. It is
+now guarded and tested (S.1), and `texturePreserve` — the same class of defect found later — is inside the skin
+group at `DocumentModel.cs:254-255`. What is genuinely open on Windows is packaging, not decoding: see S.3.
+
+**S.2.4 Two packaging/CI claims I could confirm and had not recorded.**
+
+- `Tools/validate-bundle.sh:39` matches `*"All rights reserved"*|*"all rights reserved"*`. A copyright line in
+  uppercase — `ALL RIGHTS RESERVED`, the form several vendors actually ship — exits 0. The check is real but
+  case-limited; the ledger said "cannot fail", which is a different and weaker statement than the truth.
+- `.github/workflows/ci.yml:183-195` enumerates twelve expected verdicts. `Tests/run.sh` nevertheless builds and
+  runs two more: `run-abi.sh` (`:42`) and `MaskQualityTests.swift` (`:66`), whose verdict strings
+  `ABI TESTS: PASS` and `MASK QUALITY TESTS: PASS` appear in no assertion list. Those two suites can stop
+  executing on `main` without turning macOS Integration red. This is the accurate statement of the gap; the
+  earlier framing ("`Docs/CI_GATES.md` claims they are asserted") is wrong — CI_GATES quotes historical job logs
+  that carry those strings, which is evidence they ran *then*, not a promise CI keeps *now*.
+
+**S.2.5 A claim I set out to correct and could not.** My own worklist for this pass said the ledger asserted
+`build.sh` validates `LC_BUILD_VERSION` against `RETOUCH_VERSION`. It does not, and never did: `LC_BUILD_VERSION`
+appears nowhere in the repository or in this file. Recording that matters more than it looks — a correction added
+without re-reading the source would have put a false statement about a false statement into a decision ledger.
+The real build-stamping facts are the opposite of worrying: `build.sh:104-112` compiles, copies the fresh binary,
+copies `Resources/Info.plist`, then stamps `CFBundleShortVersionString` with PlistBuddy **before** codesigning, so
+there is no stale-binary path. What `build.sh` does do and does not skip is exec the bundled binary
+(`:229` arm64, `:244` `arch -x86_64`) with no opt-out switch — which is why G-BLD is still CI-only.
+
+### S.2.6 G-SUM was understated in both directions, so it is restated precisely.
+
+§3 line 88 and §7 line 156 both say the checksums are generated and "independently re-checked — NOT VERIFIED".
+Reading the workflow instead of the row separates two facts the ledger had merged:
+
+- **Generation is executed evidence.** `Tools/make-dmg.sh:30` writes the sidecar next to each DMG (`shasum -a 256`,
+  the same `<hash>  <path>` form the verifier reads), and the
+  `Release` workflow has run three times by `workflow_dispatch` (latest success 2026-11-15 against `main`), in
+  which the macOS packaging jobs — the ones that produce the sidecars — completed.
+- **The independent re-check is encoded but has never executed.** `release.yml:181-187` re-verifies every
+  `*.sha256` inside the `release` job — a different job from the ones that produced them, on a different runner,
+  from artifacts it downloaded rather than wrote — and the loop is non-vacuous because an unmatched glob leaves
+  the literal `*.sha256` to fail `sha256sum -c`. But that job is gated on `startsWith(github.ref,'refs/tags/v')`
+  (`:159-165`), and no tag has ever been pushed. So the honest status is **implemented, CI-enforced at publish
+  time, never performed** — not "missing", and not "verified".
+- The publish path itself is **not** broken by the Windows gate, contrary to an earlier note: `release.yml:154-165`
+  uses `always()` with explicit result tests that accept `windows-app` as `skipped` while `vars.WINDOWS_APP_READY`
+  stays unset, and publishing takes `artifacts/*`, so a macOS-only tag publishes correctly. Verified by reading
+  the job, not by a run.
+
+One real defect in the same file *was* found and is being fixed separately: the publish step creates the release
+with `--generate-notes` (`release.yml:195`), which means the vetted bilingual notes this release is required to
+ship (G-RN) would never reach the release body. Auto-generated GitHub notes are not a substitute for a claim the
+project has to stand behind.
+
+### S.3 New open items this pass put on the record, with the evidence class stated
+
+| ID | Item | Evidence |
+|---|---|---|
+| **S-FLUX** | **Two repository-owned records disagree about one shipped artefact.** §R.3 (2026-11-22, my own decision) states the `flux2-klein-4b-q4` pin "is not distributable as it stands… that fails F1 and F2 regardless of licence". PR #121 then wrote `weights=_approved(…, stated_by=STATED_BY_RIGHTS_HOLDER, verdict=APPROVED)` into `worker/retouch_ai_worker/catalog.py:446`, with `evidence_url` at `mflux-community/flux2-klein-4b-mflux-q4` — a mutable third-party conversion whose card disclaims authorship — and a note asserting the grant was read *at that repository*. The grant exists one level up (`black-forest-labs/FLUX.2-klein-4B`, Apache-2.0). The catalogue therefore attributes to the artefact it downloads a statement made about a different artefact. Read in the shipped surface, §7's G-NOC row lists this entry as selectable. Either re-record against the upstream revision with a pinned conversion commit and CI-generated hashes, or set the artefact's verdict to UNKNOWN so the gate refuses it. **Measured at `ac18c1a`; unresolved.** |
+| **S-WIN-2** | Windows package attribution. `Tools/package-windows-msi.ps1` and `Windows/installer/Product.wxs` contain no licence/notice handling at all (case-insensitive grep: empty), so an MSI carries no MIT text and no third-party notices. Caveat against overstatement: `build-windows.ps1:226` *does* copy ONNX Runtime's own `LICENSE`/`ThirdPartyNotices.txt` into `AI/`, so "nothing" is too strong. **Measured statically; no MSI was built here (`dotnet` absent).** |
+| **S-WIN-4** | No Windows counterpart to `Tools/validate-bundle.sh` exists in `Tools/`. | `git ls-tree` at `ac18c1a`. |
+| **S-WIN-6** | The ONNX Runtime MIT grant has never been read from the nupkg's own `LICENSE` by anyone in this project; every row asserting it cites an upstream claim. | No in-tree record of the read. **NOT VERIFIED.** |
+| **S-VER** | Version identity is still 1.0.0: `Resources/Info.plist:22-24` and `Windows/Directory.Build.props:13`. `Docs/RELEASE_NOTES_2.0.0.md` does not exist; only `RELEASE_NOTES_1.0.0.md`. | Measured. |
+| **S-ADVERSARIAL** | The §4 adversarial matrix still has no committed seed→test→exit table; `WORKER_CI_VALIDATION_PLAN` lists seeds with nothing pinning them. | `git grep` at `ac18c1a`. |
+| **S-DISK** | The disk probe still conflates "capacity unknown" with "volume full" at five sites, and `Tests/ModelStoreTests.swift` pins `freeBytes: 0` assertions that encode the conflation. | Carried forward from §Phase-1; **re-confirmed open, not re-measured this pass.** |
+
+### S.4 Release readiness, stated as coverage rather than as a number
+
+The mandate forbids a percentage without a defined measurable checklist, so none is given. What can be said
+without inflating it:
+
+- **Implemented and locally measured:** the fail-closed integrity gate on PR #115's head (worker suite
+  `Ran 279 … OK` through `Tests/run-worker.sh`, with the linked-directory case proved to fail against the
+  previous implementation), and the updater quarantine fix on PR #122 (`ENGINE TESTS: PASS`, plus a mutation run
+  that turns it into `FAIL (3)` when the flag is removed).
+- **Implemented, evidence is CI-only:** every Windows context, the four-arch macOS suites, and the golden-corpus
+  protection. `dotnet` is absent on this machine, so nothing Windows was executed here.
+- **Not verified at all, and load-bearing for a release:** any first-launch behaviour of a real downloaded bundle
+  (G-ACC, D11), the truthfulness of the Gatekeeper instructions in release notes that do not exist yet, any
+  cross-Mac launch of a non-notarised build, production of a 2.0.0 artefact (G-BLD — this Mac cannot compile the
+  bundle; the CLT toolchain has no `SwiftUIMacros`), and every live inference claim.
+- **Blocked on a decision recorded as unresolved:** S-FLUX. It is a §4 provenance item inside the model-ecosystem
+  authority, and I am not treating a licence grant held by someone upstream as a grant held by the file we ship.
+
+G-QA and G-PUB remain **BLOCKED** and **NOT AUTHORIZED** exactly as §9 and §11 define them: the owner runs the
+acceptance session, and publication, tags and release assets stay his. `Docs/RELEASE_2.0.0_ACCEPTANCE.md` exists
+as a deliberately blank form; it has not been filled because filling it requires the app to be launched.
