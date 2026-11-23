@@ -26,9 +26,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .catalog import (Catalog, pin_problem, resolve_model_root,
+from .catalog import (Catalog, ModelEntry, pin_problem, resolve_model_root,
                       unlisted_payload)
-from .protocol import CONTRACT_VERSION
+from .protocol import CONTRACT_VERSION, WorkerError
 
 VOCABULARY = "capabilities/1"
 SUPPORTED = "supported"
@@ -200,6 +200,55 @@ def _inspect(catalog: Catalog, model_id: str) -> tuple[str, str | None, str | No
     return "ok", root.name, None
 
 
+def permission_refusal(entry: ModelEntry | None,
+                       catalog: Catalog) -> str | None:
+    """The sentence refusing a model on permission grounds, or None.
+
+    One source for the two places that have to agree. `report` publishes the
+    blocked capability, and the job gate in `server.py` refuses a named
+    capability — if those two derived the answer separately, the report could
+    say "no established permission" while the gate answered with the generic
+    class, which is the shape the host routes to Manage Models. The order
+    matches `report`: a record that fails validation is a catalogue defect with
+    its own code, so it is not reported as a permission refusal here, and an
+    excluded model is refused whatever the evaluation switch says.
+    """
+    if entry is None:
+        return None
+    try:
+        entry.validate()
+    except ValueError:
+        return None
+    excluded = entry.permitted_use.excluded
+    if excluded:
+        return (f"{entry.id} is excluded ({', '.join(excluded)} terms refuse "
+                f"distribution), so no configuration downloads or runs it")
+    if not catalog.allow_uncleared and not entry.permitted_use.admitted:
+        verdict = entry.permitted_use.weights.verdict
+        return (f"{entry.id} has no established permission for public "
+                f"non-commercial use and distribution (weights verdict: "
+                f"{verdict}), so this build will not download or run it")
+    return None
+
+
+def capability_permission_refusal(capability_id: str,
+                                  catalog: Catalog) -> str | None:
+    """Why permission alone blocks this capability, or None if it does not.
+
+    A capability with no model behind it — a fixed `unsupported` or a `blocked`
+    with nothing installed to refuse — can never be a permission refusal, and an
+    id the catalog does not carry is the caller's bug, not a licence answer.
+    """
+    spec = next((item for item in CAPABILITIES if item.id == capability_id), None)
+    if spec is None or not spec.models:
+        return None
+    try:
+        entry = catalog.get(spec.models[0])
+    except WorkerError:
+        return None
+    return permission_refusal(entry, catalog)
+
+
 def _record(spec: Spec, state: str, provider: str, model_id: str | None = None,
             version: str | None = None, evidence: str | None = None,
             reason: str | None = None) -> dict:
@@ -236,24 +285,14 @@ def report(catalog: Catalog, evidence: tuple[dict, ...] | None = None,
                 spec, BLOCKED, provider, model_id,
                 reason=f"{error}, so this build will not download or run it"))
             continue
-        excluded = entry.permitted_use.excluded
-        if excluded:
-            # No switch admits an excluded model, so the report must not either.
-            records.append(_record(
-                spec, BLOCKED, provider, model_id,
-                reason=(f"{model_id} is excluded ({', '.join(excluded)} terms "
-                        f"refuse distribution), so no configuration downloads "
-                        f"or runs it")))
-            continue
-        if not catalog.allow_uncleared and not entry.permitted_use.admitted:
+        refusal = permission_refusal(entry, catalog)
+        if refusal is not None:
             # Asked before the install state: a licence refusal must not become
-            # a download offer (`requires_model`) for the same weights.
-            verdict = entry.permitted_use.weights.verdict
-            records.append(_record(
-                spec, BLOCKED, provider, model_id,
-                reason=(f"{model_id} has no established permission for public "
-                        f"non-commercial use and distribution (weights verdict: "
-                        f"{verdict}), so this build will not download or run it")))
+            # a download offer (`requires_model`) for the same weights. The same
+            # helper answers the job gate, so the report and the refusal cannot
+            # drift apart on which class a permission is.
+            records.append(_record(spec, BLOCKED, provider, model_id,
+                                   reason=refusal))
             continue
         absent = [name for name in spec.packages if not have(name)]
         if absent:

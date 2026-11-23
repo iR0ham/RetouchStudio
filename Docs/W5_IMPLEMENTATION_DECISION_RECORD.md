@@ -116,9 +116,9 @@ They are not interchangeable.
 | `mask.click` | Promptable mask (B) | `mask` | SAM 2.1 box (shipped) | follow-on S2 |
 | `matte.fine` | Hair/fine matte (B) | `matte` | none (licence gate) | follow-on S2 (licence gate) |
 | `inpaint.spot` | Spot removal (D) | `inpaint` | MI-GAN (shipped) | follow-on H1; ONNX port unverified |
-| `inpaint.object` | Object removal (D) | `inpaint`, `generative_edit` | MI-GAN / FLUX.2 klein (shipped) | follow-on H1/G1; needs a CPU-viable engine |
-| `generative.edit` | Masked prompt edit (F) | `generative_edit` | FLUX.2 klein (shipped) | follow-on G1; CPU-viable or optional-GPU engine |
-| `generative.reimagine` | Whole-frame reimagine (F) | `generative_edit` | FLUX.2 klein (shipped) | follow-on G1; CPU-viable or optional-GPU engine |
+| `inpaint.object` | Object removal (D) | `inpaint`, `generative_edit` | MI-GAN (shipped); FLUX.2 klein refused (see note below) | follow-on H1/G1; needs a CPU-viable engine |
+| `generative.edit` | Masked prompt edit (F) | `generative_edit` | refused (see note below) | follow-on G1; CPU-viable or optional-GPU engine |
+| `generative.reimagine` | Whole-frame reimagine (F) | `generative_edit` | refused (see note below) | follow-on G1; CPU-viable or optional-GPU engine |
 | `generative.outpaint` | Outpainting (F) | `generative_edit` | refusal (no licensed engine) | follow-on G1; refusal until licensed |
 | `background.replace` | Backdrop replacement (E), composed | `segmentation` + composite + optional `matte` / `generative_edit` | shipped over `mask.subject` (coarse edges) | follow-on B1 |
 | `upscale.2x` | 2× output (G) | `upscale` | not implemented | follow-on U1 |
@@ -126,6 +126,18 @@ They are not interchangeable.
 | `enhance.photo` | AI Enhancer, same size (H) | `enhance` (+ `restore` stages) | none (classical only) | follow-on E1 |
 | `restore.photo` | Restoration, same size (H) | `restore` | none | follow-on E1 |
 | `portrait.ai` | AI portrait augmentation (C) | `enhance`, `inpaint` | none; classical stays default | follow-on P1 |
+
+Dated correction (2026-11-23): the three FLUX.2 klein cells above read "(shipped)"
+in the revision that adopted the model. That status no longer holds. The pinned
+`flux2-klein-4b-q4` conversion has weight verdict `unknown` — no rights holder or
+authorization can be established for it from public evidence — so under DR-15 its
+capability is reported `blocked` and every job naming it is refused with
+`E_LICENCE_REFUSED`. A `blocked` capability normally waits for the user to do
+something, so the generic refusal routed those three surfaces to the model
+manager, where no action settles a permission. The gate now answers the licence
+class separately from that generic one, so the manager does not open. See
+`Docs/MODEL_LICENCES.md` for the record and `Docs/AI_11_MODEL_EVALUATION.md` for
+the verdict. Earlier rows in this file are otherwise left as written.
 
 A follow-on milestone is a concrete path with named gates, not a parity claim
 or a support claim. `background.replace` is a product-level composite over a

@@ -130,6 +130,23 @@ class DownloadTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_the_shipped_flux_entry_is_refused_by_a_real_fetch(self):
+        # `test_plan_refuses_unlicensed_models` proves the rule on a fake entry.
+        # This is the same rule on the shipped table and the real Downloader, so
+        # the 4.6 GB FLUX transfer cannot be reached by any path that grants
+        # consent: `fetch` plans first, and the plan refuses with `-32010`.
+        root = Path(self.tmp.name) / "flux-store"
+        catalog = Catalog(root, allow_uncleared=False)
+        consent = ConsentStore(root / "consent.json")
+        downloader = Downloader(root, catalog, consent,
+                                opener=lambda *a, **k: (_ for _ in ()).throw(
+                                    AssertionError("a refused entry opened a connection")))
+        with self.assertRaises(WorkerError) as caught:
+            downloader.fetch(["flux2-klein-4b-q4"])
+        self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+        self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
+        self.assertFalse((root / "flux2-klein-4b-q4").exists())
+
     def test_consent_is_required(self):
         with self.assertRaises(WorkerError) as caught:
             self.downloader.fetch(["fake-model"])

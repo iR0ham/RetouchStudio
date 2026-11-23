@@ -1732,9 +1732,14 @@ do {
                     evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
                     grantsAll: false),
         ArtefactPin(model: "flux2-klein-4b-q4", artefact: "weights",
-                    verdict: "approved", statedBy: "rights-holder",
+                    verdict: "unknown", statedBy: "not-established",
                     evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
-                    grantsAll: true),
+                    // S-FLUX re-read this artefact and its upstream on 2026-11-23, and
+                    // `readOn` means "when the statement behind this verdict was read"
+                    // (§1: a URL without a date cannot rot-detect). The date moves with
+                    // the read that established the verdict, exactly as §10 moved
+                    // swin2sr-x4 from 2026-11-21 to 2026-11-22.
+                    grantsAll: false, readOn: "2026-11-23"),
         ArtefactPin(model: "flux2-klein-4b-q4", artefact: "trainingData",
                     verdict: "unknown", statedBy: "not-established",
                     evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
@@ -1782,7 +1787,10 @@ do {
                     grantsAll: false),
     ]
     let expectedAdmitted: [String: Bool] = [
-        "flux2-klein-4b-q4": true,
+        // S-FLUX, 2026-11-23: FLUX's weights permission is not established, so its
+        // own record refuses it. The flag below is the derived admission, not a
+        // product decision — `isAdmitted` needs an approving verdict on the weights.
+        "flux2-klein-4b-q4": false,
         "sam2.1-hiera-tiny": true,
         "swin2sr-x4": true,
         "migan": true,
@@ -1886,7 +1894,25 @@ do {
         }
         return artefact(record["weights"] as? [String: Any] ?? [:]) && !excluded
     }
-    let probeID = "flux2-klein-4b-q4"
+    // The probe has to start from a record that *grants* everything, because most
+    // cases below rewrite one field of an approving record and then assert that
+    // the rule under test is the first one to fire. The case that proves the
+    // hazard is this file's own history: the probe used to be
+    // `flux2-klein-4b-q4`, and when S-FLUX moved that artefact to
+    // `unknown` / `not-established` on 2026-11-23 (Docs/MODEL_LICENCES.md §12),
+    // nine of these checks silently became assertions about the not-established
+    // rule and about records that no longer granted anything. So the probe is now
+    // selected from the shipped data and pinned, rather than assumed by name.
+    let probeID = shippedEntries.first { entry in
+        guard let weights = (entry["permitted_use"] as? [String: Any])?["weights"] as? [String: Any]
+        else { return false }
+        return weights["verdict"] as? String == "approved"
+            && weights["statedBy"] as? String == "rights-holder"
+            && ["canAcquire", "canRedistribute", "canUse"].allSatisfy { weights[$0] as? Bool == true }
+            && ((weights["conditions"] as? [[String: Any]]) ?? []).isEmpty
+    }?["id"] as? String ?? ""
+    check(!probeID.isEmpty,
+          "a granting shipped record exists to probe the validator rules against")
     func catalogue(_ modelID: String, _ artefact: String, syncAdmitted: Bool = true,
                    _ mutate: (inout [String: Any]) -> Void) -> Data {
         var root = shippedObject
@@ -2024,8 +2050,10 @@ do {
               "a retired commercialOk flag cannot change an excluded record")
 
         // The claimed flag must agree with the record, in both directions. Every
-        // shipped record derives `true` now, so the disagreement has to be built
-        // by withdrawing a permission rather than by editing the flag: swin2sr's
+        // shipped record derived `true` when this case was written, so the
+        // disagreement has to be built by withdrawing a permission rather than by
+        // editing the flag (since S-FLUX, `flux2-klein-4b-q4` derives `false` on
+        // its own, which is a refusal rather than a mismatch). swin2sr's
         // code artefact is excluded with none of its axes granted, which is a
         // legal record by itself and makes the entry derive `false` while the
         // file still claims `true`. Flipping a claim is the one thing the

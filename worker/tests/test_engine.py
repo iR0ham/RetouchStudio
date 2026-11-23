@@ -392,6 +392,13 @@ class LoaderIntegrityTests(unittest.TestCase):
         # can drive without weights: a fake torch proves whether
         # `from_pretrained` was reached at all. The file is exactly the recorded
         # length, so nothing but the digest can stop it.
+        #
+        # The fixture takes an *admitted* record rather than `SHIPPED[0]`. Since
+        # S-FLUX position zero is FLUX, whose weights permission is unknown, and
+        # `_require_licensed` answers before disk state — so a borrowed FLUX row
+        # would prove only the licence gate and never reach the digest.
+        admitted_use = next(entry.permitted_use for entry in SHIPPED
+                            if entry.permitted_use.admitted)
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)
         inputs = tmp / "inputs"
@@ -409,7 +416,7 @@ class LoaderIntegrityTests(unittest.TestCase):
         }), encoding="utf-8")
         entry = ModelEntry(
             id="swin2sr-x4", name="Swin2SR x4", task="upscaling",
-            license_id="Apache-2.0", permitted_use=SHIPPED[0].permitted_use, source="local",
+            license_id="Apache-2.0", permitted_use=admitted_use, source="local",
             files=(ModelFile("weights.bin",
                              hashlib.sha256(b"trusted").hexdigest(), 7),))
         (version / "weights.bin").write_bytes(b"tampere")

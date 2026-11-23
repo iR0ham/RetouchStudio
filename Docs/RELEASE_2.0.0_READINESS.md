@@ -1776,7 +1776,7 @@ project has to stand behind.
 
 | ID | Item | Evidence |
 |---|---|---|
-| **S-FLUX** | **Two repository-owned records disagree about one shipped artefact.** §R.3 (2026-11-22, my own decision) states the `flux2-klein-4b-q4` pin "is not distributable as it stands… that fails F1 and F2 regardless of licence". PR #121 then wrote `weights=_approved(…, stated_by=STATED_BY_RIGHTS_HOLDER, verdict=APPROVED)` into `worker/retouch_ai_worker/catalog.py:446`, with `evidence_url` at `mflux-community/flux2-klein-4b-mflux-q4` — a mutable third-party conversion whose card disclaims authorship — and a note asserting the grant was read *at that repository*. The grant exists one level up (`black-forest-labs/FLUX.2-klein-4B`, Apache-2.0). The catalogue therefore attributes to the artefact it downloads a statement made about a different artefact. Read in the shipped surface, §7's G-NOC row lists this entry as selectable. Either re-record against the upstream revision with a pinned conversion commit and CI-generated hashes, or set the artefact's verdict to UNKNOWN so the gate refuses it. **Measured at `ac18c1a`; unresolved.** |
+| **S-FLUX** | **Two repository-owned records disagree about one shipped artefact.** §R.3 (2026-11-22, my own decision) states the `flux2-klein-4b-q4` pin "is not distributable as it stands… that fails F1 and F2 regardless of licence". PR #121 then wrote `weights=_approved(…, stated_by=STATED_BY_RIGHTS_HOLDER, verdict=APPROVED)` into `worker/retouch_ai_worker/catalog.py:446`, with `evidence_url` at `mflux-community/flux2-klein-4b-mflux-q4` — a mutable third-party conversion whose card disclaims authorship — and a note asserting the grant was read *at that repository*. The grant exists one level up (`black-forest-labs/FLUX.2-klein-4B`, Apache-2.0). The catalogue therefore attributes to the artefact it downloads a statement made about a different artefact. Read in the shipped surface, §7's G-NOC row lists this entry as selectable. Either re-record against the upstream revision with a pinned conversion commit and CI-generated hashes, or set the artefact's verdict to UNKNOWN so the gate refuses it. **Measured at `ac18c1a`; unresolved.** **CLOSED 2026-11-23: the second option was taken (S.8), and the routing residue it left was closed the same day (S.9). This row is kept as written.** |
 | **S-WIN-2** | Windows package attribution. `Tools/package-windows-msi.ps1` and `Windows/installer/Product.wxs` contain no licence/notice handling at all (case-insensitive grep: empty), so an MSI carries no MIT text and no third-party notices. Caveat against overstatement: `build-windows.ps1:226` *does* copy ONNX Runtime's own `LICENSE`/`ThirdPartyNotices.txt` into `AI/`, so "nothing" is too strong. **Measured statically; no MSI was built here (`dotnet` absent).** |
 | **S-WIN-4** | No Windows counterpart to `Tools/validate-bundle.sh` exists in `Tools/`. | `git ls-tree` at `ac18c1a`. |
 | **S-WIN-6** | The ONNX Runtime MIT grant has never been read from the nupkg's own `LICENSE` by anyone in this project; every row asserting it cites an upstream claim. | No in-tree record of the read. **NOT VERIFIED.** |
@@ -1871,3 +1871,176 @@ Two rows that read as "all resolved" are not, and both stay open with their evid
 And a process rule this measurement earns: in this ledger, an ancestry claim must name the object it compared
 and state whether that object was fetched, because "I could not see it" and "it is not there" produce the same
 exit code.
+
+### S.8 — later the same day, 2026-11-23: S-FLUX closes as `unknown`, and the gate now refuses the download
+
+S-FLUX above offered two ways out — re-record against the upstream revision, or set the
+artefact's verdict to `unknown`. **Chosen: `unknown`.** Not because the re-record is wrong
+but because it is not available under this slice's constraints: it needs 4.6 GB of weight
+downloads to verify the published digests, which the model-ecosystem authority forbids on
+this machine without authorisation. Recording a permission we cannot evidence would repeat
+the mistake S-FLUX describes.
+
+`Docs/MODEL_LICENCES.md` §12 carries the full evidence, the two corrections the research
+package needed before it was allowed into the record, and the three ways to close the item
+later. In one line: the Apache-2.0 grant is real and is now anchored to a revision
+(`black-forest-labs/FLUX.2-klein-4B` @ `e7b7dc27…`, `LICENSE.md` 9,584 bytes, sha256
+`ca02bc51900ab07789d1b70283329e7137f5af98f5161c23a1c81fc38a4af1fe`, verbatim, no
+field-of-use clause, no NOTICE file), and what cannot be established is the link from that
+revision to the pinned community conversion — whose repository ships no licence file at
+all, whose head has already moved from `77090341…` to `794cd159…`, and whose card asserts
+the lineage without naming a revision.
+
+**What the shipped behaviour becomes** (each row asserted by a test on this branch, none of
+it inferred):
+
+| Site | Before | After |
+|---|---|---|
+| `catalog.py` FLUX weights record | `approved` / `rights-holder` / axes `true` | **`unknown` / `not-established` / axes `null`** |
+| `Resources/model-catalog.json` | same claim, regenerated surface | **same claim as the worker, byte-for-byte, via `licence-evidence-apply.py`** |
+| `plan.py` `manifest()` | returned a 4.6 GB download plan | **`LICENSE_BLOCKED` (−32010)** |
+| `catalog.py` `require_verified()` | loaded | **`LICENSE_BLOCKED` (−32010)** |
+| `capability.list` → `generative.edit`, `generative.reimagine`, `inpaint.object` | `requires_model` | **`blocked`**, reason carries "no established permission" and "weights verdict: unknown" |
+| `capability.list` → `inpaint.spot`, `upscale.4x` | `requires_model` | **unchanged** — the refusal is entry-scoped, not feature-scoped |
+| Both hosts on −32010 | — | **`E_LICENCE_REFUSED`, and `opensModelManager` returns false** (`WorkerClient.swift:34`, `WorkerClient.cs:43`) so a refused licence is not presented as a missing model |
+
+Proven end-to-end against `origin/main`'s own worker code before the branch was cut: a
+baseline record loads, the mutated `unknown` record still passes `validate()` (so this is a
+licence decision, not a schema violation), and the same mutated record yields −32010 from
+both `manifest()` and `load()`.
+
+**Two honest limits on that sentence.** (1) `load()` accepts an `allow_uncleared` escape
+hatch, reachable in production only through `RETOUCH_AI_EVAL_MODELS=1`; both launch sites
+now strip that variable (`AIWorker.swift:599`, `AIRuntimeValidation.swift:211`), so the
+shipped app cannot reach it — but a person starting the worker by hand through
+`run-worker.sh` can, and that is a documented operator action, not a guarantee in code.
+(2) The −32010 → `E_LICENCE_REFUSED` mapping is **tested only for −32021** on Windows
+(`Windows/RetouchStudio.AI.Tests/Program.cs:326-341`); no test pins the −32010 branch or
+the `opensModelManager` answer on either host. Tracked as an open item, not closed here.
+
+**Not touched:** `migan` (MIT code *and* `LICENSE-WEIGHTS` — spot healing stays offered),
+the §11 `swin2sr-x4` record, every other catalogue entry, the MIT repository licence, and
+the FLUX inference code itself. A refused record is a metadata decision; deleting the
+loader would destroy the only harness a future re-record can be tested with.
+
+The user-visible consequence for 2.0.0 is what `Docs/RELEASE_NOTES_2.0.0.md` now says in
+both languages: generative editing and diffusion-based object removal are not offered.
+
+Closing S-FLUX also moved one host-side pin, and only CI found it. `Tests/RuntimeV2Tests.swift`
+probed the capability gate through `generative.reimagine` — whose only catalogue model is this
+entry — and asserted the refusal was `-32011 E_MODEL_MISSING`. That assertion was true for a
+reason unrelated to what the check exists to prove (the weights simply were not installed), and
+the same gate now answers `-32010 E_LICENCE_REFUSED` because the record refuses its own weights.
+The check moved to the new code with its name restated, not loosened: it still asserts that
+naming a capability makes the helper apply its verdict before a job folder exists, and the
+adjacent label-route check still proves the verdict does not silently become the gate (A2). The
+worker suite, `ModelStoreTests` and the generator check were all green locally first, so the
+record of this slice includes the fact that my local gate set was too narrow to see it. The
+corrected check cannot be exercised here at all: this machine has no installed helper runtime,
+so `RuntimeV2Tests` reports 4 failures named M, N, O and P, every one of them
+`posix_spawn failed (errno 13)` — the helper refusing to start, which is environment and not
+catalogue logic. Whether the same four fail at `main` on this machine was **not measured**, so
+this suite's verdict is CI-only and is recorded as such rather than claimed.
+
+### S.9 — later the same day, 2026-11-23: S.8's last paragraph claimed a gate behaviour that the head it described did not have
+
+S.8 closed with the sentence "the same gate now answers `-32010 E_LICENCE_REFUSED`". **That was
+false at `281f7ae`, and CI is what proved it**: run `45131036490` failed `macOS Integration` at
+"Run engine, model and runtime suites" with `RUNTIME V2 TESTS: FAIL (1)`, on exactly the check
+that sentence was about —
+
+```
+✗ P: naming a capability whose only model is licence-refused stops the job —
+  flux2-klein-4b-q4 has no established permission for public non-commercial use
+  and distribution (weights verdict: unknown), so this build will not download or run it
+```
+
+Writing the assertion was not the same as making it true.
+
+The defect was real and it was in the worker, not in the test. `server.py::_require_capability`
+answered *every* non-ready capability state with `-32020 E_UNSUPPORTED` plus
+`data.capabilityState = "blocked"`. On the macOS host, `WorkerClient.opensModelManager` returns
+true for `-32020` when the state is `blocked` and `missingPackage` is `nil` — a reasonable rule,
+because a blocked capability normally waits for the user to do something in the model manager
+(adopt a legacy install, install weights, record a run). `missingPackage` is populated only by
+the sam2 import path in `engine.py`, never at this gate. So a refusal whose cause was a licence
+record opened the model manager with a "waiting for you" sentence, and nothing there settles a
+permission. The host already mapped `-32010` to `E_LICENCE_REFUSED` without opening the manager;
+the worker was simply not using that class.
+
+**The fix is one source for the answer.** `capabilities.py` now owns
+`permission_refusal(entry, catalog)` — excluded terms first, then the not-admitted sentence — and
+`report()` builds its `blocked` reason from it instead of carrying two hand-written copies. The
+job gate calls `capability_permission_refusal()` before it looks at the capability record and
+raises `LICENSE_BLOCKED`, so the report and the refusal cannot disagree about which class a
+permission is. A record that fails `validate()` keeps its own code: that is a catalogue defect
+(`-32021`), not a licence answer, and the helper returns `None` for it on purpose.
+
+**What was *not* wrong, stated because a review round claimed it was.** The suggestion that jobs
+could reach an unverified download — "fail-open at submission" — does not survive reading
+`catalog.py`. `_require_licensed()` is the first thing both accessors do (`require()` at
+`catalog.py:1163`, `require_verified()` at `:1248`), and its own docstring says the refusal order
+is what the host's routing keys on: licence first, so a licence answer never depends on what is on
+disk. `plan.manifest()` — the download planner the `model.plan` RPC calls — refuses an excluded
+record (`plan.py:36-43`) and a not-admitted one (`:44-47`) before it emits a single URL.
+No unadmitted byte was ever downloadable or loadable. Two asymmetries are worth naming rather
+than leaving implicit, and this slice changes neither: the Python admission test is the aggregate
+`permitted_use.admitted` plus the excluded list, while the Swift host additionally walks each
+artefact's own `isAdmitted` (`Sources/RetouchStudio/Models/ModelCatalog.swift`), so a record whose
+aggregate claims admission while one artefact refuses it is caught on the host and not by the
+worker; and Python's aggregate check honours the `allow_uncleared` escape hatch whereas
+`manifest()` does not.
+
+**Test evidence for this round** (each item measured, not inferred):
+
+- Worker suite through `Tests/run-worker.sh` with the working interpreter: `Ran 286 tests … OK`,
+  `VERDICT: PASS`, rc 0. Three `test_server.py` assertions moved from `-32020` to `-32010` and
+  keep their `state == "blocked"` and reason-text assertions — the class changed, the strictness
+  did not. One new test submits `patch_edit` with *no* capability name against the shipping
+  catalogue through a real socket, so the kind-only path answers the permission question itself
+  (`-32010`, `data.model == "flux2-klein-4b-q4"`, `data.verdict == "unknown"`).
+- `Tests/expected-worker-tests.txt` now reads **286**; the count guard fired at `286 != 285` first
+  and the source was updated to the measured number rather than the test being dropped.
+- `python3 Docs/licence-evidence-apply.py --check`: `OK: catalogue current, sha256 0a5e3386…`.
+  Two shipped record strings changed under this round and both went through the generator, never
+  by hand: `weights.readOn` moved to `2026-11-23` (the date of the read that produced the verdict —
+  §1 defines `readOn` as the rot-detection date, and §10 already moved `swin2sr-x4`'s to
+  `2026-11-22` for the same reason), and `code.note` said the grant was read "at this repository",
+  which is the attribution §12.5 exists to retract. `Tests/ModelStoreTests.swift` pins both record
+  dates, and it caught the first one: the suite failed `flux2-klein-4b-q4/weights was read on its
+  pinned date` before the pin moved to the new truth.
+- `ModelStoreTests`: `MODEL STORE TESTS: PASS`, 233 checks, 0 failures. Its shipped-table probe
+  no longer assumes `flux2-klein-4b-q4` by name — that entry now derives `admitted = false`, which
+  silently converted nine validator-rule checks into assertions about the not-established rule —
+  and the probe record is selected from the shipped JSON and pinned by a check that fails if no
+  granting record exists.
+- The whole app source tree type-checks under the CLT SDK: 0 errors. This caught a real mistake in
+  the copy edit below (a Swift-invalid adjacent-string-literal), which the CI-less local gate set
+  would otherwise have shipped.
+- `RuntimeV2Tests` compiles and aborts at check **M** with `posix_spawn failed (errno 13)` — the
+  same installed-helper blocker S.8 recorded. **The rewritten P block, including
+  `opensModelManager == false` and the `-32020` contrast leg, therefore never executed here and
+  is CI-only.** Its verdict in this ledger comes from CI, not from this machine.
+
+**Surfaces that were still asserting the retired claim, now corrected in the same slice:**
+`Docs/W5_IMPLEMENTATION_DECISION_RECORD.md`'s capability matrix called `inpaint.object`,
+`generative.edit` and `generative.reimagine` "FLUX.2 klein (shipped)" — the three rows the S-FLUX
+decision makes false — and carries a dated correction under the table rather than a silent
+rewrite. `Docs/MODEL_LICENCE_EVIDENCE.md`'s own status line still promised "data layer only …
+changes no install, download or refusal decision"; it is kept as the decision record with a dated
+correction above it. The onboarding tutorial said, in both languages, "FLUX.2 klein, SAM 2.1 and
+Swin2SR are Apache-2.0; MI-GAN is MIT" — false for the artefact this build pins — and now says
+what the record says. The Model Manager derived its `code / weights` licence tokens from the flat
+historical strings, which DR-13 keeps stale by design; those tokens now come from
+`permittedUse.…isAdmitted`, with a new bilingual key `modelsLicenceUnestablished`
+("licence not established" / «مجوز اثبات نشده»). Measured against the shipped JSON, exactly one
+entry changes: `flux2-klein-4b-q4`. `sam2.1-hiera-tiny`, `swin2sr-x4` and `migan` still read
+`Apache-2.0` / `MIT` because their records *are* admitted, so the row is a correction and not a
+blanket warning.
+
+**Open after this round, with their evidence class:** the `-32010` → `E_LICENCE_REFUSED` mapping
+still has no host-side unit test on either platform (macOS is now covered at RPC level by the P
+leg, Windows not at all — `dotnet` is absent here); the gate's error payload omits `modelId` and
+`package`, so the host's `missingPackage` branch cannot fire from a gated job; the consent sheet
+still shows no licence-evidence fields; and no live acceptance of any of it exists, because
+launching the app is not authorised. S.4's rule stands: no readiness percentage is given.

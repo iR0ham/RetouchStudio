@@ -1384,13 +1384,41 @@ func testLabelledSubmissionIsRecordedNotGated() {
         catch { return ("", AIWorkerFailure(code: 0, message: "\(error)")) }
     }
 
+    // S-FLUX changed which refusal this probe can produce. `generative.reimagine`
+    // resolves to exactly one catalogue entry, `flux2-klein-4b-q4`, whose record
+    // now refuses its own weights. Before that record changed, the capability gate
+    // stopped this job because the model was merely absent (-32011
+    // E_MODEL_MISSING); the gate stops it now with the licence class (-32010),
+    // because that is what the record actually says. The gate had been answering
+    // this refusal as -32020 `E_UNSUPPORTED` with a `blocked` state, which is the
+    // shape the host routes to Manage Models — where an adopt tap or an install
+    // normally is the missing step. Nothing there settles a permission, so the
+    // class is the user-visible answer, not decoration: the leg below pins that no
+    // manager opens. The point of the check — naming a capability makes the helper
+    // apply its verdict before it creates a job folder — is unchanged.
     let named = sent { try client.submit("patch_edit", params,
                                          capability: "generative.reimagine") }
-    check(named.failure?.code == -32011 && named.failure?.typedCode == "E_MODEL_MISSING",
-          "P: naming a capability the adapter cannot run stops the job",
+    check(named.failure?.code == -32010
+              && named.failure?.typedCode == "E_LICENCE_REFUSED",
+          "P: naming a capability whose only model is licence-refused stops the job",
           named.failure?.message ?? "")
+    check(named.failure?.opensModelManager == false,
+          "P: a licence refusal sends the user nowhere the download can settle it",
+          named.failure.map { "\($0.code) \($0.typedCode) opensManager=\($0.opensModelManager)" } ?? "")
     check(folders().isEmpty, "P: the gated spelling leaves no job folder",
           folders().joined(separator: " "))
+
+    // The refusal above has to be attributable to the record, not to the gate
+    // refusing every capability it is asked about. The same spelling with a name
+    // this job kind does not carry is a caller bug rather than a permission, and
+    // answers with a different class — so a licence-shaped answer cannot be what
+    // the gate produces for anything at all.
+    let foreign = sent { try client.submit("patch_edit", params,
+                                           capability: "upscale.4x") }
+    check(foreign.failure?.code == -32020
+              && foreign.failure?.typedCode == "E_UNSUPPORTED",
+          "P: a capability this job kind does not carry is refused as unsupported",
+          foreign.failure?.message ?? "")
 
     let wrong = sent { try client.submit("patch_edit", params,
                                          requestedCapability: "upscale.4x") }

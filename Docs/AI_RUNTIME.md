@@ -23,6 +23,8 @@ The helper is self-contained. A full build carries it inside the app. Release bu
 
 Download sizes from the catalog: FLUX.2 klein 4B q4 — 4.6 GB; SAM 2.1 tiny — 148.8 MB (156,008,466 bytes, measured 2026-11-18); Swin2SR x4 — 48.5 MB; MI-GAN — 28.1 MB. The app works with any subset; a missing model produces a clear “open Manage Models” message instead of a failed job.
 
+Corrected 2026-11-23: FLUX.2 klein 4B q4 is no longer in the class this sentence describes. Its weights are not admitted, so the request is refused before a download is ever offered, and that refusal deliberately does **not** open Manage Models — an unadmitted model is not presented as something to go fetch. See §6.3 and [`MODEL_LICENCES.md`](MODEL_LICENCES.md) §12.
+
 The worker is the framework interpreter copied from Homebrew Python 3.13.15, with the Homebrew dylibs it needs (`libssl`, `libcrypto`, `liblzma`, `libmpdec`, `libsqlite3`) relocated into `Worker/lib` and every Mach-O reference rewritten to `@loader_path`. No Homebrew installation is required on the target Mac, and no Mach-O load command in the bundle refers to `/opt/homebrew`. A handful of unused framework scripts (`pip3`, `pydoc3`, `idle3`) and pkg-config files still carry Homebrew shebangs or build paths; the helper never runs them — it is started through the bundled `Python.framework` interpreter.
 
 ---
@@ -254,6 +256,8 @@ checkpoint (`W5_ADAPTERS.md` §States).
 | SAM 2.1 tiny | Segmentation | Apache-2.0 | Yes |
 | Swin2SR x4 | Upscaling | Apache-2.0 | Yes |
 | MI-GAN (512, Places2) | Small-hole inpainting | MIT (weights) | Yes |
+
+**Corrected 2026-11-23, first row.** That row is kept as the 2026-11-10 inspection it was; it is no longer the state of the app. `flux2-klein-4b-q4` is not downloadable and its capabilities are reported `blocked`, because the catalogue's own `permitted_use` record for the pinned artefact now reads `unknown` / `statedBy: not-established` / `admitted: false`: the bytes come from a community conversion repository that ships no licence file, and the Apache-2.0 grant belongs to `black-forest-labs/FLUX.2-klein-4B`, whose link to those pins cannot be established from an editable card. Evidence and the corrections to this slice's own first reading: [`MODEL_LICENCES.md`](MODEL_LICENCES.md) §12 and [`MODEL_LICENCE_EVIDENCE.md`](MODEL_LICENCE_EVIDENCE.md) §11. Separately, the "Commercial use" column asks a question the project no longer asks — since 2026-11-22 admission is measured against *public non-commercial use and distribution*, which is the `use` class stored in every record.
 
 Weights are downloaded, never redistributed inside the app. Each download is verified against the SHA256 in the catalog when the manifest provides one. Inspected on 2026-11-10, the worker catalog (`retouch_ai_worker/catalog.py` in the separate checkout) gives SAM 2.1 tiny neither a size nor a SHA256: that download cannot be checksum-verified and its progress is indeterminate. That checkout is not under version control here, so this describes it as inspected, not a property of the app bundle.
 

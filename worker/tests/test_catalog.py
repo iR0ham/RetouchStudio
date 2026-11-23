@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from unittest.mock import patch
@@ -21,6 +22,7 @@ from retouch_ai_worker.catalog import (APPROVED, APPROVED_WITH_CONDITIONS, CATAL
                                        ArtefactTerms, Catalog, ModelEntry,
                                        ModelFile, PermittedUse, UseCondition,
                                        normalize_digest, pin_problem)
+from retouch_ai_worker.plan import manifest
 from retouch_ai_worker.protocol import (BUSY, CATALOG_INVALID, CHECKSUM_MISMATCH,
                                         LICENSE_BLOCKED, MODEL_MISSING,
                                         UNKNOWN_MODEL, WorkerError)
@@ -132,14 +134,193 @@ class CatalogTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
 
-    def test_flux_is_admitted_and_listed(self):
+    def test_flux_weights_are_unknown_and_the_gate_refuses_them(self):
+        # S-FLUX, 2026-11-23. The shipped record used to quote "Open weights
+        # available for commercial use under the Apache 2.0 license" — a sentence
+        # Black Forest Labs speaks about `black-forest-labs/FLUX.2-klein-4B` — as
+        # the permission of `mflux-community/flux2-klein-4b-mflux-q4`, the
+        # community conversion this entry actually downloads and whose own card
+        # disclaims authorship. Recording an upstream statement as a derivative's
+        # grant is the inference this schema exists to refuse, so the artefact is
+        # UNKNOWN and the existing gate refuses it. Nothing new was added to make
+        # that happen: the refusal comes out of `weights.admitted` requiring an
+        # approving verdict, `PermittedUse.admitted` being
+        # `weights.admitted and not excluded`, and `_require_licensed` /
+        # `plan.manifest` raising `LICENSE_BLOCKED`.
         catalog = Catalog(self.root, allow_uncleared=False)
         listed = {entry["id"]: entry for entry in catalog.list()}
         flux = listed["flux2-klein-4b-q4"]["permitted_use"]
-        self.assertTrue(flux["admitted"])
-        self.assertEqual(flux["weights"]["verdict"], APPROVED)
+        self.assertFalse(flux["admitted"])
+        self.assertEqual(flux["weights"]["verdict"], UNKNOWN)
+        self.assertEqual([flux["weights"][axis] for axis in
+                          ("canAcquire", "canRedistribute", "canUse")],
+                         [None, None, None],
+                         "an unknown verdict may not state a granted axis")
         self.assertEqual(listed["flux2-klein-4b-q4"]["license"], "Apache-2.0")
         self.assertEqual(len(listed), len(CATALOG))
+
+        # Both accessors refuse before any disk state, and the payload names the
+        # artefact and its verdict so the host can say why in its own words.
+        for accessor in (catalog.require, catalog.require_verified):
+            with self.subTest(accessor=accessor.__name__):
+                with self.assertRaises(WorkerError) as caught:
+                    accessor("flux2-klein-4b-q4")
+                self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+                self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
+                self.assertEqual(caught.exception.data["artefact"], "weights")
+                self.assertEqual(caught.exception.data["model"], "flux2-klein-4b-q4")
+                self.assertIn("no established permission", str(caught.exception))
+        # The download manifest is refused too, so no consent sheet is ever
+        # priced for 4.6 GB this worker will not load.
+        with self.assertRaises(WorkerError) as caught:
+            manifest(["flux2-klein-4b-q4"], catalog)
+        self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+        self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
+        # And the refusal costs nothing: no lease survives it.
+        self.assertEqual(catalog._leases, {})
+
+    def test_the_flux_unknown_record_states_what_is_missing(self):
+        # A validator rule makes an `unknown` verdict carry a note; this pins the
+        # note's *content*, because the whole point of the downgrade is that a
+        # future re-record must inherit the anchor instead of re-deriving it.
+        weights = next(entry for entry in CATALOG
+                       if entry.id == "flux2-klein-4b-q4").permitted_use.weights
+        self.assertEqual(weights.stated_by, STATED_BY_NOT_ESTABLISHED)
+        self.assertIsNone(weights.permitted)
+        self.assertFalse(weights.admitted)
+        self.assertFalse(weights.conditions)
+        note = weights.note or ""
+        # The note is the tooltip a user can actually open, so it is a summary
+        # with a pointer; §12 below is where the evidence lives. These phrases are
+        # the summary's load-bearing parts: what is missing from the artefact, the
+        # revision the grant is anchored to, and the fact that this entry was
+        # downgraded rather than never assessed.
+        for phrase in ("ships no licence copy",
+                       "states no upstream revision",
+                       "the converter head has moved",
+                       "black-forest-labs/FLUX.2-klein-4B",
+                       "e7b7dc27f91deacad38e78976d1f2b499d76a294",
+                       "PR #121",
+                       "tokenizer"):
+            self.assertIn(phrase, note, phrase)
+        # The pointer must resolve, or the summary is an orphan citing a section
+        # nobody kept. This is the only test that reads the dossier, and it reads
+        # it to prove the evidence trail exists, not to restate it.
+        self.assertIn("Docs/MODEL_LICENCES.md section 12", note)
+        dossier = (Path(__file__).resolve().parents[2]
+                   / "Docs" / "MODEL_LICENCES.md").read_text(encoding="utf-8")
+        self.assertIn("## 12. Addendum, 2026-11-23", dossier)
+        for phrase in ("Community conversion by",
+                       "no licence file of any kind",
+                       "794cd159538149ad9830848508c31f0ea7088e58",
+                       "Flux2KleinEdit",
+                       "download_patterns"):
+            self.assertIn(phrase, dossier, phrase)
+        # Attribution discipline: the converter URL stays the evidence for the
+        # artefact, and the upstream grant is never recorded as this artefact's
+        # own statement source.
+        self.assertEqual(weights.evidence_url,
+                         "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4")
+        self.assertNotEqual(weights.stated_by, STATED_BY_RIGHTS_HOLDER)
+
+    def test_an_upstream_statement_never_grants_a_derivative(self):
+        # The *shape* of the S-FLUX mistake, made unrepresentable rather than
+        # merely absent from today's data. An artefact whose own card disclaims
+        # authorship carried `stated_by=rights-holder` because a sentence spoken
+        # about its upstream source was quoted at its URL. Nothing in the schema
+        # can tell those two repositories apart — the validator sees one URL and
+        # cannot reach the network — so what is pinned here is the pair of rules
+        # that together leave the mistake nowhere to live: a `not-established`
+        # record may state no permission (`catalog.py:197-200`), and only an
+        # approving verdict with every axis granted admits
+        # (`catalog.py:160-166`, `catalog.py:274`).
+        derivative = ModelEntry(
+            id="derivative-conversion", name="Community conversion", task="upscaling",
+            license_id="Apache-2.0",
+            permitted_use=use_class(weights=terms(
+                notice="Apache-2.0. Redistributing these weights requires the licence "
+                       "copy, the retained notices and a statement of changes.",
+                note="\"Open weights available for commercial use under the Apache 2.0 "
+                     "license\" — a sentence the upstream author speaks about its own "
+                     "repository. This card says \"Community conversion — not an official "
+                     "release from the original model's authors\".")),
+            source="hf:someone/conversion-of-upstream",
+            files=(ModelFile("weights.bin", SHA_OF_WEIGHTS, len(WEIGHTS)),))
+
+        # 1. The wrong shape still validates and still admits, which is why rule 2
+        #    has to be enforced by a second layer: the schema alone cannot see that
+        #    the quoted sentence belongs to a different repository. Recording this
+        #    explicitly keeps the claim honest, and it is the reason the shipped
+        #    table carries the marker sweep in
+        #    `test_the_shipped_table_holds_no_upstream_statement_at_a_derivative_url`.
+        derivative.permitted_use.validate()
+        self.assertTrue(derivative.permitted_use.admitted)
+
+        # 2. Re-recorded honestly — the search at *this* artefact found no
+        #    statement — every granted axis becomes invalid, so the mistake cannot
+        #    survive the correction. The axes are the only thing that changed.
+        for axis in ("can_acquire", "can_redistribute", "can_use"):
+            corrected = terms(stated_by=STATED_BY_NOT_ESTABLISHED, verdict=UNKNOWN,
+                              note="the converter ships no licence file and disclaims "
+                                   "authorship; the quoted grant belongs to the upstream "
+                                   "repository")
+            corrected = replace(corrected, **{axis: True})
+            with self.subTest(granted_axis=axis):
+                with self.assertRaises(ValueError) as caught:
+                    corrected.validate()
+                self.assertIn("records a decision", str(caught.exception))
+
+        # 3. And a record that grants nothing admits nothing: the loader refuses
+        #    it for the licence reason, never the missing-file one.
+        honest = ModelEntry(
+            id=derivative.id, name=derivative.name, task=derivative.task,
+            license_id=derivative.license_id,
+            permitted_use=replace(derivative.permitted_use, weights=terms(
+                can_acquire=None, can_redistribute=None, can_use=None,
+                stated_by=STATED_BY_NOT_ESTABLISHED, verdict=UNKNOWN,
+                note="no licence file in this repository; the card disclaims authorship")),
+            source=derivative.source, files=derivative.files)
+        honest.validate()
+        self.assertFalse(honest.permitted_use.admitted)
+        self.assertIsNone(honest.permitted_use.weights.permitted)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(honest):
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require_verified(honest.id)
+        self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+        self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
+        # Even the research switch cannot put it back: it opens the admission gate
+        # for evaluation, and once it is open the ordinary install answer returns,
+        # which is the only difference the switch is allowed to make.
+        with _with(honest):
+            with self.assertRaises(WorkerError) as caught:
+                Catalog(self.root, allow_uncleared=True).require(honest.id)
+        self.assertEqual(caught.exception.code, MODEL_MISSING)
+
+    def test_the_shipped_table_holds_no_upstream_statement_at_a_derivative_url(self):
+        # The same rule measured against the shipped data, so a future re-record
+        # has to earn its way past it: any entry whose note itself reports that the
+        # artefact disclaims authorship or carries no licence may not record a
+        # granted axis. This is the guard the FLUX row failed in the other
+        # direction — its own note quoted the upstream sentence while pointing at
+        # the converter.
+        markers = ("not an official release", "community conversion",
+                   "no license file", "no licence file", "ships no LICENSE")
+        for entry in CATALOG:
+            for name, record in (("code", entry.permitted_use.code),
+                                 ("weights", entry.permitted_use.weights),
+                                 ("training data", entry.permitted_use.training_data)):
+                text = " ".join(filter(None, (record.note, record.notice))).lower()
+                disclaiming = any(marker in text for marker in markers)
+                with self.subTest(entry=entry.id, artefact=name):
+                    if disclaiming:
+                        self.assertNotEqual(
+                            record.stated_by, STATED_BY_RIGHTS_HOLDER,
+                            f"{entry.id} {name} records a rights-holder grant for an "
+                            "artefact whose own record says it is a disclaimer-of-"
+                            "authorship derivative")
+                        self.assertIsNone(record.permitted)
+                        self.assertFalse(record.admitted)
 
     def test_every_shipped_record_carries_the_whole_position(self):
         # Finding (3): `Catalog.public()` must carry the record field for field,
@@ -330,10 +511,16 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, MODEL_MISSING)
 
     def test_missing_installed_model(self):
+        # `flux2-klein-4b-q4` used to stand in for "not installed". Since S-FLUX
+        # its own record refuses the load on licence before disk is ever consulted
+        # — which is the ordering the gate documents — so the missing-model answer
+        # comes from an entry that *is* admitted, and the licence answer is pinned
+        # by `test_flux_weights_are_unknown_and_the_gate_refuses_them`.
         catalog = Catalog(self.root, allow_uncleared=False)
         with self.assertRaises(WorkerError) as caught:
-            catalog.require("flux2-klein-4b-q4")
+            catalog.require("swin2sr-x4")
         self.assertEqual(caught.exception.code, MODEL_MISSING)
+        self.assertEqual(caught.exception.data["reason"], "not-installed")
 
     def test_installed_model_resolves(self):
         target = self.root / "sam2.1-hiera-tiny" / "sam2.1_hiera_tiny.pt"

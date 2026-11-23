@@ -705,6 +705,7 @@ final class PersianL10n: L10n {
     override var modelsRemoveAction: String { "حذف" }
     override func modelsRemoved(_ name: String) -> String { "\(name) حذف شد." }
     override var modelsSizeUnknown: String { "اندازه نامعلوم" }
+    override var modelsLicenceUnestablished: String { "مجوز اثبات نشده" }
 
     // Versioned model store (W5-2)
     override func modelsVersionLabel(_ version: String) -> String {
