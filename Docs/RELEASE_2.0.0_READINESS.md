@@ -3191,3 +3191,80 @@ that follows from it is **R2 option B now** — release an honest editor with th
 the 2.1 milestone**, with a helper in the artefact and one shipped-build inference recorded to the ladder. Tags,
 releases, assets, packaging changes and Windows distribution remain owner-blocked and were not touched.
 
+
+---
+
+## Addendum S.17 — 2026-11-24: the owner rejects option B, makes a working 4× upscaler release-blocking, and the
+## gate becomes a plan rather than a recommendation
+
+**What changed.** S.16 recommended **R2 option B** — ship 2.0.0 as an honest editor with the AI bullets corrected, and
+push the helper to 2.1. The owner declined it. His decision, recorded here verbatim in substance: *2.0.0 must not be
+released until at least one real 4× upscaler works inside the actual distributable application; this is a release-blocking
+requirement, not a future 2.1 milestone; the current editor acceptance does not satisfy it; the scope is intentionally
+limited to one production-usable 4× upscaler and the release gate must not be expanded to every AI capability.* The
+recommendation in S.16 is therefore **superseded, not deleted** — its factual findings (the missing helper, the refusal
+by design, the new redirect defect, the ladder) all stand and are the input to what follows.
+
+**Immediate consequences written into the record.**
+
+- The DMG pinned in §0b of the acceptance pack (`b3711d0ce222aa03bddc41dbbf85c4c18a453431c9944a528c385dfe9d2ed2b4`) is no
+  longer a release candidate. It stays valid as the editor and export acceptance evidence the owner personally produced;
+  nothing that passed there is being re-litigated.
+- §3 of this ledger no longer describes a releasable state. `RETOUCH_SKIP_WORKER: '1'` in `.github/workflows/release.yml`
+  is now a blocker to remove, not a product shape.
+- README and the release notes may not describe 2.0.0 as shipping until the gate is evidenced. The corrections merged in
+  PR #136 are necessary, not sufficient.
+
+**The eight-item release gate the owner imposed**, all as stated by him: downloader tests pass on both platforms; the
+selected model has approved licensing plus a technical assessment; the required runtime or helper is present in the
+distributable; real 4× inference succeeds from the packaged application; quality, runtime and memory meet predeclared
+thresholds; clean-install acceptance passes; the evidence is independently reviewed; and the owner explicitly authorises
+publication. "Passing CI alone does not open the release gate."
+
+**What was produced.** [`RELEASE_2.0.0_UPSCALER_GATE.md`](RELEASE_2.0.0_UPSCALER_GATE.md): milestones M0–M7 with
+dependencies, the affected files per slice, implementer and independent-reviewer roles, a test table whose every row has a
+measurable pass condition, the reusable-versus-regenerate evidence split, six risks with scheduled mitigations, an
+effort estimate of 65–107 engineer-hours against 10–18 working days, and seven open decisions D1–D7 with the one that is
+not mine to make marked as such.
+
+**Decisions taken inside the mandate, with reasons.** D1: the helper ships **inside** the distributable rather than as a
+consented download — that is what the owner's R3 states literally, and it removes the dependency on an unpublished runtime
+package entirely; the cost is an artefact roughly 150× the 10 MB measured in the audit, which is disclosed rather than
+smoothed over. D2: the Windows weights come from **our own reproducible conversion** of the pinned checkpoint, because
+W5-4's BLOCKED condition already forbids adopting a community ONNX file. D4: the Windows parity thresholds are declared
+**before** any run, so no bar can move afterwards.
+
+**The one genuinely uncertain item, stated plainly.** Windows has no ONNX Swin2SR artifact and no conversion procedure.
+Cyclic-shift window attention and bicubic positional-bias interpolation are historically awkward to export, and CPU
+execution-provider latency at useful tile sizes is unmeasured here. That is why the plan spends its first two days on a
+feasibility spike before committing to the shape. If the spike fails, the honest outcomes are a fixed-input-size export, a
+different licensed 4× model, or the owner re-scoping Windows out of the gate — and I will report whichever it is with the
+measured reason instead of quietly relaxing criterion 4 to macOS only.
+
+**Safety posture unchanged.** No tag, no release or asset mutation, no publication, no GUI launch without the owner's
+authorisation for a bounded session, the owner's checkout untouched, MIT preserved, ad-hoc signing plus SHA-256 kept, no
+notarisation requirement introduced, the updater disabled, no paid service, and no AI capability marked supported without
+its evidence row.
+
+**Status of the gate as it lands.** Item 1 **BLOCKED** on implementation, item 2 partly **MEASURED** at development-runtime
+depth on macOS and unassessed on Windows, items 3–6 **NOT VERIFIED**, items 7–8 not yet reached. Nothing here says the
+release is ready, and the plan's first line is that 2.0.0 is blocked.
+
+**Same-day correction to this addendum, after the two feasibility investigations returned.** The M2b estimate in
+[`RELEASE_2.0.0_UPSCALER_GATE.md`](RELEASE_2.0.0_UPSCALER_GATE.md) §7 was written before them and was too low. A
+read-only investigation of `Windows/` at `0183202` found that ONNX Runtime 1.32.0 is already referenced, loaded,
+shipped in the built app and hash-verified in CI — one dependency I had priced as work is in fact done — but that
+**no inference has ever run on Windows**: there is not one `InferenceSession`, `OrtValue` or `Run()` call under
+`Windows/`, `WorkerServer.RefuseJob` (`WorkerServer.cs:188-211`) answers `-32020` for every capability, and there is
+no tiling, overlap or banding code at all, while the decoder holds two to three full-resolution buffers and
+`PixelBuffer`'s length multiply is `int`. M2b therefore became 40–70 hours and the plan total moved from 65–107 to
+100–155 hours. The same investigation refuted three symbol references in the briefing I gave it — `MinimumHostVersion`,
+`UpscalePlan` and `BitmapBridge` do not exist at this commit — none of which had reached this ledger or the plan, and it
+corrected one belief I had carried since the Phase-1 audit: **the model manager IS reachable from the Windows UI**
+(`MainWindow.xaml.cs:566` opens `ModelManagerWindow`, which lists, verifies and activates records). On the macOS side the
+bundle mechanism proved more complete than expected — `Tools/build-python-runtime.sh` plus `Tools/bundle-worker.sh` build
+a relocatable 3.13.15 helper that `AIWorker.interpreter()` would pick up automatically — and less complete where it
+matters: no CI job on a release path has ever produced that helper, `Tools/notarize.sh` is wired into neither workflow,
+`validate-bundle.sh` checks the architecture of the app executable but not the nested interpreter, and every release job
+carries a `timeout-minutes: 60` budget that a source-built CPython plus 67 pinned ML distributions has not been shown to
+fit. The historical text above is untouched; this paragraph is the dated correction.
