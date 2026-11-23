@@ -1747,6 +1747,30 @@ copies `Resources/Info.plist`, then stamps `CFBundleShortVersionString` with Pli
 there is no stale-binary path. What `build.sh` does do and does not skip is exec the bundled binary
 (`:229` arm64, `:244` `arch -x86_64`) with no opt-out switch — which is why G-BLD is still CI-only.
 
+### S.2.6 G-SUM was understated in both directions, so it is restated precisely.
+
+§3 line 88 and §7 line 156 both say the checksums are generated and "independently re-checked — NOT VERIFIED".
+Reading the workflow instead of the row separates two facts the ledger had merged:
+
+- **Generation is executed evidence.** `Tools/make-dmg.sh:31` writes the sidecar next to each DMG, and the
+  `Release` workflow has run three times by `workflow_dispatch` (latest success 2026-11-15 against `main`), in
+  which the macOS packaging jobs — the ones that produce the sidecars — completed.
+- **The independent re-check is encoded but has never executed.** `release.yml:181-187` re-verifies every
+  `*.sha256` inside the `release` job — a different job from the ones that produced them, on a different runner,
+  from artifacts it downloaded rather than wrote — and the loop is non-vacuous because an unmatched glob leaves
+  the literal `*.sha256` to fail `sha256sum -c`. But that job is gated on `startsWith(github.ref,'refs/tags/v')`
+  (`:159-165`), and no tag has ever been pushed. So the honest status is **implemented, CI-enforced at publish
+  time, never performed** — not "missing", and not "verified".
+- The publish path itself is **not** broken by the Windows gate, contrary to an earlier note: `release.yml:154-165`
+  uses `always()` with explicit result tests that accept `windows-app` as `skipped` while `vars.WINDOWS_APP_READY`
+  stays unset, and publishing takes `artifacts/*`, so a macOS-only tag publishes correctly. Verified by reading
+  the job, not by a run.
+
+One real defect in the same file *was* found and is being fixed separately: the publish step creates the release
+with `--generate-notes` (`release.yml:195`), which means the vetted bilingual notes this release is required to
+ship (G-RN) would never reach the release body. Auto-generated GitHub notes are not a substitute for a claim the
+project has to stand behind.
+
 ### S.3 New open items this pass put on the record, with the evidence class stated
 
 | ID | Item | Evidence |
