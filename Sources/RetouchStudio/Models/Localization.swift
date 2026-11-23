@@ -698,6 +698,11 @@ class L10n {
     var modelsRemoveAction: String { "Remove" }
     func modelsRemoved(_ name: String) -> String { "\(name) was removed." }
     var modelsSizeUnknown: String { "Size unknown" }
+    /// The licence token a metadata row shows when the entry's own permitted-use
+    /// record refuses it. A flat `Apache-2.0` beside a download this build will
+    /// not offer reads as a permission with some other problem attached; the
+    /// record says the opposite, and this row is what the user believes.
+    var modelsLicenceUnestablished: String { "licence not established" }
     var modelsHelperMissing: String { "The AI helper is not available on this Mac." }
 
     // Versioned model store (W5-2)

@@ -9,6 +9,18 @@ Status: **data layer only**. This gate records licence evidence; it changes no
 install, download or refusal decision. Acting on the evidence is a separate,
 later, reviewed change.
 
+> **Dated correction (2026-11-23).** The sentence above described this gate as
+> shipped, and it was true at `cd5741b7`: nothing read the fields. Two later
+> changes closed that. S-FLUX (§11, plus `Docs/MODEL_LICENCES.md` §12) made the
+> worker refuse to load or plan a model whose artefact records are not admitted,
+> and the follow-up recorded in `Docs/RELEASE_2.0.0_READINESS.md` S.9 made the
+> capability gate answer that refusal with `E_LICENCE_REFUSED` instead of the
+> generic `E_UNSUPPORTED`. The data layer is therefore *not* inert any more, and
+> neither the capability report nor a job submission treats an unadmitted record
+> as something the user can settle in the model manager. The paragraph above is
+> kept as the record of what was decided at the time; §11 and S.9 are the
+> current behaviour.
+
 Baseline measured at `cd5741b76`.
 
 ## 1. Why
@@ -406,7 +418,7 @@ the repository the grant lives in. The pinned download is
 of any kind**; the only bridge from it to Black Forest Labs' terms is an editable model card
 that names `black-forest-labs/FLUX.2-klein-4B` as `base_model`, calls the change "only
 conversion to MLX and quantization", and states **no upstream revision**. The upstream grant is
-real and is anchored in §12: that repository at revision
+real and is anchored in `Docs/MODEL_LICENCES.md` §12: that repository at revision
 `e7b7dc27f91deacad38e78976d1f2b499d76a294` ships `LICENSE.md` (9,584 bytes, verbatim Apache-2.0,
 no field-of-use clause, no `NOTICE` file). What cannot be established from a card read is the
 link from that revision to the pinned digests, and the converter's own head has moved since this
@@ -414,6 +426,16 @@ entry was first recorded. §9's rule 2 — "`not-established` may only carry `un
 axis blank" — is the rule this record now obeys. The record it replaces satisfied the schema's
 shape while asserting `rights-holder` for a statement the rights holder never made about
 *these* bytes, which is the inference rule 2 exists to make unrepresentable.
+
+One field-semantics point, because the shipped row reads ambiguously without it: this entry's
+`evidenceUrl` stays
+`https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4` — the **artefact** repository,
+which is what the field means (§9's table: "where the statement was read"; for this row the honest
+answer is that it was read there and is not there). It is not, and does not claim to be, the
+location of the grant. The grant anchor lives only in prose here and in
+`MODEL_LICENCES.md` §12.2, because no schema field holds "the licence of an upstream artefact we
+cannot tie to these bytes". Recording the upstream URL in `evidenceUrl` would be the same
+inference the downgrade removes.
 
 Consequences worth stating rather than leaving implicit:
 

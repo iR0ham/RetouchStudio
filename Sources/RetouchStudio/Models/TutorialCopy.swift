@@ -385,7 +385,7 @@ struct TutorialCopy {
                     step("Go offline",
                          "Once installed, every AI tool works with no network. Downloads are the only time the app uses the internet."),
                     step("Know the licenses",
-                         "FLUX.2 klein, SAM 2.1 and Swin2SR are Apache-2.0; MI-GAN is MIT. The manager shows the exact entry for each model."),
+                         "SAM 2.1 and Swin2SR are Apache-2.0; MI-GAN is MIT. No permission is established for the FLUX.2 klein conversion this build pins, so its generative tools stay refused. The manager shows the exact entry for each model."),
                 ],
                 note: "No cloud inference, no image uploads, no hidden requests. Docs/PRIVACY_AUDIT.md records how this was measured."),
 
@@ -755,7 +755,7 @@ struct TutorialCopy {
                     step("آفلاین شوید",
                          "پس از نصب، هر ابزار هوش مصنوعی بدون شبکه کار می‌کند. دانلود تنها زمانی است که برنامه از اینترنت استفاده می‌کند."),
                     step("مجوزها را بدانید",
-                         "FLUX.2 klein، SAM 2.1 و Swin2SR مجوز Apache-2.0 دارند؛ MI-GAN مجوز MIT. مدیر مدل‌ها مدخل دقیق هر کدام را نشان می‌دهد."),
+                         "SAM 2.1 و Swin2SR مجوز Apache-2.0 دارند؛ MI-GAN مجوز MIT. برای FLUX.2 klein مجوز دانلود در این نسخه اثبات نشده، پس ابزارهای مولدِ آن باز نمی‌شود. مدیر مدل‌ها مدخل دقیق هر کدام را نشان می‌دهد."),
                 ],
                 note: "هیچ استنتاج ابری، هیچ آپلود عکس و هیچ درخواست پنهانی نیست. سند Docs/PRIVACY_AUDIT.md روش اندازه‌گیری را ثبت کرده است."),
 

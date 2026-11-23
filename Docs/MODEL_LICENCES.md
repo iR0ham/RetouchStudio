@@ -11,6 +11,14 @@
 > `2b2815d5e8359bff9e542d18c8ef362831a20ba496d564cdac01d2d683dd5b7c`.
 > The digest and size describe the imported original; this copy differs from
 > it only by this preamble and the Appendix C redaction above.
+>
+> **Charter clarification (2026-11-23).** "Without change" covers the transcribed
+> body — sections 0 through 11 and the appendices, as dated 2026-11-21. Later
+> findings are appended as numbered addenda, each carrying its own date and its
+> own evidence labels, and an addendum supersedes earlier rows by naming them
+> rather than by editing them. §12 is the first such addendum. A reader who wants
+> the original dossier byte-for-byte should reconstruct it from the digest above,
+> not from this file's tail.
 
 # Model Licence & Provenance Dossier — RetouchStudio
 
@@ -505,10 +513,13 @@ to pull onto the owner's machine.
 | `permitted_use.weights.statedBy` | `rights-holder` | **`not-established`** |
 | `canAcquire` / `canRedistribute` / `canUse` | `true` / `true` / `true` | **`null` / `null` / `null`** |
 | `permitted_use.weights.note` | quoted BFL's own sentence | the paragraph this section documents |
+| `permitted_use.weights.readOn` | `2026-11-21` | **`2026-11-23`** — the date of the read that produced this verdict, moving with the read exactly as §10 moved `swin2sr-x4` to `2026-11-22` |
+| `permitted_use.code.note` | said the grant was read "at this repository" | says it was read at the **upstream** repository, and that this converter repository ships no licence copy |
 | `PermittedUse.admitted` | `true` | **`false`** |
 | `plan.py` `manifest()` for the entry | returned a download plan | **`LICENSE_BLOCKED` (−32010)** |
-| `catalog.py` `require_verified()` for the entry | loaded | **`LICENSE_BLOCKED` (−32010)** |
+| `catalog.py` `require_verified()` for the entry | loaded | **`LICENSE_BLOCKED` (−32010)**, asked before any disk state |
 | `capability.list` → `generative.edit`, `generative.reimagine`, `inpaint.object` | `requires_model` (a download was offered) | **`blocked`**, reason "no established permission … weights verdict: unknown" |
+| `job.submit` naming one of those capabilities (2026-11-23, S.9) | `-32020 E_UNSUPPORTED`, `state: "blocked"` — which the macOS host routes to Manage Models | **`-32010 E_LICENCE_REFUSED`**, `state: "blocked"` — nothing opens, because nothing there settles a permission |
 
 The last two rows are the point of the change. Offering a 4.6 GB transfer as the remedy
 for a permission nobody has granted is exactly the failure mode DR-15 forbids, and the

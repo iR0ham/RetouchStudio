@@ -389,7 +389,8 @@ struct ModelManagerView: View {
                 actionButton(record)
             }
             Text("\(capabilityLabel(entry)) · \(editor.s.modelsVersionLabel(entry.version)) · "
-                 + "\(sizeText(entry.sizeBytes)) · \(entry.weightsLicense)")
+                 + "\(sizeText(entry.sizeBytes)) · "
+                 + "\(licenceLabel(entry.weightsLicense, entry.permittedUse?.weights))")
                 .font(Theme.Font.face(size: 10.5))
                 .foregroundStyle(Theme.faint)
             Text(sourceLine(entry))
@@ -623,7 +624,25 @@ struct ModelManagerView: View {
         let sha = String((entry.sha256 ?? "").prefix(16))
         // The hex run stays Latin and is isolated: inside a right-to-left
         // paragraph an unisolated run can move out of place next to the label.
-        return "\(host) · \(entry.codeLicense) / \(entry.weightsLicense) · SHA-256 \u{2066}\(sha)\u{2069}…"
+        let code = licenceLabel(entry.codeLicense, entry.permittedUse?.code)
+        let weights = licenceLabel(entry.weightsLicense, entry.permittedUse?.weights)
+        return "\(host) · \(code) / \(weights) · SHA-256 \u{2066}\(sha)\u{2069}…"
+    }
+
+    /// The licence token for one artefact: the recorded name while its own
+    /// permitted-use record admits the artefact, and an honest fallback once it
+    /// does not. Both rows used to print the flat `weightsLicense` string, which
+    /// for `flux2-klein-4b-q4` said `Apache-2.0` in the same panel that refused
+    /// the download — a licence name read as a permission, with the refusal
+    /// looking like some other fault (ledger S-FLUX, 2026-11-23). A catalogue
+    /// entry with no `permitted_use` block is not a refusal either, so the name
+    /// stays for those.
+    private func licenceLabel(
+        _ recorded: String,
+        _ terms: ModelCatalogEntry.ModelArtefactTerms?
+    ) -> String {
+        guard let terms, !terms.isAdmitted else { return recorded }
+        return editor.s.modelsLicenceUnestablished
     }
 
     private func sourceHost(_ entry: ModelCatalogEntry) -> String? {
