@@ -7213,8 +7213,9 @@ func testPersianStorageSizeIsOneIsolatedRun() {
         ("the fraction that mismatched", 96_700_000, "96.7 MB", "\u{2066}۹۶٫۷ MB\u{2069}"),
         ("a gigabyte-scale value", 4_800_000_000, "4.8 GB", "\u{2066}۴٫۸ GB\u{2069}"),
         // The formatter spells an empty store out in words rather than writing
-        // "0 bytes"; the policy converts the digits and keeps its unit alone.
-        ("zero bytes", 0, "Zero KB", "\u{2066}Zero KB\u{2069}")
+        // "0 bytes". A quantity is not a unit, so the Persian reading converts
+        // that word back to a digit and keeps only the unit token Latin.
+        ("zero bytes", 0, "Zero KB", "\u{2066}۰ KB\u{2069}")
     ]
     for (label, bytes, latinExpected, persianExpected) in cases {
         check(latin(bytes) == latinExpected, "\(label): the Latin reading is \(latinExpected)",
@@ -7237,6 +7238,13 @@ func testPersianStorageSizeIsOneIsolatedRun() {
           "the whole size is one left-to-right isolated run")
     check(sample.contains("MB") && !sample.contains("مگابایت"),
           "the unit token stays Latin and is never translated", sample)
+
+    // The empty store in the same shape terms, because it is the one reading the
+    // formatter delivers as a word: its quantity must arrive as a Persian digit
+    // and the only Latin characters left may be the unit itself.
+    let empty = L10n.byteSize(0, language: .persian)
+    check(empty.contains("\u{06F0}"), "an empty store reads as a Persian zero", empty)
+    check(empty.filter(\.isASCII) == " KB", "nothing but the unit stays Latin", empty)
 
     // The rendered line, through the language the interface is actually
     // speaking: `L10n.byteSize` takes its default from `AppLanguage.current`,

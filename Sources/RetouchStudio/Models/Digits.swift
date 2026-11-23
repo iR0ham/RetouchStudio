@@ -44,8 +44,21 @@ enum Digits {
     /// RTL paragraph an unisolated pair of them can flip.
     static func size(_ formatted: String, language: AppLanguage = .current) -> String {
         guard language == .persian else { return formatted }
-        let number = persian(formatted).replacingOccurrences(of: ".", with: "٫")
+        let number = persian(digitized(formatted)).replacingOccurrences(of: ".", with: "٫")
         return isolate(number)
+    }
+
+    /// Puts a digit back where `.file` style wrote a word. The policy translates
+    /// units, never quantities: an empty store was rendering as "Zero KB" in the
+    /// Persian shell, which is English prose in a number's position. Only the
+    /// leading word is touched, so the unit token after it still passes through
+    /// untouched, and a reading that already starts with a digit is returned as
+    /// delivered.
+    private static func digitized(_ formatted: String) -> String {
+        for word in ["Zero", "zero"] where formatted.hasPrefix(word) {
+            return "0" + formatted.dropFirst(word.count)
+        }
+        return formatted
     }
 
     /// A left-to-right run inside right-to-left prose. The isolate pair
