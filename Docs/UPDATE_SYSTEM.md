@@ -122,7 +122,13 @@ Only a throwaway key is used inside the tests.
 5. Staging happens in a hidden directory beside the installed bundle, so the
    final rename stays on one volume. A read-only parent is refused with an
    actionable message instead of a half-copy.
-6. `/usr/bin/ditto -x -k` unpacks the zip; the result must contain exactly one
+6. `/usr/bin/ditto -x -k --noqtn` unpacks the zip. `--noqtn` matters: ditto
+   copies the archive's `com.apple.quarantine` attribute onto every file it
+   writes, which would make the swapped-in bundle a quarantined, ad-hoc-signed
+   download that Gatekeeper and AMFI can refuse at the next launch. The flag
+   changes what is written, never what is checked — signature, size and SHA-256
+   are all validated against the manifest before this step, and the identity
+   guards below run after it. The result must contain exactly one
    `.app` whose `CFBundleIdentifier` matches the running app and whose
    `CFBundleShortVersionString` matches the manifest.
 7. `UpdateInstaller.swap` writes a journal (current, staged, backup paths), then
