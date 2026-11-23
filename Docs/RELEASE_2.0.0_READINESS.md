@@ -2479,7 +2479,6 @@ pre-existing suspects survive elsewhere in *this* ledger (two `AMBIGUOUS` bare f
 inside earlier addenda, so the append-only rule keeps their text and this sentence is the correction record.
 
 Three substantive defects, all fixed in the same PR as this addendum:
-
 1. **§0 assumed an artefact that cannot exist before publication.** The pack told the owner to download the
    RC "from the release page" and to **stop** if About says anything but `2.0.0 (…)`. There is no 2.0.0
    release page — creating one is D7 — and per S.12.3 a CI build says `0.0.0-ci (N)` *by design*. §0 now
@@ -2495,8 +2494,18 @@ Three substantive defects, all fixed in the same PR as this addendum:
    `aiLicenseBlocked`, `Localization.swift:1368` / `PersianL10n.swift:1240`). What is missing is an eye on
    the rendered alert, not code — so the row now says that, and new §4b carries the toast gap.
 
-The pack's structure, its honesty rule and its 13 sections needed no change: this was a verification pass
-that found one drifted anchor and three stale claims, not a rewrite.
+A mechanical pass cannot see every defect, so the prerequisites were then read as an owner would. That found
+three more, all in §0 and all of them the kind that waste a session: the time requirement said **30 minutes**
+while the budget table below it sums to **72**; prerequisite 5 sent the reader to **§8** for the
+"helper absent vs installed" branches when those branches are in **§9** (§8 is undo/redo); and prerequisite
+4 cited `Localization.swift:817-819` for the Apple-silicon-only statement, but those lines are
+`Digits.size`/`aiRuntimeChecksumFailed` — the string is `Localization.swift:849` in English and
+`PersianL10n.swift:818` in Persian. All three corrected, and `LSMinimumSystemVersion = 14.0` was confirmed
+from the plist itself rather than from the doc.
+
+The pack's structure, its honesty rule and its seventeen numbered sections (§0–§16, eighteen headings once
+§4b is added) needed no change: this was a verification pass that found **one drifted anchor, three stale
+claims and three unusable instructions** — not a rewrite.
 
 ### S.12.7 Work items #152 / #156 / #157 / #158, and the freeze I chose
 
@@ -2520,22 +2529,29 @@ order matters and I am not making that call for him.
 
 ### S.12.8 Evidence ladder after this addendum
 
-**VERIFIED now (my own reading at `5ce98ec`, not inherited):** branch/tag/release/checkout state (§
-"S.12.0"); a `workflow_dispatch` cannot publish (`release.yml:159-166`, `:33-37`, permissions); the stamping
-mechanism (`build.sh:105-114`, `release.yml:38/68`, `check-versions.sh` source read end to end); the four
-catalogue entries' platforms; `pin_problem`'s shape and its seven call sites; the four `require_verified`
-load calls; `-32010 → aiLicenseBlocked` existing in both language tables; 112 of 113 acceptance-pack
-citations.
+**VERIFIED now (my own reading at `5ce98ec`, not inherited):** branch/tag/release/checkout state (the
+opening paragraph of this addendum); a `workflow_dispatch` cannot publish (`release.yml:159-166`, `:33-37`,
+permissions); the stamping mechanism (`build.sh:105-114`, `release.yml:38/68`, `check-versions.sh` source read
+end to end); the four catalogue entries' platforms; `pin_problem`'s shape and its seven call sites; the four
+`require_verified` load calls; `-32010 → aiLicenseBlocked` existing in both language tables; 112 of 113
+acceptance-pack citations.
+
+**VERIFIED by handling the artefact (S.12.10):** the arm64 candidate image's sha256 matches its sidecar; it
+carries `CFBundleShortVersionString = 0.0.0-ci` and `CFBundleVersion = 5`; `Contents/Resources/Worker` does
+not exist in it; its `model-catalog.json` is hash-identical to the audited repo file; the binary is arm64
+only; the signature is ad-hoc with no Team ID.
 
 **VERIFIED by CI, this round:** `macOS arm64`, `macOS x86_64` and `Windows StudioCore` succeeded on the new
 candidate run `45197302277` (head `5ce98ec`, run number 5); the `Publish GitHub Release` job is gated out and
 does not run. *(Windows x64 application: result appended when it lands.)*
 
 **NOT VERIFIED, unchanged by anything here:** every user-visible property of either package. No DMG is
-mounted or launched in CI, the acceptance pack's 13 sections are **NOT RUN**, the toast placement is
-headless-only (§4b), live-app inference and the banded-path memory are unmeasured, the `-32010` host mapping
-has no test on either side (#152), the updater's inertness is argued from configuration, and Windows remains
-runner-only evidence with no real desktop.
+mounted or launched in CI — the image was mounted read-only and inspected, never opened as an app — the
+acceptance pack's sections are **NOT RUN**, the toast placement is headless-only (§4b), the About panel's
+rendered version string is inferred from the plist rather than seen, live-app inference and the banded-path
+memory are unmeasured, the `-32010` host mapping has no test on either side (#152), the updater's inertness is
+argued from configuration, the x86_64 image was not inspected, and Windows remains runner-only evidence with
+no real desktop.
 
 **No readiness percentage is stated**, per S.4: the honest shape is that every gate inside this team's
 control is green and every gate needing a window, a tag or the owner's machine is untouched.
@@ -2554,4 +2570,33 @@ progress:
    irreversible public actions, all still undone.
 4. **Run §4b and the rest of the acceptance pack** in a real window. Nothing I can do closes it, and the
    no-GUI restriction is his to lift.
+
+### S.12.10 The candidate package opened headlessly: the numbers S.12.3 predicted are the numbers it carries
+
+Rather than infer the stamped version from the workflow, I read it out of the artefact. The
+`macos-arm64` artefact of run `45197302277` was downloaded through the Actions API, the DMG checked against
+the sidecar that travelled with it, mounted `-readonly -nobrowse`, inspected, and ejected
+(`disk5 ejected`; `/Volumes` is back to the three volumes it had before). **No app was launched, no window
+opened, nothing was installed and no Finder window appeared**, so the standing restriction held. Measured:
+
+| Property | Value | What it proves |
+|---|---|---|
+| Artefact name | `RetouchStudio-0.0.0-ci-arm64.dmg` | The `0.0.0-ci` fallback of `release.yml:33-37` fires on a non-tag ref, as S.12.3 states |
+| sha256 | `b3711d0ce222aa03bddc41dbbf85c4c18a453431c9944a528c385dfe9d2ed2b4` — matches `RetouchStudio-0.0.0-ci-arm64.dmg.sha256` byte for byte (`shasum -c`: `OK`) | The checksum sidecar workflow is real and self-consistent; §7 of the acceptance pack is checkable exactly as written |
+| `CFBundleShortVersionString` | **`0.0.0-ci`** | §0's new artefact rule is correct: a pre-publication candidate *must* read this, and aborting the session over it would have been wrong |
+| `CFBundleVersion` | **`5`** = that run's number | Confirms `RETOUCH_BUILD="$GITHUB_RUN_NUMBER"` end to end, and confirms the committed `2` in `Resources/Info.plist` is never what a CI build ships. This is the measurement behind owner decision (2) in S.12.9 |
+| `Contents/Resources/` | `AppIcon.icns`, `Fonts/` (Vazirmatn Regular/Medium/SemiBold/Bold + `OFL.txt`), `LICENSE`, `THIRD_PARTY_NOTICES.txt`, `model-catalog.json` — **no `Worker/` directory** | The helper runtime is genuinely absent from the shipping DMG. The L1 claim in S.12.4 was previously inferred from `RETOUCH_SKIP_WORKER: '1'`; it is now observed, and it is the strongest available support for "the macOS 2.0.0 package contains no AI runtime" |
+| `Contents/Resources/model-catalog.json` | sha256 `0a5e338631e35f3f150096e0349062176b14f45353e685fc3e890015cafc8050`, **identical to `git show 5ce98ec:Resources/model-catalog.json`** | The licence/integrity records the audit adjudicated are literally the records the shipped app reads — §14's assertions are about bytes a user gets, not about a repo file |
+| `Contents/MacOS/RetouchStudio` | `lipo -archs`: `arm64` only | Per-arch packaging holds; an Intel user needs the other DMG, which is the documented behaviour rather than a defect |
+| Code signature | `flags=0x2(adhoc)`, `Signature=adhoc`, `TeamIdentifier=not set` | Consistent with the owner's 2026-11-21 decision to stay out of the Apple Developer Program: ad-hoc is permanent here, and no Gatekeeper promise belongs in any doc |
+| Bundle / image size | 10 MB bundle in a 4,531,423-byte image | Matches S.11's published sizes; no hidden multi-hundred-megabyte payload slipped into the DMG |
+
+Two honest limits on this section. **The bytes live in `/private/tmp`, which is ephemeral** — the digests
+above are reproducible only by re-downloading artefact `14830230760` while Actions retains it, so this table
+is a dated observation and not a permanent licensing store; the durable evidence is the catalogue's own hash
+and the repo files it points at. And **inspecting a mounted image is not running the product**: nothing here
+shows the app launches, that About displays these strings, or that §1's Gatekeeper answer is friendly. G-QA
+stays NOT RUN. The `x86_64` image (`4,729,989` bytes) was not opened, so its stamping is inferred from the
+same workflow lines rather than measured.
+
 

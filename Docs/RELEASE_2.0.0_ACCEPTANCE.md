@@ -47,13 +47,16 @@ every row below, so pick one and write it in the identity line:
   holding the artefact you think you are: **stop**.
 - **Pre-publication candidate** — what actually exists as of 2026-11-23. The packages come from a
   `workflow_dispatch` run of the `Release` workflow, so they are named
-  `RetouchStudio-0.0.0-ci-<arch>.dmg` and About reads `0.0.0-ci (<run number>)`. **That label is correct
-  for an unpublished candidate, not a defect** — do not stop the session over it; record the exact pair and
-  the run number, and quote the run number in every FAIL block (§15). Two honest consequences: the download
-  comes from the *Actions run* page rather than a release page, and a GitHub artefact is a zip round-trip
-  that may not preserve `com.apple.quarantine`, so §1's Gatekeeper outcome taken from that path is
-  **indicative only** — a truthful §1 verdict needs the published image. Ledger §12 Addendum S.11/S.12
-  records which run was built and which head it used.
+  `RetouchStudio-0.0.0-ci-<arch>.dmg` and the bundle's `Info.plist` carries
+  `CFBundleShortVersionString = 0.0.0-ci` with `CFBundleVersion` equal to the run number — that pair was read
+  directly out of the arm64 image of run `45197302277` (ledger Addendum S.12.10), so About should read
+  `0.0.0-ci (5)`; **the rendered string itself is still unobserved, because no window has been opened.**
+  **That label is correct for an unpublished candidate, not a defect** — do not stop the session over it;
+  record the exact pair and the run number, and quote the run number in every FAIL block (§15). Two honest
+  consequences: the download comes from the *Actions run* page rather than a release page, and a GitHub
+  artefact is a zip round-trip that may not preserve `com.apple.quarantine`, so §1's Gatekeeper outcome
+  taken from that path is **indicative only** — a truthful §1 verdict needs the published image. The
+  readiness ledger's Addenda S.11 and S.12 record which run was built and which head it used.
 
 **Before you start, confirm the source agrees:** `./Tools/check-versions.sh 2.0.0` must pass. It cannot
 tell you the build number, and it never will — that is the owner's open "build stamping" decision, not a
@@ -68,10 +71,13 @@ gap in this checklist.
    cell, because that zip round-trip weakens the Gatekeeper conclusion.
 2. You have: one portrait photo where a face is clearly visible, one large landscape photo with no
    face, and a free folder for exports.
-3. You have at least 30 minutes of uninterrupted time; the AI sections assume the network works once.
+3. You have at least **75 minutes** of uninterrupted time — the budget below sums to 72 minutes and the
+   note-taking is what makes a FAIL row usable; the AI sections assume the network works once.
 4. macOS 14 or later on Apple silicon (`Resources/Info.plist` `LSMinimumSystemVersion` = `14.0`; the
-   helper is Apple-silicon-only — `Localization.swift:817-819`).
-5. Note the current state of the helper before you start, because §8 has two branches:
+   helper is Apple-silicon-only — `Localization.swift:849` in English, `PersianL10n.swift:818` in
+   Persian). The shipped build has no helper at all, so an Intel Mac simply has the editor.
+5. Note the current state of the helper before you start, because **§9** has two branches (its heading says
+   "helper absent vs installed"):
    `ls ~/Library/Application\ Support/RetouchStudio/AI/runtimes` → helper absent / present: `______`.
 
 ### Time budget
