@@ -89,6 +89,19 @@ Two things need to be true before any AI edit can run, and 2.0.0 is honest about
 
 The four models the catalogue can offer, and why each is there:
 
+*(Dated correction, 2026-11-24.)* "Can offer" above means **researched and licence-adjudicated**, not
+**fetchable**: the table is the catalogue of models this project has evaluated and adjudicated, and in
+this build none of the four can be obtained through the app. Two separate reasons, both recorded in
+[`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §7.4: the AI helper is not carried by release builds and
+no runtime package is configured (`AIRuntime.package` is nil), so the AI tools report themselves
+unavailable; and even for the weights alone, the downloader refuses every HTTP redirect while the
+Hugging Face file URLs in the catalogue answer `HTTP 302` (binary assets) or `HTTP 307` (config JSON) to
+their CDN — nine of the ten probed file URLs redirect, the tenth (SAM 2.1 tiny) is refused before any
+request because its entry is `unverifiable` — so the in-app download fails for every entry before a byte
+is hashed: defect **R1** in that audit (§7.4, probe table §12.2). Weights
+that are already on disk by other means still pass the same size-and-SHA-256 verification and can still
+be adopted. FLUX.2 klein 4B (q4) is listed below for completeness and is **Not offered in 2.0.0**.
+
 | Model | Used for | Size | Licence basis |
 |---|---|---|---|
 | Swin2SR x4 (real-world) | 4× upscale | 48.5 MB | Apache-2.0 for the code and for the weights, published by the lab that wrote the model. |
@@ -125,6 +138,20 @@ like any other change.
 کند.
 
 چهار مدلی که فهرست برنامه می‌تواند ارائه دهد و دلیل حضور هر کدام:
+
+*(اصلاحیهٔ تاریخ‌دار، ۲۰۲۶-۱۱-۲۴.)* «می‌تواند ارائه دهد» در جملهٔ بالا یعنی **پژوهش و
+داوری مجوز شده**، نه **قابل دریافت از داخل برنامه**: جدول زیر فهرست مدل‌هایی است که این پروژه بررسی و
+داوری مجوز کرده، و در این نسخه هیچ‌کدام از آن چهار مدل از راه برنامه قابل دانلود نیست. دو دلیل جدا، که
+هر دو در [`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §7.4 ثبت شده‌اند: کمک‌یار هوش مصنوعی در
+نسخه‌های منتشرشده وجود ندارد و هیچ بستهٔ زمان‌اجرای پیکربندی‌شده‌ای تعریف نشده (`AIRuntime.package` برابر
+nil است)، پس ابزارهای هوش مصنوعی اعلام می‌کنند که در دسترس نیستند؛ و حتی برای خودِ وزن‌ها، دانلودکننده
+هر HTTP redirect را رد می‌کند، در حالی که نشانی‌های فایل Hugging Face موجود در فهرست با `HTTP 302`
+(فایل‌های دودویی) یا `HTTP 307` (JSON پیکربندی) به CDN خودشان هدایت می‌شوند — از ده نشانی فایل سنجیده‌شده
+نه مورد بازنویسی می‌شوند و مورد دهم (SAM 2.1 tiny) پیش از هر درخواست رد می‌شود، چون ثبت آن `unverifiable`
+است — بنابراین دانلود درون‌برنامه برای همهٔ مدل‌ها پیش از آنکه حتی یک بایت هش شود شکست می‌خورد: نقص **R1**
+در همان ممیزی (§7.4، جدول سنجش §12.2). وزن‌هایی که از راه دیگری
+از پیش روی دیسک باشند همان بررسی اندازه و SHA-256 را می‌گذرانند و همچنان قابل پذیرفتن‌اند. FLUX.2 klein
+4B (q4) فقط برای کامل بودن در جدول زیر آمده و **در نسخهٔ ۲٫۰٫۰ ارائه نمی‌شود**.
 
 | مدل | کاربرد | حجم | پایهٔ مجوز |
 |---|---|---|---|
