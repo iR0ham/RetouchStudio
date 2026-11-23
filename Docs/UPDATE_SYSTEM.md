@@ -137,7 +137,11 @@ Only a throwaway key is used inside the tests.
    editor opens: nothing in `App.swift` or `AppDelegate` constructs an
    `UpdateController` or calls `recover(journalURL:)`, so recovery runs when the
    owner opens the About window (Retouch Studio → About) in that process, and
-   not at startup. What an earlier revision of this document claimed — launch
+   not at startup. Re-verified 2026-11-29 against this tree: `UpdateController()`
+   still occurs exactly once in `Sources/`, as that `@StateObject`
+   (`InfoViews.swift:95`), reachable only through `InfoWindows.shared.showAbout()`
+   from the app-menu item (`App.swift:210`). What an earlier revision of this
+   document claimed — launch
    coverage — holds only for the early phase: `AppDelegate.attach(model:)` does
    run startup sweeps (`ModelManager.cleanupAtStartup()`,
    `AIWorker.cleanupJobsAtStartup()`), but those clean the model store and the
@@ -148,7 +152,10 @@ Only a throwaway key is used inside the tests.
    was overstated here. The consequence for a user: a swap interrupted between
    the two renames leaves the old bundle under
    its `.…backup-<uuid>` name and the journal at
-   `~/Library/Application Support/RetouchStudio/update-journal.json`, and no
+   `~/Library/Application Support/RetouchStudio/update-journal.json`
+   (`UpdateController.journalURL`, `UpdateController.swift:25-32`, written by
+   `swap` at `UpdateVerification.swift:174`; the backup name comes from
+   `UpdateVerification.swift:171`), and no
    later launch repairs that on its own — the app keeps running whatever bundle
    the rename left in place, and the backup folder and journal persist until an
    About panel is opened. Two further properties of this path are worth stating
