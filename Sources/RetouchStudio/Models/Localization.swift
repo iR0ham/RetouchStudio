@@ -273,6 +273,8 @@ class L10n {
     func projectSaved(_ name: String) -> String { "Saved project \(name)" }
     var projectSaveFailed: String { "Could not save the project." }
     var projectOpened: String { "Project restored." }
+    /// A crash-recovery candidate is an unsaved photo session, not a project.
+    var sessionRestored: String { "Edits restored." }
     var projectOpenFailed: String { "Could not open that project." }
     var projectPhotoMissing: String {
         "The photo this project refers to is no longer at that path."
@@ -600,6 +602,9 @@ class L10n {
     // MARK: - Settings, About, Help
 
     var settingsTitle: String { "Settings" }
+    /// The app-menu item. SwiftUI's default title follows the system language,
+    /// so the app supplies its own.
+    var settingsMenu: String { "Settings…" }
     /// macOS titles this window itself, in the system language. The app writes
     /// its own so the title bar follows the switch like the rest of the text.
     var settingsWindowTitle: String { "\(appName) \(settingsTitle)" }
@@ -785,6 +790,27 @@ class L10n {
         let amount = fraction == 0 ? "\(whole)" : "\(whole).\(fraction)"
         return "\(amount) \(units[unit])"
     }
+    /// The same readout in the language the interface is speaking, for a size
+    /// some other formatter already produced — today that is
+    /// `ByteCountFormatter` at the model-manager rows. English gets the string
+    /// back untouched; Persian writes one isolated left-to-right run with
+    /// Persian digits, a Persian decimal separator and the Latin unit token.
+    /// One call per readout, so a number and its unit can never arrive as two
+    /// separately-localised pieces and leave a mixed-script token behind.
+    static func byteSize(_ bytes: Int64,
+                         language: AppLanguage = .current) -> String {
+        let formatted = ByteCountFormatter.string(fromByteCount: bytes,
+                                                  countStyle: .file)
+        return Digits.size(formatted, language: language)
+    }
+    /// A size already formatted by `ByteCountFormatter` ("48.5 MB"). English
+    /// gets it back untouched; Persian converts the digits and the decimal
+    /// separator, keeps the unit token Latin, and isolates the run. See
+    /// `Digits.size`, which owns the unit policy for every size readout.
+    static func byteSize(_ formatted: String,
+                         language: AppLanguage = .current) -> String {
+        Digits.size(formatted, language: language)
+    }
     var aiRuntimeChecksumFailed: String {
         "The downloaded file did not match its SHA256. Nothing was installed."
     }
@@ -959,6 +985,7 @@ class L10n {
         case .readingImage: return readingImage
         case .couldNotRead: return couldNotRead
         case .projectOpened: return projectOpened
+        case .sessionRestored: return sessionRestored
         case .applyingCrop: return applyingCrop
         case .cropReset: return cropReset
         case .cropApplied: return cropApplied

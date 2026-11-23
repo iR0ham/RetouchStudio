@@ -728,6 +728,30 @@ check(persianMessage.contains("نصب نشد"),
 check(Digits.persian("12 MB") == "۱۲ MB",
       "the digit converter does not wait for the interface language")
 
+// Unit policy: Persian digits, Latin unit tokens, one isolated LTR run. The
+// token is not translated; the isolation is what keeps the order.
+print("\n[RT] the unit policy holds at every readout")
+
+check(Digits.pixels(48, language: .persian) == "\u{2066}۴۸ px\u{2069}",
+      "a Persian pixel count uses Persian digits and the Latin token")
+check(Digits.pixelSize(4032, 2268, language: .persian)
+        == "\u{2066}۴۰۳۲ × ۲۲۶۸ px\u{2069}",
+      "a Persian width × height keeps its order and its token")
+check(Digits.pixels(48, language: .english) == "48 px"
+        && Digits.pixelSize(4032, 2268, language: .english) == "4032 × 2268 px",
+      "English keeps the shape it already had")
+check(Digits.size("48.5 MB", language: .persian) == "\u{2066}۴۸٫۵ MB\u{2069}",
+      "a Persian size converts digits and keeps the Latin unit")
+check(Digits.size("48.5 MB", language: .english) == "48.5 MB",
+      "an English size is untouched")
+let persianConsent = PersianL10n.table.modelsConsentBody(
+    files: 3, size: "۴۸٫۵ MB", codeLicense: "Apache-2.0",
+    weightsLicense: "Apache-2.0", host: "huggingface.co", sha: "abc123")
+check(persianConsent.contains("۳ فایل") && persianConsent.contains("۴۸٫۵ MB"),
+      "a Persian file count uses Persian digits and the size stays Latin")
+check(persianMessage.contains("\u{2066}") && persianMessage.contains("\u{2069}"),
+      "the disk sentence isolates its sizes left-to-right")
+
 // MARK: - The phase machine's part in this slice
 
 // MARK: - The pre-download floor counts the live tree
