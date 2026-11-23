@@ -608,7 +608,8 @@ def _approved(evidence_url: str, *, notice: str | None = None,
 
 def _not_established(evidence_url: str, *, note: str,
                      stated_by: str = STATED_BY_NOT_ESTABLISHED,
-                     notice: str | None = None) -> ArtefactTerms:
+                     notice: str | None = None,
+                     read_on: str = LICENCE_READ_ON) -> ArtefactTerms:
     """The search happened and produced no usable statement.
 
     Axes stay blank rather than false: blank means "not known", false means
@@ -620,6 +621,7 @@ def _not_established(evidence_url: str, *, note: str,
         evidence_url=evidence_url,
         notice=notice,
         note=note,
+        read_on=read_on,
     )
 
 
@@ -636,9 +638,11 @@ CATALOG: tuple[ModelEntry, ...] = (
             # weights record below is what the load gate enforces.
             code=_not_established(
                 "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
-                note="The dossier records the FLUX.2-klein-4B weights grant at this "
-                     "repository and no separate code-licence read for this entry. The "
-                     "entry's codeLicense string is preserved unchanged."),
+                note="The dossier read the FLUX.2-klein-4B weights grant at the "
+                     "upstream repository (black-forest-labs/FLUX.2-klein-4B); this "
+                     "converter repository ships no licence copy of its own, and no "
+                     "separate code-licence read exists for this entry. The entry's "
+                     "codeLicense string is preserved unchanged."),
             # Downgraded from `approved` on 2026-11-23 (ledger item S-FLUX). The
             # record this replaces quoted "Open weights available for commercial
             # use under the Apache 2.0 license" — a sentence Black Forest Labs
@@ -675,7 +679,12 @@ CATALOG: tuple[ModelEntry, ...] = (
                      "corrections to this slice's own first reading, and a separate "
                      "non-licensing defect (the declared download set omits the "
                      "tokenizer assets mflux requires) are in "
-                     "Docs/MODEL_LICENCES.md section 12."),
+                     "Docs/MODEL_LICENCES.md section 12.",
+                # The date is the read that produced this verdict, not the date the
+                # entry was first written: the converter card and the upstream
+                # licence were both re-read on 2026-11-23, and a rot-detection date
+                # that predates the read it reports would understate the record.
+                read_on="2026-11-23"),
             training_data=_not_established(
                 "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
                 note="The dossier records no training-data row for this entry, so no "

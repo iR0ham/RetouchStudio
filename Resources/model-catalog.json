@@ -73,7 +73,7 @@
           "verdict": "unknown",
           "conditions": [],
           "notice": null,
-          "note": "The dossier records the FLUX.2-klein-4B weights grant at this repository and no separate code-licence read for this entry. The entry's codeLicense string is preserved unchanged."
+          "note": "The dossier read the FLUX.2-klein-4B weights grant at the upstream repository (black-forest-labs/FLUX.2-klein-4B); this converter repository ships no licence copy of its own, and no separate code-licence read exists for this entry. The entry's codeLicense string is preserved unchanged."
         },
         "weights": {
           "use": "public-non-commercial-use-and-distribution",
@@ -82,7 +82,7 @@
           "canUse": null,
           "statedBy": "not-established",
           "evidenceUrl": "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
-          "readOn": "2026-11-21",
+          "readOn": "2026-11-23",
           "verdict": "unknown",
           "conditions": [],
           "notice": "Apache-2.0 attribution duties preserved from the superseded record: redistributing FLUX.2-klein weights would require the licence copy, the retained copyright and licence notices, a statement of changes, and any NOTICE text from the source repository. Recorded as evidence; it is not a claim that permission to redistribute this conversion is established.",

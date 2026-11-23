@@ -1734,7 +1734,12 @@ do {
         ArtefactPin(model: "flux2-klein-4b-q4", artefact: "weights",
                     verdict: "unknown", statedBy: "not-established",
                     evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
-                    grantsAll: false),
+                    // S-FLUX re-read this artefact and its upstream on 2026-11-23, and
+                    // `readOn` means "when the statement behind this verdict was read"
+                    // (§1: a URL without a date cannot rot-detect). The date moves with
+                    // the read that established the verdict, exactly as §10 moved
+                    // swin2sr-x4 from 2026-11-21 to 2026-11-22.
+                    grantsAll: false, readOn: "2026-11-23"),
         ArtefactPin(model: "flux2-klein-4b-q4", artefact: "trainingData",
                     verdict: "unknown", statedBy: "not-established",
                     evidenceURL: "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4",
