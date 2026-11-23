@@ -119,6 +119,16 @@ Why not "replace it": every alternative in this class has the same or a weaker w
 
 **If it ever fails** (e.g. the owner wants a stricter dataset position): replacement order is SwinIR-L realSR ×4 GAN (Apache-2.0, 142,473,939 B) → Real-ESRGAN `x4plus` (BSD-3-Clause, 67,040,989 B). Both are §4 below.
 
+**Dated correction (2026-11-24) — acquisition, not licence.** The verdict and every field above stand: this
+entry is licensed for acquisition and for redistribution. What changed is how its bytes can be reached. The
+app's downloader refuses every HTTP redirect, and the two `huggingface.co` file URLs of this entry now
+answer `HTTP 302` (`pytorch_model.bin`, to `us.aws.cdn.hf.co`) or `HTTP 307` (`config.json`,
+`preprocessor_config.json`, to a same-host cache path), so **this model cannot be downloaded through the app
+today**. Its weights were placed on disk by other means and still pass the same size-and-SHA-256
+verification. Defect **R1**, with the per-file probe table:
+[`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §7.4 and §12.2. No licence field and no verdict in this
+dossier was altered by that finding.
+
 ---
 
 ## 3. Mask / segmentation — the installed model
@@ -145,6 +155,14 @@ Why not "replace it": every alternative in this class has the same or a weaker w
 Note the distinction the PM asked for: the *repository* licence (Apache-2.0) and the *checkpoint* licence (Apache-2.0) are separate grants here, and the project is lucky that Meta stated the second one explicitly. Most repos do not.
 
 **Blockers are not licence blockers — see §8c.**
+
+**Dated correction (2026-11-24) — acquisition, not licence.** The blocker above is the runtime package, and
+the redirect defect **R1** does not remove it: this entry's file URL on `dl.fbaipublicfiles.com` answered
+`200` with a `content-length` equal to its pin ([`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §12.2),
+so it is the one catalogue entry that does *not* redirect — yet the app still refuses it before any request
+because of §8c. Net effect for a reader: **this model cannot be obtained through the app**, for the packaging
+reason rather than the redirect reason, and weights already on disk still pass verification. No licence field
+and no verdict in this dossier was altered by that finding; defect **R1** is §7.4 of that audit.
 
 ---
 
@@ -197,6 +215,16 @@ Why no enhancement model reaches plain "USABLE": none of them (except SAM 2 and 
 Dataset note: MI-GAN and the LaMa family train on **Places2**. The Places2 terms page could not be fetched (two attempts, both failed today); **Places2 licence = NOT CONFIRMED**. The MI-GAN authors nonetheless attached an explicit MIT grant to the weights, which is the operative document.
 
 **Recommendation:** MI-GAN stays the default heal model (small, MIT code *and* weights, runs under 30 MB). Use LaMa only if large-hole quality demands it, and if so record the third-party artefact explicitly in the manifest with `weightsLicense: "NOT CONFIRMED (third-party re-export of big-lama)"` rather than "Apache-2.0". Do not promote FLUX generation on this hardware.
+
+**Dated correction (2026-11-24) — acquisition, not licence.** The verdicts above are licence verdicts and
+are unchanged. On acquisition, neither installed entry is downloadable through the app today. The app's
+downloader refuses every HTTP redirect, and `migan_pipeline_v2.onnx` on `huggingface.co` answers `HTTP 302`
+to `us.aws.cdn.hf.co`, so **MI-GAN cannot be fetched in-app** — that refusal, with its `the model source
+answered HTTP 302` error text, is exactly what the owner hit. `flux2-klein-4b-q4` redirects the same way on
+all five of its weight files and is additionally **not offered in 2.0.0** for the licence and download-set
+reasons §12 records; the two causes are independent, and fixing R1 would not make FLUX downloadable. Weights
+already placed on disk by other means still pass the same size-and-SHA-256 verification. Probe table and
+defect: [`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §12.2 and §7.4 (**R1**).
 
 ---
 
@@ -672,3 +700,11 @@ only harness a future re-record can be tested with.
 For 2.0.0 the user-visible consequence is stated in `Docs/RELEASE_NOTES_2.0.0.md`:
 generative editing and object removal by diffusion are **not offered**; spot healing
 remains available through `migan`.
+
+**Dated correction (2026-11-24) — acquisition.** "Not offered" above is a licence decision and stays. A
+second, independent reason now applies to acquisition: the five weight files of this entry answer
+`HTTP 302` to `us.aws.cdn.hf.co`, which the app's downloader refuses outright, so even with the licence
+record unchanged and the helper present the in-app download would fail before a byte is hashed. Defect
+**R1**, [`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §7.4 and §12.2. Fixing R1 does not make this
+entry downloadable — its `unknown` weights verdict and its incomplete download set still refuse it. No
+verdict or licence field in this dossier was altered by that finding.
