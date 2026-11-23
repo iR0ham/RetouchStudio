@@ -7188,6 +7188,102 @@ func testAIEditStoreProvenance() {
     try? manager.removeItem(at: wrongPatchSidecar)
 }
 
+// MARK: - Wave 1 defect: a Persian storage size is one run
+
+/// The measured defect: Settings → AI rendered `۹۶٫۷ MB` — the digits converted
+/// to Persian, the unit left as the raw English abbreviation, and no isolation,
+/// so the paragraph direction was free to move the token. The policy is Persian
+/// digits, the Latin unit glyph, and the whole readout inside one LRI…PDI run.
+/// These assertions pin the rendered strings themselves rather than calling the
+/// formatter and asking whether something came back.
+@MainActor
+func testPersianStorageSizeIsOneIsolatedRun() {
+    print("\n[D8] a Persian storage size is one isolated run of Persian digits and a Latin unit")
+
+    // ByteCountFormatter is what the model-manager rows measure with; the
+    // expected strings below are written against its .file output on this box,
+    // so a change in the system formatter shows up here instead of silently
+    // moving the assertion.
+    func latin(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    let cases: [(String, Int64, String, String)] = [
+        ("a sub-MB value", 354_000, "354 KB", "\u{2066}۳۵۴ KB\u{2069}"),
+        ("the fraction that mismatched", 96_700_000, "96.7 MB", "\u{2066}۹۶٫۷ MB\u{2069}"),
+        ("a gigabyte-scale value", 4_800_000_000, "4.8 GB", "\u{2066}۴٫۸ GB\u{2069}"),
+        // The formatter spells an empty store out in words rather than writing
+        // "0 bytes"; the policy converts the digits and keeps its unit alone.
+        ("zero bytes", 0, "Zero KB", "\u{2066}Zero KB\u{2069}")
+    ]
+    for (label, bytes, latinExpected, persianExpected) in cases {
+        check(latin(bytes) == latinExpected, "\(label): the Latin reading is \(latinExpected)",
+              latin(bytes))
+        check(L10n.byteSize(bytes, language: .persian) == persianExpected,
+              "\(label): the Persian reading is one isolated run",
+              L10n.byteSize(bytes, language: .persian))
+        check(L10n.byteSize(bytes, language: .english) == latinExpected,
+              "\(label): English is untouched")
+    }
+
+    // The shape of every Persian reading, independent of the case table: no
+    // ASCII digit survives, the unit stays Latin, and the run is isolated.
+    let sample = L10n.byteSize(96_700_000, language: .persian)
+    check(!sample.unicodeScalars.contains { $0.value >= 48 && $0.value <= 57 },
+          "no ASCII digit is left in a Persian size")
+    check(sample.unicodeScalars.contains { $0.value >= 0x06F0 && $0.value <= 0x06F9 },
+          "the digits are Persian-Indic")
+    check(sample.hasPrefix("\u{2066}") && sample.hasSuffix("\u{2069}"),
+          "the whole size is one left-to-right isolated run")
+    check(sample.contains("MB") && !sample.contains("مگابایت"),
+          "the unit token stays Latin and is never translated", sample)
+
+    // The rendered line, through the language the interface is actually
+    // speaking: `L10n.byteSize` takes its default from `AppLanguage.current`,
+    // so a Persian row is proved by holding the override for these calls and
+    // dropping it again immediately — nothing here writes to defaults.
+    let fa = PersianL10n.table
+    AppLanguage.languageOverride = .persian
+    let diskLine = fa.modelsDiskUsage(used: latin(96_700_000), free: latin(4_800_000_000))
+    let runtimeBody = fa.aiRuntimeDownloadBody(file: "ai-runtime.zip",
+                                               size: latin(390_000_000), hash: "abc123")
+    let consentBody = fa.modelsConsentBody(files: 3, size: latin(96_700_000),
+                                           codeLicense: "Apache-2.0",
+                                           weightsLicense: "Apache-2.0",
+                                           host: "huggingface.co", sha: "abc123")
+    let legacyLine = fa.modelsLegacyFound(latin(96_700_000))
+    let adoptLine = fa.modelsAdoptBody(latin(96_700_000))
+    let englishDiskLine = L10n().modelsDiskUsage(used: latin(96_700_000),
+                                                 free: latin(4_800_000_000))
+    AppLanguage.languageOverride = nil
+
+    check(diskLine == "روی دیسک: \u{2066}۹۶٫۷ MB\u{2069} · آزاد: \u{2066}۴٫۸ GB\u{2069}",
+          "the Persian storage line carries two isolated runs", diskLine)
+    check(!diskLine.unicodeScalars.contains { $0.value >= 48 && $0.value <= 57 },
+          "and no half-converted number in it")
+    // Under an English interface the same sentences keep the shape they had.
+    check(englishDiskLine == "On disk: 96.7 MB · Free: 4.8 GB",
+          "the English storage line is unchanged", englishDiskLine)
+
+    // Every other readout that takes a formatted size from a row goes through
+    // the same policy, so no panel can drift back to a mixed token.
+    check(runtimeBody.contains("\u{2066}۳۹۰ MB\u{2069}"),
+          "the runtime consent quotes an isolated Persian size", runtimeBody)
+    check(consentBody.contains("۳ فایل") && consentBody.contains("\u{2066}۹۶٫۷ MB\u{2069}"),
+          "the model consent does too", consentBody)
+    check(legacyLine.contains("\u{2066}۹۶٫۷ MB\u{2069}")
+            && adoptLine.contains("\u{2066}۹۶٫۷ MB\u{2069}"),
+          "and so do the adopt and legacy rows", legacyLine)
+    // A string already carrying Persian digits must not be converted twice or
+    // re-wrapped.
+    check(L10n.byteSize("\u{2066}۹۶٫۷ MB\u{2069}") == "\u{2066}۹۶٫۷ MB\u{2069}",
+          "an already-Persian size passes through unchanged")
+    // The unknown-size placeholder is not a size, and keeps its own wording.
+    check(L10n().modelsSizeUnknown == "Size unknown"
+            && fa.modelsSizeUnknown == "اندازه نامعلوم",
+          "the unknown placeholder keeps its own wording", fa.modelsSizeUnknown)
+}
+
 // MARK: - runner
 
 @MainActor
@@ -7304,6 +7400,7 @@ func runAll() async {
     testAIProvenanceAdoption()
     testAIEditStoreProvenance()
     await testModelStoresMaskBesideEdit()
+    testPersianStorageSizeIsOneIsolatedRun()
 
     // Invalidate any debounced write left by the last scenario: the scratch
     // directory is about to disappear, and no timer may outlive it.

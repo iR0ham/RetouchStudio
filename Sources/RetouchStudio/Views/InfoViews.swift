@@ -36,8 +36,19 @@ final class InfoWindows {
         }
     }
 
+    /// Settings is hosted the same way the other panels are. A SwiftUI
+    /// `Settings` scene carries a system title in the system language, which
+    /// ignores the app's own language switch; an app-owned window and menu item
+    /// let both say the table's word for it.
+    func showSettings(model: EditorModel) {
+        show(id: "settings", title: model.s.settingsWindowTitle, size: NSSize(width: 470, height: 560)) {
+            SettingsView(model: model)
+        }
+    }
+
     /// A language switch in the menu reaches the editor instantly, but the
-    /// panels hold a snapshot, so they have to be rebuilt by hand.
+    /// panels hold a snapshot, so they have to be rebuilt by hand. Settings
+    /// observes the model itself, so it relocalises in place.
     func relocaliseOpenPanels() {
         if windows["about"] != nil { showAbout() }
         if windows["help"] != nil { showHelp() }
