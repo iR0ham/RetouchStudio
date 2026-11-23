@@ -11,7 +11,7 @@ Built with SwiftUI, Core Image and Vision, and shipped as a self-contained `.app
 - **Twelve tools in one inspector**: Skin, Healing, Reshape, Eyes & Teeth, Makeup, Color & Light, Looks, Crop, Body, Background, Stickers and Analysis.
 - **Non-destructive edits**: every adjustment is a value in a project, so a saved `.retouch` file can be reopened and changed later. Up to 100 steps of undo and redo.
 - **Automatic analysis** with a face overlay: skin, eyes, teeth and background are measured, and Auto Retouch only moves what the measurement justifies.
-- **Optional local AI helper** on macOS: remove an object from a marked region, continue texture over a small area, reimagine the frame from a prompt, or upscale 4×. The models are downloaded on request; nothing is uploaded. Windows has no AI tools — see the platform paragraph under Requirements.
+- **Local AI helper — macOS only, and not present in the 2.0.0 build**: it would remove an object from a marked region, continue texture over a small area, reimagine the frame from a prompt, or upscale 4×, with the weights fetched only after your approval and nothing uploaded. Release builds are built with `RETOUCH_SKIP_WORKER=1` and no runtime package is configured, so in 2.0.0 the AI tools report that they are unavailable and no model can be downloaded in-app; [`Docs/W5_SCOPE_AUDIT_2.0.0.md`](Docs/W5_SCOPE_AUDIT_2.0.0.md) records exactly what is and is not delivered. Windows has no AI tools — see the platform paragraph under Requirements.
 - **Project files and recovery**: `.retouch` projects, editable presets, and a debounced recovery copy while unsaved work exists.
 - **Export control**: JPEG, PNG, TIFF or HEIC, long-edge cap, quality slider, watermark, optional face overlay, and GPS/camera identity stripped from the saved copy.
 - **Bilingual UI**: complete English and Persian localisation (including Persian digits), switchable in Settings.
@@ -107,6 +107,13 @@ RETOUCH_ARCH=arm64 ./build.sh release    # bundles Worker/ inside the app
 The AI tools (remove object, heal area, reimagine, 4× upscale) run in a local Python worker. Release builds do not carry it. The protocol-v2 download path exists in the code but is disabled in this build (`AIRuntime.package` is nil) because no official runtime package has been approved: **Settings → Manage Models…** shows no runtime download, and the 1.0.0 arm64 archive is not treated as compatible. When an official package is configured, its consent sheet will show the archive name, its size and a 16-character SHA256 prefix; the app downloads it only after approval, verifies the full hash, and installs it under `~/Library/Application Support/RetouchStudio/AI/runtimes/protocol-v2`. Model weights stay under `~/Library/Application Support/RetouchStudio/AI/models` and are downloaded separately, each after a sheet shows the file count, total size and licence (the sheet does not list every file or its SHA256).
 
 A build can also carry the helper inside the app, which copies a relocatable interpreter plus the required wheels into `Contents/Resources/Worker` (about 1.3–1.6 GB). Model weights are never bundled either way.
+
+*(Dated correction, 2026-11-23.)* The weight download above is the intended design, not the current
+behaviour: `ModelStore` refuses any HTTP redirect, and every `huggingface.co` file URL now redirects
+to the CDN that hosts the bytes, so **no catalogue entry can be obtained through the app today** — the
+model manager reports `the model source answered HTTP 302` for MI-GAN and the equivalent for the other
+entries. Weights that are already on disk can still be verified and adopted. The defect and its fix are
+tracked as R1 in [`Docs/W5_SCOPE_AUDIT_2.0.0.md`](Docs/W5_SCOPE_AUDIT_2.0.0.md).
 
 Without the helper the editor still runs; AI tools report that the runtime is unavailable. The helper is Apple-silicon-only, so an Intel Mac uses the editor without AI.
 

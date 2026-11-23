@@ -878,6 +878,17 @@ ledger records this in S.12.6 pass 4.
     (`server.py:344`, which is also where `capabilityId` is attached) and on the plan builder
     (`plan.py:33-47`) — but **not** on the host's install door, which is why #157 stays open.
 
+**Dated restatement (2026-11-23, after the live session).** The **N/A** marks used throughout this pack mean
+"the precondition is absent from this build", and they were never meant to imply that the underlying feature
+works. The post-session audit in [`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) found one case where that
+distinction matters and where the pack understated the position: the **weight download** path is not merely
+unreachable-without-a-helper, it **fails** — `ModelStore.urlSession(_:task:willPerformHTTPRedirection:completionHandler:)`
+refuses every redirect, and all nine `huggingface.co` file URLs in `Resources/model-catalog.json` now answer
+`302`/`307`, while the one non-redirecting URL (`sam2.1_hiera_tiny.pt`) is refused by its own `unverifiableReason`.
+So for every AI row in this pack, read **N/A** as *"committed in W5-1 … W5-5 or promised in `README.md`, not
+delivered in this artefact"* rather than *"not applicable to this product"*. No AI row of this pack is accepted as
+working, and none is counted as a passed test; they are open delivery gaps, tracked as R1 … R9 in the audit.
+
 ---
 
 ## 15. Defect triage — what to record for any FAIL

@@ -3114,3 +3114,80 @@ readiness percentage is stated anywhere in this ledger. Publication remains owne
   is evidence of what was known when it was written — the resolution lives in the dated marker under it, and the
   real answer is the section pointer: §9's chip paragraph. Any future edit to the pack moves those numbers again;
   that is the known, accepted cost of appending to the document being cited.
+
+## Addendum S.16 — 2026-11-23 (after the session): the owner's five AI symptoms audited, one new defect found, and the delivery ladder restated
+
+The owner ran the session in §1–§13 against the pinned DMG and reported five AI symptoms, then ordered the
+original W5-1 … W5-5 commitments re-opened rather than the symptoms patched one by one. This addendum records
+what that audit concluded and points at [`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md), which carries the
+commitment matrix, the model dossier, the platform matrix and the remediation plan R1 … R9.
+
+**What the audit was run against.** Not the tip: a detached worktree at `5ce98ec`, the commit compiled into
+`b3711d0c…2ed2b4`, because `0758ad8` and everything after it differ only under `Docs/`. Six read-only research
+passes were dispatched and their load-bearing claims re-verified personally. One citation error was caught and
+corrected before it could be repeated: `Tools/build.sh` does not exist — the worker-stamping logic is in the
+repository-root `build.sh`.
+
+**Three of the five symptoms are the documented light build, working as intended.** The shipped bundle contains
+no helper, verified from the artefact rather than from the workflow:
+
+```
+$ ls "/Volumes/Retouch Studio 0.0.0-ci 1/Retouch Studio.app/Contents/Resources/"
+AppIcon.icns	Fonts		LICENSE		THIRD_PARTY_NOTICES.txt	model-catalog.json
+$ du -sh "…/Retouch Studio.app"
+ 10M
+```
+
+with `RETOUCH_SKIP_WORKER: '1'` in `.github/workflows/release.yml` and `AIRuntime.package` hard-coded `nil`. So
+"helper is not running", "capability list cannot be read" and "Swin2SR is installed but cannot run" are the
+correct consequences of a packaging decision this ledger already recorded — and of `Docs/W5_UPSCALER_ACCEPTANCE.md`
+§10.5's own sentence, which the release-facing documents had never inherited: *"It is **not** shipped-build evidence:
+the installed bundle carries no `Contents/Resources/Worker` and `AIRuntime.package` is nil."* "SAM2 is not
+installable" is the catalogue's own `unverifiableReason`, which is accurate: `sam2` is in neither
+`worker/requirements.lock` (67 pins, none of them `sam2`) nor the `models` extra.
+
+**The fourth is a new defect, and it is bigger than the symptom reported.** `ModelStore`'s delegate answers every
+redirect with `completionHandler(nil)` — the comment above it reads *"A redirect is a different source than the one
+the owner approved."* — and the completion handler then fails with `the model source answered HTTP <code>`. Hugging
+Face now serves files from its XET CDN, so all nine `huggingface.co` file URLs in the catalogue redirect (binary
+files `302` to `us.aws.cdn.hf.co`, the two config files `307` to an in-host cache path). The tenth URL, SAM 2's
+`dl.fbaipublicfiles.com` checkpoint, answers `200` with `content-length: 156008466` — matching its pin — and is
+refused separately by the entry's own `unverifiableReason`. **Net effect: no catalogue entry is obtainable through
+the app on either platform**; `Windows/RetouchStudio.AI/Models/ModelStore.cs` sets `AllowAutoRedirect = false` and
+fails identically. `README.md`'s "The models are downloaded on request" is therefore false, and the user-facing
+error text blames the source for our own policy. It survived every gate because the weights on this Mac arrived by
+manual placement plus the adopt path, and `Tests/ModelStoreTests.swift` drives the downloader against a local fixture
+server that answers 200 and never redirects — so W5-2's exit criterion, which names no real-host condition, was truly
+met while the feature was broken. Filed as **R1** here rather than as a GitHub issue: this order authorises research
+and a remediation plan, not tracker writes.
+
+**The fifth symptom is the same cause as the first.** The owner's report was accurate on all five points; nothing in
+it was a misobservation.
+
+**Delivery ladder, restated.** W5-1, W5-2 and W5-3 are **met as written** — and this audit says plainly that as written
+they did not require a helper inside a shipped bundle or a download against a real host. W5-4 is **partial and
+self-declared incomplete** (`"W5-4 is NOT complete"`, `"Production adoption: not performed"`); its best evidence is one
+recorded `upscale.4x` run in a hand-built dev runtime, and `worker/retouch_ai_worker/capability-evidence.json` still
+holds exactly one entry which names no run id, host or artefact hash. W5-5 is **partial**: the checks are green, but
+`worker-payload-bundle` is `continue-on-error: true`, uploads no artefact, and its smoke test imports modules rather
+than the symbols the engine actually uses (`Swin2SRForImageSuperResolution`, `Flux2KleinEdit`,
+`ModelConfig.flux2_klein_4b`, `ort.InferenceSession`) — all four of which resolve in the dev interpreter, so the pins
+work and nothing proves it survives a bump. **There is no SHIPPED-WORKING AI cell on any platform, at any commit.**
+
+**Two side effects of this audit, recorded rather than hidden.**
+- Build stamping resolved as a by-product of mounting the RC: its `CFBundleShortVersionString` is `0.0.0-ci` and its
+  `CFBundleVersion` is `5`, which is the fifth `release.yml` run's `GITHUB_RUN_NUMBER` (a per-workflow counter, run
+  `45197302277`) and not the repository-wide run id; `Resources/Info.plist` defaults are `2.0.0` plus build `2`. A
+  `v*` tag stamps from the tag name, so an RC reporting `0.0.0-ci` is correct behaviour. §3 G-VER stands.
+- Mounting the DMG for inspection left a second read-only mount of the same image, which was ejected after the
+  listing. The pre-existing mount of the same file was left in place: it may be the owner's own from the session, and
+  nothing of his was unmounted without asking.
+
+**Effect on the acceptance decision.** The AI rows of the pack keep their **N/A** marks, but their meaning is now
+corrected in place at the end of §14 of the pack: **N/A** here means *"committed in W5-1 … W5-5 or promised in
+`README.md`, not delivered in this artefact"*, not *"not applicable to this product"*. The candidate the owner accepted
+for acceptance remains the editor candidate; this audit removes any reading of it as AI acceptance. The recommendation
+that follows from it is **R2 option B now** — release an honest editor with the AI bullets corrected — and **option C as
+the 2.1 milestone**, with a helper in the artefact and one shipped-build inference recorded to the ladder. Tags,
+releases, assets, packaging changes and Windows distribution remain owner-blocked and were not touched.
+
