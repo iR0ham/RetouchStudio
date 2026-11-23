@@ -113,7 +113,7 @@ row is structurally unscoreable and must be recorded as **N/A**, never PASS or F
 | 7 | Project save → quit → restore + recovery | 8 | 8 |
 | 8 | Undo/redo across an AI edit | 4 | 1 — row 8.1 only; **8.2–8.4 N/A** (need a completed AI quick edit) |
 | 9 | AI consent sheet + Model Manager states | 8 | 7 — Branch A rows 9.1–9.6; **9.7 N/A** (no helper present) |
-| 10 | Upscale a large image + ETA wording | 6 | 2 — **10.4 and 10.5 run** (both are host-side, gated on `AIWorker.isInstalled` at `EditorModel.swift:3383`/`:3393`); **10.1–10.3 N/A** (need real inference) |
+| 10 | Upscale a large image + ETA wording | 6 | 2 — **10.4 and 10.5 run** (both are host-side, gated on `AIWorker.isInstalled` at `EditorModel.swift:3383`/`:3393`); 10.1 gives the estimate **string** only; **10.2–10.3 N/A** (need real inference) |
 | 11 | Disk-nearly-full behaviour | 4 | 1 — 11B acknowledgment only; **11A N/A** (no runtime download is offered) |
 | 12 | Persian locale pass | 8 | 8 |
 | 13 | Windows statement (no execution) | 2 | 2 — a statement, not a test (§13) |
@@ -163,7 +163,8 @@ you are not holding the accepted build (§2, row 2.0).
    (§0, prerequisite 1).
 
 **What cannot be scored with this build.** 11 minutes of the plan above are structurally unreachable — §8 rows
-8.2–8.4, §9 row 9.7, §10 rows 10.1–10.3, §11 row 11A. Mark them **N/A**, never PASS or FAIL. Two corrections
+8.2–8.4, §9 row 9.7, §10 rows 10.1–10.3 (with the nuance that 10.1's **estimate text** is still visible), §11 row
+11A. Mark them **N/A**, never PASS or FAIL. Two corrections
 worth knowing before you start, because both were overstated in an earlier summary:
 
 - §10 is **not** wholly unreachable. Rows 10.4 (the 40 MP ceiling text and a dead toggle) and 10.5 (a refusal
@@ -636,7 +637,7 @@ line while it tiles.
 
 | # | Evidence |
 |---|---|
-| 10.1 Estimate shown; measured wall time: ______ — **N/A on this artefact: no inference can run (§0b)** | |
+| 10.1 Estimate shown; measured wall time: ______ — **PARTIAL: the estimate string is visible without a helper (`EditorView.swift:316-319` renders detail + estimate on geometry alone), the wall-clock comparison is N/A** | |
 | 10.2 Tile progress reported while running — **N/A on this artefact** | |
 | 10.3 Output file at the requested long edge, sharper, no artifacts you'd file — **N/A on this artefact** | |
 | 10.4 Too-large photo shows the ceiling text and disables the toggle — **IN SCOPE: pure geometry, no helper involved** | |
