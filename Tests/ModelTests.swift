@@ -8100,6 +8100,13 @@ func testStatusToastStaysClearOfCompareChrome() {
 /// nowhere on the stage or lands on chrome it believes is empty — so pin the
 /// agreement, including pans past `clampPan` and a photo pushed off the canvas,
 /// which is where a hand-clamped rect is easiest to get wrong.
+///
+/// The expected boxes are transcribed from the overlay by hand, with the
+/// overlay's own literals (10 pt of padding, a 28 pt strip halved to 14, the
+/// 96 pt reserve) written out rather than read back from `ToastPlacement`. That
+/// is deliberate: a constant changed on one side has to be argued for twice.
+/// It pins the model to this reading of the drawing, not to pixels, so a change
+/// to the overlay still needs the transcription updated here in the same review.
 @MainActor
 func testToastObstaclesMirrorTheDrawnChrome() {
     print("\n[ui] the toast obstacles describe the chrome that is actually drawn")
@@ -8142,24 +8149,46 @@ func testToastObstaclesMirrorTheDrawnChrome() {
                     // the stage, and the badges cannot be inset further than the
                     // strip is wide.
                     let splitX = center.x - shown.width / 2 + shown.width * CGFloat(split)
-                    let expectTags = strip != nil && splitX >= 0 && splitX <= canvas.width
-                        && (strip?.width ?? 0) > 20
+                    let expectSplit = strip != nil && splitX >= 0 && splitX <= canvas.width
+                    // The 20 pt term is the model's own floor: two 10 pt insets
+                    // leave nothing for a reserve. The shell still paints the row
+                    // there (its Spacer collapses), but the badges then live
+                    // inside a sliver the photo obstacle already covers, so
+                    // declining to book them cannot land the pill on one.
+                    let expectTags = expectSplit && (strip?.width ?? 0) > 20
 
+                    // The same photo geometry in the three states the canvas can
+                    // show it in: the split open, a held-Space peek, and a tool
+                    // that has taken the pointer.
                     let obstacles = ToastObstacles.compareWorkspace(canvas: canvas, photo: photo,
                                                                     compareEnabled: true,
                                                                     comparePosition: split,
                                                                     toolOwnsCanvas: false,
                                                                     peeking: false,
                                                                     dock: nil)
+                    let peeked = ToastObstacles.compareWorkspace(canvas: canvas, photo: photo,
+                                                                 compareEnabled: true,
+                                                                 comparePosition: split,
+                                                                 toolOwnsCanvas: false,
+                                                                 peeking: true,
+                                                                 dock: nil)
+                    let inTool = ToastObstacles.compareWorkspace(canvas: canvas, photo: photo,
+                                                                 compareEnabled: true,
+                                                                 comparePosition: split,
+                                                                 toolOwnsCanvas: true,
+                                                                 peeking: false,
+                                                                 dock: nil)
 
-                    if let strip = strip, let model = obstacles.photo {
-                        let off = max(abs(strip.minX - model.minX), abs(strip.maxX - model.maxX),
-                                      abs(strip.minY - model.minY), abs(strip.maxY - model.maxY))
-                        if off > 0.01 {
-                            mismatches.append("\(label): photo box \(model) vs drawn \(strip)")
+                    for (state, boxes) in [("compare", obstacles), ("peek", peeked), ("tool", inTool)] {
+                        if let strip = strip, let model = boxes.photo {
+                            let off = max(abs(strip.minX - model.minX), abs(strip.maxX - model.maxX),
+                                          abs(strip.minY - model.minY), abs(strip.maxY - model.maxY))
+                            if off > 0.01 {
+                                mismatches.append("\(label): \(state) photo box \(model) vs drawn \(strip)")
+                            }
+                        } else if boxes.photo != nil {
+                            mismatches.append("\(label): \(state) photo box \(String(describing: boxes.photo)) vs drawn nil")
                         }
-                    } else if obstacles.photo != nil {
-                        mismatches.append("\(label): photo box \(String(describing: obstacles.photo)) vs drawn nil")
                     }
 
                     let hasTags = obstacles.beforeLabel != nil && obstacles.afterLabel != nil
@@ -8175,9 +8204,20 @@ func testToastObstaclesMirrorTheDrawnChrome() {
                             || abs(after.minY - (strip.minY + 10)) > 0.01 {
                             mismatches.append("\(label): tags \(before)/\(after) vs strip \(strip)")
                         }
+                        let booked = strip.insetBy(dx: -0.01, dy: -0.01)
+                        for tag in [before, after] {
+                            if !booked.contains(tag.origin)
+                                || !booked.contains(CGPoint(x: tag.maxX, y: tag.maxY)) {
+                                mismatches.append("\(label): tag \(tag) escapes the photo box \(strip)")
+                            }
+                        }
                     }
 
                     if let handle = obstacles.compareHandle {
+                        // 14 is half the 28 pt hitWidth the overlay gives the
+                        // divider, written as a literal so editing
+                        // ToastPlacement.handleWidth cannot make this agree with
+                        // itself.
                         if abs(handle.minX - (splitX - 14)) > 0.01
                             || abs(handle.maxX - (splitX + 14)) > 0.01 {
                             mismatches.append("\(label): handle \(handle) vs split x \(splitX)")
@@ -8192,17 +8232,40 @@ func testToastObstaclesMirrorTheDrawnChrome() {
                             && (handle.minY > drawnTop + 0.01 || handle.maxY < drawnBottom - 0.01) {
                             mismatches.append("\(label): handle \(handle) vs drawn span \(drawnTop)–\(drawnBottom)")
                         }
+                    } else if expectSplit {
+                        mismatches.append("\(label): no grab strip booked at split \(splitX)")
                     }
 
-                    let stage = CGRect(origin: .zero, size: canvas)
-                    for box in obstacles.hardRects {
-                        // The reservation may overhang the edge — at split 0 and
-                        // 1 the divider's 28 pt grab strip straddles it and the
-                        // overlay clips the drawing — but a box wholly off the
-                        // stage would mean the pill is dodging nothing.
-                        if !stage.intersects(box) {
-                            mismatches.append("\(label): obstacle \(box) is off the stage")
+                    if obstacles.hardRects.count != (expectSplit ? (expectTags ? 3 : 1) : 0) {
+                        mismatches.append("\(label): \(obstacles.hardRects.count) reservations for \(obstacles.hardRects)")
+                    }
+
+                    // The peek covers the split, so the AFTER tag and the divider
+                    // leave the stage, and the single BEFORE badge is pinned to
+                    // the canvas' own padded corner rather than the strip's.
+                    if peeked.afterLabel != nil || peeked.compareHandle != nil {
+                        mismatches.append("\(label): the peek still reserves split chrome")
+                    }
+                    // A photo with no pixels on the stage reserves nothing, while
+                    // the overlay would still paint its badge — a state clampPan
+                    // keeps out of reach, so following the photo box is the
+                    // honest expectation rather than an unconditional badge.
+                    let expectPeek = strip == nil ? 0 : 1
+                    if peeked.hardRects.count != expectPeek {
+                        mismatches.append("\(label): \(peeked.hardRects.count) peek reservations, expected \(expectPeek)")
+                    }
+                    if let badge = peeked.beforeLabel {
+                        let widest = min(96, canvas.width - 20)
+                        if abs(badge.minX - 10) > 0.01 || abs(badge.minY - 10) > 0.01
+                            || abs(badge.width - widest) > 0.01 {
+                            mismatches.append("\(label): peek badge \(badge) vs 10,10 w \(widest) of \(canvas.width)")
                         }
+                    }
+
+                    // Crop, heal, art, analysis and AI picking hide the whole
+                    // compare strip, tags included, while still drawing the photo.
+                    if !inTool.hardRects.isEmpty {
+                        mismatches.append("\(label): \(inTool.hardRects.count) reservations in tool mode")
                     }
                     states += 1
                 }

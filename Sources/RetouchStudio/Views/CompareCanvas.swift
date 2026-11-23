@@ -84,10 +84,14 @@ struct CompareCanvas: View {
         // `showsToast` already requires `model.hasImage`, so a photo on the
         // stage or a running operation is exactly the window in which the next
         // toast may be placed, and the twin stays live across all of it. On an
-        // empty idle stage it measured the drop hint instead — a sentence that
-        // can never be placed — and handed that width to the first toast after
-        // a document loaded, which is a worse fallback than the deliberate
-        // 200 pt default the state starts at.
+        // idle stage it was measuring a line that can never be placed — the
+        // drop hint once the view has appeared, an empty pill before that — and
+        // preference propagation lands a render pass later, so the first toast
+        // after a document loaded was fitted to that stale width. Gating leaves
+        // the deliberate 200 pt default in place instead. The gate opens with
+        // `hasImage`, so on the very first toast after a load one frame can
+        // still use that default; a real width arrives on the next pass, which
+        // is the intended fallback rather than an unrelated measurement.
         .overlay(alignment: .topLeading) {
             if model.hasImage || model.isBusy {
                 statusPill

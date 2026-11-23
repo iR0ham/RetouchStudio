@@ -112,7 +112,11 @@ enum ToastPlacement {
     /// it; the suite re-measures the font file so a type change cannot silently
     /// shrink this.
     static let labelHeight: CGFloat = 21
-    /// "BEFORE"/"AFTER" at the tag font, widened generously for any language.
+    /// Room for the widest tag the shell can draw. Measured from the shipped
+    /// face at the badge font: "BEFORE" is 51 pt, "AFTER" 45, the Persian tags
+    /// 30 and 29, so 96 leaves the reservation comfortably above the localised
+    /// pair rather than sized to it. The test suite measures both tables, so a
+    /// tag that outgrows this floor fails there instead of silently overlapping.
     static let labelReserveWidth: CGFloat = 96
     /// The divider's grab strip, not the 1 pt line — `hitWidth` in
     /// `compareHandle(displayed:canvas:center:)`.
