@@ -190,6 +190,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # The published notes are the hand-written end-user notes for this
+          # version, resolved from the tag. A missing file aborts here rather
+          # than publishing a release whose body GitHub generated for us.
+          NOTES="Docs/RELEASE_NOTES_${GITHUB_REF_NAME#v}.md"
+          if [[ ! -f "$NOTES" ]]; then
+            echo "release: $NOTES is missing; write the end-user notes for ${GITHUB_REF_NAME#v} before tagging" >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" artifacts/* \
             --title "Retouch Studio ${GITHUB_REF_NAME#v}" \
-            --generate-notes
+            --notes-file "$NOTES"

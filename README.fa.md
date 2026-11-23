@@ -39,7 +39,7 @@
 
 ## پیش‌نیازها
 
-- macOS 14 Sonoma یا جدیدتر روی Apple silicon یا Intel. نسخه‌ها به‌صورت دو دیسک‌ایمیج جدا منتشر می‌شوند — arm64 برای Apple silicon و x86_64 برای Intel — به‌همراه یک آرشیو zip یونیورسال سبک.
+- macOS 14 Sonoma یا جدیدتر روی Apple silicon یا Intel. هر نسخهٔ macOS یک دیسک‌ایمیج و فایل چک‌سام `.sha256` آن را به‌ازای هر معماری منتشر می‌کند — یک ایمیج برای Apple silicon (arm64) و یکی برای Intel (x86_64) — در کنار آرشیو zip و فایل MSI ویندوز. یک آرشیو zip یونیورسال سبک هم هنگامی کنار این‌ها منتشر می‌شود که گام بسته‌بندی دستی در [`Docs/RELEASING.md`](Docs/RELEASING.md) برای آن نسخه اجرا شود؛ نسخهٔ ۱٫۰٫۰ چنین آرشیوی دارد، در حالی که خودِ گردش کار انتشار تنها همان دو ایمیج معماری‌شده را می‌سازد و بارگذاری می‌کند.
 - ابزارهای AI به Apple silicon نیاز دارند و دانلود runtime در این build در دسترس نیست: نصب‌کنندهٔ protocol-v2 تا وقتی بستهٔ رسمی runtime پیکربندی نشود غیرفعال می‌ماند. آرشیو runtime نسخهٔ 1.0.0 در صفحهٔ انتشار، بستهٔ سازگار با protocol-v2 شمرده نمی‌شود؛ سازگاری آن بررسی نشده و اپ آن را نصب نمی‌کند. روی Intel ویرایشگر، تحلیل و خروجی کامل کار می‌کنند و ابزارهای AI اعلام می‌کنند که runtime در دسترس نیست.
 - برای اجرای نسخهٔ آماده: هیچ چیز دیگری لازم نیست. اپ خودکفاست.
 - برای ساخت از سورس: Xcode Command Line Tools (`xcode-select --install`). خود Xcode لازم نیست؛ `build.sh` مستقیماً با `swiftc` کامپایل می‌کند.
@@ -48,7 +48,7 @@
 
 ## اجرای نسخهٔ آماده
 
-1. دیسک‌ایمیج مناسب همین مک را دانلود کنید — `RetouchStudio-1.0.0-arm64.dmg` برای Apple silicon یا `RetouchStudio-1.0.0-x86_64.dmg` برای Intel — باز کنید و `Retouch Studio.app` را به پوشهٔ Applications بکشید. حجم اپ حدود ۳٫۵ تا ۴ مگابایت است. دانلود runtime در این build غیرفعال است، بنابراین ابزارهای AI تا پیکربندی بستهٔ رسمی protocol-v2 در دسترس نیستند؛ وزن مدل‌ها جداگانه و پس از آماده‌بودن runtime دانلود می‌شوند. یک آرشیو zip یونیورسال سبک هم برای کسانی که آرشیو ساده می‌خواهند در دسترس است.
+1. دیسک‌ایمیج مناسب همین مک را دانلود کنید — `RetouchStudio-2.0.0-arm64.dmg` برای Apple silicon یا `RetouchStudio-2.0.0-x86_64.dmg` برای Intel — باز کنید و `Retouch Studio.app` را به پوشهٔ Applications بکشید. حجم اپ حدود ۳٫۵ تا ۴ مگابایت است. دانلود runtime در این build غیرفعال است، بنابراین ابزارهای AI تا پیکربندی بستهٔ رسمی protocol-v2 در دسترس نیستند؛ وزن مدل‌ها جداگانه و پس از آماده‌بودن runtime دانلود می‌شوند. دو ایمیج معماری‌شده همیشه منتشر می‌شوند؛ یک آرشیو zip یونیورسال سبک تنها در صورتی کنار آن‌ها هست که گام بسته‌بندی دستی در [`Docs/RELEASING.md`](Docs/RELEASING.md) برای آن نسخه اجرا شده باشد، چنانکه برای نسخهٔ ۱٫۰٫۰ اجرا شد. یادداشت‌های انتشار این نسخه، به فارسی و انگلیسی، در [`Docs/RELEASE_NOTES_2.0.0.md`](Docs/RELEASE_NOTES_2.0.0.md) آمده است.
 2. اولین اجرا: روی اپ راست‌کلیک کنید و **Open** را بزنید، یا آن را از **System Settings → Privacy & Security → Open Anyway** مجاز کنید. نسخه‌های منتشرشده امضای ad-hoc دارند و notarize نشده‌اند، بنابراین Gatekeeper یک‌بار سؤال می‌کند. دلیل و ادامهٔ مسیر در [`Docs/RELEASING.md`](Docs/RELEASING.md) آمده است.
 
 ## ساخت از سورس
@@ -73,7 +73,7 @@ RETOUCH_ARCH=x86_64 ./build.sh release   # فقط Intel
 بیلد اپ را در ریشهٔ مخزن در `Retouch Studio.app` می‌سازد و نسخه را از `Resources/Info.plist` برمی‌دارد. نسخهٔ انتشار را می‌توان بدون ویرایش سورس تغییر داد:
 
 ```bash
-RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=1 ./build.sh release
+RETOUCH_VERSION=2.0.0 RETOUCH_BUILD=2 ./build.sh release
 ```
 
 ساخت دیباگ (بدون بهینه‌سازی):
@@ -182,6 +182,7 @@ build.sh               کامپایل + بسته‌بندی + امضا + خود�
 | [`Docs/PERFORMANCE_BENCHMARKS.md`](Docs/PERFORMANCE_BENCHMARKS.md) | اعداد اندازه‌گیری‌شدهٔ بارگذاری، پیش‌نمایش، تحلیل، ماسک، خروجی، دسته‌ای و حافظه |
 | [`Docs/GOLDEN_IMAGE_CORPUS.md`](Docs/GOLDEN_IMAGE_CORPUS.md) | پیکرهٔ ۱۲ فیکسچری، قفل baseline و بررسی اصالت |
 | [`Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md`](Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md) | مرز کد قابل‌حمل/مک و مسیر ویندوز |
+| [`Docs/RELEASE_NOTES_2.0.0.md`](Docs/RELEASE_NOTES_2.0.0.md) | یادداشت‌های انتشار نسخهٔ ۲٫۰٫۰، نخستین نسخه پس از بازنویسی (فارسی و انگلیسی) |
 | [`Docs/RELEASE_NOTES_1.0.0.md`](Docs/RELEASE_NOTES_1.0.0.md) | یادداشت‌های انتشار نخستین نسخهٔ عمومی |
 
 ## مجوز

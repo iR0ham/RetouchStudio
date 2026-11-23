@@ -39,7 +39,7 @@ The screenshots use an AI-generated fictional portrait. No personal photo is inc
 
 ## Requirements
 
-- macOS 14 Sonoma or later on Apple silicon or Intel. Releases are published as separate Apple-silicon (arm64) and Intel (x86_64) disk images, plus a light universal zip archive.
+- macOS 14 Sonoma or later on Apple silicon or Intel. Each macOS release publishes a disk image and its `.sha256` checksum for Apple silicon (arm64) and for Intel (x86_64), alongside the Windows zip and MSI. A light universal zip archive is published beside them when the manual packaging step in [`Docs/RELEASING.md`](Docs/RELEASING.md) is run for that release — 1.0.0 carries one — while the release workflow itself builds and uploads only the two per-architecture images.
 - AI tools require Apple silicon, and the on-demand runtime download is not available in this build: the protocol-v2 installer stays disabled until an official runtime package is configured. The 1.0.0 runtime archive on the release page is not treated as a compatible protocol-v2 package; its compatibility has not been verified and the app will not install it. On Intel the editor, analysis and export work fully; the AI tools report that the runtime is unavailable.
 - To run a release build: nothing else. The app is self-contained.
 - To build from source: Xcode Command Line Tools (`xcode-select --install`). Xcode itself is not required; `build.sh` compiles directly with `swiftc`.
@@ -48,7 +48,7 @@ Windows is the second platform, and as of 2026-11-22 it builds, packages, instal
 
 ## Run a release build
 
-1. Download the disk image for this Mac — `RetouchStudio-1.0.0-arm64.dmg` for Apple silicon, `RetouchStudio-1.0.0-x86_64.dmg` for Intel — open it and drag `Retouch Studio.app` to Applications. The app is about 3.5–4 MB. The AI runtime download is disabled in this build, so the AI tools stay unavailable until an official protocol-v2 package is configured; model weights are downloaded separately once a helper runtime is available. A light universal zip archive is published beside the images for anyone who prefers one.
+1. Download the disk image for this Mac — `RetouchStudio-2.0.0-arm64.dmg` for Apple silicon, `RetouchStudio-2.0.0-x86_64.dmg` for Intel — open it and drag `Retouch Studio.app` to Applications. The app is about 3.5–4 MB. The AI runtime download is disabled in this build, so the AI tools stay unavailable until an official protocol-v2 package is configured; model weights are downloaded separately once a helper runtime is available. The two per-architecture images are always published; a light universal zip appears beside them only when the manual packaging step in [`Docs/RELEASING.md`](Docs/RELEASING.md) was run for that release, as it was for 1.0.0. End-user notes for this release, in English and Persian, are in [`Docs/RELEASE_NOTES_2.0.0.md`](Docs/RELEASE_NOTES_2.0.0.md).
 2. First launch: right-click the app and choose **Open**, or allow it under **System Settings → Privacy & Security → Open Anyway**. Release builds are ad-hoc signed and not notarized, so Gatekeeper asks once. See [`Docs/RELEASING.md`](Docs/RELEASING.md) for why and what comes next.
 
 ## Build from source
@@ -73,7 +73,7 @@ A universal build runs the self-test natively and then again through the Intel s
 The build copies the app into `Retouch Studio.app` in the repository root and stamps the version from `Resources/Info.plist`. A release build can override it without editing a source file:
 
 ```bash
-RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=1 ./build.sh release
+RETOUCH_VERSION=2.0.0 RETOUCH_BUILD=2 ./build.sh release
 ```
 
 Debug build (no optimisation):
@@ -182,6 +182,7 @@ build.sh               compile + assemble + sign + self-test
 | [`Docs/PERFORMANCE_BENCHMARKS.md`](Docs/PERFORMANCE_BENCHMARKS.md) | Measured load, preview, analysis, mask, export, batch and memory numbers |
 | [`Docs/GOLDEN_IMAGE_CORPUS.md`](Docs/GOLDEN_IMAGE_CORPUS.md) | The 12-fixture corpus, its baseline lock and provenance checks |
 | [`Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md`](Docs/CROSS_PLATFORM_TECHNOLOGY_DECISIONS.md) | The portable/ macOS boundary and the Windows path |
+| [`Docs/RELEASE_NOTES_2.0.0.md`](Docs/RELEASE_NOTES_2.0.0.md) | Release notes for the first post-rewrite release (English and Persian) |
 | [`Docs/RELEASE_NOTES_1.0.0.md`](Docs/RELEASE_NOTES_1.0.0.md) | Release notes for the first public build |
 
 ## License
