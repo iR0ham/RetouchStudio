@@ -124,6 +124,49 @@ Python  21839  ...  IPv4  ...  TCP 10.0.0.2:59055->15.237.164.118:443 (ESTABLISH
 
 An earlier run of the same scenario produced the same pair of CDN addresses (`52.222.136.89`, `15.236.34.207`). No other endpoint appeared in either run.
 
+**Dated correction, 2026-11-24 (append-only; the measurement above is kept as the record of what was
+observed on its date).** Everything in §3.2–§3.3 was correct on the date it was measured: at that time the
+TLS connection for a catalogue download terminated at a `huggingface.co` address backed by CloudFront, and
+the two addresses above are what the sampler saw. The topology has since changed, and this document must be
+read with that change in mind:
+
+- **The recorded endpoint was accurate when written.** It is not retracted here, and nothing about the
+  consent gate, the size-and-SHA-256 check, or "no other endpoint appeared" is being restated.
+- **As of 2026-11-23 the chain terminates at a different host.** A header-only probe of the ten catalogue
+  file URLs ([`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §12.2) shows that
+  `huggingface.co/…/resolve/main/…` now answers `HTTP 302` to `us.aws.cdn.hf.co` for binary assets and
+  `HTTP 307` to a `huggingface.co` cache path for config JSON. Nine of the ten redirect; the tenth
+  (`sam2.1_hiera_tiny.pt` on `dl.fbaipublicfiles.com`) answered `200`. So a fetch that succeeds today ends
+  on a CDN host that §3.3 does not name, and the privacy statement's "single source host per file" framing
+  no longer describes the network the design would use.
+- **Today the app refuses those hops, so no model download completes.** `ModelStore` answers every
+  redirect with a refusal (and the Windows side sets `AllowAutoRedirect = false`), which means the traffic
+  described in scenario C cannot occur at all in the current build — the download fails before a byte is
+  transferred or hashed. That is defect **R1** in [`W5_SCOPE_AUDIT_2.0.0.md`](W5_SCOPE_AUDIT_2.0.0.md) §7.4.
+  The consequence for this document is narrow: the audit's *traffic* conclusion gets stronger, not weaker,
+  because the audited outbound transfer is currently unreachable.
+- **What the intended fix would change about this statement — NOT IMPLEMENTED.** The proposed remediation
+  (R1) replaces the unconditional refusal with a **host-and-path-class allow-list**: a redirect is followed
+  only toward an explicitly declared host *and* path class recorded beside the catalogue entry, integrity
+  stays gated by the pinned `SHA-256` and byte size rather than by the hop count, and the consent sheet
+  discloses the **terminal destination** alongside the size and licence it already shows. If and when that
+  lands, §3.3 gains a second permitted terminal host class, and the sentence "the only outbound connections
+  … are the HTTPS transfers of a model download that the owner approved" (§6) keeps its meaning but its
+  host set widens from one origin to a declared allow-list. **This is a proposal in the audit, not
+  behaviour in any shipped or built code: NOT IMPLEMENTED.** Until it is implemented and re-sampled, no
+  released build makes a CDN connection.
+- **The audit's other privacy conclusions are unchanged.** No telemetry, no analytics, no crash-reporting
+  service, no background request, no cloud inference, no image upload: none of these moved. This was
+  re-checked against the current tree on 2026-11-24 by grepping `Sources/`, `Windows/` and `Tools/` for
+  telemetry/analytics/crash-reporting vendors and for hard-coded remote hosts. The result was zero
+  telemetry or analytics call sites; the only remote hosts in first-party code are the model-download URLs
+  in `Resources/model-catalog.json` (`huggingface.co`, `dl.fbaipublicfiles.com`), the documentation URLs
+  they point at, `https://www.python.org/ftp/python/` in `Tools/bundle-worker.sh` (a build-time interpreter
+  fetch, not app code), loopback `http://127.0.0.1` (the worker socket), XML namespace URIs that are
+  identifiers and never fetched, and `https://example.com` in test fixtures. `Tools/build-windows.ps1` sets
+  `DOTNET_CLI_TELEMETRY_OPTOUT=1`, which opts *out* of the .NET CLI's own telemetry at build time and is
+  not app behaviour. The static inventory in §2 and the verdict table in §6 therefore still stand.
+
 ### 3.4 A finding that came out of this audit
 
 The first live launch after signing invalidated the bundle signature: Python wrote 378 `__pycache__` directories into `Contents/Resources/Worker`, adding files that the seal never covered. `codesign --verify` reported “a sealed resource is missing or invalid”.
