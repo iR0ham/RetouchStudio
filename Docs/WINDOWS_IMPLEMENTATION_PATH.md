@@ -4,11 +4,14 @@
 `StudioCore` build, its C ABI test and the conformance gate run on a native
 `windows-2025` runner (2026-11-13). A C#/WPF light editor in `Windows/` —
 WIC decode/encode, crop, orientation, nine global sliders, shared project files
-and history — builds and loads its window there, with 55 host checks green (see
-[CI_GATES.md](CI_GATES.md#verified-runs)). There is no Windows installer,
-published artifact, AI support or macOS pixel parity, so every product claim
+and history — builds and loads its window there, with 55 host checks green at
+this writing (see [CI_GATES.md](CI_GATES.md#verified-runs)). There is no Windows
+updater or code signing, and no macOS pixel parity, so every product claim
 beyond "a light editor opens on `windows-2025`" is **NOT VERIFIED**. macOS
-remains the only shipping product.
+remains the only shipping product. *(Corrected 2026-11-29: this paragraph also
+denied a Windows installer and a published artifact; both exist — see the
+2026-11-15 correction below, which supersedes these two clauses and the
+installer clause in the open list at the end of this document.)*
 
 **Date:** 2026-11-13
 **Basis:** repository at `28f8462` on branch `windows/w2-app-host` (off `main`
@@ -241,7 +244,9 @@ Open, and therefore still **NOT VERIFIED**:
 - no byte-level or visual comparison against the render-plan fixtures; the
   macOS Core Image pipeline is not reproduced stage for stage;
 - 8-bit output only, no metadata in exports, no HEIC write;
-- no installer, signing or updater; the zip is unsigned;
+- no signing or updater; the zip and the MSI are unsigned (the installer itself
+  exists and CI installs, upgrades and uninstalls it — see the 2026-11-15
+  correction below);
 - no AI, analysis, masks, healing, presets or watermark.
 
 W3–W6 are untouched.
