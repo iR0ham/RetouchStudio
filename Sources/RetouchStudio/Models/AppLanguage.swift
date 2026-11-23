@@ -27,14 +27,27 @@ enum AppLanguage: String, CaseIterable {
     /// The language in force right now. The app has one editor window and one
     /// settings sheet, so a single global is enough — and it lets the font
     /// tokens and the About/Help windows read it without an actor hop.
+    ///
+    /// A string built from the tables reads this, so under the default English
+    /// interface a formatter cannot be shown producing its Persian shape. Tests
+    /// hold that shape with `languageOverride`, which is never written to
+    /// defaults: the suites run as one process, and persisting a flip would leak
+    /// into whatever suite the runner executes next.
     static var current: AppLanguage {
-        get { stored }
+        get { languageOverride ?? stored }
         set {
             guard newValue != stored else { return }
             stored = newValue
             UserDefaults.standard.set(newValue.rawValue, forKey: storageKey)
         }
     }
+
+    /// Test-only seam for the interface language. Production leaves this nil.
+    #if RETOUCH_TESTING
+    nonisolated(unsafe) static var languageOverride: AppLanguage?
+    #else
+    static var languageOverride: AppLanguage? { nil }
+    #endif
 
     private static let storageKey = "app.language"
 
