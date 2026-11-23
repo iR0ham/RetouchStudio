@@ -51,9 +51,11 @@ every row below, so pick one and write it in the identity line:
   `RetouchStudio-0.0.0-ci-<arch>.dmg` and the bundle's `Info.plist` carries
   `CFBundleShortVersionString = 0.0.0-ci` with `CFBundleVersion` equal to the run number — that pair was read
   directly out of the arm64 image of run `45197302277` (ledger Addendum S.12.10), so **if you are holding that
-  run's image** About reads `0.0.0-ci (5)`. Any later `Release` dispatch carries a higher number, and the
-  counter is shared with every other workflow run, so the only binding rule is *the number equals the run
-  number of the run you downloaded* — do not treat `(5)` as expected if your artefact came from another run.
+  run's image** About reads `0.0.0-ci (5)`. Any later `Release` dispatch carries a higher number. *Corrected
+  2026-11-23:* an earlier line here said the counter "is shared with every other workflow run", which is wrong
+  and contradicts ledger S.12.3 — `GITHUB_RUN_NUMBER` is **per workflow**, measured (`Release` went 4→5 while
+  `CI` was at 510→513 in the same span). The only binding rule is therefore *the number equals the run number
+  of the run you downloaded* — do not treat `(5)` as expected if your artefact came from another run.
   **The rendered string itself is still unobserved, because no window has been opened.**
   **That label is correct for an unpublished candidate, not a defect** — do not stop the session over it;
   record the exact pair and the run number, and quote the run number in every FAIL block (§15). Two honest
@@ -78,8 +80,8 @@ gap in this checklist.
 3. You have at least **75 minutes** of uninterrupted time — the budget below sums to 72 minutes and the
    note-taking is what makes a FAIL row usable; the AI sections assume the network works once.
 4. macOS 14 or later on Apple silicon (`Resources/Info.plist` `LSMinimumSystemVersion` = `14.0`; the
-   helper is Apple-silicon-only — `Localization.swift:849` in English, `PersianL10n.swift:818` in
-   Persian). The shipped build has no helper at all, so an Intel Mac simply has the editor.
+   helper is Apple-silicon-only — `aiRuntimeIntelUnavailable` at `Localization.swift:848` in English,
+   `PersianL10n.swift:817` in Persian). The shipped build has no helper at all, so an Intel Mac simply has the editor.
 5. Note the current state of the helper before you start, because **§9** has two branches (its heading says
    "helper absent vs installed"):
    `ls ~/Library/Application\ Support/RetouchStudio/AI/runtimes` → helper absent / present: `______`.
@@ -133,9 +135,13 @@ record that too — it changes what the release notes must say.
 
 **Click path.**
 1. Menu **Retouch Studio → About Retouch Studio** (`App.swift:210` → `InfoWindows.showAbout()`).
-2. In the About window press **Check for Updates** (`Views/InfoViews.swift:200`, label
-   `Localization.swift:878`).
-3. Separately: **Settings (⌘,) → DEVELOPER** row **Version** (`SettingsView.swift:242-262`).
+2. In the About window press **Check for Updates** (`Views/InfoViews.swift:211`, the `else` branch of
+   `updateSection`; label `updateCheck` at `Localization.swift:909`). *Anchor corrected 2026-11-23:* this step
+   first cited `InfoViews.swift:200` / `Localization.swift:878`, which are a `.foregroundStyle` line and the
+   unrelated `modelsCapabilityLabel`.
+3. Separately: **Settings (⌘,) → DEVELOPER** row **Version** (`SettingsView.swift:242-262`; the row is
+   `detailRow(model.s.aboutVersion, DeveloperProfile.versionLine)` at `:261`, and `aboutVersion` = "Version" at
+   `Localization.swift:908`).
 
 **Expected observable result.** About and Settings show the **same** version and build, and that pair is
 whichever §0 says your artefact must carry — `2.0.0 (<run number>)` from a tag build, or
@@ -144,7 +150,8 @@ formerly demanded `2.0.0 (build)`, which no CI-built candidate can show; a pre-p
 `0.0.0-ci` is the **expected** case per §0, not a FAIL. What still fails the row is an *internal* mismatch
 (About ≠ Settings), or a build number that is not the run number of the run you downloaded. Pressing
 **Check for Updates** ends in a failure line built from `updateFailed` + `updateFeedMissing`
-(`UpdateController.swift:66-69`, `Localization.swift:883-884`):
+(`UpdateController.swift:65-70`, `Localization.swift:914-915` — *anchors corrected 2026-11-23*, the earlier
+`:883-884` pointed inside `modelsCapabilityLabel`; the quoted sentence itself was right):
 `The update check failed: This build has no update feed configured.` No download starts, no
 network request appears in Activity Monitor, and no **Install** button ever replaces it. Ledger §3
 G-UPD marks the *rendered* panel **NOT VERIFIED** — this step is what closes it.
@@ -221,8 +228,11 @@ that is policy, not a defect.
 reserves the BEFORE/AFTER tags, the divider's grab strip, and the zoom dock as hard obstacles and the photo
 as a soft one, and PR #131 gated the hidden measuring twin behind `model.hasImage || model.isBusy`
 (`CompareCanvas.swift`, the `.overlay(alignment: .topLeading)` on `statusPill`). **All of that is verified
-only headlessly** — `testToastObstaclesMirrorTheDrawnChrome` sweeps 120 zoom/pan/split states against a
-transcription of the view's own arithmetic, and the suite prints `MODEL TESTS: PASS` at 1252 `✓` — so how
+only headlessly** — `testToastObstaclesMirrorTheDrawnChrome` (`Tests/ModelTests.swift:8111`, called at `:7436`)
+sweeps 120 states — 2 canvases × 3 zooms (1/2/4) × 5 pans × 4 split positions — against a transcription of the
+view's own arithmetic, and the local run recorded `MODEL TESTS: PASS` with 1252 `✓` / 0 `✗`. *Attribution
+corrected 2026-11-23:* that pass count is a figure from that run's log (ledger S.12.2), not something the source
+prints, so quote it as history rather than checking it on screen. How
 it looks and moves in a real window is still NOT VERIFIED. This section is the only thing that can close
 that. The code under test is `ToastPlacement.frame(in:toast:obstacles:)` reached from
 `CompareCanvas.statusToast(canvas:)`, and the obstacle set comes from
@@ -256,16 +266,20 @@ is not a toast; trigger real actions to keep one visible.
 **Expected observable result.** Every word of the pill stays readable and no part of it hides behind another
 control: never under the 28 pt divider strip, never behind a tag, never behind the zoom dock, and never
 clipped by a tool's own overlay. *Corrected 2026-11-23 — what this section can and cannot falsify:* the
-geometry "the pill lies inside the stage" is **not** testable by eye, because `ToastPlacement.fit` clamps `y`
-into the inset range before it returns (`ToastPlacement.swift:241-245`, `let y = min(max(y, inset), lowest)`)
-and `search` discards any candidate that cannot fit (`:193-195`) — a returned pill is inside the canvas by
-construction. So record **overlaps and readability**, not the rectangle: a FAIL needs a named control the
+geometry "the pill lies inside the stage" is **not** testable by eye, and here is the exact reason.
+`ToastPlacement.fit` clamps `y` into the inset range before it returns (`ToastPlacement.swift:241-242`,
+`let lowest = max(inset, canvas.height - inset - height)` then `let y = min(max(y, inset), lowest)`); `x` is not
+clamped but *derived* from the free horizontal spans left after the hard obstacles are subtracted
+(`:247-256`), and if the row has no usable width at all `fit` returns `nil` (`:245`) so `search` moves on
+(`:192-195`). A pill that gets drawn is therefore inside the canvas by construction, and a canvas with no room
+draws nothing. So record **overlaps and readability**, not the rectangle: a FAIL needs a named control the
 pill sat on top of, or text you could not read. During the Space peek the BEFORE badge keeps its corner and
 the pill moves clear of it rather than of the compare chrome it no longer draws. In tool mode the pill may
 sit where the compare strip would have been — the reservations are deliberately dropped — but it must not sit
-under a tool's own overlay. On the very first toast after a load, expect the pill to be sized from the
-deliberate 200 pt default for a single frame before the measured width arrives; that is the intended fallback
-from PR #131, not a bug. **What to write in the note cell for each row:** which edge or control the pill came
+under a tool's own overlay. On the very first toast after a load, the gate at `CompareCanvas.swift:95-97` opens
+with `hasImage` while preference propagation lands a render pass later, so exactly one frame is placed from the
+deliberate 200 pt default before the measured width arrives (`:88-94`) — that fallback is intended, and it is
+**observable**: what you are judging is whether that one frame is legible and clear of chrome. **What to write in the note cell for each row:** which edge or control the pill came
 within a few points of, whether any text was unreadable, and whether the pill moved smoothly
 (`Motion.snappy`) or jumped.
 
@@ -275,7 +289,7 @@ within a few points of, whether any text was unreadable, and whether the pill mo
 | 4b.2 Zoomed and panned off-stage: no control covers the pill and all its text is readable (name the control if it does) | |
 | 4b.3 Space peek: badge keeps its corner, pill clears it | |
 | 4b.4 Crop (8) / Heal (2) / Remove object: no reservation artifacts, pill readable | |
-| 4b.5 First toast after ⌘O is not mis-placed for a visible beat | |
+| 4b.5 First toast after ⌘O: during the one fallback frame, is all its text readable and clear of every named control? PASS = yes (say whether you saw the width snap into place); FAIL = clipped text, or a control you can name under the pill | |
 | 4b.6 Persian tags «قبل»/«بعد» never overlap the pill | |
 | 4b.7 Motion: the pill animates rather than teleporting between obstacles | |
 
@@ -416,10 +430,13 @@ a new branch and drops the old redo chain (`:405-408`).
 ## 9. AI consent sheet and Model Manager states — helper absent vs installed
 
 **Entry point (both branches).** **Settings (⌘,) → AI MODELS → Manage Models…**
-(`SettingsView.swift:184-207`, label `Localization.swift:640`). The sheet header is **AI Models**
-with the line `Models run on this Mac. Nothing is uploaded, and no model is downloaded without your
-approval.` (`ModelManagerView.swift:167-183`, `Localization.swift:641-644`) and a **Done** chip
-(`modelsClose`, `Localization.swift:673`).
+(`SettingsView.swift:184-207`, section title `settingsModels` = "AI MODELS" at `Localization.swift:641`, button
+`settingsModelsManage` at `:645`, sheet opened at `SettingsView.swift:193` → `ModelManagerView` at `:31`). The
+sheet header is **AI Models** with the line `Models run on this Mac. Nothing is uploaded, and no model is
+downloaded without your approval.` (`ModelManagerView.swift:167-183`; `modelsTitle` `Localization.swift:646`,
+`modelsOfflineNote` `:647-649`) and a **Done** chip (`modelsClose`, `:678`, rendered `ModelManagerView.swift:177`).
+*Anchors corrected 2026-11-23:* this block earlier cited `:640` / `:641-644` / `:673`, which are a comment line,
+the Settings note, and `modelsMissing` — the strings quoted were right, the pointers were not.
 
 **Branch A — helper absent (this is the shipped light-build state).**
 - `AIRuntime.package` is hard-coded `nil` (`Sources/RetouchStudio/Core/AIRuntime.swift:40`), so
@@ -428,23 +445,31 @@ approval.` (`ModelManagerView.swift:167-183`, `Localization.swift:641-644`) and 
   and `Docs/RELEASING.md:179` both assert this, and neither is marked verified anywhere.
 - The **AI CAPABILITIES** block instead shows the helper-stopped note
   `The local AI helper is not running, so the capability list cannot be read.`
-  (`capabilityHelperStopped`, `Localization.swift:653-655`, wired at `ModelManager.swift:100`).
+  (`capabilityHelperStopped`, `Localization.swift:658-660`, wired at `ModelManager.swift:100`).
 - Model rows still list the four catalogue entries with chips from `statusChip`
   (`ModelManagerView.swift:530-566`): `Not installed`, and — if weights were ever downloaded —
   `Installed · can't run` (`modelsInstalledNoRuntime`, `Localization.swift:666`) plus the warning line
   `modelsInstalledNoRuntimeNote` (`:667-669`, rendered `ModelManagerView.swift:405-409`).
   Installing, verifying and removing must still work in that state.
-- The disk line `On disk: X · Free: Y` (`modelsDiskUsage`, `:736-738`) must render real numbers, or
+- **Which chip is truthful here.** `statusChip` resolves `.ready` / `.notInstalled` rows through
+  `ModelRunState.resolve(weightsInstalled: !record.versions.isEmpty, helperCanRun: AIWorker.isInstalled)`
+  (`ModelManagerView.swift:542-560`, `Models/ModelRunState.swift:19`, `Core/AIWorker.swift:615`). With no helper on the machine, a model whose weights
+  are on disk therefore reads `Installed · can't run`, and only an un-downloaded one reads `Not installed`.
+  If a model you know you downloaded says `Not installed` in Branch A, that is a genuine FAIL — record it.
+- The disk line `On disk: X · Free: Y` (`modelsDiskUsage`, `:746-748`) must render real numbers, or
   `Size unknown` when capacity is unreadable (`ModelManagerView.swift:186-198`).
 
 **Branch B — helper installed / bundled.** Repeat the same checks and additionally confirm the
 capability grid renders one row per capability with a chip among **Ready / Needs a model / Blocked /
-Not available** (`capabilityReady`…`capabilityUnavailable`, `:646-650`) and that a blocked row prints
-`Waiting for: <reason>` underneath (`capabilityWaitingFor`, `:652`, rendered
-`ModelManagerView.swift:273-279`).
+Not available** (`capabilityReady`…`capabilityUnavailable`, `:651-654`, assigned as the row titles at
+`ModelManagerView.swift:245-256`) and that a blocked row prints `Waiting for: <reason>` underneath
+(`capabilityWaitingFor`, `:657`, rendered `ModelManagerView.swift:274`).
 
 **Consent alert (either branch, if an install is offered).** *Labels corrected 2026-11-23 — a row chip is not
-the alert button, and the earlier text mixed them up.* The chip on a model row reads
+the alert button, and the earlier text mixed them up.* One naming note first: "consent sheet" is the term the
+other release documents use (`Docs/MODEL_LICENCES.md`, ledger §3 **G-UI**); the control itself is a SwiftUI
+**`.alert`** presented over the Model Manager sheet (`ModelManagerView.swift:88-103`), not a second sheet —
+expect a standard app-modal alert with two buttons. The chip on a model row reads
 **Install…** when no version of that model is on disk, or **Update…** when an older one is
 (`modelsInstallVersion` / `modelsUpdate`, `Localization.swift:712-713`, chosen at
 `Views/ModelManagerView.swift:506-514`). Chips appear **only** for `.ready` entries — an
@@ -457,13 +482,20 @@ and `modelsDownloadAgain` (`:675`) are defined in both language tables and rende
 verbatim, the file count, total size, source host, **code licence**, **weights licence** and a
 16-character SHA-256 prefix, ending with `This is the only step that uses the internet. Nothing is
 installed unless every file matches its size and checksum.`
-(`modelsConsentBody`, `Localization.swift:726-735`; assembled `ModelManagerView.swift:89-104`).
+(`modelsConsentTitle` `Localization.swift:733-735` and `modelsConsentBody` `:736-745`; assembled
+`ModelManagerView.swift:90-103`).
 Ledger §3 **G-UI** records that `licenseEvidenceUrl` is decoded but **never rendered** — so expect
 SPDX names only, with **no clickable licence link**. Confirm whether that is acceptable to you as a
 user-visible fact, and record what you actually see.
 
-Also observe: **Verify** (`modelsVerify`, `Localization.swift:676`) reports `Checksums match.` or
-`Checksum mismatch: <file>` (`:680-681`); **Remove…** warns `The model files are deleted from this Mac. You can
+Also observe: **Verify** (`modelsVerify`, `Localization.swift:676`, chip at `ModelManagerView.swift:484`) reports
+`Checksums match.` (`modelsVerified`, `:680`, rendered `ModelManagerView.swift:470`) or, on failure, the manager's
+detail sentence `Verification failed: <detail>` (`modelsUnverified`, `:731`, mapped from `E_MODEL_UNVERIFIED` at
+`ModelManager.swift:284`). *Corrected 2026-11-23:* this row earlier promised `Checksum mismatch: <file>` — that
+string is real (`modelsVerifyFailed`, `:681`) but **rendered by nothing**, the same dead-key class as
+`modelsDownload`, so scoring row 9.6 against it would be unfalsifiable. Judge the words the app can actually
+print. Note also that a row whose manifest is bad shows `Verification failed: manifest`
+(`ModelManagerView.swift:462-463`) **before** you press anything. **Remove…** warns `The model files are deleted from this Mac. You can
 download them again later.` (`:695-696`); a cancelled download says `Download cancelled. Nothing was installed.`
 (`:692`); an unverifiable entry's status chip reads **Not installed** (`modelsMissing`, `:673`, applied at
 `ModelManagerView.swift:535-538`) **and** the row prints a separate warning line
@@ -477,7 +509,7 @@ download them again later.` (`:695-696`); a cancelled download says `Download ca
 | 9.3 Row chips match the real on-disk state | |
 | 9.4 Consent sheet shows count/size/host/licences/SHA-16 | |
 | 9.5 No licence URL is presented (G-UI as recorded) | |
-| 9.6 Verify + Remove behave as worded | |
+| 9.6 Verify + Remove print the two sentences §9 quotes (not `Checksum mismatch:`, which no view renders) | |
 | 9.7 Branch B (only if a helper is present) | |
 
 ---
@@ -629,7 +661,7 @@ the file it was checked against, so treat those three as this pack's own finding
    `Core/SkinEngine.swift:213`), needing neither a helper nor a model. The accurate statement is about the
    Windows **adapter**: `WorkerServer.cs:171-172` routes every `job.submit` to `RefuseJob`, which answers
    `-32020` with that capability's recorded state and reason (`WorkerServer.cs:188-210`,
-   `Capabilities.cs:33-67`), so the packaged transport is deliberately inert before any model is consulted.
+   `Capabilities.cs:32-67`), so the packaged transport is deliberately inert before any model is consulted.
    Absent capability, not a broken one.
 2. **Ad-hoc signed, never notarised; Gatekeeper will prompt on other Macs.** Owner decision D4/D5;
    `Docs/RELEASING.md:81,184`. Right-click → Open on first launch is the supported path.
@@ -651,8 +683,9 @@ the file it was checked against, so treat those three as this pack's own finding
 8. **Catalogue integrity is fail-closed at this head — this row used to say the opposite, and that was
    the stale claim.** *Superseded (2026-11-22, ledger §3 G-INT):* "a pin absent from a manifest is trusted
    rather than refused on the legacy path", citing `catalog.py:330,358,401,418`. *Measured at `5ce98ec` on
-   2026-11-23:* those lines no longer hold that shape (`:358` is `REASON_MISSING_SIZE = "missing-size"`,
-   `:418` a `json.dumps`); `pin_problem` (`worker/retouch_ai_worker/catalog.py:470`) is documented as "the
+   2026-11-23:* those lines no longer hold that shape (`:330` is now `def installed(self, root:)`, `:358` is
+   `REASON_MISSING_SIZE = "missing-size"`, `:401` is the `json.dumps` inside the proof tuple and `:418` is a
+   blank line between helpers); `pin_problem` (`worker/retouch_ai_worker/catalog.py:470`, body `:482-497`) is documented as "the
    single admission rule", returns `missing-digest` / `invalid-digest` / `missing-size` instead of skipping,
    and is consulted from `catalog.py:1173,1194,1258,1296,1357`, `capabilities.py:150` and `plan.py:56`. All
    four model-load paths call `catalog.require_verified` (`engine.py:884,938,951,971`), which closes the
@@ -687,7 +720,12 @@ the file it was checked against, so treat those three as this pack's own finding
     The mapped text lands in `aiMaskMessage` (`EditorModel.swift:1631`) or in
     `quickEditStage = .failed(…)` (`:1888`), and both render as an **inline warning-colour line inside the
     tool panel** (`ToolPanel.swift:214-218` and `:219-223`), so judge whether that line is readable, fully
-    visible and not truncated by the panel width. Anything on this list that you do not exercise stays
+    visible and not truncated by the panel width. **Reachability caveat added 2026-11-23:** `-32010` is a
+    *worker* answer, so it only reaches the screen if the local helper actually runs. In Branch A (no helper —
+    the shipped CI state) no job can be submitted, which means this particular sentence is **not observable in
+    this session** and stays NOT VERIFIED; it is closable only from Branch B, or from a locally built bundle
+    that carries the helper. Record which branch you were in before claiming anything about it.
+    Anything on this list that you do not exercise stays
     NOT VERIFIED after the session; do not let a completed form imply it was covered.
 16. **The install door checks integrity, not the licence record** (open work item #157). *Mechanism
     corrected 2026-11-23 — the earlier version of this row was wrong, and it wrong-told you what to look for.*
@@ -699,21 +737,30 @@ the file it was checked against, so treat those three as this pack's own finding
     `permittedUse`. On the host, `permittedUse` is **display-only** (the licence labels at
     `Views/ModelManagerView.swift:393,627-628`) plus a structural self-consistency check at decode
     (`ModelCatalog.swift:478-479`, which refuses a record whose own `admitted` flag disagrees with its
-    verdicts). Consequence, and this is what you can actually observe today: `flux2-klein-4b-q4` carries
-    **no** `unverifiableReason`, so its row is `.ready` and its chip is an active
-    **Install…** / **Update…** — those are the real labels (`Localization.swift:712-713`
+    verdicts). Consequence, and this is what you can actually observe today: `Resources/model-catalog.json`
+    carries `unverifiableReason` on **one** entry only (`sam2.1-hiera-tiny`, `:140`), so on this machine the
+    other three — `flux2-klein-4b-q4`, `swin2sr-x4`, `migan` — are all `.ready` and all show an active
+    **Install…** / **Update…** chip (with nothing on disk yet, the label is `Install…`)
+    — those are the real labels (`Localization.swift:712-713`
     `modelsInstallVersion` / `modelsUpdate`; the chip code is `ModelManagerView.swift:506-514`). The word
-    **Download** belongs to a different control: the consent sheet's primary button
+    **Download** belongs to a different control: the consent alert's primary button
     (`modelsDownloadAction`, `Localization.swift:687`, used at `ModelManagerView.swift:100`). *An earlier
     draft told you to look for a "Download…" chip for FLUX — no such chip exists on that row, so that row
-    could never be scored.* The licence refusal you do get comes **later**, from the worker's plan gate:
-    `-32010` (`protocol.py:24 LICENSE_BLOCKED`, applied at `catalog.py:1016` and `:1167`) →
+    could never be scored.* The licence refusal you do get comes **later**, from the worker:
+    `-32010` (`protocol.py:24 LICENSE_BLOCKED`) is raised by `catalog.py`'s `_require_licensed`
+    (`:1011`, three raise sites `:1025`/`:1035`/`:1044`), which both catalogue accessors call
+    (`:1172`, `:1257`), and independently by the plan builder (`plan.py:33`/`:39`/`:47`) and the submit route
+    (`server.py:344`) →
     `E_LICENCE_REFUSED` (`Core/WorkerClient.swift:34`) → `aiLicenseBlocked` (`Models/EditorModel.swift:1765`).
-    So: **record which model rows show an active chip, and do not press one for a model whose use class is
-    unsettled** — FLUX is a multi-gigabyte download and nothing in this session authorises it. A FAIL is
+    So: **expect exactly three rows with an active chip** (`flux2-klein-4b-q4`, `swin2sr-x4`, `migan`) and
+    `sam2.1-hiera-tiny` showing `Not installed` plus `Not installable: …` — if sam2 offers a chip, that is the
+    FAIL on this row. **Do not press any of them for a model whose use class is unsettled**: FLUX is a
+    multi-gigabyte download and nothing in this session authorises it. A FAIL is
     only: completing such a download and getting a real generated image out of it. Do not read the closure
-    of row 8 as "licence admission is enforced at every door": it is enforced at the capability gate and the
-    plan gate, and the install door inherits that only as a side effect.
+    of row 8 as "licence admission is enforced at every door": the refusal sits on the paths that hand bytes to
+    a runtime (`catalog.require` at `:1172`, `catalog.require_verified` at `:1257`), on the capability route
+    (`server.py:344`, which is also where `capabilityId` is attached) and on the plan builder
+    (`plan.py:33-47`) — but **not** on the host's install door, which is why #157 stays open.
 
 ---
 
