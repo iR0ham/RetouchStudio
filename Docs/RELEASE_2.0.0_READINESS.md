@@ -2821,4 +2821,120 @@ owner decision (3) in S.12.9. The upgrade proof also rests on a fixed `UpgradeCo
 `Windows/installer/Product.wxs:19`, which is what makes the `0.0.0.0 → 0.0.1.0` line above an upgrade rather
 than a side-by-side install.
 
+## Addendum S.13 — 2026-11-23 (night): the pack landed, the tip moved by two documentation files, and two strings an acceptance row could have silently depended on were shown to be unrenderable
+
+*Why this exists, and what it is not.* The owner ordered four things into the record: state that the tag target is
+now `4e5394c`, restate the candidate so the freeze is not quoted against the tip, register the three dead
+localisation keys, and register the test's stale line anchor. This addendum is documentation and nothing else:
+**no tag was created, nothing was published, no asset was uploaded, no GUI was launched, no download ran, and
+`~/RetouchStudio` was not written to.**
+
+### S.13.1 What CI proved about the pack itself, including one CI finding about CI
+
+Addendum S.12 landed through **PR #132**: head `7fcc164`, merge commit **`4e5394c`** (parents `5ce98ec` and
+`7fcc164`), and `git diff 7fcc164 4e5394c` is empty — so the tree on `main` is exactly the tree that was reviewed,
+not something edited after the review. The gate was run **`45212379212`**: **seven contexts green on that head's own
+attempt**, with `macOS Integration` at 30m22s and `Windows App` at 15m41s.
+
+The attempt immediately before it is a *method* finding worth keeping, because `gh pr checks` rendered it **fail**.
+In run `45208464107` (head `4144a88`), `macOS Integration` and `Worker Payload Bundle` ended `cancelled` at
+**15m01s** with `startedAt: null`, zero recorded steps and a `BlobNotFound` log — **they never executed**, while the
+other five contexts passed. A readiness record that trusts the rollup therefore cannot distinguish "a check went
+red" from "a check never ran", and I deliberately did not rework any prose on the strength of that failure. The cause
+of the pending-job cancellation is **NOT ESTABLISHED**: there was no newer run in the concurrency group, my watcher
+script only calls `gh run view`, and every other pull request's macOS legs went green the same day. Recorded as
+unknown, not as flaky-by-nature.
+
+### S.13.2 The candidate restated, so the freeze and the current tip cannot be quoted against each other
+
+| Object | SHA | What changed since it | Consequence for release |
+|---|---|---|---|
+| Frozen code candidate (S.12.9) | `5ce98ec` | carries the toast PRs #130/#131; the RC build run `45197302277` was made from it | the acceptance evidence in S.12 describes **this** tree |
+| `main` = `develop` while this addendum is written | `4e5394c` | two files, both under `Docs/` | **tag the current tip**, then re-run the one-line check below |
+
+The rule has to survive its own merge, so it cannot name a SHA as permanently "the tag target": merging this
+addendum moves `main` again by exactly one file. **The instruction is therefore:** tag whatever `main` equals when
+publication is authorised, and immediately before tagging confirm
+`git diff --name-only 5ce98ec..HEAD` returns only paths under `Docs/`. If it does, the shipped bytes are the bytes
+the candidate was measured on; if it returns anything else, code has moved since the freeze and this row is stale —
+stop and re-audit rather than assuming.
+
+That the two are packaged-byte identical is a checked claim, not an inference from "documentation doesn't ship".
+`Tools/validate-bundle.sh:50-66` demands `Contents/Resources/LICENSE` and `Contents/Resources/THIRD_PARTY_NOTICES.txt`,
+and `:98-99` the `Worker/` tree plus `model-catalog.json`; the only `Docs/`-to-artefact bridge anywhere in the
+pipeline is `Docs/licence-evidence-apply.py`, whose single write target is `Resources/model-catalog.json` (`:30`,
+written at `:119`) and whose input is the worker catalogue it imports at `:33` — none of which S.12's branch or this
+one touched. That is also why the `--check` idempotency step in **Platform-neutral Conformance** stayed green on
+both attempts. The document the publish step insists on (`release.yml:188-200`, filename composed at `:196`) already
+exists at this head as `Docs/RELEASE_NOTES_2.0.0.md`.
+
+Two caveats against over-reading the row "tag `4e5394c`". First, the RC artefacts already built from `5ce98ec`
+(run `45197302277`) keep their provenance and their digests; a *fresh* dispatch from the new tip would differ in
+`CFBundleVersion` because `GITHUB_RUN_NUMBER` counts **per workflow** (S.12.3), so "build 6" is only meaningful next
+to the run it came from — a docs-descendant rebuild is not more verified, only differently stamped. Second, no macOS
+CI job ever mounts a DMG (`hdiutil` appears **zero** times in `.github/workflows/ci.yml`), so "this installer
+installs and launches" remains **NOT VERIFIED** whichever of the two SHAs is tagged.
+
+### S.13.3 Three localisation strings exist in both language tables and no view can render them
+
+Verified line by line at `4e5394c`: `modelsDownload` (`Localization.swift:674`, "Download…"),
+`modelsDownloadAgain` (`:675`, "Download again…") and `modelsVerifyFailed(_:)` (`:681`, "Checksum mismatch:
+\(file)") each have a Persian twin (`PersianL10n.swift:678`, `:679`, `:685`) and **no call site**: a recursive grep
+of `Sources/`, `Windows/`, `Tests/` and `worker/` for those three names returns, outside the two tables themselves,
+nothing but my own `Docs/` text. The strings the app *can* actually print about verification are `modelsVerified`
+(`Localization.swift:680`, "Checksums match.", rendered at `ModelManagerView.swift:470`) and `modelsUnverified(_:)`
+(`:731`, mapped from `E_MODEL_UNVERIFIED` at `ModelManager.swift:284` and pre-printed for the manifest case at
+`ModelManagerView.swift:463`).
+
+The consequence is procedural, not cosmetic: an acceptance row that waits for "Download…" or "Checksum mismatch:"
+**can never fail**, so it would spend a one-shot acceptance session to produce a green that means nothing. The pack
+already carries this correction in place — `Docs/RELEASE_2.0.0_ACCEPTANCE.md:477` calls `modelsDownload` and
+`modelsDownloadAgain` strings that are "rendered by nothing in the app", §9's Verify paragraph (`:495`) says the
+same of `modelsVerifyFailed` and records that scoring row 9.6 against it "would be unfalsifiable", and §14 (`:751`)
+notes that an earlier draft "told you to look for a 'Download…' chip for FLUX — no such chip exists on that row, so
+that row could never be scored." Status: **PROPOSED** — deleting them or wiring them is a code change, and the
+freeze S.12.9 chose covers documentation only. They are also a live trap for the next contributor, who will read a
+defined string and a translated twin as evidence that a Download affordance exists in the Model Manager.
+
+### S.13.4 The one test anchor that no longer points where its comment says
+
+`Tests/RuntimeTransferTests.swift:245` declares `let documentedDownload: Int64 = 390_000_000` with the trailing
+comment `// Docs/RELEASING.md:186`. At this head `Docs/RELEASING.md:186` is *"Confirm the About window and Settings
+show the stamped version."* — an unrelated bullet. The 390 MB promise the constant encodes is at
+`Docs/RELEASING.md:128`, and the paired "~390 MB … about 1.3 GB unpacked" sentence is at `:192`; `:187` is a blank
+line, which is one of the seven suspects S.12.6 already names on purpose.
+
+Status **PROPOSED**, for two reasons. It lives under `Tests/`, and the freeze covers documentation; and the durable
+fix is not a renumber. A renumber drifts the moment anyone adds a bullet — which is precisely what has already
+happened once to the file this addendum cites — so the right change is to make the assertion **search the text**
+("390 MB", "1.3 GB") instead of trusting a line position, so the test breaks when the *promise* changes and stays
+quiet when the document merely reflows. That is a small, self-contained PR with no CI-visible behaviour change
+beyond the assertion itself.
+
+### S.13.5 Recount on this commit, and what a recount still cannot see
+
+The same out-of-tree probe, re-run against the merged tree: `Docs/RELEASE_2.0.0_ACCEPTANCE.md` is unchanged at
+**174 unique citations, 0 suspects** (measured at `4e5394c` after the merge, which is the copy a reader now gets
+from `main`), and this ledger, with S.13 attached, carries **217 unique citations and the same seven suspects** —
+six historical rows named in S.12.6 plus the deliberate blank-line citation. S.13 therefore added nine citations
+and no new suspect, which is the only kind of progress this document can make mechanically.
+
+Mechanically is the limit, and S.12.6's four-pass result still stands as the reason: a line-existence probe passes
+on a wrong-symbol anchor, which is precisely the defect class that made the licence-mechanism sentence, the
+`modelsDownload` chip promise and the `RELEASING.md:186` mirror in S.13.4 all look clean while being wrong. The
+numbers above are a floor, not a certificate, and every claim in this addendum was written from the file and line
+named beside it rather than from a prior addendum's summary of it.
+
+### S.13.6 The owner's list is unchanged, and shorter than it looks
+
+Nothing in this addendum adds a decision. The four that remain, and only those, are: **accept the AI shape** of a
+build whose macOS DMGs carry no helper (Branch A in the pack, which is what makes §14.15's licence-refusal row —
+the `-32010` sentence as a user reads it — unobservable inside the session); **accept build stamping** as "the
+number equals the run number of the run you downloaded"; **accept or reject the tip to be tagged**, which is
+`4e5394c` plus this addendum and is therefore still code-identical to the frozen `5ce98ec` — the same judgement
+S.12 asked for; and **authorise tag + publication**, the one irreversible act I have not performed and will not
+perform on my own authority. The 72-minute acceptance session (`Docs/RELEASE_2.0.0_ACCEPTANCE.md`) is his to run
+and is still the only thing that converts "documented" into "verified" for the user-visible half of the product.
+**No readiness percentage is stated here or anywhere above: no defined checklist would support one.**
+
 
