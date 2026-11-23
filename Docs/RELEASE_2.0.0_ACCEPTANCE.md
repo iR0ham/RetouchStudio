@@ -27,9 +27,12 @@ bundle's `Info.plist`, which `build.sh` stamps from environment variables:
 **Write the identity here before starting:** version `(build)` observed in About: `__________` ·
 DMG sha-256 match: `__________`.
 
-**Note on the source default.** At the head this pack was written against, `Resources/Info.plist`
-still ships `1.0.0` / `1`. If About shows anything other than `2.0.0 (<build>)`, **stop** — you are
-not holding the RC, and every result below would be about the wrong artefact (ledger §3 G-VER).
+**Note on the source default.** `Resources/Info.plist` now carries the `2.0.0` / build `2` stamp in
+the source, so that is what a bundle built from this head shows unless `build.sh` overrides it. The
+instruction is unchanged: if About shows anything other than `2.0.0 (<build>)`, **stop** — you are not
+holding the RC, and every result below would be about the wrong artefact (ledger §3 G-VER). Confirm
+the stamp before you start: `./Tools/check-versions.sh 2.0.0` must agree, and the image itself must
+answer `shasum -a 256 -c "RetouchStudio-2.0.0-arm64.dmg.sha256"`.
 
 ### Prerequisites (all must be true before minute 1)
 
