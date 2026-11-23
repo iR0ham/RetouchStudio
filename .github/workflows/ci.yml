@@ -78,6 +78,25 @@ jobs:
       - name: Assert the macOS and Windows version sources agree
         run: ./Tools/check-versions.sh
 
+      # The app's licence records are the worker table's own, and this is the
+      # only step that can prove it: regenerate the resource from the table and
+      # require that the committed bytes are already the result. `--check`
+      # fails first with the precise message; the two full runs then prove the
+      # write is idempotent, so the recorded position cannot depend on how many
+      # times the generator has run. If anything is written, the golden-corpus
+      # step below also refuses the dirty tree.
+      - name: Assert the licence records match the worker table
+        run: |
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          python3 Docs/licence-evidence-apply.py --check
+          python3 Docs/licence-evidence-apply.py
+          first="$(sha256sum Resources/model-catalog.json)"
+          python3 Docs/licence-evidence-apply.py
+          second="$(sha256sum Resources/model-catalog.json)"
+          test "$first" = "$second"
+          echo "catalogue idempotent: $first"
+
       - name: Run conformance gate
         run: |
           set -euo pipefail

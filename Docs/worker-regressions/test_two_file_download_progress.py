@@ -23,10 +23,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from retouch_ai_worker.catalog import Catalog, ModelEntry, ModelFile
+from retouch_ai_worker.catalog import (APPROVED, LICENCE_READ_ON, REQUIRED_USE,
+                                       STATED_BY_RIGHTS_HOLDER, ArtefactTerms,
+                                       Catalog, ModelEntry, ModelFile,
+                                       PermittedUse)
 from retouch_ai_worker.downloads import ConsentStore, Downloader
 
 PAYLOAD = b"retouch-studio-test-payload-" * 4096
+
+
+def _terms() -> ArtefactTerms:
+    return ArtefactTerms(
+        use=REQUIRED_USE, can_acquire=True, can_redistribute=True, can_use=True,
+        stated_by=STATED_BY_RIGHTS_HOLDER, evidence_url="https://example.test/L",
+        read_on=LICENCE_READ_ON, verdict=APPROVED)
+
+
+CLEARED_USE = PermittedUse(code=_terms(), weights=_terms(),
+                           training_data=_terms())
 
 
 class _RangeHandler(BaseHTTPRequestHandler):
@@ -62,7 +76,7 @@ class _TwoFileCatalog(Catalog):
         super().__init__(root, allow_uncleared=True)
         self.entry = ModelEntry(
             id="fake-model", name="Fake", task="test", license_id="Apache-2.0",
-            commercial_ok=True, source="test",
+            permitted_use=CLEARED_USE, source="test",
             files=(
                 ModelFile("a.bin", sha256, len(PAYLOAD), first_url),
                 ModelFile("b.bin", sha256, len(PAYLOAD), second_url),

@@ -66,10 +66,20 @@ class CapabilityReportTests(unittest.TestCase):
         self.assertEqual(report(self.catalog, evidence=())["vocabulary"], VOCABULARY)
 
     def test_a_missing_model_is_requires_model(self):
+        spot = self.by_id()["inpaint.spot"]
+        self.assertEqual(spot["state"], "requires_model")
+        self.assertEqual(spot["modelId"], MIGAN)
+        self.assertIn("not installed", spot["reason"])
+
+    def test_an_unadmitted_model_is_never_offered_for_download(self):
+        # swin2sr's weights statement is inferred, so the shipping gate refuses
+        # it. `requires_model` would tell the UI to offer a download the
+        # catalogue would refuse at install time, so the licence answer wins.
         upscale = self.by_id()["upscale.4x"]
-        self.assertEqual(upscale["state"], "requires_model")
+        self.assertEqual(upscale["state"], "blocked")
         self.assertEqual(upscale["modelId"], SWIN)
-        self.assertIn("not installed", upscale["reason"])
+        self.assertIn("no established permission", upscale["reason"])
+        self.assertNotIn("not installed", upscale["reason"])
 
     def test_installed_without_evidence_is_blocked(self):
         _versioned(self.root, MIGAN, "1.0.0",
@@ -170,12 +180,19 @@ class CapabilityReportTests(unittest.TestCase):
         self.assertEqual(entries[0]["modelVersion"], "1.0.0")
 
     def test_missing_ledger_supports_nothing(self):
+        # Installed, imported and licence-admitted behind the evaluation
+        # switch, so the only thing missing is the recorded run.
+        catalog = Catalog(self.root, allow_uncleared=True)
         _versioned(self.root, SWIN, "1.0.0", {
             "config.json": 772,
             "preprocessor_config.json": 152,
             "pytorch_model.bin": 48_460_141,
         })
-        records = report(self.catalog, evidence=(), platform_name=PLATFORM)
+        records = report(catalog, evidence=(), platform_name=PLATFORM)
+        upscale = {item["capabilityId"]: item
+                   for item in records["capabilities"]}["upscale.4x"]
+        self.assertEqual(upscale["state"], "blocked")
+        self.assertIn("no recorded run", upscale["reason"])
         self.assertFalse(any(item["state"] == SUPPORTED
                              for item in records["capabilities"]))
 

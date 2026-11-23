@@ -11,20 +11,48 @@ from pathlib import Path
 from unittest.mock import patch
 
 from retouch_ai_worker import catalog as catalog_module
-from retouch_ai_worker.catalog import (CATALOG, LEGACY_LEASE, Catalog, ModelEntry,
-                                       ModelFile)
+from retouch_ai_worker.catalog import (APPROVED, APPROVED_WITH_CONDITIONS, CATALOG,
+                                       EXCLUDED, LEGACY_LEASE, LICENCE_READ_ON,
+                                       REQUIRED_USE, STATED_BY_INFERRED,
+                                       STATED_BY_NOT_ESTABLISHED,
+                                       STATED_BY_RIGHTS_HOLDER, UNKNOWN,
+                                       ArtefactTerms, Catalog, ModelEntry,
+                                       ModelFile, PermittedUse, UseCondition)
 from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, LICENSE_BLOCKED,
                                         MODEL_MISSING, UNKNOWN_MODEL, WorkerError)
+
+
+def terms(**overrides) -> ArtefactTerms:
+    """A complete, admitted artefact record; overrides make the bad variants."""
+    fields = dict(
+        use=REQUIRED_USE, can_acquire=True, can_redistribute=True, can_use=True,
+        stated_by=STATED_BY_RIGHTS_HOLDER, evidence_url="https://example.test/L",
+        read_on=LICENCE_READ_ON, verdict=APPROVED)
+    fields.update(overrides)
+    return ArtefactTerms(**fields)
+
+
+def use_class(**overrides) -> PermittedUse:
+    record = dict(code=terms(), weights=terms(), training_data=terms())
+    record.update(overrides)
+    return PermittedUse(**record)
+
+
+CLEARED_USE = use_class()
+UNCLEARED_USE = use_class(weights=terms(
+    can_acquire=None, can_redistribute=None, can_use=None,
+    stated_by=STATED_BY_NOT_ESTABLISHED, verdict=UNKNOWN,
+    note="no rights-holder statement was found"))
 
 # The catalog only ships models whose weights are cleared. The gate still has
 # to refuse an uncleared entry if one is ever added, so the test supplies one.
 UNCLEARED = ModelEntry(id="eval-only", name="Eval only", task="inpainting",
-                       license_id="NOASSERTION", commercial_ok=False,
+                       license_id="NOASSERTION", permitted_use=UNCLEARED_USE,
                        source="local", files=(ModelFile("weights.bin"),))
 
 # A flat install that a test can adopt while a reader waits on the legacy lease.
 LEGACY = ModelEntry(id="legacy-race", name="Legacy race", task="inpainting",
-                    license_id="MIT", commercial_ok=True, source="local",
+                    license_id="MIT", permitted_use=CLEARED_USE, source="local",
                     files=(ModelFile("weights.bin"),))
 
 # A model small enough for a test to write whole, so its load path can be
@@ -32,13 +60,13 @@ LEGACY = ModelEntry(id="legacy-race", name="Legacy race", task="inpainting",
 WEIGHTS = b"weights"
 VERIFIED = ModelEntry(
     id="tiny-model", name="Tiny", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local",
+    permitted_use=CLEARED_USE, source="local",
     files=(ModelFile("weights.bin", hashlib.sha256(WEIGHTS).hexdigest(),
                      len(WEIGHTS)),))
 UNDIGESTED = ModelEntry(
     id="size-only", name="Size only", task="upscaling", license_id="Apache-2.0",
-    commercial_ok=True, source="local", files=(ModelFile("weights.bin", None,
-                                                         len(WEIGHTS)),))
+    permitted_use=CLEARED_USE, source="local", files=(ModelFile("weights.bin", None,
+                                                               len(WEIGHTS)),))
 
 
 class _FakeClock:
@@ -58,12 +86,34 @@ class CatalogTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
 
-    def test_flux_is_commercial_and_listed(self):
+    def test_flux_is_admitted_and_listed(self):
         catalog = Catalog(self.root, allow_uncleared=False)
         listed = {entry["id"]: entry for entry in catalog.list()}
-        self.assertTrue(listed["flux2-klein-4b-q4"]["commercial_ok"])
+        flux = listed["flux2-klein-4b-q4"]["permitted_use"]
+        self.assertTrue(flux["admitted"])
+        self.assertEqual(flux["weights"]["verdict"], APPROVED)
         self.assertEqual(listed["flux2-klein-4b-q4"]["license"], "Apache-2.0")
         self.assertEqual(len(listed), len(CATALOG))
+
+    def test_every_shipped_record_carries_the_whole_position(self):
+        # Finding (3): `Catalog.public()` must carry the record field for field,
+        # not a summary of it, so the host and this table cannot disagree.
+        catalog = Catalog(self.root, allow_uncleared=False)
+        for model in catalog.list():
+            record = model["permitted_use"]
+            self.assertEqual(set(record),
+                             {"code", "weights", "trainingData", "admitted"},
+                             model["id"])
+            for name in ("code", "weights", "trainingData"):
+                self.assertEqual(
+                    set(record[name]),
+                    {"use", "canAcquire", "canRedistribute", "canUse",
+                     "statedBy", "evidenceUrl", "readOn", "verdict",
+                     "conditions", "notice", "note"},
+                    f"{model['id']} {name}")
+                self.assertEqual(record[name]["use"], REQUIRED_USE)
+                self.assertTrue(record[name]["evidenceUrl"])
+                self.assertTrue(record[name]["readOn"])
 
     def test_sam_tiny_weights_are_recorded_as_measured(self):
         # Measured 2026-11-18 three ways that agree: the pinned URL streams this
@@ -79,23 +129,101 @@ class CatalogTests(unittest.TestCase):
             spec.sha256,
             "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69")
 
-    def test_unlicensed_model_is_refused(self):
+    def test_every_shipped_record_validates(self):
+        for entry in CATALOG:
+            entry.validate()
+            self.assertTrue(entry.license_id, entry.id)
+            for name, record in (("code", entry.permitted_use.code),
+                                 ("weights", entry.permitted_use.weights),
+                                 ("training data", entry.permitted_use.training_data)):
+                self.assertIn(record.verdict,
+                              (APPROVED, APPROVED_WITH_CONDITIONS, UNKNOWN, EXCLUDED),
+                              f"{entry.id} {name}")
+                self.assertTrue(record.evidence_url, f"{entry.id} {name}")
+                self.assertTrue(record.read_on, f"{entry.id} {name}")
+
+    def test_a_tag_only_weights_statement_is_not_an_admission(self):
+        # The mandate's central rule and the review finding (4): inferred
+        # evidence can never be a grant, so swin2sr's repository tag is recorded
+        # as an inference and the gate refuses it.
+        entry = next(item for item in CATALOG if item.id == "swin2sr-x4")
+        weights = entry.permitted_use.weights
+        self.assertEqual(weights.stated_by, STATED_BY_INFERRED)
+        self.assertEqual(weights.verdict, UNKNOWN)
+        self.assertIsNone(weights.permitted)
+        self.assertFalse(entry.permitted_use.admitted)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with self.assertRaises(WorkerError) as caught:
+            catalog.require("swin2sr-x4")
+        self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+        self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
+        self.assertEqual(caught.exception.data["artefact"], "weights")
+
+    def test_an_inferred_statement_can_never_grant_an_axis(self):
+        inferred = terms(stated_by=STATED_BY_INFERRED)
+        with self.assertRaises(ValueError) as caught:
+            inferred.validate()
+        self.assertIn("inferred evidence", str(caught.exception))
+        # A tag may still be recorded as a blank inference; it just admits nothing.
+        blank = terms(stated_by=STATED_BY_INFERRED, can_acquire=None,
+                      can_redistribute=None, can_use=None, verdict=UNKNOWN,
+                      note="repository tag only")
+        blank.validate()
+        self.assertIsNone(blank.permitted)
+        self.assertFalse(blank.admitted)
+
+    def test_approved_with_conditions_must_list_a_met_condition(self):
+        for conditions in ((), (UseCondition("attribute the authors", False),)):
+            with self.assertRaises(ValueError):
+                terms(verdict=APPROVED_WITH_CONDITIONS,
+                      conditions=conditions).validate()
+        admitted = terms(verdict=APPROVED_WITH_CONDITIONS,
+                         conditions=(UseCondition("attribute the authors", True),))
+        admitted.validate()
+        self.assertTrue(admitted.admitted)
+
+    def test_a_record_without_its_evidence_is_invalid(self):
+        for fields in ({"evidence_url": ""}, {"read_on": ""},
+                       {"read_on": "2026-11-31"}, {"read_on": "yesterday"},
+                       {"use": "commercial-resale"}):
+            with self.assertRaises(ValueError, msg=fields):
+                terms(**fields).validate()
+
+    def test_an_excluded_model_is_refused_even_under_the_eval_switch(self):
+        # Finding (4): "excluded" plus a permissive boolean must never load.
+        excluded = ModelEntry(
+            id="excluded-model", name="Excluded", task="upscaling",
+            license_id="CC-BY-NC-ND-4.0", permitted_use=use_class(
+                weights=terms(verdict=EXCLUDED, can_acquire=False,
+                              can_redistribute=False, can_use=False,
+                              note="no redistribution or derivative use")),
+            source="local", files=(ModelFile("weights.bin"),))
+        for allow in (False, True):
+            catalog = Catalog(self.root, allow_uncleared=allow)
+            with patch("retouch_ai_worker.catalog.CATALOG",
+                       CATALOG + (excluded,)):
+                with self.assertRaises(WorkerError) as caught:
+                    catalog.require("excluded-model")
+            self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+            self.assertEqual(caught.exception.data["reason"], "excluded")
+
+    def test_a_refused_entry_still_reports_its_licence_class(self):
+        # Scope A: a refused model produces the licence refusal, never an
+        # unrelated capability failure, and the message names the artefact.
         catalog = Catalog(self.root, allow_uncleared=False)
         with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (UNCLEARED,)):
             with self.assertRaises(WorkerError) as caught:
                 catalog.require("eval-only")
         self.assertEqual(caught.exception.code, LICENSE_BLOCKED)
+        self.assertEqual(caught.exception.data["model"], "eval-only")
+        self.assertEqual(caught.exception.data["verdict"], UNKNOWN)
 
-    def test_eval_switch_allows_but_then_requires_files(self):
+    def test_the_eval_switch_does_not_skip_a_file_check(self):
         catalog = Catalog(self.root, allow_uncleared=True)
         with patch("retouch_ai_worker.catalog.CATALOG", CATALOG + (UNCLEARED,)):
             with self.assertRaises(WorkerError) as caught:
                 catalog.require("eval-only")
         self.assertEqual(caught.exception.code, MODEL_MISSING)
-
-    def test_every_shipped_model_is_cleared(self):
-        self.assertTrue(all(entry.commercial_ok for entry in CATALOG),
-                        [entry.id for entry in CATALOG if not entry.commercial_ok])
 
     def test_missing_installed_model(self):
         catalog = Catalog(self.root, allow_uncleared=False)
@@ -273,9 +401,9 @@ class CatalogTests(unittest.TestCase):
     def test_every_entry_has_a_license_id(self):
         for entry in CATALOG:
             self.assertTrue(entry.license_id, entry.id)
-            if entry.commercial_ok:
+            if entry.permitted_use.weights.verdict == APPROVED:
                 self.assertIn(entry.license_id, {"Apache-2.0", "MIT", "BSD-3-Clause"},
-                              f"{entry.id} claims to be commercial")
+                              f"{entry.id} claims its weights are approved")
 
 
 if __name__ == "__main__":
