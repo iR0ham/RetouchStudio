@@ -3249,3 +3249,22 @@ its evidence row.
 **Status of the gate as it lands.** Item 1 **BLOCKED** on implementation, item 2 partly **MEASURED** at development-runtime
 depth on macOS and unassessed on Windows, items 3–6 **NOT VERIFIED**, items 7–8 not yet reached. Nothing here says the
 release is ready, and the plan's first line is that 2.0.0 is blocked.
+
+**Same-day correction to this addendum, after the two feasibility investigations returned.** The M2b estimate in
+[`RELEASE_2.0.0_UPSCALER_GATE.md`](RELEASE_2.0.0_UPSCALER_GATE.md) §7 was written before them and was too low. A
+read-only investigation of `Windows/` at `0183202` found that ONNX Runtime 1.32.0 is already referenced, loaded,
+shipped in the built app and hash-verified in CI — one dependency I had priced as work is in fact done — but that
+**no inference has ever run on Windows**: there is not one `InferenceSession`, `OrtValue` or `Run()` call under
+`Windows/`, `WorkerServer.RefuseJob` (`WorkerServer.cs:188-211`) answers `-32020` for every capability, and there is
+no tiling, overlap or banding code at all, while the decoder holds two to three full-resolution buffers and
+`PixelBuffer`'s length multiply is `int`. M2b therefore became 40–70 hours and the plan total moved from 65–107 to
+100–155 hours. The same investigation refuted three symbol references in the briefing I gave it — `MinimumHostVersion`,
+`UpscalePlan` and `BitmapBridge` do not exist at this commit — none of which had reached this ledger or the plan, and it
+corrected one belief I had carried since the Phase-1 audit: **the model manager IS reachable from the Windows UI**
+(`MainWindow.xaml.cs:566` opens `ModelManagerWindow`, which lists, verifies and activates records). On the macOS side the
+bundle mechanism proved more complete than expected — `Tools/build-python-runtime.sh` plus `Tools/bundle-worker.sh` build
+a relocatable 3.13.15 helper that `AIWorker.interpreter()` would pick up automatically — and less complete where it
+matters: no CI job on a release path has ever produced that helper, `Tools/notarize.sh` is wired into neither workflow,
+`validate-bundle.sh` checks the architecture of the app executable but not the nested interpreter, and every release job
+carries a `timeout-minutes: 60` budget that a source-built CPython plus 67 pinned ML distributions has not been shown to
+fit. The historical text above is untouched; this paragraph is the dated correction.

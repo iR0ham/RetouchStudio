@@ -71,19 +71,58 @@ independent. M4 is strictly after M3 because the artefact under test must be the
 the existing numbers), `worker/tools/upscale_acceptance.py`, new `Docs/UPS4X_QUALIFICATION.md`. Owner:
 Researcher, with the Test Engineer for the harness run. Reviewer: Code Reviewer for the licence fields.
 
-**M2b — Windows conversion.** New `Tools/export-swin2sr-onnx.py` plus a committed recipe, the artefact
-record in `Windows/README.md` (size, SHA-256, opset), `Resources/model-catalog.json` (a Windows-platform
-entry, or a separate version of the same model), `Windows/RetouchStudio.AI/Capabilities.cs` (unblock
-`upscale.4x` only after the gate passes), `Windows/RetouchStudio.AI` model-load path. Owner: Full-stack
-Engineer with Researcher for the export feasibility spike. Reviewer: Code Reviewer, plus a licence check
-on the derivative artefact.
+**M2b — Windows conversion and inference.** A read-only investigation of this tree (2026-11-24)
+changed the shape of this milestone, mostly for the better. **ONNX Runtime is already a shipped,
+pinned dependency**: `Windows/RetouchStudio.AI/RetouchStudio.AI.csproj:17` references
+`Microsoft.ML.OnnxRuntime 1.32.0`, `Providers.Ensure()` loads the native library and confirms the CPU
+execution provider (`Providers.cs:29-35`), `AI/onnxruntime.dll` ships in the built app, and CI asserts
+its recorded size and SHA-256 (`ci.yml:556`). **But no inference has ever been created here**: there is
+not one `InferenceSession`, `OrtValue` or `Run()` call anywhere under `Windows/`. `WorkerServer.RefuseJob`
+(`WorkerServer.cs:188-211`) returns `-32020` for every capability unconditionally, and the gate is
+`Capabilities.Runnable()` (`Capabilities.cs:150`) reading the `Fixed` table where
+`Capabilities.cs:59-60` marks `upscale.4x` `Blocked`. There is no resize pretending to be a model — no
+bicubic fake to remove. And there is **no tiling, overlap or banding code at all on Windows**: the
+measured banded pipeline exists only in Python (`worker/retouch_ai_worker/engine.py:35-42`,
+`_axis_tiles` / `_axis_plan`), so that algorithm must be ported, not enabled. Memory is a real constraint,
+not a formality: `WindowsImageCodec.DecodeAsync` holds two full-resolution buffers at once and
+`Decode16Async` three (`:194-245`), and `PixelBuffer`'s `new byte[width * height * 4]` (`PixelBuffer.cs:29`)
+multiplies in `int`, so a large 4× output throws `OverflowException` before it allocates.
+So the Windows work is: the conversion recipe and its provenance, `windows-x64` plus a usable provider in
+`Resources/model-catalog.json` (the `swin2sr-x4` entry is `macos-arm64` / `macos-python` at :218-221, and
+`ModelCatalog.Platform` + `Supports()` mark it unsupported on Windows), a C# session create/run plus the
+port of the tile-and-blend band, a derivative-artefact licence record, and the inversion of three
+assertions that currently *require* refusal (`Windows/RetouchStudio.AI.Tests/Program.cs:166-167,173-176,280-281`).
+Files: new `Tools/export-swin2sr-onnx.py`, `Windows/RetouchStudio.AI/Providers.cs`, `Capabilities.cs`,
+`WorkerServer.cs`, `Windows/RetouchStudio.Imaging`, `Resources/model-catalog.json`,
+`Windows/RetouchStudio.AI.Tests/Program.cs`, `Windows/README.md`. Owner: Full-stack Engineer, with the
+Researcher for the export spike. Reviewer: Code Reviewer, plus a licence check on the derivative artefact.
+**A shared-file note**: this milestone touches `Resources/model-catalog.json`, which M1 also touches — they
+must be serialised, not parallel.
 
-**M3 — distributable runtime.** `build.sh` (the `RETOUCH_SKIP_WORKER` branch, the stamping block),
-`Tools/bundle-worker.sh`, `Tools/validate-bundle.sh`, `.github/workflows/release.yml` (all three macOS
-jobs), `Tools/build-windows.ps1`, `Tools/make-dmg.sh`, `Sources/RetouchStudio/Core/AIRuntime.swift`,
-`Sources/RetouchStudio/Core/AIWorker.swift`. Owners: Full-stack Engineer (build), Full-stack Engineer
-(host discovery) — different files, no overlap. Reviewer: Code Reviewer, with the sealed-runtime and
-quarantine findings (tasks #94, #102, #31) closed first.
+**M3 — distributable runtime.** The mechanism already exists and is nearly complete; what is missing is
+wiring, budget and one proof. `Tools/build-python-runtime.sh` source-builds a relocatable
+CPython **3.13.15** (pinned SHA-256, arm64-only, Homebrew `openssl@3 xz sqlite` at build time) and writes
+the `.source-stamp` that `Tools/bundle-worker.sh:60-73` demands; `bundle-worker.sh` copies the framework
+plus the venv site-packages, rewrites `libpython` to `@loader_path`, converts the two internal links to
+relative symlinks and **refuses** the bundle if any Mach-O still mentions `/opt/homebrew` or a symlink is
+broken. Host discovery already prefers the bundle: `AIWorker.interpreter()` tries
+`Bundle.main.resourceURL/Worker/bin/python3` second, right after the `RETOUCH_AI_PYTHON` override, and
+`selectedRuntimeIsDownloaded` deliberately returns false when a bundled helper exists. So no app-side
+discovery change is needed — the artefact simply never contains that directory today.
+Changes therefore land in: `build.sh` (the `RETOUCH_SKIP_WORKER` branch at :170-176, and the nested
+re-sign loop at :207-218), `.github/workflows/release.yml` (remove the flag for the **arm64** job only —
+`AIWorker.bundledRoot` returns nil under `#if arch(x86_64)`, so the Intel DMG stays helper-less by design
+and must say so — plus the Homebrew setup and venv steps that `ci.yml:340-342` already performs, inside a
+`timeout-minutes: 60` budget that has **not** been shown to fit), `Tools/validate-bundle.sh` (it lipo-checks
+only the app executable, never the nested interpreter), and `Tools/make-dmg.sh` (whether the two symlinks
+survive the image is NOT VERIFIED). The payload build itself is already proven end to end in
+`ci.yml:319+`, but as a `continue-on-error: true` job that is not a required context, and `ci.yml:297-299`
+states plainly that no CI job ever ran the bundle script on a release path. Owners: Full-stack Engineer
+(build and CI), Test Engineer (the clean-machine launch proof). Reviewer: Code Reviewer, with the
+sealed-runtime and quarantine findings (#94, #102, #31) closed first.
+**Weights stay outside the bundle**: `AIWorker.supportDirectory` is fixed to Application Support with an
+invariant comment that runtimes must never hold weights, and no code path reads weights from inside the
+app — which is precisely why R1 (M1) is on the critical path for M4 rather than a side quest.
 
 **M4 — real inference evidence.** `worker/retouch_ai_worker/capability-evidence.json` (schema
 `retouchstudio.capability-evidence/2`, the fields listed by the owner), the host reader and any gate that
@@ -117,6 +156,7 @@ Engineer. Reviewer: Code Reviewer.
 | Packaged real inference | one 4× pass on the fixed corpus through the product path | 4× dimensions out, 8-bit or measured bit depth, provenance sidecar verifies, PSNR ≥ 24.0 dB per image and against the predeclared control |
 | Memory and latency | harness `--measure`, peak RSS sampled during the job | numbers recorded in the evidence entry; no threshold invented after the run |
 | Windows parity | ONNX vs torch reference on the same pairs | PSNR within the D4 tolerance, predeclared before the first run |
+| Windows inference is not vacuous | the same `job.submit upscale.4x` path the app uses, asserted against a pre-committed reference crop | output dimensions alone **fail** — bicubic satisfies them; the gate is SSIM against the reference plus the PSNR floor, and the three existing assertions that demand refusal are inverted rather than deleted |
 | Cancel / retry / recovery | cancel at load, at tile, at write; retry after each; kill during install | cancelled reported as cancelled, no partial model active, retry succeeds, no orphan staging |
 | Clean install | fresh runner (Windows) or redirected support directory with no prior state (macOS headless) plus one GUI first-launch session | first launch offers AI honestly, install→verify→run works with nothing pre-seeded |
 
@@ -148,20 +188,31 @@ clean-install records. The `Tests/ModelStoreTests.swift` redirect cases (the cur
 
 ## 5. Risks, with the mitigation actually scheduled
 
-**R-P1 — Windows ONNX export of Swin2SR is the critical path and is genuinely uncertain.** Swin
-architectures export badly: the cyclic shifted-window attention with `torch.roll`, and the
-interpolated positional bias (`F.interpolate` with bicubic modes), have historically needed recent opsets
-and sometimes custom nodes; CPU EP latency at 512 tiles is unknown. Mitigation: a **two-day feasibility
-spike first** (M2b.0) that exports the pinned checkpoint, runs it on the hosted runner, and reports PSNR
-against the torch reference on two corpus images. If it fails, the owner is told immediately with the
-measured reason, and the options are: a fixed-input-size export, a different 4× model licensed for the
-same class, or Windows being re-scoped out of the gate **by the owner**. I will not silently relax gate
-item 4 to macOS-only.
+**R-P1 — Windows real inference is the critical path and is bigger than it first looked.** The good news
+is measured: ONNX Runtime 1.32.0 is already referenced, loaded, shipped in the app and hash-checked in CI,
+so no new dependency is needed. The bad news is that the Windows side has **never executed a model** — no
+`InferenceSession` exists — and has **no tiling code**, while the memory behaviour of the decoder holds two
+to three full-resolution buffers and `PixelBuffer` multiplies its length in `int`, so a large 4× output cannot
+even be allocated. On top of that sits the export itself: Swin architectures are historically awkward to
+export (cyclic shifted-window attention with `torch.roll`, bicubic positional-bias interpolation) and per-tile
+CPU latency here is unmeasured. Mitigation: a **two- to three-day spike first** (M2b.0) that exports the pinned
+checkpoint, runs one 256 px tile through the CPU execution provider and reports PSNR against the torch
+reference on two corpus images — that single experiment prices both the export risk and the latency risk.
+If it fails, the owner is told immediately with the measured reason, and the options are a fixed-input-size
+export, a different 4× model in the same licence class, or Windows being re-scoped out of the gate **by the
+owner**. I will not silently relax gate item 4 to macOS-only, and I will not accept a Windows test that only
+asserts output dimensions, because bicubic passes that vacuously.
 
-**R-P2 — a ~1.3–1.6 GB arm64 DMG changes distribution.** Bundling the helper multiplies the artefact by
-about 150× against the 10 MB measured in the audit, under ad-hoc signing with no notarisation.
-Mitigation: keep per-arch DMGs, validate the nested interpreter runs after the DMG's own copy (the
-`ditto`/quarantine class of defect), and report real sizes before any release-body text is written.
+**R-P2 — the artefact grows from ~16 MB to ~1.3–1.6 GB, and that number is already in the repo, not a guess.**
+`ci.yml:315-317` records the full lock unpacking to **1.4 GB** of site-packages, `Docs/PHASE0_CROSSPLATFORM_AUDIT.md:200,222`
+reports **1.3 GB measured** with `du -sh` for an app carrying the helper, and `Docs/RELEASING.md:54,192` states
+~16 MB light versus ~1.3–1.6 GB with it. Model weights are **additional** — they stay outside the bundle by
+invariant — so a user's first AI-enabled run costs the DMG plus tens of MB of weights. Mitigation: keep per-arch
+DMGs, state the size honestly in the release notes before anyone publishes, validate the nested interpreter actually
+executes after the DMG's own copy (the `ditto`/quarantine class of defect, and `make-dmg.sh`'s symlink preservation
+is NOT VERIFIED), and note that `Resources/RetouchStudio.entitlements` is an empty dictionary with no JIT or dyld
+exception while `build.sh:195-205` only applies `--options runtime` when a real signing identity exists — which it
+never does here, so the whole tree is ad-hoc signed.
 
 **R-P3 — a 16 GB MacBook Air is both the build host and the acceptance host.** Source-building CPython
 plus a 48 MB torch inference is survivable (the banded path measured ~1.3 GB at the ceiling), but a
@@ -202,13 +253,13 @@ Passing CI changes none of these rows by itself.
 |---|---|---|---|
 | M1 R1 downloader, both hosts + review round | 10–16 | 1.5–2 days | low |
 | M2a macOS qualification dossier | 4–6 | 0.5 day | low |
-| M2b Windows ONNX conversion, parity, review | 16–30 | 3–5 days | **high** — dominates the plan |
-| M3 bundled runtime, seal, bundle validation | 12–20 | 2–3 days | medium |
+| M2b Windows ONNX conversion, **plus the first real C# inference and a ported tiling band** | 40–70 | 5–9 days | **high** — dominates the plan |
+| M3 bundled runtime, release-CI wiring, seal, bundle validation | 14–24 | 2–4 days | medium — the 60-minute job budget is unproven |
 | M4 packaged inference + evidence schema v2 | 6–10 + a 60–90 minute session | 1–2 days | medium |
 | M5 Model Manager states + cancel/retry/recovery | 6–12 | 1–2 days | medium |
 | M6 clean-install acceptance | 8–14 | 1–2 days | medium |
 | M7 review of the evidence set, plus one rework loop | 3–5 | 0.5–1 day | low |
-| **Total** | **65–107 h** | **10–18 working days** | driven by M2b and M3 |
+| **Total** | **100–155 h** | **15–25 working days** | driven by M2b, then M3 |
 
 A defensible commitment is: M1, M2a and the M2b spike inside the first three days; the first helper-bearing
 macOS artefact within a week; gate items 1–5 reachable in two to three weeks; gate 6–8 shortly after, with
