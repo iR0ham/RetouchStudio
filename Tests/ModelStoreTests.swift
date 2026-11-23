@@ -2129,15 +2129,23 @@ do {
                 }
                 check(Set(workerIDs).contains(row.id),
                       "\(row.id) exists in the worker table")
-                check(block.contains("license_id=\"\(row.codeLicense)\"")
-                        || block.contains("license_id=\"\(row.weightsLicense)\""),
+                // One requirement, on the field the badge actually prints. An `||`
+                // over `codeLicense` and `weightsLicense` passed whenever either
+                // matched, so a table that disagreed with both visible strings
+                // except one would still have been called agreement.
+                check(block.contains("license_id=\"\(row.weightsLicense)\""),
                       "\(row.id) states the same SPDX on both surfaces", row.weightsLicense)
                 // Python joins adjacent string literals at compile time, and the
                 // long URLs are written that way. Undo the line breaks and the
                 // quote pair they leave behind, so the comparison is against the
                 // URL Python actually records rather than its source spelling.
+                // Comment lines are dropped first: the join has no separator, so a
+                // comment left in place would merge its prose into the artefact
+                // slices below and let a licence word merely *mentioned* in a
+                // comment satisfy a check about the record underneath it.
                 let joined = block.split(separator: "\n")
                     .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty && !$0.hasPrefix("#") }
                     .joined()
                     .replacingOccurrences(of: "\"\"", with: "")
                 check(joined.contains(record.weights.evidenceUrl),
@@ -2147,55 +2155,94 @@ do {
                 // helper name per entry was not enough once a single row could be
                 // an explicit grant while its sibling rows stayed unknown, so each
                 // artefact's own block is now compared with its own verdict.
-                func artefactBlock(_ artefact: String) -> String {
-                    guard let start = joined.range(of: "\(artefact)=") else { return "" }
+                func artefactBlock(_ artefact: String) -> Substring? {
+                    guard let start = joined.range(of: "\(artefact)=") else { return nil }
                     let rest = joined[start.upperBound...]
-                    // `_approved(...)` / `_not_established(...)` end at the next
-                    // top-level artefact or at the closing of permitted_use.
-                    let end = ["weights=PermittedUse", "training_data=", "),\n        source"]
-                        .compactMap { marker in
-                            rest.range(of: marker)
-                                .map { rest.distance(from: rest.startIndex,
-                                                     to: $0.lowerBound) }
-                        }
-                        .min() ?? rest.count
-                    return String(rest.prefix(max(end, 0)))
+                    // The next artefact's own keyword closes the slice; `source=`
+                    // closes the last one. `joined` carries no newlines, so the
+                    // markers have to be keywords rather than indented lines — and
+                    // an unbounded slice fails instead of silently running to the
+                    // end of the entry, because a slice that includes its siblings
+                    // lets one artefact's spelling answer another's check.
+                    let marker: String
+                    switch artefact {
+                    case "code": marker = "weights="
+                    case "weights": marker = "training_data="
+                    default: marker = "source="
+                    }
+                    guard let end = rest.range(of: marker) else { return nil }
+                    return rest[..<end.lowerBound]
                 }
                 for (artefact, terms) in [("code", record.code),
                                           ("weights", record.weights),
                                           ("trainingData", record.trainingData)] {
                     let slice = artefactBlock(artefact == "trainingData" ? "training_data" : artefact)
-                    switch terms.statedBy {
-                    case "rights-holder":
-                        check(terms.verdict == "approved"
-                                ? slice.contains("_approved(")
-                                : slice.contains("verdict=APPROVED_WITH_CONDITIONS")
-                                    && slice.contains("stated_by=STATED_BY_RIGHTS_HOLDER"),
-                              "\(row.id)/\(artefact) is a rights-holder statement on both surfaces",
-                              slice.prefix(80).replacingOccurrences(of: "\n", with: " "))
-                    case "inferred":
-                        check(slice.contains("STATED_BY_INFERRED"),
-                              "\(row.id)/\(artefact) is an inference on both surfaces")
-                    default:
-                        check(slice.contains("_not_established("),
-                              "\(row.id)/\(artefact) is not established on both surfaces")
+                    guard let slice else {
+                        check(false, "\(row.id)/\(artefact) has its own bounded slice in the worker")
+                        continue
                     }
-                    check(slice.contains(terms.verdict)
-                            || (terms.verdict == "approved" && slice.contains("_approved("))
-                            || (terms.verdict == "unknown" && slice.contains("_not_established("))
-                            // The worker spells a conditional approval as its enum
-                            // constant, so the hyphenated wire word cannot appear
-                            // literally in its source. The check above pins the
-                            // constant beside the same rights-holder source.
-                            || (terms.verdict == "approved-with-conditions"
-                                    && slice.contains("verdict=APPROVED_WITH_CONDITIONS")),
-                          "\(row.id)/\(artefact) states the same verdict in the worker",
-                          terms.verdict)
+                    // One spelling per (verdict, source) pair, written the way the
+                    // joined source actually reads: the join leaves no spaces
+                    // between the keyword arguments. A pair the table has never
+                    // used maps to no spelling at all, so adding one has to be
+                    // taught here deliberately rather than passing by accident.
+                    // `approved-with-conditions` is the worker's enum constant, not
+                    // the hyphenated wire word, which is why the expectation is
+                    // spelled that way instead of searching for `terms.verdict`.
+                    let spellings: [String]
+                    switch (terms.verdict, terms.statedBy) {
+                    case ("approved", "rights-holder"):
+                        spellings = ["_approved("]
+                    case ("approved-with-conditions", "rights-holder"):
+                        spellings = ["_terms(verdict=APPROVED_WITH_CONDITIONS,",
+                                     "stated_by=STATED_BY_RIGHTS_HOLDER"]
+                    case ("unknown", "not-established"):
+                        spellings = ["_not_established("]
+                    case ("unknown", "inferred"):
+                        spellings = ["stated_by=STATED_BY_INFERRED"]
+                    default:
+                        spellings = []
+                    }
+                    check(!spellings.isEmpty
+                            && slice.hasPrefix(spellings[0])
+                            && spellings.dropFirst().allSatisfy { slice.contains($0) },
+                          "\(row.id)/\(artefact) states the same verdict and statement "
+                          + "source in the worker",
+                          "\(terms.verdict)/\(terms.statedBy) as \(slice.prefix(70))")
                 }
             }
         } else {
             check(false, "the worker catalog is readable for the cross-surface check")
         }
+    }
+
+    // (f2) The flat licence strings the consent sheet and the Model Manager
+    // actually print. `Docs/licence-evidence-apply.py` regenerates the
+    // `permitted_use` record, and its `--check` gate cannot see these older
+    // fields, so without a pin here the sentence a user reads could be edited
+    // while every record-level check stayed green. Pinned to the values the
+    // dossier records for each entry; the worker-side SPDX agreement is asserted
+    // in the cross-surface check above, which covers the same string from the
+    // other side.
+    let badgePins: [(id: String, code: String, weights: String, evidenceURL: String)] = [
+        ("flux2-klein-4b-q4", "Apache-2.0", "Apache-2.0",
+         "https://huggingface.co/mflux-community/flux2-klein-4b-mflux-q4"),
+        ("sam2.1-hiera-tiny", "Apache-2.0", "Apache-2.0",
+         "https://huggingface.co/facebook/sam2.1-hiera-tiny"),
+        ("swin2sr-x4", "Apache-2.0", "Apache-2.0",
+         "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"),
+        ("migan", "MIT", "MIT", "https://huggingface.co/andraniksargsyan/migan"),
+    ]
+    for pin in badgePins {
+        guard let row = shipped.entry(id: pin.id) else {
+            check(false, "\(pin.id) is still in the shipped catalog for its badge pin")
+            continue
+        }
+        check(row.codeLicense == pin.code && row.weightsLicense == pin.weights,
+              "\(pin.id) prints the licence strings the dossier records",
+              "\(row.codeLicense) / \(row.weightsLicense)")
+        check(row.licenseEvidenceUrl == pin.evidenceURL,
+              "\(pin.id) names the evidence URL it prints", row.licenseEvidenceUrl)
     }
 
     // (g) The untouched accessors, frozen independently of the old-format

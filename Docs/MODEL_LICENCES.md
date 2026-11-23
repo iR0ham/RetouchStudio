@@ -400,7 +400,13 @@ three axes blank. Its note gained the dataset quote below and no permission.
 ### 11.2 The evidence, read 2026-11-22 at primary sources
 
 Three statements, each quoted from the source named with its URL. All three were
-re-read on 2026-11-23 while applying this decision and still hold verbatim.
+re-read from the network on 2026-11-23 while this branch was being prepared, and
+each still reads as quoted: the organisation endpoint returns the verified flag and
+full name below, the README (14,822 bytes) contains both sentences word for word
+under the sections named, and `LICENSE` is still 11,348 bytes opening with the
+Apache text and carrying the SwinIR appendix. One quotation is normalised rather
+than byte-exact — the README writes `for testing:` with two trailing spaces, printed
+here with one, which is how the rendered page shows it anyway.
 
 1. **The uploader is the rights holder, not a mirror.**
    `https://huggingface.co/api/organizations/caidas/overview` returns

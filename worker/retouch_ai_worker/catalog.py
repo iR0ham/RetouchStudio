@@ -2,12 +2,21 @@
 
 The catalog is data, not comments. Every entry carries an SPDX licence id and a
 `permitted_use` record that states, separately for the model's code, its weight
-files and its training data, the use class this product needs, the three
-permission axes the owner's 2026-11-22 mandate separates (may an end user
-acquire the file from where we ship it; may we publish its URL, size and
-SHA-256 and install it; is the intended non-commercial use permitted), where
-the statement came from, the evidence URL and read date, and a licence verdict
-drawn from the four statuses the mandate allows.
+files and its training data, the use class this product needs, three permission
+axes (may an end user acquire the file from where we ship it; may we publish its
+URL, size and SHA-256 and install it; is the intended non-commercial use
+permitted), where the statement came from, the evidence URL and read date, and a
+licence verdict drawn from the four statuses the gate allows.
+
+The gate is DR-15 in `Docs/RELEASE_2.0.0_READINESS.md`: the release manager's
+2026-11-22 restatement of the licence test for a non-commercial use class, written
+under the owner's standing execution mandate. DR-15 evaluates four rights per
+artefact; the first three are the axes above, and the fourth — Conditions:
+attribution, ShareAlike, dataset limits — is not a boolean, so it lives in
+`verdict` together with the `conditions` list, each entry stamped `met`. The
+owner's mandate states the principles; DR-15 is this project's implementation of
+them, and attributing a decision to the wrong author is how a project ends up
+believing a rule is immutable when it is its own.
 
 The boolean this replaced could not express "we do not know", and that is how an
 inferred permission once became an approval. The record makes unknown a
@@ -90,8 +99,8 @@ class UseCondition:
 class ArtefactTerms:
     """What the recorded evidence says about one artefact (code, weights, data).
 
-    The three permission axes are stored separately because they are answered
-    separately under the mandate, and collapsing them to one boolean is exactly
+    The three permission axes are stored separately because DR-15 answers them
+    separately, and collapsing them to one boolean is exactly
     the conflation this record exists to prevent:
 
     - `can_acquire`: the end user may obtain this file from `evidence_url`.
@@ -531,7 +540,7 @@ CATALOG: tuple[ModelEntry, ...] = (
             # copyright line names the SwinIR authors. The grant is therefore
             # stated by the rights holder rather than inferred by us, which is
             # why `stated_by` moves off STATED_BY_INFERRED and the axes may be
-            # recorded. The three conditions below are what the decision
+            # recorded. The four conditions below are what the decision
             # actually depends on; the training-data provenance the same README
             # reports (DIV2K/Flickr2K, research-only distribution) is recorded
             # as a constraint rather than ignored, and is not a term of the
