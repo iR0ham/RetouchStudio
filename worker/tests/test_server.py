@@ -1,4 +1,6 @@
+import hashlib
 import json
+import shutil
 import os
 import socket
 import subprocess
@@ -9,16 +11,43 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from unittest.mock import patch
 
-from retouch_ai_worker.catalog import Catalog
+from retouch_ai_worker.catalog import (Catalog, ModelEntry, ModelFile,
+                                       STATED_BY_NOT_ESTABLISHED, UNKNOWN)
 from retouch_ai_worker.capabilities import (BLOCKED, PROVIDER, SUPPORTED, VOCABULARY,
                                             current_platform)
-from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, INVALID_PARAMS,
+from retouch_ai_worker.protocol import (BUSY, CATALOG_INVALID, CHECKSUM_MISMATCH,
+                                        INVALID_PARAMS, LICENSE_BLOCKED,
                                         MODEL_MISSING, PATH_DENIED, UNSUPPORTED,
                                         WorkerError, decode, encode)
 from retouch_ai_worker.server import (JOB_LOCK_NAME, JobManager,
                                       acquire_folder_lock, WorkerServer)
 from retouch_ai_worker.transport import read_image
+
+
+
+def cleared_use():
+    """A complete, admitted licence record for a synthetic fixture entry.
+
+    These fixtures were written when an entry's permission answer was one
+    boolean. The record replaced that boolean, so a synthetic entry now needs a
+    real record; taking the shipped catalog's first admitted entry keeps the
+    fixture honest about the shape `validate()` enforces instead of inventing one
+    per test.
+    """
+    from retouch_ai_worker.catalog import CATALOG as SHIPPED
+    return SHIPPED[0].permitted_use
+
+
+def uncleared_use():
+    """The same record with its weights permission withdrawn, so it refuses."""
+    from dataclasses import replace as dc_replace
+    use = cleared_use()
+    return dc_replace(use, weights=dc_replace(
+        use.weights, can_acquire=None, can_redistribute=None, can_use=None,
+        stated_by=STATED_BY_NOT_ESTABLISHED, verdict=UNKNOWN,
+        note="no rights-holder statement was found"))
 
 
 class FakeEngine:
@@ -60,6 +89,11 @@ class ModelEngine:
     def run(self, kind, params, ctx):
         if kind == "upscale":
             return {"root": str(self.catalog.require("swin2sr-x4"))}
+        if kind == "inpaint":
+            # The `migan` loader's shape: resolve the weights through the
+            # catalog and hand the bytes to a runtime. Integrity refusals have
+            # to surface from here, which is why this fake exists.
+            return {"root": str(self.catalog.require_verified("migan"))}
         raise WorkerError(-32601, f"no such kind {kind}")
 
     def execution_providers(self):
@@ -111,6 +145,35 @@ except OSError:
     raise SystemExit(3)
 raise SystemExit(0)
 """
+
+
+def _repin(entry, defect):
+    """A copy of a shipped entry with one catalog defect injected.
+
+    `migan` pins one file and the upscaler three, so the fixtures stay honest
+    about a real entry's shape instead of a single-file toy: only the named
+    defect changes.
+    """
+    if defect == "missing-digest":
+        files = tuple(ModelFile(spec.path, None, spec.bytes, spec.url)
+                      for spec in entry.files)
+    elif defect == "missing-size":
+        files = tuple(ModelFile(spec.path, spec.sha256, None, spec.url)
+                      for spec in entry.files)
+    elif defect == "invalid-digest":
+        files = tuple(ModelFile(spec.path, "deadbeef", spec.bytes, spec.url)
+                      for spec in entry.files)
+    elif defect == "unsafe-path":
+        files = tuple(ModelFile("../" + spec.path.replace("/", "_"),
+                                spec.sha256, spec.bytes, spec.url)
+                      for spec in entry.files)
+    elif defect == "complete":
+        return entry
+    else:
+        raise AssertionError(f"unknown defect {defect!r}")
+    return ModelEntry(id=entry.id, name=entry.name, task=entry.task,
+                      license_id=entry.license_id, permitted_use=entry.permitted_use,
+                      source=entry.source, files=files, notes=entry.notes)
 
 
 class ServerTests(unittest.TestCase):
@@ -602,6 +665,511 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status["status"], "failed")
         self.assertEqual(result["error"]["code"], CHECKSUM_MISMATCH)
         self.assertEqual(result["error"]["data"]["model"], "swin2sr-x4")
+
+    # --- integrity refusals over the wire ---------------------------------
+    #
+    # Mandate §4 asks for the *end-to-end* answer, not just the catalog's: a
+    # rejection that raises the right `WorkerError` in `catalog.py` but arrives at
+    # the host as `-32603 Internal error` (or, worse, as a succeeded job) is still
+    # a fail-open from the user's point of view. Every test below drives a real
+    # JSON-RPC connection — submit, run, poll, read `job.result` — against an
+    # engine whose loader resolves its weights through the catalog exactly as the
+    # shipped `_ensure_*` methods do.
+
+    def _migan_entry(self, sha256, size=8):
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        return ModelEntry(id="migan", name="MI-GAN", task="inpainting",
+                          license_id="MIT", permitted_use=cleared_use(), source="local",
+                          files=(ModelFile("weights.bin", sha256, size),))
+
+    def _install_migan(self, payload, versioned=True):
+        """Put `payload` where the `migan` pin points, and return its folder."""
+        root = self.server.catalog.root / "migan"
+        folder = root / ("1.0.0" if versioned else "")
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "weights.bin").write_bytes(payload)
+        if versioned:
+            (root / "active.json").write_text(json.dumps({
+                "schema": "retouchstudio.model-active/1",
+                "modelId": "migan", "version": "1.0.0"}), encoding="utf-8")
+        return folder
+
+    def _run_kind_job(self, sock_name, kind="inpaint", capability=None,
+                      manager=None):
+        """Run one job to its terminal state over a real socket; return job.result.
+
+        Naming no `capabilityId` is the shape the audit could not close: the
+        server-side gate never runs, so the only thing standing between tampered
+        bytes and a runtime is the loader's own verification. Passing one adds the
+        other submission shape without duplicating the polling loop.
+        """
+        root = Path(self.tmp.name)
+        if manager is None:
+            manager = JobManager(ModelEngine(self.server.catalog),
+                                 root / f"{sock_name}-jobs", (root / "inputs",))
+        server = WorkerServer(root / f"{sock_name}.sock", manager, self.server.catalog,
+                              (root / "inputs",))
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        session = Session(root / f"{sock_name}.sock")
+        try:
+            submit = {"kind": kind, "params": {}}
+            if capability is not None:
+                submit["capabilityId"] = capability
+            sent = session.call("job.submit", submit)
+            if "error" in sent:
+                # The gate refused before a job existed: that refusal *is* the
+                # answer, and it arrives as a plain JSON-RPC error object.
+                return {"refused": sent["error"]}
+            job_id = sent["result"]["job_id"]
+            deadline = time.time() + 5
+            status = None
+            while time.time() < deadline:
+                status = session.call("job.status", {"job_id": job_id})["result"]
+                if status["status"] in ("succeeded", "failed", "cancelled"):
+                    break
+                time.sleep(0.02)
+            reply = session.call("job.result", {"job_id": job_id})["result"]
+        finally:
+            session.close()
+            server.shutdown()
+            server.server_close()
+        self.assertIn(status["status"], ("succeeded", "failed"), status)
+        return reply
+
+    def _run_kind_only_job(self, sock_name, kind="inpaint", manager=None):
+        """A kind-only job that must fail; returns the failure it produced."""
+        reply = self._run_kind_job(sock_name, kind, manager=manager)
+        self.assertNotIn("refused", reply)
+        self.assertIn("error", reply, reply)
+        return reply["error"]
+
+    def test_a_same_length_substitution_fails_the_job_over_rpc(self):
+        # Measured on `cd5741b`: only the upscaler hashed at load, so a file with
+        # the recorded length and the wrong content reached a runtime through a
+        # kind-only submit.
+        trusted = b"trusted!"
+        pin = hashlib.sha256(trusted).hexdigest()
+        self._install_migan(b"tampereD")                      # same length
+        with patch("retouch_ai_worker.catalog.CATALOG", (self._migan_entry(pin),)):
+            error = self._run_kind_only_job("tamper")
+        self.assertEqual(error["code"], CHECKSUM_MISMATCH)
+        self.assertEqual(error["data"]["model"], "migan")
+        self.assertEqual(error["data"]["reason"], "digest")
+        self.assertEqual(error["data"]["file"], "weights.bin")
+        self.assertEqual(error["data"]["expected_sha256"], pin)
+        self.assertEqual(error["data"]["actual_sha256"],
+                         hashlib.sha256(b"tampereD").hexdigest())
+        # The refused model is still repairable: nothing holds its lease.
+        self.assertEqual(self.server.catalog._leases, {})
+
+    def test_a_correctly_pinned_model_still_runs_over_rpc(self):
+        # The positive control for every refusal above: a job whose bytes match
+        # their pins must succeed through the same kind-only path, or the fix
+        # would be a denial of service rather than a trust gate.
+        good = b"trusted!"
+        pin = hashlib.sha256(good).hexdigest()
+        self._install_migan(good)
+        with patch("retouch_ai_worker.catalog.CATALOG", (self._migan_entry(pin),)):
+            reply = self._run_kind_job("pinned-ok")
+        # The verified load returned the install path and the job ran: every
+        # refusal above would have turned this into a failed job instead.
+        self.assertIsNone(reply.get("error"), reply)
+        self.assertEqual(reply["status"], "succeeded", reply)
+        self.assertEqual(Path(reply["result"]["root"]).name, "1.0.0")
+
+    def test_an_unverifiable_pin_refuses_the_kind_only_job(self):
+        # The other half of admission over RPC: a null digest must fail the job
+        # with `-32021`, not load the file the way `require_verified` used to.
+        self._install_migan(b"tampereD")
+        with patch("retouch_ai_worker.catalog.CATALOG", (self._migan_entry(None),)):
+            error = self._run_kind_only_job("pin")
+        self.assertEqual(error["code"], CATALOG_INVALID)
+        self.assertEqual(error["data"]["reason"], "missing-digest")
+        self.assertEqual(error["data"]["file"], "weights.bin")
+        self.assertEqual(self.server.catalog._leases, {})
+
+    def test_a_missing_size_refuses_the_kind_only_job(self):
+        self._install_migan(b"trusted!")
+        entry = self._migan_entry(hashlib.sha256(b"trusted!").hexdigest(), size=None)
+        with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+            error = self._run_kind_only_job("nosize")
+        self.assertEqual(error["code"], CATALOG_INVALID)
+        self.assertEqual(error["data"]["reason"], "missing-size")
+
+    def test_a_malformed_digest_refuses_the_kind_only_job(self):
+        # A truncated pin can never equal hexdigest(). It used to be reported as
+        # "failed its recorded checksum", which tells the user to repair weights
+        # when the catalog is what is wrong.
+        self._install_migan(b"trusted!")
+        for pin, reason in (("g" * 64, "invalid-digest"),
+                            ("abc", "invalid-digest"),
+                            ("", "missing-digest")):
+            with self.subTest(pin=repr(pin)):
+                with patch("retouch_ai_worker.catalog.CATALOG",
+                           (self._migan_entry(pin),)):
+                    error = self._run_kind_only_job(f"bad-{len(pin)}-{reason}")
+                self.assertEqual(error["code"], CATALOG_INVALID)
+                self.assertEqual(error["data"]["reason"], reason)
+
+    def test_an_uppercase_pin_loads_over_rpc(self):
+        # Case is not a trust question. On the baseline this pin rejected a
+        # byte-correct model forever, which is a denial the attacker does not even
+        # have to cause.
+        good = b"trusted!"
+        upper = hashlib.sha256(good).hexdigest().upper()
+        self._install_migan(good)
+        with patch("retouch_ai_worker.catalog.CATALOG", (self._migan_entry(upper),)):
+            reply = self._run_kind_job("upper")
+        self.assertIsNone(reply.get("error"), reply)
+        self.assertEqual(reply["status"], "succeeded", reply)
+
+    def test_an_escaping_catalog_path_refuses_the_kind_only_job(self):
+        # The pins would be checked against one file while the loader opens
+        # another, so this is a trust defect and not a missing install.
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        folder = self._install_migan(b"trusted!")
+        outside = self.server.catalog.root / "outside.bin"
+        outside.write_bytes(b"trusted!")
+        entry = ModelEntry(id="migan", name="MI-GAN", task="inpainting",
+                           license_id="MIT", permitted_use=cleared_use(), source="local",
+                           files=(ModelFile("../outside.bin",
+                                            hashlib.sha256(b"trusted!").hexdigest(),
+                                            8),))
+        self.assertTrue(folder.exists())
+        with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+            error = self._run_kind_only_job("escape")
+        self.assertEqual(error["code"], CATALOG_INVALID)
+        self.assertEqual(error["data"]["reason"], "unsafe-path")
+
+    def test_a_symlinked_weight_refuses_the_kind_only_job(self):
+        # Attempted bypass of the digest gate without editing any pin: point the
+        # store file at bytes that happen to match, so the check passes on the
+        # link target while a re-open by name can land elsewhere.
+        self.server.catalog.root.mkdir(parents=True, exist_ok=True)
+        real = self.server.catalog.root / "real.bin"
+        real.write_bytes(b"trusted!")
+        folder = self.server.catalog.root / "migan" / "1.0.0"
+        folder.mkdir(parents=True)
+        os.symlink(real, folder / "weights.bin")
+        (self.server.catalog.root / "migan" / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": "migan", "version": "1.0.0"}), encoding="utf-8")
+        entry = self._migan_entry(hashlib.sha256(b"trusted!").hexdigest())
+        with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+            error = self._run_kind_only_job("symlink")
+        self.assertEqual(error["code"], CHECKSUM_MISMATCH)
+        self.assertEqual(error["data"]["reason"], "unsafe-path")
+
+    def test_an_uncleared_model_refuses_the_kind_only_job_before_any_integrity(self):
+        # Ordering, proven over the wire: a licence answer must not depend on disk
+        # state, and an integrity answer must not be reachable by accepting the
+        # licence. Here the bytes are perfectly valid and still refused.
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        good = b"trusted!"
+        entry = ModelEntry(id="migan", name="MI-GAN", task="inpainting",
+                           license_id="NOASSERTION", permitted_use=uncleared_use(),
+                           source="local",
+                           files=(ModelFile("weights.bin",
+                                            hashlib.sha256(good).hexdigest(), 8),))
+        self._install_migan(good)
+        with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+            error = self._run_kind_only_job("licence")
+        self.assertEqual(error["code"], LICENSE_BLOCKED)
+
+        # A bad pin on an uncleared entry still answers with the licence first:
+        # -32010 is the product decision, -32021 the technical one, and the
+        # product one must not depend on what the catalog happens to record.
+        pinless = ModelEntry(id="migan", name="MI-GAN", task="inpainting",
+                             license_id="NOASSERTION", permitted_use=uncleared_use(),
+                             source="local", files=(ModelFile("weights.bin", None, 8),))
+        with patch("retouch_ai_worker.catalog.CATALOG", (pinless,)):
+            error = self._run_kind_only_job("licence-pin")
+        self.assertEqual(error["code"], LICENSE_BLOCKED)
+
+        # ...and the research switch changes only that gate. It is read from the
+        # environment when a Catalog is built without an explicit answer, which is
+        # how `__main__` builds the worker's own, so the variable is set rather
+        # than the constructor argument. Under it the same entry is refused for its
+        # pin and never loaded. `AIWorker.swift` strips the variable from the
+        # inherited environment, so a user's shell cannot reach this state in a
+        # real launch (that half is NOT VERIFIED here: no app launch is permitted).
+        root = Path(self.tmp.name)
+        with mock.patch.dict(os.environ, {"RETOUCH_AI_EVAL_MODELS": "1"}):
+            switched = JobManager(ModelEngine(Catalog(self.server.catalog.root)),
+                                  root / "switch-jobs", (root / "inputs",))
+        self.assertTrue(switched.engine.catalog.allow_uncleared)
+        with patch("retouch_ai_worker.catalog.CATALOG", (pinless,)):
+            error = self._run_kind_only_job("switch-pin", manager=switched)
+        self.assertEqual(error["code"], CATALOG_INVALID)
+        self.assertEqual(error["data"]["reason"], "missing-digest")
+
+    def test_a_missing_model_stays_MODEL_MISSING_and_never_becomes_unverified(self):
+        # Legitimate optional-model behaviour, kept across the tightening: nothing
+        # installed is a downloadable answer, and no pin defect may masquerade as
+        # one (the reverse mapping would offer a download that repairs nothing).
+        entry = self._migan_entry(hashlib.sha256(b"trusted!").hexdigest())
+        with patch("retouch_ai_worker.catalog.CATALOG", (entry,)):
+            error = self._run_kind_only_job("absent")
+        self.assertEqual(error["code"], MODEL_MISSING)
+        self.assertEqual(error["data"]["reason"], "not-installed")
+        self.assertEqual(error["data"]["missing"], "weights.bin")
+        self.assertNotEqual(error["code"], CATALOG_INVALID)
+        self.assertNotEqual(error["code"], CHECKSUM_MISMATCH)
+
+    def test_a_named_capability_and_its_report_never_disagree(self):
+        # The gate and the loader must not disagree, which is the half of the
+        # taxonomy that used to be incoherent: `capability.list` called a pinless
+        # entry unverifiable while `require_verified` loaded it. Both answers now
+        # come from one admission rule, so a state the report can name is a state
+        # the job path refuses the same way — for every model in the shipped
+        # catalog, not just the one this branch happens to fake.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        states = {"missing-digest": "blocked", "missing-size": "blocked",
+                  "invalid-digest": "blocked", "unsafe-path": "blocked",
+                  None: "requires_model"}
+        for defect in ("missing-digest", "missing-size", "invalid-digest",
+                       "unsafe-path", "complete"):
+            for model_id, capability, kind in (("migan", "inpaint.spot", "patch_edit"),
+                                               ("swin2sr-x4", "upscale.4x", "upscale")):
+                with self.subTest(defect=defect, model=model_id):
+                    reason = None if defect == "complete" else defect
+                    broken = tuple(
+                        _repin(item, defect) if item.id == model_id else item
+                        for item in SHIPPED)
+                    shutil.rmtree(self.server.catalog.root, ignore_errors=True)
+                    with patch("retouch_ai_worker.catalog.CATALOG", broken):
+                        refused = self._run_kind_job(f"gate-{model_id}-{defect}",
+                                                     kind=kind,
+                                                     capability=capability)
+                        listed = self.session.call("capability.list")
+                    spot = next(item for item in listed["result"]["capabilities"]
+                                if item["capabilityId"] == capability)
+                    self.assertEqual(spot["state"], states[reason], listed)
+                    # A named submission is always refused at the gate, before a
+                    # job exists; what must agree with the report is its code.
+                    self.assertIn("refused", refused, refused)
+                    if spot["state"] == "blocked":
+                        self.assertEqual(refused["refused"]["code"], UNSUPPORTED)
+                        self.assertEqual(refused["refused"]["data"]["state"], "blocked")
+                    else:
+                        # Nothing installed stays a downloadable answer even when
+                        # the pins are complete — never an integrity one.
+                        self.assertEqual(refused["refused"]["code"], MODEL_MISSING)
+                        self.assertEqual(refused["refused"]["data"]["model"], model_id)
+
+    def test_a_kind_only_job_refuses_exactly_what_the_report_calls_blocked(self):
+        # The complement of the gate test above: the same machine state reached
+        # without a capability id has no gate to stand in front of it, so the
+        # refusal must come from the loader with the integrity code. A blocked
+        # capability that only ever failed at the gate would leave the documented
+        # kind-only escape hatch loading bytes the report calls unverifiable.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+
+        for defect, code, reason in (
+                ("missing-digest", CATALOG_INVALID, "missing-digest"),
+                ("missing-size", CATALOG_INVALID, "missing-size"),
+                ("invalid-digest", CATALOG_INVALID, "invalid-digest"),
+                ("unsafe-path", CATALOG_INVALID, "unsafe-path")):
+            with self.subTest(defect=defect):
+                broken = tuple(_repin(item, defect) if item.id == "migan" else item
+                               for item in SHIPPED)
+                shutil.rmtree(self.server.catalog.root, ignore_errors=True)
+                folder = self.server.catalog.root / "migan" / "1.0.0"
+                folder.mkdir(parents=True)
+                (folder / "migan_pipeline_v2.onnx").write_bytes(b"anything at all")
+                (self.server.catalog.root / "migan" / "active.json").write_text(
+                    json.dumps({"schema": "retouchstudio.model-active/1",
+                                "modelId": "migan", "version": "1.0.0"}),
+                    encoding="utf-8")
+                with patch("retouch_ai_worker.catalog.CATALOG", broken):
+                    error = self._run_kind_only_job(f"hatch-{defect}")
+                self.assertEqual(error["code"], code)
+                self.assertEqual(error["data"]["reason"], reason)
+
+    def test_health_reports_an_unverifiable_catalog_entry_over_the_wire(self):
+        # A null pin used to make `health()` answer ok:true for an installed model
+        # it had checked against nothing. Over RPC that became a green launch probe
+        # for bytes nobody had verified.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        broken = tuple(
+            ModelEntry(id=item.id, name=item.name, task=item.task,
+                       license_id=item.license_id, permitted_use=item.permitted_use,
+                       source=item.source,
+                       files=tuple(ModelFile(spec.path, None, spec.bytes)
+                                   for spec in item.files))
+            if item.id == "migan" else item for item in SHIPPED)
+        target = self.server.catalog.root / "migan" / "migan_pipeline_v2.onnx"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"anything at all")
+        with patch("retouch_ai_worker.catalog.CATALOG", broken):
+            reply = self.session.call("health")["result"]
+        self.assertFalse(reply["ok"])
+        state = {item["model"]: item for item in reply["models"]}["migan"]
+        self.assertTrue(state["installed"])
+        self.assertFalse(state["ok"])
+        self.assertEqual(state["problems"][0]["reason"], "missing-digest")
+        # The report carries the same code the load path raises, so a host routing
+        # the launch probe needs no second table of reasons.
+        self.assertEqual(state["code"], CATALOG_INVALID)
+
+    def test_health_never_hashes_and_still_costs_nothing_per_poll(self):
+        # Cost invariant behind the cache: `health()` is called at launch and on
+        # every capability poll, so it must stay a stat-only check. If it ever
+        # starts hashing, this fails on the call count rather than on a slow CI.
+        from retouch_ai_worker.catalog import _sha256
+
+        calls = []
+        with patch("retouch_ai_worker.catalog._sha256",
+                   side_effect=lambda p: (calls.append(p), _sha256(p))[1]):
+            for _ in range(20):
+                self.session.call("health")
+        self.assertEqual(calls, [], "health() hashed a model file")
+
+    def test_capability_list_never_hashes(self):
+        from retouch_ai_worker.catalog import _sha256
+
+        calls = []
+        with patch("retouch_ai_worker.catalog._sha256",
+                   side_effect=lambda p: (calls.append(p), _sha256(p))[1]):
+            for _ in range(20):
+                self.session.call("capability.list")
+        self.assertEqual(calls, [], "capability.list hashed a model file")
+
+    def test_models_verify_reports_an_unverifiable_entry_without_raising(self):
+        # The report shape the model manager consumes stays a report: a bad pin
+        # becomes `unverifiable`, not an exception and not `ok`.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+        from retouch_ai_worker.catalog import ModelEntry, ModelFile
+
+        broken = tuple(
+            ModelEntry(id=item.id, name=item.name, task=item.task,
+                       license_id=item.license_id, permitted_use=item.permitted_use,
+                       source=item.source,
+                       files=tuple(ModelFile(spec.path, "deadbeef", spec.bytes)
+                                   for spec in item.files))
+            if item.id == "migan" else item for item in SHIPPED)
+        with patch("retouch_ai_worker.catalog.CATALOG", broken):
+            reply = self.session.call("models.verify", {"model": "migan"})["result"]
+        self.assertFalse(reply["ok"])
+        self.assertEqual(reply["checked"], 0)
+        self.assertTrue(reply["unverifiable"])
+        self.assertEqual(reply["failed"][0]["reason"], "invalid-digest")
+
+    def test_a_plan_prices_only_bytes_this_worker_will_load(self):
+        # Positive control for the three refusals below, and the only RPC-level
+        # look `models.plan` had: a complete pin still yields the manifest the
+        # consent sheet is hashed over, priced from the pinned lengths.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+
+        entry = next(item for item in SHIPPED if item.id == "migan")
+        reply = self.session.call("models.plan", {"models": ["migan"]})
+        self.assertNotIn("error", reply, reply)
+        plan = reply["result"]
+        self.assertEqual(plan["total_bytes"], sum(spec.bytes for spec in entry.files))
+        self.assertEqual({item["path"] for item in plan["files"]},
+                         {spec.path for spec in entry.files})
+        self.assertEqual(plan["aggregate"]["files"], len(entry.files))
+        self.assertEqual(plan["aggregate"]["sha256"], plan["manifest_hash"])
+        for item in plan["files"]:
+            # A plan the consent gate can be shown for has to name a source and a
+            # digest for every byte it charges.
+            self.assertTrue(item["url"], item)
+            self.assertTrue(item["sha256"], item)
+            self.assertIsNotNone(item["bytes"], item)
+
+    def test_a_plan_refuses_every_pin_class_the_loader_refuses_over_rpc(self):
+        # `test_downloads` pins admission in the downloader; this pins the *wire
+        # answer* the model manager renders. The measured baseline was worse than
+        # an error: an entry with a null pin charged `None` bytes into the consent
+        # total, the transfer ran, and only the load refused — the user paid the
+        # bandwidth to be told -32021. `spec.url` is deliberately kept intact by
+        # `_repin` so a regression here prices a bad plan instead of accidentally
+        # failing on a missing download source.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+
+        shipped = next(item for item in SHIPPED if item.id == "migan")
+        for defect in ("missing-digest", "missing-size", "invalid-digest",
+                       "unsafe-path"):
+            with self.subTest(defect=defect):
+                with patch("retouch_ai_worker.catalog.CATALOG",
+                           (_repin(shipped, defect),)):
+                    reply = self.session.call("models.plan", {"models": ["migan"]})
+                self.assertNotIn("result", reply, reply)
+                self.assertEqual(reply["error"]["code"], CATALOG_INVALID)
+                self.assertEqual(reply["error"]["data"]["reason"], defect)
+                self.assertNotIn("total_bytes", json.dumps(reply["error"]),
+                                 "a refused plan still leaked a price")
+
+    def test_a_plan_refuses_an_entry_that_names_no_files(self):
+        # The fourth class, invisible to a per-file loop: an empty file list priced
+        # a *free, empty* plan. It cleared the consent gate with 0 bytes, installed
+        # nothing, and left every capability bound to a model that could never
+        # load. `incomplete-entry` is the answer the UI needs, because no download
+        # repairs a record that names nothing.
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+
+        shipped = next(item for item in SHIPPED if item.id == "migan")
+        empty = ModelEntry(id=shipped.id, name=shipped.name, task=shipped.task,
+                           license_id=shipped.license_id,
+                           permitted_use=shipped.permitted_use,
+                           source=shipped.source, files=())
+        with patch("retouch_ai_worker.catalog.CATALOG", (empty,)):
+            reply = self.session.call("models.plan", {"models": ["migan"]})
+        self.assertEqual(reply["error"]["code"], CATALOG_INVALID)
+        self.assertEqual(reply["error"]["data"]["reason"], "incomplete-entry")
+        self.assertNotIn("result", reply, reply)
+
+    def test_a_licence_refusal_prices_no_plan_before_the_pin_is_examined(self):
+        # Ordering is the product answer, not a detail: an entry that is both
+        # unpermitted and mis-pinned must say -32010 ("we are not allowed to fetch
+        # these weights"), never -32021 ("your install is corrupt"), because the
+        # second invites a download the first forbids.
+        shipped = cleared_use()
+        unpermitted = ModelEntry(
+            id="migan", name="MI-GAN", task="inpainting", license_id="MIT",
+            permitted_use=uncleared_use(), source="local",
+            files=(ModelFile("weights.bin", None, None),))
+        with patch("retouch_ai_worker.catalog.CATALOG", (unpermitted,)):
+            reply = self.session.call("models.plan", {"models": ["migan"]})
+        self.assertEqual(reply["error"]["code"], LICENSE_BLOCKED)
+        self.assertNotEqual(reply["error"]["code"], CATALOG_INVALID)
+        self.assertEqual(reply["error"]["data"]["verdict"], "unknown")
+        self.assertTrue(shipped.admitted, "the fixture's control record stopped "
+                        "admitting, so this test no longer proves an ordering")
+
+    def test_a_verification_failure_survives_the_job_record_verbatim(self):
+        # The taxonomy is only useful if the code reaches the host unmodified.
+        # A generic fault (-32603) or a swallowed exception here would look like a
+        # worker crash to `WorkerClient.typedCode` and map to E_INTERNAL.
+        self._install_migan(b"tampereD")
+        pin = hashlib.sha256(b"trusted!").hexdigest()
+        with patch("retouch_ai_worker.catalog.CATALOG", (self._migan_entry(pin),)):
+            error = self._run_kind_only_job("record")
+        self.assertEqual(error["code"], CHECKSUM_MISMATCH)
+        for internal in (-32603, -32601, -32700):
+            self.assertNotEqual(error["code"], internal)
+        self.assertTrue({"model", "file", "reason"} <= set(error["data"]),
+                        error["data"])
+
+    def test_a_legacy_install_of_a_pinned_model_still_loads_over_rpc(self):
+        # Fix constraint 2: adoption is app-side and hashes; the worker must keep
+        # accepting the flat layout, or the gate strands an existing install.
+        good = b"trusted!"
+        pin = hashlib.sha256(good).hexdigest()
+        self._install_migan(good, versioned=False)
+        with patch("retouch_ai_worker.catalog.CATALOG", (self._migan_entry(pin),)):
+            reply = self._run_kind_job("legacy")
+        self.assertIsNone(reply.get("error"), reply)
+        self.assertEqual(Path(reply["result"]["root"]).name, "migan")
 
     def test_a_legacy_install_is_refused_by_name_and_runs_by_kind(self):
         # The two submission shapes must answer differently for one and the same

@@ -74,10 +74,15 @@ table of its own.
   (`-32019`, `E_MODEL_UNVERIFIED`). The size check was added after review: the
   report already called a truncated install `blocked`, but the load path only
   checked existence, so the kind path could load it. A refused model releases
-  its lease. Qualification states — no recorded run, legacy flat layout, a
-  DR-5 entry without size or SHA-256 — stay runnable on purpose: they describe
-  what may be *claimed*, and running them is how evidence gets recorded. The
-  missing package is not one of those states: `_ensure_sam` refuses with
+  its lease. Qualification states — no recorded run, legacy flat layout — stay
+  runnable on purpose: they describe what may be *claimed*, and running them is
+  how evidence gets recorded. A catalog entry without a size or SHA-256 used to be
+  listed here too, and on 2026-11-23 it stopped being one: mandate §4 required
+  fail-closed integrity, and "the record names bytes but never says which" is not
+  a claim gate — `require_verified` used to load those files on length alone.
+  Every such entry is now refused with `-32021` by the load path, `health`,
+  `models verify`, `capability.list` and `models.plan` alike
+  (`Docs/AI_PROTOCOL_V2.md` addendum). The missing package is not one of those states: `_ensure_sam` refuses with
   `-32020` and `{capabilityId, state, package, reason}` before
   `Catalog.require` takes a lease, which is also why a `mask.click` evidence
   run cannot be recorded from a lock-reproducible runtime — nothing there can

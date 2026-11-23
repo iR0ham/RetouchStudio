@@ -39,6 +39,11 @@ struct AIWorkerFailure: LocalizedError, Equatable {
         case -32015, -32602: return "E_INVALID_INPUT"
         case -32019: return "E_MODEL_UNVERIFIED"
         case -32020: return "E_UNSUPPORTED"
+        // The catalog entry's pin is incomplete or malformed, so there is
+        // nothing to verify the bytes against. Same honest label as damaged
+        // weights, and like them it opens no manager: no download repairs a
+        // catalog defect. See `worker/retouch_ai_worker/protocol.py`.
+        case -32021: return "E_MODEL_UNVERIFIED"
         default: return "E_INTERNAL"
         }
     }

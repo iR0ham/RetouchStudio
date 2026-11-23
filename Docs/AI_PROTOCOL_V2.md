@@ -139,9 +139,34 @@ before any weights load: a missing model is `-32011`, an uncleared licence is
 `-32010`, and a file whose size differs from the catalog record is `-32019`
 (`E_MODEL_UNVERIFIED`), the same condition `capability.list` reports as
 `blocked`. The kind path deliberately does not refuse the `blocked` states that
-describe a *claim* (no recorded run, legacy flat layout, a catalog entry without
-size or SHA-256); those keep already-installed models usable, and running them
-is how the evidence for a support claim gets recorded.
+describe a *claim* (no recorded run, legacy flat layout); those keep
+already-installed models usable, and running them is how the evidence for a
+support claim gets recorded.
+
+> **Addendum, 2026-11-23 (mandate §4, PR #115).** A catalog entry without a size
+> or SHA-256 **no longer belongs to that list**, and `-32019` now covers two more
+> install shapes. Both were measured fail-opens: the sentence above is what the
+> code did, not what it does.
+>
+> * An entry whose pin set is absent, incomplete, malformed or whose file list is
+>   empty is refused by **every** path — load, `health`, `models verify`,
+>   `capability.list` and `models.plan` — with `-32021 CATALOG_INVALID` and a
+>   `reason` from the same taxonomy (`missing-size`, `missing-digest`,
+>   `invalid-digest`, `incomplete-entry`, `unsafe-path`). A bad pin is a defect in
+>   this build, not a property of the user's download, so no download can repair
+>   it and no layer may call such an install healthy.
+> * `-32019 CHECKSUM_MISMATCH` is now also emitted for `reason: "unsafe-path"` (a
+>   listed weight that is a symlink) and `reason: "unlisted-file"` (a payload file
+>   the catalog does not name, reported by relative path in `data["files"]`). The
+>   second closes the substitution a per-file digest pass cannot see: a
+>   convention-following loader prefers an unpinned `model.safetensors` to the
+>   pinned `pytorch_model.bin` sitting beside it, so every pin reads correct while
+>   different bytes reach the runtime.
+> * The three reporting surfaces refuse exactly what the load path refuses. That
+>   agreement, not the individual check, is the contract: a model manager that
+>   says "verified" over an install the worker will not load is a false promise to
+>   the user. Pinned by `test_the_report_paths_refuse_what_the_loader_refuses` and
+>   `test_the_report_refuses_the_shapes_the_loader_refuses`.
 
 ## Errors
 
@@ -153,6 +178,14 @@ meanings (`BUSY`, `PATH_DENIED`, `LICENSE_BLOCKED`, `BUDGET_EXCEEDED`, ...).
 numeric code for "this adapter or platform does not provide it", and both hosts
 map `-32020` to `E_UNSUPPORTED`. A host that only knows the older codes sees a
 worker-range error and treats the job as failed, which is safe.
+
+`-32021 CATALOG_INVALID` is the integrity-family code added with the fail-closed
+gate above: the *record* is unusable, so the answer is a build fix, never a
+re-download. Both hosts map it to `E_MODEL_UNVERIFIED` — deliberately the same
+label as `-32019`, because the user-visible action ("this model cannot be
+trusted; it is not your fault and re-fetching will not help") is identical, while
+`data["reason"]` keeps the two classes separable for logs and tests. A host that
+has seen the code MUST NOT offer a download button for it.
 
 Errors never include absolute user paths or model weights. Logs stay on the
 worker's inherited stderr; the host does not parse them for protocol state.

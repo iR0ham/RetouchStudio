@@ -873,8 +873,10 @@ class Engine:
         The load path is where the catalog's SHA-256 is enforced: it runs once
         per process, is 0.036 s for this checkpoint's 48 MB weights on the
         reference Mac, and means the bytes a job trusts are the bytes the
-        catalog describes. `require` keeps its size-only check so launch and
-        capability reporting stay cheap.
+        catalog describes. Every other `_ensure_*` loader does the same — the
+        digest proof is memoised per artifact, so a model is hashed once per
+        process rather than once per job — while `require` keeps its size-only
+        check so launch and capability reporting stay cheap.
         """
         if self._swin is not None:
             return self._swin
@@ -912,7 +914,7 @@ class Engine:
     def _ensure_sam(self) -> None:
         if self._sam is not None:
             return
-        # Asked before the model, and before `require` takes its lease: the
+        # Asked before the model, and before it takes its lease: the
         # weights can be perfectly installable and still have nothing that
         # reads them. `sam2` is not in `requirements.lock`, so this is the
         # ordinary answer for a lock-reproducible runtime, not a damaged one.
@@ -933,7 +935,7 @@ class Engine:
                  "package": "sam2",
                  "reason": "this worker cannot import sam2, so "
                            "sam2.1-hiera-tiny has nothing to run on"}) from error
-        root = self.catalog.require("sam2.1-hiera-tiny")
+        root = self.catalog.require_verified("sam2.1-hiera-tiny")
 
         checkpoint = str(root / "sam2.1_hiera_tiny.pt")
         sam2 = build_sam2("configs/sam2.1/sam2.1_hiera_t.yaml", checkpoint, device="mps")
@@ -946,7 +948,7 @@ class Engine:
             return self._migan
         import onnxruntime as ort
 
-        root = self.catalog.require("migan")
+        root = self.catalog.require_verified("migan")
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4
         session = ort.InferenceSession(
@@ -966,7 +968,7 @@ class Engine:
         from mflux.models.common.config import ModelConfig
         from mflux.models.flux2.variants import Flux2KleinEdit
 
-        root = self.catalog.require("flux2-klein-4b-q4")
+        root = self.catalog.require_verified("flux2-klein-4b-q4")
         if MLX_CACHE_GB > 0:
             mx.set_cache_limit(int(MLX_CACHE_GB * 1e9))
         if MLX_WIRED_GB > 0:
