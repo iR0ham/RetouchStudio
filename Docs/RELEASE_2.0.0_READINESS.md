@@ -1925,3 +1925,19 @@ loader would destroy the only harness a future re-record can be tested with.
 
 The user-visible consequence for 2.0.0 is what `Docs/RELEASE_NOTES_2.0.0.md` now says in
 both languages: generative editing and diffusion-based object removal are not offered.
+
+Closing S-FLUX also moved one host-side pin, and only CI found it. `Tests/RuntimeV2Tests.swift`
+probed the capability gate through `generative.reimagine` — whose only catalogue model is this
+entry — and asserted the refusal was `-32011 E_MODEL_MISSING`. That assertion was true for a
+reason unrelated to what the check exists to prove (the weights simply were not installed), and
+the same gate now answers `-32010 E_LICENCE_REFUSED` because the record refuses its own weights.
+The check moved to the new code with its name restated, not loosened: it still asserts that
+naming a capability makes the helper apply its verdict before a job folder exists, and the
+adjacent label-route check still proves the verdict does not silently become the gate (A2). The
+worker suite, `ModelStoreTests` and the generator check were all green locally first, so the
+record of this slice includes the fact that my local gate set was too narrow to see it. The
+corrected check cannot be exercised here at all: this machine has no installed helper runtime,
+so `RuntimeV2Tests` reports 4 failures named M, N, O and P, every one of them
+`posix_spawn failed (errno 13)` — the helper refusing to start, which is environment and not
+catalogue logic. Whether the same four fail at `main` on this machine was **not measured**, so
+this suite's verdict is CI-only and is recorded as such rather than claimed.

@@ -1384,10 +1384,19 @@ func testLabelledSubmissionIsRecordedNotGated() {
         catch { return ("", AIWorkerFailure(code: 0, message: "\(error)")) }
     }
 
+    // S-FLUX changed which refusal this probe can produce, so the expectation
+    // moved with it rather than being loosened. `generative.reimagine` resolves to
+    // exactly one catalogue entry, `flux2-klein-4b-q4`, whose record now refuses its
+    // own weights. Before that record changed, the capability gate stopped this job
+    // because the model was merely absent (-32011 E_MODEL_MISSING); the same gate
+    // stops it now because the permission is not established (-32010). The point of
+    // the check — naming a capability makes the helper apply its verdict before it
+    // creates a job folder — is unchanged, and both codes keep that guarantee.
     let named = sent { try client.submit("patch_edit", params,
                                          capability: "generative.reimagine") }
-    check(named.failure?.code == -32011 && named.failure?.typedCode == "E_MODEL_MISSING",
-          "P: naming a capability the adapter cannot run stops the job",
+    check(named.failure?.code == -32010
+              && named.failure?.typedCode == "E_LICENCE_REFUSED",
+          "P: naming a capability whose only model is licence-refused stops the job",
           named.failure?.message ?? "")
     check(folders().isEmpty, "P: the gated spelling leaves no job folder",
           folders().joined(separator: " "))
