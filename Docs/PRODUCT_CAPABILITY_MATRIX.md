@@ -108,7 +108,7 @@ Read this section before quoting any number from it.
 | Layer opacity / fill | Not Started | mask-level `opacity` only (`Mask.swift:47`) | no · no | — | absent | layer system | — |
 | Non-destructive editing | Implemented | `DocumentState` (`StudioCore/DocumentValue.swift:332`), re-render from source (`ImageProcessor.swift:129-193`), v5 project stores edits | yes · yes | AT CI MA | renders a subset | — | flat model: non-destructive but not reorderable |
 | Smart objects | Not Started | nearest primitive `BackdropStore` / `AIEditStore` | no · no | — | absent | asset store + layer system | — |
-| Advanced undo / redo | Implemented | `EditorModel.swift:387-420` (100 steps, 350 ms coalescing, redo branch), C ABI `HistoryABI.swift` | yes (menu) · yes | AT CI MA | verified (55 host checks) | needs tree semantics when layers land | no non-linear history |
+| Advanced undo / redo | Implemented | `EditorModel.swift:387-420` (100 steps, 350 ms coalescing, redo branch), C ABI `HistoryABI.swift` | yes (menu) · yes | AT CI MA | verified (55 host checks on 2026-11-13; 405 on 2026-11-23) | needs tree semantics when layers land | no non-linear history |
 | History panel | Not Started | none; undo is keyboard/menu only | no · no | DOC | absent | undo model (exists) | a cheap win independent of layers |
 | Crop | Implemented | `Crop.swift`, `CropOverlay.swift`, `ImageProcessor.swift:149-165` | yes · yes | AT CI MA | verified (UIA drag) | — | aspect presets, not a full constraint matrix |
 | Perspective correction | Not Started | no tool; "perspective" appears only inside the Remove prompt (`QuickEdit.swift:64-65`) | no · no | — | absent | transform + resampling infrastructure | — |

@@ -132,8 +132,12 @@ no patch files.
    `protocol.py`, `catalog.py` and `plan.py` contain no `urllib`, `http.client`,
    `requests` or `socket.socket`; a unit test fails if that changes. Only
    `downloads.py` has transfer code, and the server never imports it.
-3. **License gate before disk.** `Catalog.require()` raises `LICENSE_BLOCKED`
-   for any entry without `commercial_ok`, before it looks at the files.
+3. **Licence gate before disk.** Every entry carries a `permitted_use` record —
+   code, weights and training data separately — and `Catalog.require()` raises
+   `LICENSE_BLOCKED` before it looks at the files when the record does not admit
+   the model (`unknown`, `approved-with-conditions` with an unmet condition, or
+   any `excluded` artefact). The same record travels whole through `models.list`
+   and `Catalog.public()`, so the app reads the worker's own position.
    Real-ESRGAN remains evaluation-only until Phase 4. LaMa was removed from the
    catalog entirely (weights have no license); MI-GAN is MIT and is the shipped
    small-hole inpaint model.

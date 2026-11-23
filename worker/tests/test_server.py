@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from retouch_ai_worker.catalog import Catalog
-from retouch_ai_worker.capabilities import (PROVIDER, SUPPORTED, VOCABULARY,
+from retouch_ai_worker.capabilities import (BLOCKED, PROVIDER, SUPPORTED, VOCABULARY,
                                             current_platform)
 from retouch_ai_worker.protocol import (BUSY, CHECKSUM_MISMATCH, INVALID_PARAMS,
                                         MODEL_MISSING, PATH_DENIED, UNSUPPORTED,
@@ -135,6 +135,24 @@ class ServerTests(unittest.TestCase):
         self.server.server_close()
         self.tmp.cleanup()
 
+    def use_shipping_catalog(self) -> Catalog:
+        """Swap in the production catalogue, with no evaluation switch.
+
+        Every shipped entry is admitted by its own permitted-use record since the
+        release manager's 2026-11-22 decision, taken under the owner's standing
+        execution mandate, so the runtime paths below (size check,
+        legacy install, the kind-only escape hatch, a recorded run) are reached
+        through `allow_uncleared=False` — the gate they actually cross in the
+        app. `RETOUCH_AI_EVAL_MODELS=1` still exists for a model the shipping
+        table refuses; it is simply no longer what makes these tests pass, and
+        keeping it here would hide a licence regression behind a switch. The
+        refusal branch itself is pinned against a table that really refuses, in
+        `test_job_submit_refuses_an_unlicensed_capability`.
+        """
+        catalog = Catalog(self.server.catalog.root, allow_uncleared=False)
+        self.server.catalog = catalog
+        return catalog
+
     def test_hello(self):
         reply = self.session.call("hello")
         self.assertEqual(reply["result"]["protocol"], "2")
@@ -144,12 +162,44 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(reply["result"]["launch_nonce"], self.server.launch_nonce)
         self.assertEqual(reply["contractVersion"], "1")
 
-    def test_models_list_marks_licenses(self):
+    def test_models_list_carries_the_permitted_use_record(self):
         models = self.session.call("models.list")["result"]["models"]
         by_id = {model["id"]: model for model in models}
-        self.assertTrue(by_id["flux2-klein-4b-q4"]["commercial_ok"])
-        self.assertTrue(by_id["swin2sr-x4"]["commercial_ok"])
         self.assertEqual(by_id["swin2sr-x4"]["license"], "Apache-2.0")
+        self.assertNotIn("commercial_ok", by_id["swin2sr-x4"])
+        record = by_id["swin2sr-x4"]["permitted_use"]
+        self.assertEqual(set(record),
+                         {"code", "weights", "trainingData", "admitted"})
+        self.assertEqual(
+            set(record["weights"]),
+            {"use", "canAcquire", "canRedistribute", "canUse", "statedBy",
+             "evidenceUrl", "readOn", "verdict", "conditions", "notice", "note"})
+        # swin2sr's weights grant is a rights-holder statement carried by that
+        # lab's own verified Hugging Face organisation, approved with four met
+        # conditions on 2026-11-22 (Docs/MODEL_LICENCES.md §8), so `models.list`
+        # reports the model as admitted.
+        self.assertTrue(record["admitted"])
+        self.assertEqual(record["weights"]["statedBy"], "rights-holder")
+        self.assertEqual(record["weights"]["verdict"], "approved-with-conditions")
+        self.assertIs(record["weights"]["canUse"], True)
+        self.assertTrue(record["weights"]["conditions"])
+        self.assertTrue(all(item["met"] for item in record["weights"]["conditions"]))
+        # The training-data axis stays unknown: the addendum records the
+        # DIV2K/Flickr2K quote without claiming the per-checkpoint mix.
+        self.assertEqual(record["trainingData"]["verdict"], "unknown")
+        self.assertIsNone(record["trainingData"]["canUse"])
+        self.assertEqual(
+            record["weights"]["evidenceUrl"],
+            "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr")
+        # flux's weights grant is a rights-holder statement, so it is admitted …
+        flux = by_id["flux2-klein-4b-q4"]["permitted_use"]
+        self.assertTrue(flux["admitted"])
+        self.assertEqual(flux["weights"]["statedBy"], "rights-holder")
+        self.assertEqual(flux["weights"]["verdict"], "approved")
+        # … and every shipped entry carries a complete record, not a boolean.
+        for model in models:
+            self.assertIn("permitted_use", model)
+            self.assertNotIn("commercial_ok", model)
 
     def test_health_reports_missing_models_without_failing(self):
         reply = self.session.call("health")["result"]
@@ -329,10 +379,21 @@ class ServerTests(unittest.TestCase):
         for item in records.values():
             if item["state"] != "supported":
                 self.assertTrue(item["reason"], item)
-        self.assertEqual(records["upscale.4x"]["state"], "requires_model")
+        # swin2sr's weights record is admitted (the release manager's
+        # 2026-11-22 decision under the owner's execution mandate), so
+        # nothing installed means the honest download offer here — the same shape
+        # `inpaint.spot` reports two lines below. The licence refusal that used to
+        # win this comparison is pinned with a table that really refuses, in
+        # `test_job_submit_refuses_an_unlicensed_capability`.
+        upscale = records["upscale.4x"]
+        self.assertEqual(upscale["state"], "requires_model")
+        self.assertIn("not installed", upscale["reason"])
+        self.assertNotIn("no established permission", upscale["reason"])
+        self.assertEqual(records["inpaint.spot"]["state"], "requires_model")
 
     def test_capability_list_marks_the_recorded_upscale_run_supported(self):
-        root = self.server.catalog.root
+        catalog = self.use_shipping_catalog()
+        root = catalog.root
         version = root / "swin2sr-x4" / "1.0.0"
         version.mkdir(parents=True)
         for name, size in (("config.json", 772), ("preprocessor_config.json", 152),
@@ -358,11 +419,56 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(reply["error"]["data"]["capabilityId"],
                          "generative.outpaint")
 
-    def test_job_submit_reports_a_missing_model(self):
-        reply = self.session.call("job.submit", {
-            "kind": "upscale", "capabilityId": "upscale.4x", "params": {}})
-        self.assertEqual(reply["error"]["code"], MODEL_MISSING)
-        self.assertEqual(reply["error"]["data"]["model"], "swin2sr-x4")
+    def test_job_submit_refuses_an_unlicensed_capability(self):
+        # The licence gate is still a gate. No shipped entry fails it today, so
+        # the branch is exercised with a table whose swin2sr weights record says
+        # `unknown` with blank axes — exactly the shape that would come back if
+        # someone lowered the grant again — and an install that would otherwise
+        # be supported. A refusal must arrive as `blocked`, never as a download
+        # offer and never as a submitted job.
+        from dataclasses import replace as dc_replace
+
+        from retouch_ai_worker.catalog import CATALOG as SHIPPED
+        from retouch_ai_worker.catalog import UNKNOWN, ArtefactTerms
+
+        unestablished = dc_replace(
+            SHIPPED[0].permitted_use.weights,
+            verdict=UNKNOWN, stated_by="not-established", can_acquire=None,
+            can_redistribute=None, can_use=None, conditions=(),
+            note="pinned for this test: the search produced no statement")
+        refusing = tuple(
+            dc_replace(entry,
+                       permitted_use=dc_replace(entry.permitted_use,
+                                                weights=unestablished))
+            if entry.id == "swin2sr-x4" else entry
+            for entry in SHIPPED)
+        catalog = self.use_shipping_catalog()
+        version = catalog.root / "swin2sr-x4" / "1.0.0"
+        version.mkdir(parents=True)
+        for name, size in (("config.json", 772), ("preprocessor_config.json", 152),
+                           ("pytorch_model.bin", 48_460_141)):
+            with (version / name).open("wb") as handle:
+                handle.truncate(size)
+        (catalog.root / "swin2sr-x4" / "active.json").write_text(json.dumps({
+            "schema": "retouchstudio.model-active/1",
+            "modelId": "swin2sr-x4", "version": "1.0.0",
+        }), encoding="utf-8")
+        self.assertIsInstance(unestablished, ArtefactTerms)
+
+        with mock.patch("retouch_ai_worker.catalog.CATALOG", refusing):
+            reply = self.session.call("job.submit", {
+                "kind": "upscale", "capabilityId": "upscale.4x", "params": {}})
+            listed = {item["capabilityId"]: item for item in
+                      self.session.call("capability.list")["result"]["capabilities"]}
+        self.assertEqual(reply["error"]["code"], UNSUPPORTED)
+        self.assertEqual(reply["error"]["data"]["capabilityId"], "upscale.4x")
+        self.assertEqual(reply["error"]["data"]["state"], BLOCKED)
+        self.assertIn("no established permission", reply["error"]["message"])
+        self.assertEqual(listed["upscale.4x"]["state"], BLOCKED)
+        self.assertIn("no established permission", listed["upscale.4x"]["reason"])
+        # And the refusal costs nothing: no job folder, no job record.
+        self.assertEqual(sorted(os.listdir(Path(self.tmp.name) / "jobs"))
+                         if (Path(self.tmp.name) / "jobs").exists() else [], [])
 
     def test_job_submit_refuses_a_mismatched_capability(self):
         reply = self.session.call("job.submit", {
@@ -376,7 +482,10 @@ class ServerTests(unittest.TestCase):
         # would make the feature unreachable, and no refusal test would notice.
         # The evidence ledger here is a fixture naming whatever platform this
         # process reports, so the answer does not depend on the runner's arch.
-        catalog = self.server.catalog
+        # The model runs under the evaluation switch: this test is about the
+        # supported/refused boundary, not about the licence verdict for the
+        # weights, which `test_models_list_*` pins separately.
+        catalog = self.use_shipping_catalog()
         entry = catalog.get("swin2sr-x4")
         version = catalog.root / entry.id / "1.0.0"
         version.mkdir(parents=True)
@@ -452,13 +561,14 @@ class ServerTests(unittest.TestCase):
         # host names it for `upscale`, but the kind path stays open because it
         # is how an installed model without a recorded support claim runs.
         root = Path(self.tmp.name)
-        version = self.server.catalog.root / "swin2sr-x4" / "1.0.0"
+        catalog = self.use_shipping_catalog()
+        version = catalog.root / "swin2sr-x4" / "1.0.0"
         version.mkdir(parents=True)
         for name, size in (("config.json", 772), ("preprocessor_config.json", 152),
                            ("pytorch_model.bin", 48)):
             with (version / name).open("wb") as handle:
                 handle.truncate(size)
-        (self.server.catalog.root / "swin2sr-x4" / "active.json").write_text(json.dumps({
+        (catalog.root / "swin2sr-x4" / "active.json").write_text(json.dumps({
             "schema": "retouchstudio.model-active/1",
             "modelId": "swin2sr-x4", "version": "1.0.0",
         }), encoding="utf-8")
@@ -467,9 +577,9 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(reported["upscale.4x"]["state"], "blocked")
         self.assertIn("size check", reported["upscale.4x"]["reason"])
 
-        manager = JobManager(ModelEngine(self.server.catalog), root / "jobs",
+        manager = JobManager(ModelEngine(catalog), root / "jobs",
                              (root / "inputs",))
-        server = WorkerServer(root / "model.sock", manager, self.server.catalog,
+        server = WorkerServer(root / "model.sock", manager, catalog,
                               (root / "inputs",))
         thread = threading.Thread(target=server.serve_forever,
                                   kwargs={"poll_interval": 0.05}, daemon=True)
@@ -504,7 +614,8 @@ class ServerTests(unittest.TestCase):
         # halves are pinned on the same machine state so the boundary cannot drift
         # quietly: closing the kind path would remove the documented escape hatch,
         # and opening the named path would make `supported` advisory again.
-        flat = self.server.catalog.root / "swin2sr-x4"
+        catalog = self.use_shipping_catalog()
+        flat = catalog.root / "swin2sr-x4"
         flat.mkdir(parents=True)
         for name, size in (("config.json", 772), ("preprocessor_config.json", 152),
                            ("pytorch_model.bin", 48_460_141)):
@@ -522,7 +633,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.manager.snapshot()["jobs"], [],
                          "a submission the gate refused left a job behind")
 
-        self.manager.engine = ModelEngine(self.server.catalog)
+        self.manager.engine = ModelEngine(catalog)
         job_id = self.session.call("job.submit",
                                    {"kind": "upscale", "params": {}})["result"]["job_id"]
         deadline = time.time() + 5

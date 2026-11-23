@@ -66,10 +66,52 @@ class CapabilityReportTests(unittest.TestCase):
         self.assertEqual(report(self.catalog, evidence=())["vocabulary"], VOCABULARY)
 
     def test_a_missing_model_is_requires_model(self):
+        spot = self.by_id()["inpaint.spot"]
+        self.assertEqual(spot["state"], "requires_model")
+        self.assertEqual(spot["modelId"], MIGAN)
+        self.assertIn("not installed", spot["reason"])
+
+    def test_a_licence_admitted_model_is_offered_for_download(self):
+        # swin2sr's weights are approved-with-conditions and every condition is
+        # met (Docs/MODEL_LICENCES.md §11, decided 2026-11-22 under the
+        # standing execution authority), so the licence gate no longer refuses
+        # `upscale.4x` — the only AI capability
+        # this product ships. Nothing is installed in this report, so the answer
+        # is the honest download offer rather than `blocked`. The licence branch
+        # itself stays pinned by `test_an_excluded_model_is_never_offered_*`.
         upscale = self.by_id()["upscale.4x"]
         self.assertEqual(upscale["state"], "requires_model")
         self.assertEqual(upscale["modelId"], SWIN)
         self.assertIn("not installed", upscale["reason"])
+        self.assertNotIn("no established permission", upscale["reason"])
+
+    def test_an_excluded_model_is_never_offered_for_download(self):
+        # The licence refusal still wins over a download offer: `requires_model`
+        # would tell the UI to fetch weights the catalogue refuses at install.
+        # The shipping table admits every entry now, so the branch is shown by
+        # replacing one entry's weights record with a refusal and keeping the
+        # rest of the table intact.
+        shipped = {entry.id: entry for entry in catalog_module.CATALOG}
+        refused = replace(
+            shipped[SWIN],
+            permitted_use=replace(
+                shipped[SWIN].permitted_use,
+                weights=replace(
+                    shipped[SWIN].permitted_use.weights,
+                    verdict="excluded", can_acquire=False, can_redistribute=False,
+                    can_use=False, conditions=(),
+                    note="refused for this test")))
+        patched = tuple(refused if entry.id == SWIN else entry
+                        for entry in catalog_module.CATALOG)
+        self.assertEqual([entry.id for entry in patched],
+                         [entry.id for entry in catalog_module.CATALOG],
+                         "the substitution keeps the table itself intact")
+        with patch("retouch_ai_worker.catalog.CATALOG", patched):
+            upscale = self.by_id()["upscale.4x"]
+        self.assertEqual(upscale["state"], "blocked")
+        self.assertEqual(upscale["modelId"], SWIN)
+        self.assertIn("excluded", upscale["reason"])
+        self.assertNotIn("not installed", upscale["reason"])
 
     def test_installed_without_evidence_is_blocked(self):
         _versioned(self.root, MIGAN, "1.0.0",
@@ -170,12 +212,21 @@ class CapabilityReportTests(unittest.TestCase):
         self.assertEqual(entries[0]["modelVersion"], "1.0.0")
 
     def test_missing_ledger_supports_nothing(self):
+        # Installed and importable with no recorded run. The licence now admits
+        # this model without the evaluation switch (decided 2026-11-22),
+        # so `allow_uncleared` is no longer what gets the report past the
+        # licence gate — the missing ledger is.
+        catalog = Catalog(self.root, allow_uncleared=True)
         _versioned(self.root, SWIN, "1.0.0", {
             "config.json": 772,
             "preprocessor_config.json": 152,
             "pytorch_model.bin": 48_460_141,
         })
-        records = report(self.catalog, evidence=(), platform_name=PLATFORM)
+        records = report(catalog, evidence=(), platform_name=PLATFORM)
+        upscale = {item["capabilityId"]: item
+                   for item in records["capabilities"]}["upscale.4x"]
+        self.assertEqual(upscale["state"], "blocked")
+        self.assertIn("no recorded run", upscale["reason"])
         self.assertFalse(any(item["state"] == SUPPORTED
                              for item in records["capabilities"]))
 

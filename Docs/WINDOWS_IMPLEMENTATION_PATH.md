@@ -4,11 +4,20 @@
 `StudioCore` build, its C ABI test and the conformance gate run on a native
 `windows-2025` runner (2026-11-13). A C#/WPF light editor in `Windows/` —
 WIC decode/encode, crop, orientation, nine global sliders, shared project files
-and history — builds and loads its window there, with 55 host checks green (see
-[CI_GATES.md](CI_GATES.md#verified-runs)). There is no Windows installer,
-published artifact, AI support or macOS pixel parity, so every product claim
+and history — builds and loads its window there, with 55 host checks green in
+that run (see [CI_GATES.md](CI_GATES.md#verified-runs)). There is no Windows
+updater or code signing, and no macOS pixel parity, so every product claim
 beyond "a light editor opens on `windows-2025`" is **NOT VERIFIED**. macOS
-remains the only shipping product.
+remains the only shipping product. *(Corrected 2026-11-23: two clauses in this
+paragraph were false and a third has gone stale. It denied a Windows installer
+and a published artifact; both exist — see the 2026-11-15 correction below,
+which supersedes these two clauses and the installer clause in the open list at
+the end of this document. And the 55 checks are the 2026-11-13 figure for
+`28f8462`, kept as the historical record it is: the same Windows App job printed
+`WINDOWS HOST TESTS: PASS (405 checks)` in run 45101960656 on 2026-11-23 — the
+`pull_request` run that gated PR #120, whose head is `c68995b` and which checked
+out `refs/pull/120/merge`, the tree that merged as main `f356838` — so 55 must not
+be read as the current count.)*
 
 **Date:** 2026-11-13
 **Basis:** repository at `28f8462` on branch `windows/w2-app-host` (off `main`
@@ -241,7 +250,9 @@ Open, and therefore still **NOT VERIFIED**:
 - no byte-level or visual comparison against the render-plan fixtures; the
   macOS Core Image pipeline is not reproduced stage for stage;
 - 8-bit output only, no metadata in exports, no HEIC write;
-- no installer, signing or updater; the zip is unsigned;
+- no signing or updater; the zip and the MSI are unsigned (the installer itself
+  exists and CI installs, upgrades and uninstalls it — see the 2026-11-15
+  correction below);
 - no AI, analysis, masks, healing, presets or watermark.
 
 W3–W6 are untouched.

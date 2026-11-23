@@ -94,6 +94,235 @@ struct ModelCatalogFile: Codable, Equatable {
 }
 
 struct ModelCatalogEntry: Codable, Equatable, Identifiable {
+    struct ModelUseCondition: Codable, Equatable {
+        let text: String
+        let met: Bool
+    }
+
+    /// What the recorded evidence says about one artefact: the model's code, its
+    /// weight files, or its training data.
+    ///
+    /// The worker's `permitted_use` record is the source of this shape
+    /// (`worker/retouch_ai_worker/catalog.py`), and the host mirrors it field for
+    /// field: these JSON names are exactly what `ArtefactTerms.to_json()` writes,
+    /// so the cross-surface check can compare the two without a translation table.
+    ///
+    /// `verdict` and `statedBy` are decoded as text, not as enums, for the same
+    /// reason every other recorded fact here is: a word this build does not know
+    /// must reach `validate()` and be reported, instead of failing the strict
+    /// decode for the whole catalog.
+    struct ModelArtefactTerms: Codable, Equatable {
+        /// The owner's four statuses. Nothing outside this set is a verdict.
+        enum Verdict: String, Codable, Equatable {
+            case approved
+            case approvedWithConditions = "approved-with-conditions"
+            case unknown
+            case excluded
+        }
+
+        /// Who made the statement. `notEstablished` records that the search
+        /// happened and produced no usable statement; it is how a record that
+        /// cannot survive this schema says "not yet established".
+        enum StatedBy: String, Codable, Equatable {
+            case rightsHolder = "rights-holder"
+            case inferred
+            case notEstablished = "not-established"
+        }
+
+        /// The one use class this product needs (owner mandate, 2026-11-22).
+        static let requiredUse = "public-non-commercial-use-and-distribution"
+
+        let use: String
+        /// The end user may obtain this file from `evidenceUrl`.
+        let canAcquire: Bool?
+        /// The project may publish that URL, the recorded size and SHA-256 and
+        /// install from it. No bytes are mirrored, so this says nothing about
+        /// mirroring.
+        let canRedistribute: Bool?
+        /// The recorded use class is permitted.
+        let canUse: Bool?
+        let statedBy: String
+        let evidenceUrl: String
+        let readOn: String
+        let verdict: String
+        let conditions: [ModelUseCondition]
+        /// Attribution that would have to be reproduced if a file were mirrored or
+        /// bundled. Recorded evidence, not a claim that mirroring happens.
+        let notice: String?
+        /// Why the verdict is what it is, or what the search could not establish.
+        let note: String?
+
+        var verdictValue: Verdict? { Verdict(rawValue: verdict) }
+        var statedByValue: StatedBy? { StatedBy(rawValue: statedBy) }
+
+        /// True only when every permission axis is granted; nil when any answer is
+        /// missing. A single refusal makes it false: "we know one answer and not the
+        /// others" is still not a permission.
+        var permitted: Bool? {
+            let axes = [canAcquire, canRedistribute, canUse]
+            if axes.contains(false) { return false }
+            if axes.allSatisfy({ $0 == true }) { return true }
+            return nil
+        }
+
+        /// Whether this artefact alone satisfies the admission rule.
+        var isAdmitted: Bool {
+            guard let verdictValue,
+                  verdictValue == .approved || verdictValue == .approvedWithConditions,
+                  permitted == true else { return false }
+            return conditions.allSatisfy(\.met)
+        }
+
+        /// Writes every field, including the nulls. The worker's `to_json()` emits
+        /// `null` for an absent answer rather than omitting the key, and the
+        /// cross-surface test compares the two encodings exactly, so "absent" must
+        /// have one spelling on the wire.
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(use, forKey: .use)
+            try container.encode(canAcquire, forKey: .canAcquire)
+            try container.encode(canRedistribute, forKey: .canRedistribute)
+            try container.encode(canUse, forKey: .canUse)
+            try container.encode(statedBy, forKey: .statedBy)
+            try container.encode(evidenceUrl, forKey: .evidenceUrl)
+            try container.encode(readOn, forKey: .readOn)
+            try container.encode(verdict, forKey: .verdict)
+            try container.encode(conditions, forKey: .conditions)
+            try container.encode(notice, forKey: .notice)
+            try container.encode(note, forKey: .note)
+        }
+
+        /// Rejects every record the mandate would otherwise have to infer. Called
+        /// for each shipped entry at load time, so an edited resource cannot admit
+        /// a model by accident — the same rules the worker applies to its table.
+        func validate(model: String, artefact: String) throws {
+            let subject = "\(model) \(artefact)"
+            guard use == Self.requiredUse else {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records use \(use.debugDescription), not the required "
+                    + "\(Self.requiredUse)")
+            }
+            guard statedByValue != nil else {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) has an unknown statement source \(statedBy.debugDescription)")
+            }
+            guard verdictValue != nil else {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) has an unknown licence verdict \(verdict.debugDescription)")
+            }
+            guard !evidenceUrl.isEmpty else {
+                throw ModelCatalog.LoadError.unsafe("\(subject) has no evidence URL")
+            }
+            try ModelCatalogEntry.requireHttps(evidenceUrl, model: model,
+                                               field: "\(artefact) evidence")
+            guard !readOn.isEmpty else {
+                throw ModelCatalog.LoadError.unsafe("\(subject) has no evidence read date")
+            }
+            try ModelCatalogEntry.requireReadOnDate(readOn, model: model)
+
+            let axes = [canAcquire, canRedistribute, canUse]
+            if statedByValue == .inferred, axes.contains(true) {
+                // The central rule: an inference is never a grant.
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records a permitted axis from inferred evidence")
+            }
+            if statedByValue == .notEstablished,
+               verdictValue != .unknown || !axes.allSatisfy({ $0 == nil }) {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) marks the statement not established but records a decision")
+            }
+            if axes.contains(false), verdictValue != .excluded {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records a refused permission without the excluded verdict")
+            }
+            if verdictValue == .excluded, axes.contains(true) {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) is excluded but records a granted permission")
+            }
+            let approving = verdictValue == .approved || verdictValue == .approvedWithConditions
+            if permitted == true, !approving {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records every permission without an approving verdict")
+            }
+            if approving, permitted != true {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) approves the artefact without every permission granted")
+            }
+            if verdictValue == .approved, !conditions.isEmpty {
+                throw ModelCatalog.LoadError.unsafe("\(subject) is approved but carries conditions")
+            }
+            if verdictValue == .approvedWithConditions {
+                guard !conditions.isEmpty else {
+                    throw ModelCatalog.LoadError.unsafe(
+                        "\(subject) is approved with conditions but lists none")
+                }
+                guard conditions.allSatisfy(\.met) else {
+                    throw ModelCatalog.LoadError.unsafe(
+                        "\(subject) is approved with conditions but a condition is unmet")
+                }
+            }
+            if verdictValue == .unknown,
+               (note ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(subject) records an unknown verdict without saying what is missing")
+            }
+        }
+    }
+
+    /// The three artefact records one catalogue entry carries.
+    struct ModelPermittedUse: Codable, Equatable {
+        let code: ModelArtefactTerms
+        let weights: ModelArtefactTerms
+        let trainingData: ModelArtefactTerms
+        /// The admission flag the worker writes beside the record. Decoded only so
+        /// `validate()` can refuse a file whose flag disagrees with its own facts.
+        let claimedAdmitted: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case code
+            case weights
+            case trainingData
+            case claimedAdmitted = "admitted"
+        }
+
+        /// Artefacts whose verdict is `excluded`, in record order.
+        var excludedArtefacts: [String] {
+            var names: [String] = []
+            let records = [("code", code), ("weights", weights), ("training data", trainingData)]
+            for (name, terms) in records where terms.verdictValue == .excluded {
+                names.append(name)
+            }
+            return names
+        }
+
+        /// The load gate, as the worker applies it: the weight file's record, and no
+        /// excluded code or dataset.
+        var isAdmitted: Bool {
+            weights.isAdmitted && excludedArtefacts.isEmpty
+        }
+
+        /// Emits the flag under the wire name the worker writes, so a re-encoded
+        /// record compares equal to `PermittedUse.to_json()` in both directions.
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(code, forKey: .code)
+            try container.encode(weights, forKey: .weights)
+            try container.encode(trainingData, forKey: .trainingData)
+            try container.encode(claimedAdmitted, forKey: .claimedAdmitted)
+        }
+
+        func validate(model: String) throws {
+            try code.validate(model: model, artefact: "code")
+            try weights.validate(model: model, artefact: "weights")
+            try trainingData.validate(model: model, artefact: "training data")
+            if let claimedAdmitted, claimedAdmitted != isAdmitted {
+                throw ModelCatalog.LoadError.unsafe(
+                    "\(model) records admitted: \(claimedAdmitted) while its record "
+                    + "\(isAdmitted ? "admits" : "refuses") the model")
+            }
+        }
+    }
+
     let id: String
     let name: String
     let capabilities: [String]
@@ -106,6 +335,11 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
     let codeLicense: String
     let weightsLicense: String
     let licenseEvidenceUrl: String
+    /// The recorded licence position for this model's code, weights and training
+    /// data. Absent for a catalog written before this field existed, which must
+    /// keep decoding unchanged. Declared `var` only so a test can freeze the
+    /// remaining fields against an older file; every accessor stays `let`.
+    var permittedUse: ModelPermittedUse?
     let platforms: [String]
     let requiredProvider: String
     let minimumContractVersion: String
@@ -113,6 +347,88 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
     let deterministic: Bool
     let notes: String
     let unverifiableReason: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case capabilities
+        case version
+        case format
+        case files
+        case sizeBytes
+        case sha256
+        case sourceUrl
+        case codeLicense
+        case weightsLicense
+        case licenseEvidenceUrl
+        case permittedUse = "permitted_use"
+        case platforms
+        case requiredProvider
+        case minimumContractVersion
+        case preprocess
+        case deterministic
+        case notes
+        case unverifiableReason
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        capabilities = try container.decode([String].self, forKey: .capabilities)
+        version = try container.decode(String.self, forKey: .version)
+        format = try container.decode(String.self, forKey: .format)
+        files = try container.decode([ModelCatalogFile].self, forKey: .files)
+        sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes)
+        sha256 = try container.decodeIfPresent(String.self, forKey: .sha256)
+        sourceUrl = try container.decode(String.self, forKey: .sourceUrl)
+        codeLicense = try container.decode(String.self, forKey: .codeLicense)
+        weightsLicense = try container.decode(String.self, forKey: .weightsLicense)
+        licenseEvidenceUrl = try container.decode(String.self, forKey: .licenseEvidenceUrl)
+        // Optional, so a catalog written before the four-status record existed
+        // still loads under the strict decoder; the store then shows the entry
+        // without a recorded position rather than inventing one.
+        permittedUse = try container.decodeIfPresent(ModelPermittedUse.self,
+                                                     forKey: .permittedUse)
+        platforms = try container.decode([String].self, forKey: .platforms)
+        requiredProvider = try container.decode(String.self, forKey: .requiredProvider)
+        minimumContractVersion = try container.decode(String.self,
+                                                      forKey: .minimumContractVersion)
+        preprocess = try container.decode(ModelPreprocess.self, forKey: .preprocess)
+        deterministic = try container.decode(Bool.self, forKey: .deterministic)
+        notes = try container.decode(String.self, forKey: .notes)
+        unverifiableReason = try container.decodeIfPresent(String.self,
+                                                           forKey: .unverifiableReason)
+    }
+
+    init(id: String, name: String, capabilities: [String], version: String, format: String,
+         files: [ModelCatalogFile], sizeBytes: Int?, sha256: String?, sourceUrl: String,
+         codeLicense: String, weightsLicense: String, licenseEvidenceUrl: String,
+         permittedUse: ModelPermittedUse? = nil, platforms: [String],
+         requiredProvider: String, minimumContractVersion: String,
+         preprocess: ModelPreprocess, deterministic: Bool, notes: String,
+         unverifiableReason: String?) {
+        self.id = id
+        self.name = name
+        self.capabilities = capabilities
+        self.version = version
+        self.format = format
+        self.files = files
+        self.sizeBytes = sizeBytes
+        self.sha256 = sha256
+        self.sourceUrl = sourceUrl
+        self.codeLicense = codeLicense
+        self.weightsLicense = weightsLicense
+        self.licenseEvidenceUrl = licenseEvidenceUrl
+        self.permittedUse = permittedUse
+        self.platforms = platforms
+        self.requiredProvider = requiredProvider
+        self.minimumContractVersion = minimumContractVersion
+        self.preprocess = preprocess
+        self.deterministic = deterministic
+        self.notes = notes
+        self.unverifiableReason = unverifiableReason
+    }
 
     var isVerifiable: Bool {
         guard unverifiableReason == nil,
@@ -158,6 +474,9 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
                 throw ModelCatalog.LoadError.unsafe(
                     "\(id)/\(file.path) does not come from the recorded HTTPS source")
             }
+        }
+        if let permittedUse {
+            try permittedUse.validate(model: id)
         }
         if unverifiableReason == nil,
            let sizeBytes, sizeBytes > 0,
@@ -233,6 +552,52 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
             else {
                 throw ModelCatalog.LoadError.unsafe("\(model) has an unsafe file path")
             }
+        }
+    }
+
+    /// An evidence URL must be HTTPS with no credentials or fragment, under the
+    /// same port rules as any other recorded source. Absent is allowed: a
+    /// missing claim is auditable, a false one is not.
+    static func requireHttps(_ url: String?, model: String, field: String) throws {
+        guard let url else { return }
+        guard isAllowedSource(url, allowLocalHTTP: false), let parsed = URL(string: url),
+              parsed.host != nil else {
+            throw ModelCatalog.LoadError.unsafe("\(model) has a non-HTTPS \(field)")
+        }
+    }
+
+    /// The date a licence was read, as an ISO-8601 calendar date. A free-text
+    /// timestamp cannot be compared against a later re-read, so the shape is
+    /// enforced rather than trusted.
+    static func requireReadOnDate(_ value: String?, model: String) throws {
+        guard let value else { return }
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        let isDate = parts.count == 3
+            && parts[0].count == 4 && parts[1].count == 2 && parts[2].count == 2
+            && parts.allSatisfy { $0.allSatisfy(\.isNumber) }
+        guard isDate, let year = Int(parts[0]), let month = Int(parts[1]),
+              let day = Int(parts[2]), (1...12).contains(month), (1...31).contains(day)
+        else {
+            throw ModelCatalog.LoadError.unsafe(
+                "\(model) records a licence read date that is not an "
+                + "ISO-8601 calendar date")
+        }
+        // A day the month does not have is a typo, not a date: 2026-11-31 must
+        // be refused before anyone compares it with a later re-read.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        guard let date = calendar.date(from: components) else {
+            throw ModelCatalog.LoadError.unsafe(
+                "\(model) records an impossible licence read date \(value)")
+        }
+        let round = calendar.dateComponents([.year, .month, .day], from: date)
+        guard round.year == year, round.month == month, round.day == day else {
+            throw ModelCatalog.LoadError.unsafe(
+                "\(model) records an impossible licence read date \(value)")
         }
     }
 
