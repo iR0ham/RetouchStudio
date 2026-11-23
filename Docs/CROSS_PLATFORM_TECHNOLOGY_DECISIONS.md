@@ -178,7 +178,7 @@ All performance and parity claims in this document are **HYPOTHESIS — NOT VERI
 - The worker is a separate Python process over `AF_UNIX` JSON-RPC (`Sources/RetouchStudio/Core/AIWorker.swift:15`, `Sources/RetouchStudio/Core/WorkerClient.swift:17`).
 - The runtime installer exists but is disabled because `AIRuntime.package` is `nil` (`Sources/RetouchStudio/Core/AIRuntime.swift:40`).
 - Model weights are downloaded separately with consent and hash verification; they are not in the repository (`Sources/RetouchStudio/Models/ModelManager.swift`).
-- The audit records that the v1.0.0 tag has no installer (`Docs/PHASE0_CROSSPLATFORM_AUDIT.md:219-227`). It also records there that "Python source is not in the repository"; that half stopped being true when W5 landed the worker on 2026-11-18 — `git ls-files worker` lists it, and `Tools/bundle-worker.sh:16` defaults to `$REPO_ROOT/worker`. See `AI_11_ARCHITECTURE.md` §17. (Corrected 2026-11-29.)
+- The audit records that the v1.0.0 tag has no installer (`Docs/PHASE0_CROSSPLATFORM_AUDIT.md:219-227`). It also records there that "Python source is not in the repository"; that half stopped being true when W5 landed the worker on 2026-11-18 — `git ls-files worker` lists it, and `Tools/bundle-worker.sh:16` defaults to `$REPO_ROOT/worker`. See `AI_11_ARCHITECTURE.md` §17. (Corrected 2026-11-23.)
 
 ### 7.2 Options
 

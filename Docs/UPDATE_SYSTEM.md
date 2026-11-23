@@ -138,7 +138,7 @@ Only a throwaway key is used inside the tests.
    `UpdateController` or calls `recover(journalURL:)` (`App.swift:17-29` is the
    whole startup sweep), so recovery runs when the
    owner opens the About window (Retouch Studio → About) in that process, and
-   not at startup. Re-verified 2026-11-29 against this tree: `UpdateController()`
+   not at startup. Re-verified 2026-11-23 against this tree: `UpdateController()`
    still occurs exactly once in `Sources/`, as that `@StateObject`
    (`InfoViews.swift:95`), reachable only through `InfoWindows.shared.showAbout()`
    from the app-menu item (`App.swift:210`). What an earlier revision of this

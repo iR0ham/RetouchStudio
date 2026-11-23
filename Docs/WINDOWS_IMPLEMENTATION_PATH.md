@@ -8,7 +8,7 @@ and history — builds and loads its window there, with 55 host checks green at
 this writing (see [CI_GATES.md](CI_GATES.md#verified-runs)). There is no Windows
 updater or code signing, and no macOS pixel parity, so every product claim
 beyond "a light editor opens on `windows-2025`" is **NOT VERIFIED**. macOS
-remains the only shipping product. *(Corrected 2026-11-29: this paragraph also
+remains the only shipping product. *(Corrected 2026-11-23: this paragraph also
 denied a Windows installer and a published artifact; both exist — see the
 2026-11-15 correction below, which supersedes these two clauses and the
 installer clause in the open list at the end of this document.)*
