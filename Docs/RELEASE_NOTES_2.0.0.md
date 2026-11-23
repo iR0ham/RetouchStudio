@@ -93,8 +93,8 @@ The four models the catalogue can offer, and why each is there:
 |---|---|---|---|
 | Swin2SR x4 (real-world) | 4× upscale | 48.5 MB | Apache-2.0 for the code and for the weights, published by the lab that wrote the model. |
 | MI-GAN (512, Places2) | Heal small area | 28.1 MB | MIT for the code and MIT for the weights, under a separate weight licence the authors ship themselves. |
-| SAM 2.1 tiny | Selection from a click or a box | 156 MB | Apache-2.0, stated by the maker of the model for the checkpoints as well as the code. Downloading is refused today because the runtime package that would load it is not part of this helper; if the weights are already on disk they are verified and used. |
-| FLUX.2 klein 4B (q4) | Generative reimagining | 4.6 GB | Apache-2.0 for the weights. This one is listed but **not a 2.0.0 feature**: it was measured at 16.7 GB of memory at peak on the 16 GB reference Mac, so it is out of reach on that machine, and its download record is still being re-established against the author-published source. |
+| SAM 2.1 tiny | Selection from a click or a box | 156 MB | Apache-2.0, stated by the maker of the model for the checkpoints as well as the code. Downloading is refused today because the runtime package that would load it is not part of this helper. Weights that are already on disk still pass the same size-and-checksum verification; using them needs that runtime package, which this build does not carry. |
+| FLUX.2 klein 4B (q4) | Generative reimagining | 4.6 GB | **Not offered in 2.0.0.** The Apache-2.0 terms the upstream model's own authors state are not what is in doubt. What is in doubt is that the copy this app would download is a community conversion with no licence file of its own and no established link to that original, so no permission for it is proven; separately, its recorded download set is incomplete. See Known limitations. |
 
 Reimagine redraws the whole frame from your words. The subject stays recognisable, but every pixel
 is new — it is a generative edit, not a retouch, and its result is not deterministic.
@@ -130,8 +130,8 @@ like any other change.
 |---|---|---|---|
 | Swin2SR ×۴ (واقع‌گرایانه) | بزرگ‌نمایی ۴× | <bdi dir="ltr">48.5 MB</bdi> | Apache-2.0 برای کد و برای وزن‌ها، منتشرشده توسط همان آزمایشگاهی که مدل را نوشته است. |
 | MI-GAN (۵۱۲، Places2) | ترمیم ناحیهٔ کوچک | <bdi dir="ltr">28.1 MB</bdi> | MIT برای کد و MIT برای وزن‌ها، زیر یک مجوز جداگانهٔ وزن که خودِ نویسندگان منتشر کرده‌اند. |
-| SAM 2.1 tiny | انتخاب با یک کلیک یا کادر | <bdi dir="ltr">156 MB</bdi> | Apache-2.0، اعلام‌شده توسط سازندهٔ مدل برای وزن‌ها به‌اندازهٔ کد. دانلود آن در حال حاضر رد می‌شود، چون بستهٔ زمان‌اجرای لازم برای بارگذاری آن بخشی از این کمک‌یار نیست؛ اگر وزن‌ها از پیش روی دیسک باشند، بررسی و استفاده می‌شوند. |
-| FLUX.2 klein 4B (قفل‌شده q4) | بازآفرینی مولد | <bdi dir="ltr">4.6 GB</bdi> | Apache-2.0 برای وزن‌ها. این مورد در فهرست است ولی **ویژگی نسخهٔ ۲٫۰٫۰ نیست**: روی مک مرجع ۱۶ گیگابایتی، مصرف حافظهٔ آن تا ۱۶٫۷ گیگابایت اندازه‌گیری شده، پس روی آن ماشین امکان‌پذیر نیست و سابقهٔ دانلودش هنوز باید از منبع منتشرشده توسط صاحب اثر بازثبت شود. |
+| SAM 2.1 tiny | انتخاب با یک کلیک یا کادر | <bdi dir="ltr">156 MB</bdi> | Apache-2.0، اعلام‌شده توسط سازندهٔ مدل برای وزن‌ها به‌اندازهٔ کد. دانلود آن در حال حاضر رد می‌شود، چون بستهٔ زمان‌اجرای لازم برای بارگذاری آن بخشی از این کمک‌یار نیست. وزن‌هایی که از پیش روی دیسک باشند همان بررسی اندازه و چک‌سام را می‌گذرانند؛ ولی استفاده از آن‌ها به همان بستهٔ زمان‌اجرا نیاز دارد که در این نسخه وجود ندارد. |
+| FLUX.2 klein 4B (قفل‌شده q4) | بازآفرینی مولد | <bdi dir="ltr">4.6 GB</bdi> | **در نسخهٔ ۲٫۰٫۰ ارائه نمی‌شود.** آنچه دربارهٔ مجوز جای شک است، اجازهٔ خودِ مدل بالادست نیست؛ این است که فایلی که این برنامه دانلود می‌کند یک تبدیل اجتماعی است که هیچ فایل مجوز ندارد و پیوند ثابت‌شده‌ای با آن نسخهٔ اصلی ندارد، پس اجازهٔ استفاده از آن اثبات نشده است — و جدا از آن، مجموعهٔ فایل ثبت‌شده برای دانلودش کامل نیست. بخش محدودیت‌های شناخته‌شده را ببینید. |
 
 بازآفرینی کل کادر را از روی توصیف شما از نو می‌کشد. سوژه شناخته‌شدنی می‌ماند، اما همهٔ پیکسل‌ها تازه‌اند
 — این یک ویرایش مولد است، نه رتوش، و نتیجهٔ آن تکرارپذیر نیست.
@@ -220,21 +220,25 @@ shasum -a 256 -c RetouchStudio-2.0.0-arm64.dmg.sha256
 ### English
 
 Analysis, editing, masking, upscaling and export run entirely on your Mac. There is no telemetry, no
-analytics, no crash-reporting service and no background request: the app has no server address built
-into it, and the update check reads its feed from the app's own configuration, where this release
-declares none. The only network use anywhere in the product is an approved download — a helper
-runtime, when one is offered, or model weights — and each one happens only after you have seen its
-size and licence. GPS and camera identity are removed from exported copies. Your photos are never
-uploaded, in either language, in either direction.
+analytics, no crash-reporting service and no background request, and the app contacts no server of
+ours: nothing is compiled into the binary that reaches us. The only network addresses the bundle
+carries are the download URLs of the model files listed in Settings — each one an approved, explicit
+download — and no request is made to any of them until you press that download button. The update
+check is a further case of the same rule: it reads its feed address from the app's own configuration,
+where this release declares none. GPS and camera identity are removed from exported copies. Your
+photos are never uploaded — not from the macOS build, not from the Windows build, not from either
+architecture.
 
 ### فارسی
 
 تحلیل، ویرایش، ماسک‌گذاری، بزرگ‌نمایی و خروجی تماماً روی مک شما انجام می‌شود. هیچ تلمتری، هیچ
-ابزار تحلیلی، هیچ سرویس گزارش خطا و هیچ درخواست پس‌زمینه‌ای وجود ندارد: هیچ آدرس سروری درون فایل
-اجرایی برنامه ساخته نشده و بررسی به‌روزرسانی هم منبع خود را از پیکربندی خودِ برنامه می‌خواند که در این
-نسخه خالی است. تنها استفاده از اینترنت در کل محصول، یک دانلودِ تأییدشده است — زمان اجرای کمک‌یار، اگر
-پیشنهاد شود، یا وزن مدل‌ها — و هر کدام فقط پس از آنکه حجم و مجوزش را دیدید انجام می‌شود. موقعیت GPS و
-مشخصات دوربین از فایل‌های خروجی حذف می‌شوند. عکس‌های شما هرگز آپلود نمی‌شوند.
+ابزار تحلیلی، هیچ سرویس گزارش خطا و هیچ درخواست پس‌زمینه‌ای وجود ندارد و برنامه به هیچ سرور متعلق به
+ما وصل نمی‌شود: هیچ نشانی که به ما برسد در فایل اجرایی ساخته نشده است. تنها آدرس‌های شبکه‌ای که بستهٔ
+برنامه همراه دارد، نشانی دانلود همان وزن مدل‌هایی است که در تنظیمات فهرست شده‌اند — هر کدام یک دانلود
+صریحِ تأییدشده — و تا دکمهٔ دانلود را نزده باشید، هیچ درخواستی به هیچ‌یک از آن‌ها فرستاده نمی‌شود.
+بررسی به‌روزرسانی هم نمونهٔ دیگری از همین قانون است: منبع خود را از پیکربندی خودِ برنامه می‌خواند که در
+این نسخه خالی است. موقعیت GPS و مشخصات دوربین از فایل‌های خروجی حذف می‌شوند. عکس‌های شما هرگز آپلود
+نمی‌شوند — نه از نسخهٔ macOS، نه از نسخهٔ Windows، نه از هیچ‌کدام از دو معماری.
 
 ---
 
@@ -273,10 +277,15 @@ uploaded, in either language, in either direction.
   bundles it.
 - AI needs Apple silicon. Intel Macs and every Windows machine get no AI, and the app refuses those
   edits with a stated reason instead of silently doing something else.
-- Generative reimagining is not a working feature on the 16 GB reference Mac; its memory use was
-  measured above what that machine has.
+- Generative reimagining is not offered in 2.0.0, for two reasons that are independent of each
+  other. The pinned copy of its model is a community conversion that carries no licence file and has
+  no established link to the original author-published release, so no permission for it is proven —
+  and the download set recorded for it leaves out files the loader needs, so it could not load even
+  with the helper present. Separately, it does not fit the memory of the 16 GB reference Mac: its
+  peak use was measured at 16.7 GB there.
 - One catalogued model, SAM 2.1 tiny, is listed but not downloadable today because the runtime
-  package that loads it is missing; weights already on disk are verified and used.
+  package that loads it is missing. Weights already on disk still pass the same size-and-checksum
+  verification; using them needs that runtime package, which this build does not carry.
 - The Windows interface is English only today; the Persian interface belongs to the Mac app.
 - The consent sheet names the licences; it does not link to the licence evidence behind them.
 - On Windows the installer is unsigned, so Windows warns about it before the first run, and the
@@ -300,10 +309,14 @@ uploaded, in either language, in either direction.
   نیستند.
 - هوش مصنوعی به Apple silicon نیاز دارد. روی Intel و روی همهٔ ماشین‌های ویندوزی هوش مصنوعی نداریم و
   برنامه این ویرایش‌ها را با ذکر دلیل رد می‌کند، نه اینکه بی‌صدا کار دیگری بکند.
-- بازآفرینی مولد روی مک مرجع ۱۶ گیگابایتی کار نمی‌کند؛ مصرف حافظهٔ آن بیشتر از ظرفیت این ماشین
-  اندازه‌گیری شده است.
+- بازآفرینی مولد در نسخهٔ ۲٫۰٫۰ ارائه نمی‌شود، به دو دلیلی که ربطی به هم ندارند: نسخۀ ثبت‌شدهٔ مدل آن
+  یک تبدیل اجتماعی است که هیچ فایل مجوز ندارد و پیوند ثابت‌شده‌ای با انتشار اصلیِ منتشرشده توسط صاحب اثر
+  ندارد، پس اجازهٔ استفاده از آن اثبات نشده است — و جدا از آن، مجموعهٔ فایل دانلودیِ ثبت‌شده برای آن چند
+  فایل لازم برای بارگذاری را ندارد، پس حتی با حضور کمک‌یار هم بالا نمی‌آید. علاوه بر این دو، روی مک مرجع
+  ۱۶ گیگابایتی هم جا نمی‌شود: مصرف بیشینهٔ حافظهٔ آن روی همان ماشین ۱۶٫۷ گیگابایت اندازه‌گیری شده است.
 - یک مدل در فهرست — SAM 2.1 tiny — امروز قابل دانلود نیست، چون بستهٔ زمان‌اجرای بارگذاری آن موجود
-  نیست؛ اگر وزن‌هایش از پیش روی دیسک باشند، بررسی و استفاده می‌شوند.
+  نیست. وزن‌هایی که از پیش روی دیسک باشند همان بررسی اندازه و چک‌سام را می‌گذرانند؛ ولی استفاده از
+  آن‌ها به همان بستهٔ زمان‌اجرا نیاز دارد که در این نسخه وجود ندارد.
 - رابط ویندوز امروز انگلیسی است؛ رابط فارسی مخصوص اپ مک است.
 - برگهٔ رضایت نام مجوزها را می‌نویسد، ولی به مدرک پشت آن مجوز پیوند نمی‌دهد.
 - روی ویندوز فایل نصب امضا ندارد، پس ویندوز پیش از نخستین اجرا دربارهٔ آن هشدار می‌دهد، و بستهٔ ویندوز
