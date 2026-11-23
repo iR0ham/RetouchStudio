@@ -876,6 +876,62 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(caught.exception.data["reason"], "unlisted-file")
         self.assertEqual(caught.exception.data["files"], ["other.bin"])
 
+    def test_a_linked_directory_is_named_rather_than_walked(self):
+        # A linked *directory* is the one shape where the previous net could defer
+        # to a library: `Path.rglob` decides for itself whether a link is part of
+        # the tree it lists. That decision cannot be the policy, because the whole
+        # point of the net is to refuse bytes the record cannot name — and a link
+        # into a directory holding `model.safetensors` is precisely how a loader
+        # that resolves checkpoints by convention ends up on unpinned weights.
+        # The link is therefore the thing reported, never entered.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        outside = self.root.parent / "outside-the-lease"
+        outside.mkdir(exist_ok=True)
+        (outside / "model.safetensors").write_bytes(b"OTHER")
+        os.symlink(outside, folder / "vae")
+        catalog = Catalog(self.root, allow_uncleared=False)
+        with _with(VERIFIED):
+            with self.assertRaises(WorkerError) as caught:
+                catalog.require(VERIFIED.id)
+        data = caught.exception.data
+        self.assertEqual(caught.exception.code, CHECKSUM_MISMATCH)
+        self.assertEqual(data["reason"], "unlisted-file")
+        self.assertEqual(data["files"], ["vae/"], data)
+        # The refusal names a location inside the install and nothing else: these
+        # strings travel to the host, where a UI or a log may print them, so an
+        # absolute target would disclose the owner's filesystem in an error whose
+        # only job is to say "unrecognised bytes are in this install".
+        for name in data["files"]:
+            self.assertFalse(name.startswith("/"), name)
+            self.assertNotIn(str(outside), name)
+            self.assertNotIn("..", Path(name).parts)
+
+    def test_the_digest_pass_reads_bytes_only_while_the_lease_is_held(self):
+        # A checksum is a statement about a tree, and the lease is what keeps the
+        # tree still long enough for the statement to mean something. The check
+        # exists as a comment in `_resolve_under_lease`; comments do not fail, so
+        # pin it at the only line where it could actually be violated — the read.
+        folder = self.root / VERIFIED.id
+        folder.mkdir()
+        (folder / "weights.bin").write_bytes(WEIGHTS)
+        catalog = Catalog(self.root, allow_uncleared=False)
+        observed = []
+        real_hash = catalog_module._sha256
+
+        def watch(target):
+            observed.append((Path(target).name, dict(catalog._leases)))
+            return real_hash(target)
+
+        with _with(VERIFIED):
+            with patch.object(catalog_module, "_sha256", watch):
+                catalog.require_verified(VERIFIED.id)
+        self.assertEqual([name for name, _ in observed], ["weights.bin"], observed)
+        for name, leases in observed:
+            self.assertTrue(leases, f"{name} was hashed with no lease held")
+            self.assertEqual({key[0] for key in leases}, {VERIFIED.id}, leases)
+
     def test_store_housekeeping_beside_the_weights_is_not_called_payload(self):
         # The installer writes `manifest.json` into the version directory and macOS
         # drops `.DS_Store` in anything a Finder user opens. Refusing those would

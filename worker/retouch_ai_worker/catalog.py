@@ -403,6 +403,20 @@ def _pins_of(entry: ModelEntry) -> tuple:
                   for spec in entry.files))
 
 
+def _relative_name(path: Path, model_root: Path) -> str:
+    """`path` spelled from the install root, never as an absolute location.
+
+    Every name the integrity checks report crosses a protocol boundary and can
+    reach a log or a UI, so it must stay inside the install's own vocabulary: the
+    payload net exists to say "these bytes are not in the record", not to disclose
+    the owner's filesystem layout or the target of a link that escaped it.
+    """
+    try:
+        return path.relative_to(model_root).as_posix()
+    except ValueError:
+        return path.name
+
+
 def unlisted_payload(entry: ModelEntry, model_root: Path) -> list[str]:
     """Names, relative to the install, of files the catalog does not list.
 
@@ -414,24 +428,36 @@ def unlisted_payload(entry: ModelEntry, model_root: Path) -> list[str]:
     catalog still reads correct — the exact substitution the pins exist to refuse,
     arriving as bytes that reach a runtime without ever being hashed.
 
-    Symlinks are reported through the same net: `Path.is_file` follows a link, so
-    a linked file appears here by name and is refused even when its target's bytes
-    would hash clean.
+    Symlinks are reported through the same net, and by the same rule: a link is
+    named by where it sits in the install, never by where it points. `Path.is_file`
+    follows a link, so a linked file appears here by name and is refused even when
+    its target's bytes would hash clean. A linked *directory* is named as the link
+    itself rather than walked, because following it would import a tree the pin
+    cannot name — and because `transformers` resolves checkpoints by convention,
+    a linked `vae/` is exactly how a swapped weight arrives unnoticed.
     """
     listed = {spec.path for spec in entry.files}
     found = []
-    for path in sorted(model_root.rglob("*")):
-        if not path.is_file():
-            continue
-        try:
-            name = path.relative_to(model_root).as_posix()
-        except ValueError:      # a link that escaped the install: name it as found
-            found.append(str(path))
-            continue
-        if name in listed or path.name in HOUSEKEEPING_NAMES:
-            continue
-        found.append(name)
-    return found
+    # `os.walk` rather than `Path.rglob`: rglob's choice about descending into a
+    # linked directory belongs to the interpreter, and a net whose whole purpose
+    # is to refuse bytes the record cannot name must not depend on it. `os.walk`
+    # does not follow links, and every name it yields is already relative to the
+    # install root — so no absolute path from outside the lease can reach a
+    # protocol error, and a broken link (which `is_file` hides) is still caught.
+    for dirpath, dirnames, filenames in os.walk(model_root):
+        folder = Path(dirpath)
+        for name in sorted(dirnames):
+            if name in HOUSEKEEPING_NAMES:
+                continue
+            if (folder / name).is_symlink():
+                found.append(_relative_name(folder / name, model_root) + "/")
+        for name in sorted(filenames):
+            path = folder / name
+            relative = _relative_name(path, model_root)
+            if relative in listed or name in HOUSEKEEPING_NAMES:
+                continue
+            found.append(relative)
+    return sorted(found)
 
 
 def normalize_digest(value: object) -> str | None:
