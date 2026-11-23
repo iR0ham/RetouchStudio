@@ -1801,6 +1801,9 @@ without inflating it:
   bundle; the CLT toolchain has no `SwiftUIMacros`), and every live inference claim.
 - **Blocked on a decision recorded as unresolved:** S-FLUX. It is a §4 provenance item inside the model-ecosystem
   authority, and I am not treating a licence grant held by someone upstream as a grant held by the file we ship.
+  **Superseded later on 2026-11-23, by S.8–S.10: the decision was taken (weights verdict `unknown`, so the gate
+  refuses the download), the routing consequence of it was fixed and proved in CI, and all of it is on `main` as
+  `00aa37f`. Nothing in this bullet is owner-blocked any more.**
 
 G-QA and G-PUB remain **BLOCKED** and **NOT AUTHORIZED** exactly as §9 and §11 define them: the owner runs the
 acceptance session, and publication, tags and release assets stay his. `Docs/RELEASE_2.0.0_ACCEPTANCE.md` exists
@@ -2009,7 +2012,11 @@ worker; and Python's aggregate check honours the `allow_uncleared` escape hatch 
   which is the attribution §12.5 exists to retract. `Tests/ModelStoreTests.swift` pins both record
   dates, and it caught the first one: the suite failed `flux2-klein-4b-q4/weights was read on its
   pinned date` before the pin moved to the new truth.
-- `ModelStoreTests`: `MODEL STORE TESTS: PASS`, 233 checks, 0 failures. Its shipped-table probe
+- `ModelStoreTests`: `MODEL STORE TESTS: PASS`, rc 0, 449 `✓` lines and the suite's own
+  `✓ all model-store checks passed`. **Correction to the first draft of this bullet, which said
+  "233 checks, 0 failures": the suite prints no total, so that number was never measured and is
+  withdrawn** — the log (`/private/tmp/rs-mst-rebase.log`, and CI's `found: MODEL STORE TESTS:
+  PASS`) supports only the figures above. Its shipped-table probe
   no longer assumes `flux2-klein-4b-q4` by name — that entry now derives `admitted = false`, which
   silently converted nine validator-rule checks into assertions about the not-established rule —
   and the probe record is selected from the shipped JSON and pinned by a check that fails if no
@@ -2044,3 +2051,129 @@ leg, Windows not at all — `dotnet` is absent here); the gate's error payload o
 `package`, so the host's `missingPackage` branch cannot fire from a gated job; the consent sheet
 still shows no licence-evidence fields; and no live acceptance of any of it exists, because
 launching the app is not authorised. S.4's rule stands: no readiness percentage is given.
+
+### S.10 — later the same day, 2026-11-23: CI supplied the gate verdict, an independent review
+found two real asymmetries, and the `Windows App` context became unreliable
+
+**CI proved the behaviour S.9 could only claim.** `macOS Integration` on run `45138992397`
+(attempt 1, head `eee3e4b`, log window 08:29–08:56Z) executed the `RuntimeV2Tests` P block that
+this machine cannot run, and its runner log prints, verbatim:
+
+```
+[P] a labelled job runs where a named capability is refused
+  ✓ P: naming a capability whose only model is licence-refused stops the job — flux2-klein-4b-q4 has no established permission for public non-commercial use and distribution (weights verdict: unknown), so this build will not download or run it
+  ✓ P: a licence refusal sends the user nowhere the download can settle it — -32010 E_LICENCE_REFUSED opensManager=false
+  ✓ P: the gated spelling leaves no job folder
+  ✓ P: a capability this job kind does not carry is refused as unsupported — upscale.4x is not a patch_edit capability
+RUNTIME V2 TESTS: PASS
+```
+
+and the job's own verdict grep prints `found: RUNTIME V2 TESTS: PASS`, so the suite is credited as
+having run rather than assumed. Two things follow that S.9 asserted but could not evidence. The
+worker's licence sentence reaches the host through the gate — it is the text in the second line —
+and the refusal class is attributable to the *record*, not to a blanket "generative is gated"
+answer, because the same host, same job kind and same build returns `-32020` for `upscale.4x`.
+The P block's evidence class therefore moves from CI-only-in-the-future to **VERIFIED (CI)**; the
+live-app surface above that boundary is still NOT VERIFIED.
+
+**Mandate §7 independence was obtained, and it found two asymmetries I had not stated.** A reviewer
+with no role in the implementation read `6c6559c`/`1c77072` and the current
+`capabilities.py`, `catalog.py`, `server.py` read-only and returned **ACCEPT WITH COMMENTS**. Its
+confirmations: the raise sits before any job registration or folder creation
+(`server.py:334-345` before `record(...)` at `:346`; dispatch calls `_require_capability` at `:421`
+ahead of `manager.submit` at `:422-425`), and no path inside the gate defaults to "allow". Its two
+findings are real and stay open as tickets rather than being fixed inside this PR, because each
+needs a decision this slice does not own:
+1. **A malformed licence record still looks like a missing download.** `permission_refusal`
+   (`capabilities.py:218-221`) returns nothing when `entry.validate()` fails, so an invalid record
+   falls through to `record(...)` → `-32020 state:"blocked"` with no `package`, and
+   `WorkerClient.opensModelManager` (`WorkerClient.swift:62`) *does* open Manage Models for that
+   shape. The classified-as-catalogue-defect route is deliberate; the routing consequence was not
+   intended and is the same user-visible defect S-FLUX was raised about, on a narrower path.
+2. **The eval switch and the manifest disagree.** With `RETOUCH_AI_EVAL_MODELS=1` the gate returns
+   no refusal while `plan.manifest` ignores the switch (`plan.py:44`) and still refuses `-32010`, so
+   a job can be admitted whose model then cannot be downloaded. This is **not reachable from the
+   shipping app**: both launch paths strip the key — `AIWorker.swift:599` and
+   `AIRuntimeValidation.swift:211`, and this was re-checked on `origin/main`, not only on this
+   branch — so the exposure is test-only. The ledger's own history already says this correctly:
+   §E.3 recorded the missing strip as a live defect, and §L.4 and §R.2 recorded `AIWorker.swift:599`
+   as the change that removed it, so this finding narrows the leak to the worker's own tests rather
+   than contradicting an earlier row.
+
+Three smaller items are recorded without action: the `{"state": "blocked"}` field in the gate's
+payload is inert for the macOS host (both of its consumers key on `-32020`,
+`WorkerClient.swift:74`/`:87`); the kind-only refusal path carries `{model, license}` but no
+`capabilityId`, so the host falls back to the generic `aiLicenseBlocked` string
+(`EditorModel.swift:1765`); and `ModelStore.install` gates on integrity alone
+(`ModelStore.swift:315-318`, `738-753`) — FLUX stays un-downloadable because of its consent/hash
+path, not because of an explicit licence check on the download side. That last one is a fail-open
+of a kind §4 cares about, and it is a ticket, not a claim.
+
+**One figure in S.9 was invented and is withdrawn.** S.9 wrote "`ModelStoreTests`: PASS, 233
+checks, 0 failures". The suite prints no total, so 233 was never measured. The local log
+(`/private/tmp/rs-mst-rebase.log`, re-run against the committed tree) contains **449 `✓` lines, no
+`✗`, `✓ all model-store checks passed`, `MODEL STORE TESTS: PASS`, rc 0**, and CI's own grep prints
+`found: MODEL STORE TESTS: PASS`. Only those figures are supported; the correction is in the S.9
+bullet itself rather than by deleting it.
+
+**`Windows App` went nondeterministic on this head, and this PR was not merged over it while red.**
+On head `eee3e4b` the required context failed three attempts with *no change of input*: attempts 1
+and 2
+(08:29–08:43Z, 08:58–09:11Z) died in UI mode `exportclose` with `UI CHECK FAILED: Unrecognized
+error.` — a message that exists nowhere in this repository and is printed verbatim from the caught
+exception at `Windows/RetouchStudio.UiTests/Program.cs:153-158` — while the other thirteen legs
+passed (`WINDOWS HOST TESTS: PASS (405 checks)`, `AI RUNTIME TESTS: PASS`, `MODEL STORE CHECKS:
+PASS`). Attempt 3 (09:15–09:21Z) got *further*: `exportclose` never ran, and AI runtime section
+`[C]` failed with `FAIL the helper publishes a ready registry record — (no log)` after exactly 30
+seconds, which is a startup timeout in a different suite. For contrast, `Windows App` had succeeded
+four times earlier the same day on PR heads `c42bc1d` (05:52–06:09Z and 06:30–06:47Z), `6aa3b22`
+(07:02–07:19Z) and `281f7ae` (07:25–07:41Z). The round-2 diff touches no Windows source, and the
+one Windows check that reads the shipped catalogue (`[M17]`) passed in every attempt.
+
+That is evidence of runner-level instability, not proof of it, so an earlier private inference in
+this round — "the diff cannot break Windows" — is retired as unsupported. Instead a control was
+dispatched: branch `w5-flake-control`, commit `405dd7d`, pull request **#127**, which adds exactly
+one Markdown file and changes no code, resource, catalogue, test or build script, so its
+`Windows App` job measures the runner. The rule agreed before reading its result: if the control
+also fails `Windows App`, the environment is shown unreliable and #126 merges on its own green
+attempt with this table recorded; if the control passes, that alone does not exonerate #126, which
+keeps its gate until one of its own attempts goes green. Under no reading is the context skipped,
+and `main`'s protection still requires it.
+
+**Both outcomes arrived, and they say different things.**
+
+- **PR #126, attempt 4** — `Windows App` job `137598827326`, 09:26:36→09:41:48Z, **success** with no
+  `FAIL` line anywhere in the log: `WINDOWS HOST TESTS: PASS (405 checks)`,
+  `MODEL STORE CHECKS: PASS`, `AI RUNTIME TESTS: PASS`, `WINDOWS APP BUILD: PASS`, fourteen
+  `UI HOST TESTS: PASS` markers (both previously failing modes included), and the gate step's five
+  `found:` verdicts including `ONNX Runtime 1.32.0 matches the recorded size and SHA-256` and
+  `upscale stays blocked without an approved artifact`.
+- **The control, PR #127** — job `137599944801`, 09:28:49→09:43:19Z, **success** on the same shape
+  of work (405 checks, fourteen UIA modes, 524 `ok` assertion lines) from a commit that changes one
+  Markdown file.
+
+Attempt 4 is the decisive measurement, and it is narrower than it looks. A byte-identical head that
+failed three times and then passed once proves the three failures were **not a deterministic
+property of `eee3e4b`** — which is what the merge gate needed, and it was satisfied by this PR's own
+green attempt, not by the control and not by skipping a check. It does *not* show the two
+`exportclose` failures were harmless in some deeper sense, and the control passing in the same window
+says the runner was not uniformly broken at that moment: the instability is intermittent per job,
+which is exactly why it cannot be reasoned about from a single sample.
+
+`Windows App` therefore merged green at attempt 4: PR #126 merged into `main` as `00aa37fc` at
+09:47:48Z, and `develop` was fast-forwarded `11a4b8f..00aa37f`. That closed the last open pull
+request, so `main == develop == 00aa37fc` with **zero open PRs**. The control PR #127 was closed
+unmerged with this outcome recorded on it, and its branch and commit `405dd7d` are kept as the
+audit artefact rather than deleted, so the "no-op" claim can be re-checked.
+
+**The flake is itself a release-process risk, and it is recorded as one.** A required context that
+needed four attempts to go green is a gate that can only be cleared by retrying, and a retry-until-green
+habit is how a genuine intermittent regression gets masked. Two mitigations are now tracked: the
+diagnostics gap that made all three failures undebuggable after the fact (`Program.cs:153-158` prints
+only `error.Message`, dropping type, HRESULT and stack; the ready-record timeout prints `(no log)`),
+and the rule this addendum follows — whenever a required context is retried, the attempt count, the
+legs that failed and the verdict lines of the attempt that passed belong in this ledger, not in an
+operator's memory. Neither the Windows `-32010` mapping nor any live-app surface gained evidence from
+these retries: `Windows App` passing means the Windows build and its fourteen UIA modes are intact,
+which is not the same as the licence refusal being tested on that host, and that gap stays open
+exactly as S.9 stated it. S.4's rule still stands: no readiness percentage is given.
