@@ -135,7 +135,8 @@ Only a throwaway key is used inside the tests.
    `@StateObject` of `AboutView` (`Sources/RetouchStudio/Views/InfoViews.swift`).
    As of 2026-11-22 it therefore does **not** run on every launch before the
    editor opens: nothing in `App.swift` or `AppDelegate` constructs an
-   `UpdateController` or calls `recover(journalURL:)`, so recovery runs when the
+   `UpdateController` or calls `recover(journalURL:)` (`App.swift:17-29` is the
+   whole startup sweep), so recovery runs when the
    owner opens the About window (Retouch Studio → About) in that process, and
    not at startup. Re-verified 2026-11-29 against this tree: `UpdateController()`
    still occurs exactly once in `Sources/`, as that `@StateObject`
