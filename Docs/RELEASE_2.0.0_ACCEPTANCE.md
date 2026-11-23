@@ -6,6 +6,9 @@
 > This document is a **blank form**. It asserts no result, contains no verdict and states no
 > readiness opinion. Every evidence cell below is empty on purpose and stays empty until you fill it.
 > When you finish, the filled form is the evidence; this file un-filled proves nothing.
+> A fourth mark exists and is not a dodge: **N/A** means the precondition cannot exist in the build under test,
+> so the row is unscoreable rather than untried. §0b lists which rows are N/A for the accepted light artefact,
+> and says why PASS, FAIL and NOT RUN would each be a lie in those cells.
 
 ---
 
@@ -77,8 +80,13 @@ gap in this checklist.
    cell, because that zip round-trip weakens the Gatekeeper conclusion.
 2. You have: one portrait photo where a face is clearly visible, one large landscape photo with no
    face, and a free folder for exports.
-3. You have at least **75 minutes** of uninterrupted time — the budget below sums to 72 minutes and the
-   note-taking is what makes a FAIL row usable; the AI sections assume the network works once.
+3. You have **72 minutes** of uninterrupted clicking — that is the exact sum of the budget table below,
+   re-added by hand on 2026-11-23: `5+5+3+5+4+5+5+8+4+8+6+4+8+2 = 72`. An earlier revision of this line asked
+   for "at least 75 minutes"; those three extra minutes were a buffer no row justified, so the heading and the
+   rows now carry the same measured number and the buffer is stated where it actually belongs — **note-taking
+   is what makes a FAIL row usable, and it is not inside the 72.** With the shipped no-helper artefact, 11 of
+   those minutes are N/A by construction (§0b and the table's last column), so this session is **61 minutes** of
+   clicking. The AI rows that do run assume the network works once.
 4. macOS 14 or later on Apple silicon (`Resources/Info.plist` `LSMinimumSystemVersion` = `14.0`; the
    helper is Apple-silicon-only — `aiRuntimeIntelUnavailable` at `Localization.swift:848` in English,
    `PersianL10n.swift:817` in Persian). The shipped build has no helper at all, so an Intel Mac simply has the editor.
@@ -88,22 +96,94 @@ gap in this checklist.
 
 ### Time budget
 
-| Section | Topic | Min |
-|---|---|---|
-| 1 | First launch + Gatekeeper | 5 |
-| 2 | Build identity + updater honesty | 5 |
-| 3 | Import a photo | 3 |
-| 4 | Non-AI edit + export | 5 |
-| 4b | Canvas toast vs compare chrome (PR #130/#131) | 4 |
-| 5 | Watermark size-percentage path | 5 |
-| 6 | Batch export + cancel | 5 |
-| 7 | Project save → quit → restore + recovery | 8 |
-| 8 | Undo/redo across an AI edit | 4 |
-| 9 | AI consent sheet + Model Manager states | 8 |
-| 10 | Upscale a large image + ETA wording | 6 |
-| 11 | Disk-nearly-full behaviour | 4 |
-| 12 | Persian locale pass | 8 |
-| 13 | Windows statement (no execution) | 2 |
+The last column, added 2026-11-23, scores each section against **the artefact this session will actually
+hold** — the light CI-built arm64 DMG with no helper (`release.yml:25`, `AIRuntime.swift:40`). Minutes marked
+N/A are not "failed" and not "skipped for convenience": the precondition cannot exist in that build, so the
+row is structurally unscoreable and must be recorded as **N/A**, never PASS or FAIL (§15).
+
+| Section | Topic | Min | Runnable with the shipped no-helper RC |
+|---|---|---|---|
+| 1 | First launch + Gatekeeper | 5 | 5 — indicative only: an Actions artefact is a zip round-trip (§0b) |
+| 2 | Build identity + updater honesty | 5 | 5 |
+| 3 | Import a photo | 3 | 3 |
+| 4 | Non-AI edit + export | 5 | 5 |
+| 4b | Canvas toast vs compare chrome (PR #130/#131) | 4 | 4 |
+| 5 | Watermark size-percentage path | 5 | 5 |
+| 6 | Batch export + cancel | 5 | 5 |
+| 7 | Project save → quit → restore + recovery | 8 | 8 |
+| 8 | Undo/redo across an AI edit | 4 | 1 — row 8.1 only; **8.2–8.4 N/A** (need a completed AI quick edit) |
+| 9 | AI consent sheet + Model Manager states | 8 | 7 — Branch A rows 9.1–9.6; **9.7 N/A** (no helper present) |
+| 10 | Upscale a large image + ETA wording | 6 | 2 — **10.4 and 10.5 run** (both are host-side, gated on `AIWorker.isInstalled` at `EditorModel.swift:3383`/`:3393`); 10.1 gives the estimate **string** only; **10.2–10.3 N/A** (need real inference) |
+| 11 | Disk-nearly-full behaviour | 4 | 1 — 11B acknowledgment only; **11A N/A** (no runtime download is offered) |
+| 12 | Persian locale pass | 8 | 8 |
+| 13 | Windows statement (no execution) | 2 | 2 — a statement, not a test (§13) |
+| **Total** | *hand-added 2026-11-23* | **72** | **61 runnable · 11 N/A** |
+
+---
+
+## 0b. This session's artefact, fixed 2026-11-23
+
+The owner accepted the documentation tip as the **acceptance** candidate; that acceptance is **not** publication
+authorisation, and no tag exists. One specific build was chosen for this session and is named here so that no
+other bytes can be mistaken for it.
+
+| Field | Value |
+|---|---|
+| Built from | `5ce98ec`, the frozen code candidate — code-identical to the accepted tip: `git diff --name-only 5ce98ec..<accepted tip>` returns only the two `Docs/RELEASE_2.0.0_*.md` files (ledger S.13.2 states the rule, so it survives further doc merges) |
+| Workflow run | `45197302277` (a `workflow_dispatch` of `Release`, not a tag run) |
+| Artefact name | `macos-arm64` (a zip containing the DMG and its `.sha256` sidecar) |
+| File | `RetouchStudio-0.0.0-ci-arm64.dmg` |
+| Size | **4,531,423 bytes** |
+| SHA-256 | `b3711d0ce222aa03bddc41dbbf85c4c18a453431c9944a528c385dfe9d2ed2b4` |
+| Bundle stamps | `CFBundleShortVersionString = 0.0.0-ci`, `CFBundleVersion = 5` — read directly from the image (ledger S.12.10), so About must say `0.0.0-ci (5)` |
+
+**Fetch it (reproducible, needs your own GitHub login):**
+
+```
+gh run download 45197302277 --repo iR0ham/RetouchStudio --name macos-arm64 -D ~/Downloads/rs-rc
+cd ~/Downloads/rs-rc && unzip -o macos-arm64.zip
+shasum -a 256 RetouchStudio-0.0.0-ci-arm64.dmg
+```
+
+That last line must print `b3711d0c…2ed2b4`, i.e. the digest above, **before** anything is mounted. The sidecar
+form `shasum -a 256 -c "RetouchStudio-0.0.0-ci-arm64.dmg.sha256"` must print `: OK`. Any other digest ⇒ stop,
+you are not holding the accepted build (§2, row 2.0).
+
+A verified copy is already staged on this Mac at `~/Downloads/rs-rc-0758ad8/RetouchStudio-0.0.0-ci-arm64.dmg`
+beside its sidecar; the re-hash and `hdiutil verify` that prove it are recorded in ledger S.14.2. Treat that
+directory as convenience, not provenance — it is outside the repository and can be moved or cleaned, so re-derive
+from the run above whenever the digest does not answer.
+
+**Two traps on this Mac right now, both real:**
+
+1. A **different** arm64 DMG from a different run exists locally
+   (`/private/tmp/rcverify/x14807709194/RetouchStudio-0.0.0-ci-arm64.dmg`, 4,507,771 bytes, SHA-256 beginning
+   `9ce472b7`). Same filename, same nominal version, different bytes. Mount only the image whose digest matches
+   the row above; the filename alone identifies nothing.
+2. Anything under `/private/tmp` is ephemeral and may vanish on reboot. Re-download from the run page rather
+   than accepting a stale local copy — and say in §1's note cell which path you used, because a GitHub artefact
+   is a zip round-trip that does not reliably carry `com.apple.quarantine`. The locally cached copy of this
+   image has **no** quarantine attribute, so a double-click that opens with no prompt at all is an artefact of
+   the transport, not a Gatekeeper verdict: §1 stays **indicative only** until the published image is tested
+   (§0, prerequisite 1).
+
+**What cannot be scored with this build.** 11 minutes of the plan above are structurally unreachable — §8 rows
+8.2–8.4, §9 row 9.7, §10 rows 10.1–10.3 (with the nuance that 10.1's **estimate text** is still visible), §11 row
+11A. Mark them **N/A**, never PASS or FAIL. Two corrections
+worth knowing before you start, because both were overstated in an earlier summary:
+
+- §10 is **not** wholly unreachable. Rows 10.4 (the 40 MP ceiling text and a dead toggle) and 10.5 (a refusal
+  that writes no file) are decided in the host, not the helper: `exportUpscaleAvailable` is pure geometry
+  (`ExportPlanner.swift:32-35` → `RenderPolicy.upscaleAvailable`) and the refusal is returned at
+  `EditorModel.swift:3383`/`:3393` on `AIWorker.isInstalled`. With no helper you must get
+  `exportUpscaleUnavailable` verbatim — "…is not available on this Mac **or in this build**…"
+  (`Localization.swift:514-516`) — and **no file on disk**. `exportUpscaleFailed` (`:519-520`) belongs to the
+  helper-ran-and-failed class and cannot appear here; scoring row 10.5 against that wording would be unfalsifiable.
+- §9's chip rule needs one clarification, added here rather than discovered mid-session: line "if a model you
+  know you downloaded says `Not installed` in Branch A, that is a genuine FAIL" applies **only to `.ready`
+  rows**. `sam2.1-hiera-tiny` carries `unverifiableReason`, so `statusChip` prints `Not installed`
+  (`ModelManagerView.swift:535-538`) even though its weights are on disk here — that pairing is the documented
+  expectation (§9's own last paragraph, and §14 row 9). Failing sam2 for it would be a false FAIL.
 
 ---
 
@@ -421,9 +501,14 @@ a new branch and drops the old redo chain (`:405-408`).
 | # | Evidence |
 |---|---|
 | 8.1 Slider undo/redo round-trips | |
-| 8.2 Undo arrow live immediately after an AI edit | |
-| 8.3 Remove-last-AI-edit is itself undoable | |
-| 8.4 Arrows disabled during a running job, busy message shown | |
+| 8.2 Undo arrow live immediately after an AI edit — **N/A on this artefact: no helper, so no AI edit can complete (§0b)** | |
+| 8.3 Remove-last-AI-edit is itself undoable — **N/A on this artefact, same reason** | |
+| 8.4 Arrows disabled during a running job, busy message shown — **N/A on this artefact: no job can run** | |
+
+*Added 2026-11-23:* row 8.1 remains in scope and is the only AI-free part of this section; steps 4 and 5 of the
+click path above require a finished quick edit, which the shipped build cannot produce. Record 8.2–8.4 as **N/A**,
+not FAIL — the precondition is absent by design (`release.yml:25`), and a FAIL here would be a report about the
+packaging decision rather than about the app.
 
 ---
 
@@ -456,6 +541,14 @@ the Settings note, and `modelsMissing` — the strings quoted were right, the po
   (`ModelManagerView.swift:542-560`, `Models/ModelRunState.swift:19`, `Core/AIWorker.swift:615`). With no helper on the machine, a model whose weights
   are on disk therefore reads `Installed · can't run`, and only an un-downloaded one reads `Not installed`.
   If a model you know you downloaded says `Not installed` in Branch A, that is a genuine FAIL — record it.
+  *Scoped 2026-11-23, because as written it would have produced a false FAIL:* that rule covers **`.ready`** rows
+  only. `statusChip` answers `.unverifiable` before the weights/helper test and prints `Not installed`
+  (`ModelManagerView.swift:534-538`) regardless of what is on disk, so `sam2.1-hiera-tiny` reads
+  `Not installed` **and** `Not installable: …` on a machine that holds its weights — the pairing §9's own last
+  paragraph and §14 row 9 both expect. On this Mac three catalogue models already have weight directories
+  (`~/Library/Application Support/RetouchStudio/AI/models`: `migan`, `swin2sr-x4`, `sam2.1-hiera-tiny`), so the
+  honest row-9.3 expectation here is `Installed · can't run` for the two `.ready` ones, the sam2 pair above, and
+  a live **Install…** chip on `flux2-klein-4b-q4` — which you must not press (§14 row 16).
 - The disk line `On disk: X · Free: Y` (`modelsDiskUsage`, `:746-748`) must render real numbers, or
   `Size unknown` when capacity is unreadable (`ModelManagerView.swift:186-198`).
 
@@ -510,7 +603,7 @@ download them again later.` (`:695-696`); a cancelled download says `Download ca
 | 9.4 Consent sheet shows count/size/host/licences/SHA-16 | |
 | 9.5 No licence URL is presented (G-UI as recorded) | |
 | 9.6 Verify + Remove print the two sentences §9 quotes (not `Checksum mismatch:`, which no view renders) | |
-| 9.7 Branch B (only if a helper is present) | |
+| 9.7 Branch B (only if a helper is present) — **N/A on this artefact: three independent gates keep it absent (§0b)** | |
 
 ---
 
@@ -536,17 +629,24 @@ line while it tiles.
   output, about 2.5 MP in.` (`exportUpscaleTooLarge`, `:502-504`).
 - During the run the status reads `Upscaling X of Y tiles…` (`upscaling`, `:243-245`).
 - Refusal cases: no helper → `AI upscale could not run, so nothing was exported. … turn off AI
-  upscale to save the photo without it.` (`:512-514`); helper ran but failed →
-  `AI upscale failed before any file was written. Nothing was exported; …` (`:517-519`). Either way
+  upscale to save the photo without it.` (`:514-516`); helper ran but failed →
+  `AI upscale failed before any file was written. Nothing was exported; …` (`:519-520`). Either way
   **no file may appear on disk**.
+  *Anchors corrected 2026-11-23, and the reachability note matters more than the numbers:* this block cited
+  `:512-514` / `:517-519`, which are comment lines shifted two rows up — the same wrong-offset class S.13
+  records elsewhere. More importantly, **the first of these two cases is the only refusal this artefact can
+  produce, and it is decided in the host, not the helper**: `EditorModel.swift:3383` and `:3393` both return
+  `.exportUpscaleUnavailable` off `AIWorker.isInstalled`, so rows 10.4–10.5 are in scope for a no-helper build
+  while 10.1–10.3 are not (§0b). `exportUpscaleFailed` requires a helper that actually ran and therefore
+  **cannot** appear here; do not score 10.5 against its wording.
 
 | # | Evidence |
 |---|---|
-| 10.1 Estimate shown; measured wall time: ______ | |
-| 10.2 Tile progress reported while running | |
-| 10.3 Output file at the requested long edge, sharper, no artifacts you'd file | |
-| 10.4 Too-large photo shows the ceiling text and disables the toggle | |
-| 10.5 A refusal writes nothing | |
+| 10.1 Estimate shown; measured wall time: ______ — **PARTIAL: the estimate string is visible without a helper (`EditorView.swift:316-319` renders detail + estimate on geometry alone), the wall-clock comparison is N/A** | |
+| 10.2 Tile progress reported while running — **N/A on this artefact** | |
+| 10.3 Output file at the requested long edge, sharper, no artifacts you'd file — **N/A on this artefact** | |
+| 10.4 Too-large photo shows the ceiling text and disables the toggle — **IN SCOPE: pure geometry, no helper involved** | |
+| 10.5 A refusal writes nothing — **IN SCOPE, and the important one: expect `exportUpscaleUnavailable`, not `exportUpscaleFailed`** | |
 
 ---
 
@@ -577,7 +677,7 @@ Model Manager's `Free:` figure (`ModelManagerView.swift:191-193`) is display onl
 
 | # | Evidence |
 |---|---|
-| 11A Runtime-install refusal (skip if no runtime is offered) | |
+| 11A Runtime-install refusal (skip if no runtime is offered) — **N/A on this artefact: `AIRuntime.package` is `nil`, so no install is ever offered and this gate cannot be reached (§0b)** | |
 | 11B Explicitly out of scope — no export capacity preflight exists | |
 
 ---
@@ -640,6 +740,12 @@ Windows** (ledger §3 G-WIN).
 | # | Evidence |
 |---|---|
 | 13.1 Acknowledged: Windows is CI-only, untested locally in this session | |
+
+*Added 2026-11-23, to stop a silent default:* row 13.1 accepts only that **no Windows testing happened here**. It
+is not a decision about distribution. Because `vars.WINDOWS_APP_READY` is currently `true`, a `v2.0.0` tag would
+build **and publish** the MSI on its own (`release.yml:111`, then the release job uploads `artifacts/*`), so
+"include the Windows artefact in the 2.0.0 release" is a separate owner decision that must be stated explicitly
+rather than inherited from a repository variable. Ledger S.14 records it as still open.
 
 ---
 
@@ -711,6 +817,13 @@ ledger records this in S.12.6 pass 4.
     notice, removed fonts, uppercase `ALL RIGHTS RESERVED` all exit 0). Not release-blocking while the
     DMG ships no `Contents/Resources/Worker`. — ledger §12 Addendum B, Q.3.
 14. **Windows MSI ships no LICENSE/notice file yet.** — ledger §12 Q.3 final paragraph.
+    *Weakened 2026-11-23, and it matters for honesty more than for the count:* "ships no" is an assertion about
+    bytes nobody has listed. `Tools/build-windows.ps1:225-231` copies `LICENSE` / `ThirdPartyNotices.txt` into the
+    payload **conditionally**, when they sit beside the pinned ONNX package (`:184-185`), and
+    `Tools/package-windows-msi.ps1:68` heat-harvests the publish directory recursively — so nothing in the source
+    proves either outcome, and no MSI has been unpacked locally. Read this row as **NOT VERIFIED (unasserted)**;
+    the defect that Q.3 actually established is the *absence of a check*, not an absence of files. Ledger S.14.5
+    carries the correction.
 15. **Every ledger item still marked NOT VERIFIED that this session can touch:** G-UI (rendered
     consent evidence), G-UPD's *UI* half, "Gatekeeper instructions in the release notes are truthful"
     (§7), G-QA core behaviour on the release artefact (§3), the canvas status-toast placement (§4b), and
@@ -787,8 +900,11 @@ should be invented here.
 - **Artefacts**: screenshot path, and for any write failure the exact error line plus
   `Console.app` output copied while it happened.
 
-Mark a step **NOT RUN** whenever you skipped it, ran out of time, or the precondition was absent
-(for example §9 Branch B with no helper). A NOT RUN cell is honest information; an empty cell is not.
+Mark a step **NOT RUN** whenever you skipped it or ran out of time. Mark it **N/A** only when the precondition
+cannot exist in the build you are holding — §9 Branch B with no helper, §11A with no runtime offered. The two
+carry different information: NOT RUN says coverage is still owed, N/A says coverage is impossible until the
+packaging decision changes, and a future reader must be able to tell them apart. A NOT RUN cell is honest
+information; an empty cell is not.
 
 ---
 
@@ -799,7 +915,7 @@ alongside the candidate):
 
 - Tester: ____________ Date: ____________ Start: ______ End: ______
 - Build tested: `__________ ( __ )` · DMG: `____________________________`
-- Steps PASS: ____ / FAIL: ____ / NOT RUN: ____
+- Steps PASS: ____ / FAIL: ____ / N/A: ____ / NOT RUN: ____
 - Failures that block publication in my judgement: ____________________
 - Signature: ____________
 

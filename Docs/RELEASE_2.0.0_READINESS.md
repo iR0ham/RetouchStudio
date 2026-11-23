@@ -1519,6 +1519,17 @@ Also confirmed and out of this PR's scope: `Windows/installer/Product.wxs` refer
 `LICENSE` nor the OnnxRuntime notice. MIT's notice obligation covers the Windows build; that belongs to the
 Windows packaging ticket, not to #111, and Windows artefact publication is already gated on it.
 
+> **Dated correction marker, 2026-11-23 (S.14.5).** The paragraph above is kept unedited as the record of what was
+> believed at the time, and two of its claims no longer survive re-reading. (1) *"would ship neither `LICENSE` nor
+> the OnnxRuntime notice"* is an assertion about bytes nobody has listed: `Tools/build-windows.ps1:225-231` copies
+> `LICENSE` / `ThirdPartyNotices.txt` into the payload **when they exist beside the pinned ONNX package**
+> (`:184-185`), and `package-windows-msi.ps1:68` heat-harvests that directory recursively. The defect Q.3 really
+> established is the absence of any *check*, not the absence of files — status is now **NOT VERIFIED (unasserted)**.
+> (2) *"publication is already gated on it"* is stale: the mechanism exists (`release.yml:111`), but
+> `vars.WINDOWS_APP_READY` was measured **`true`** on 2026-11-23, so a `v2.0.0` tag would build and upload the MSI
+> by default. Windows inclusion is therefore an open owner decision, not a pending gate — see S.14.1 and the new
+> §13 note in the acceptance pack.
+
 ### Q.4 Updater — G-UPD is answered YES at configuration level, with one residual surface
 
 The independent design review returned **ACCEPT WITH CHANGES** and, for the release gate, an explicit answer:
@@ -2896,6 +2907,14 @@ that row could never be scored." Status: **PROPOSED** — deleting them or wirin
 freeze S.12.9 chose covers documentation only. They are also a live trap for the next contributor, who will read a
 defined string and a translated twin as evidence that a Download affordance exists in the Model Manager.
 
+> **Dated marker, 2026-11-23 (S.14):** the three bare line anchors above are historical and now point elsewhere —
+> S.14's own additions to that pack pushed those unchanged sentences (the quoted text is identical). The lesson is
+> the one this addendum series keeps learning: **a line anchor into a document that the same ledger keeps appending
+> to is not durable**, and an "is the line non-blank" probe cannot see the difference. Measured again on the head of
+> this PR — `:571`, `:589`, `:864` — which is the third different set of numbers this one sentence has carried, so
+> treat any number here as a snapshot and **resolve them by section instead**: §9's chip paragraph, §9's Verify
+> paragraph, §14 row 16.
+
 ### S.13.4 The one test anchor that no longer points where its comment says
 
 `Tests/RuntimeTransferTests.swift:245` declares `let documentedDownload: Int64 = 390_000_000` with the trailing
@@ -2936,5 +2955,121 @@ S.12 asked for; and **authorise tag + publication**, the one irreversible act I 
 perform on my own authority. The 72-minute acceptance session (`Docs/RELEASE_2.0.0_ACCEPTANCE.md`) is his to run
 and is still the only thing that converts "documented" into "verified" for the user-visible half of the product.
 **No readiness percentage is stated here or anywhere above: no defined checklist would support one.**
+
+---
+
+## Addendum S.14 — 2026-11-23 (late night): the owner accepts the tip *for acceptance*, one DMG becomes the
+## named test object, and eleven minutes of the session are declared structurally unscoreable
+
+This addendum records a decision, not a verdict about the product. Nothing below was tagged, published,
+distributed, installed or launched: the owner's explicit prohibitions for this round were "do not create or push
+tags, publish or modify releases, change packaging, launch GUI applications, modify the owner's local checkout, or
+start unrelated implementation work", and every one of them held. `~/RetouchStudio` is still on `40b157f` with the
+same three dirty paths and two stashes; all edits here happened in a separate temporary worktree.
+
+### S.14.1 The decision, and the line it draws
+
+The owner **accepted `0758ad8` as the candidate for his own acceptance session and expressly not as authorization
+to publish**. Two things follow that must not be blurred by a future reader:
+
+1. Acceptance of a *commit* is not acceptance of the *product*. The user-visible half of 2.0.0 is still unverified
+   until the pack is filled in, and S.13's rule survives this addendum: the candidate is defined by the diff check
+   `git diff --name-only 5ce98ec..<tip>` returning only `Docs/RELEASE_2.0.0_ACCEPTANCE.md` and
+   `Docs/RELEASE_2.0.0_READINESS.md`, never by a hard-coded SHA that this very merge would invalidate. Merging S.14
+   advances the tip and leaves the accepted code untouched.
+2. **Windows distribution is not decided by this session and must not be inherited from a variable.** Measured on
+   2026-11-23, `vars.WINDOWS_APP_READY` is `true`, so `release.yml:111` lets the MSI build and the release job then
+   uploads `artifacts/*` (`:201`) without anyone choosing it. The owner's instruction was "do not silently include or
+   exclude its artifact", so the default is now written down as a default rather than a decision, and a matching
+   note was added to the pack's §13 so no one can read row 13.1 as approval of Windows publication.
+
+### S.14.2 The test object is now identified by digest, not by filename
+
+| Field | Value | Status |
+|---|---|---|
+| Built from | `5ce98ec` (frozen code candidate; docs-only descendants since) | measured |
+| Workflow run | `45197302277` — `workflow_dispatch` of `Release`, run number 5 | measured |
+| Artefact | `macos-arm64`; the run also holds `macos-x86_64` and `windows-x64`, all `expired: false` | measured (`gh api .../runs/45197302277/artifacts`) |
+| File | `RetouchStudio-0.0.0-ci-arm64.dmg`, **4,531,423 bytes** | measured |
+| SHA-256 | `b3711d0ce222aa03bddc41dbbf85c4c18a453431c9944a528c385dfe9d2ed2b4` | **re-hashed 2026-11-23 on the cached copy and it matches, sidecar included** |
+| Bundle stamps | `CFBundleShortVersionString 0.0.0-ci`, `CFBundleVersion 5` | read out of the image (S.12.10) |
+| Quarantine | the cached copy carries `com.apple.diskimages.recentcksum` + `com.apple.provenance` and **no `com.apple.quarantine`** | measured `xattr -l` |
+
+Two hazards this naming removes, both of them real on this machine right now:
+
+- **A second file with the same name and different bytes exists.**
+  `/private/tmp/rcverify/x14807709194/RetouchStudio-0.0.0-ci-arm64.dmg` is 4,507,771 bytes and hashes to
+  `9ce472b7…` — an earlier run's image. `RetouchStudio-0.0.0-ci-arm64.dmg` therefore identifies nothing on its own;
+  only the digest does. The pack's new §0b says exactly that, and quotes both digests so a mismatch is caught before
+  anything is mounted.
+- **`/private/tmp` is not an archive.** The cached copy is a working file, and this ledger's standing rule already
+  forbids treating tmp as permanent evidence, so §0b hands the owner the reproducible fetch (`gh run download
+  45197302277 --repo iR0ham/RetouchStudio --name macos-arm64 -D <dir>` → `unzip` → `shasum -a 256`) instead of a
+  path. The missing quarantine attribute is measured, not assumed: it confirms the warning §0 already carried —
+  a Gatekeeper outcome taken from an Actions zip round-trip is **indicative only**, and a silent double-click is an
+  artefact of the transport rather than a verdict about ad-hoc signing.
+- *Superseding half of the bullet above, same night, because the owner asked for a location and not only a recipe:*
+  the accepted image **is** now staged at a durable path — `~/Downloads/rs-rc-0758ad8/RetouchStudio-0.0.0-ci-arm64.dmg`
+  beside the sidecar `RetouchStudio-0.0.0-ci-arm64.dmg.sha256` — so §0b names that path too. Verification re-run there
+  on 2026-11-23, output quoted rather than summarised: `shasum -a 256 -c RetouchStudio-0.0.0-ci-arm64.dmg.sha256` →
+  `RetouchStudio-0.0.0-ci-arm64.dmg: OK`; `shasum -a 256 RetouchStudio-0.0.0-ci-arm64.dmg` → `b3711d0c…2ed2b4`;
+  `hdiutil verify RetouchStudio-0.0.0-ci-arm64.dmg` → `hdiutil: verify: checksum of "RetouchStudio-0.0.0-ci-arm64.dmg"
+  is VALID`, after every master block reported `verified CRC32 …` and the image-wide value `CRC32 $7E7AA1F5`.
+  Downloads was chosen over
+  `/private/tmp` precisely because the previous bullet's objection stands; the fetch recipe stays authoritative, and
+  a staged copy is still only an assertion until someone re-hashes it.
+
+### S.14.3 The 75-vs-72 discrepancy, closed by adding the rows
+
+The budget table's fourteen rows sum to exactly **72** (`5+5+3+5+4+5+5+8+4+8+6+4+8+2`). The prerequisite line asked
+for "at least 75 minutes" and mentioned the 72 in the same breath, which is how the mismatch survived four audit
+passes: the extra three minutes were a buffer with no row behind it. Both places now say **72**, the table gained a
+`Total` row so the figure is checkable rather than asserted, and the buffer is stated where it is genuinely owed —
+note-taking, which is not inside the 72. Scoring the same table against this artefact (S.14.4's reachability rule)
+leaves **61 minutes runnable and 11 N/A**, and that number is derived by a stated rule, not felt: whole sections
+stay, and a section only shrinks by the minutes of the rows whose precondition cannot exist in a build with no
+helper (§8 rows 8.2–8.4, §9 row 9.7, §10 rows 10.1–10.3, §11 row 11A).
+
+### S.14.4 Four corrections, one of them to my own words an hour earlier
+
+- **I overstated §10 as wholly unreachable.** In the decision package I wrote that the upscale section could not be
+  exercised from this build. Re-reading the source at this head: the ceiling row and the refusal are both decided
+  *in the host* — `exportUpscaleAvailable` is pure geometry (`ExportPlanner.swift:32-35` → `RenderPolicy`), and
+  `EditorModel.swift:3383` / `:3393` return `.exportUpscaleUnavailable` on `AIWorker.isInstalled` without any worker
+  round-trip. So rows 10.4 and 10.5 are in scope and are, in fact, the two AI rows that prove the honest-unavailable
+  promise; only 10.1–10.3 are N/A. The correction is dated here and the earlier message stands as history.
+- **A new stale-anchor instance in a twice-audited pack.** §10 cited `Localization.swift:512-514` and `:517-519`;
+  measured at this head the two strings are declared at `:514` (body `:515`) and `:519` (body `:520`). Every cited
+  line existed and was non-blank, so the mechanical pass passed it — the exact defect class S.13 describes, found
+  again on a section that had already been checked.
+- **§9's own FAIL rule would have manufactured a false FAIL.** "A model you know you downloaded reading
+  `Not installed` is a genuine FAIL" is untrue for `.unverifiable` rows, because `statusChip` answers
+  `.unverifiable` before the weights/helper test (`ModelManagerView.swift:534-538`). On this Mac — where
+  `migan`, `swin2sr-x4` and `sam2.1-hiera-tiny` already have weight directories — the truthful expectation is
+  `Installed · can't run` for the two `.ready` rows and sam2's documented `Not installed` + `Not installable:` pair.
+  The rule is now scoped, and the FLUX row is pointed at §14 row 16 rather than re-derived here.
+- **The pack gained an `N/A` mark with a definition.** The honesty rule recognized only PASS / FAIL / NOT RUN, so
+  structurally unreachable rows were being pushed either into "skipped" (which owes coverage) or into FAIL (which is
+  a lie about the app rather than about the packaging decision). §15 now separates them, and §16 counts them, so a
+  future reader can tell "not yet looked at" from "cannot exist in this build".
+
+### S.14.5 Q.3's Windows claim restated as unasserted
+
+Recorded in place above, under the Q.3 paragraph, and mirrored into the pack's §14 row 14: "the MSI ships neither
+`LICENSE` nor the OnnxRuntime notice" was never measured against an unpacked MSI, and `build-windows.ps1:225-231`
+performs a **conditional** copy of both files that a source read alone cannot resolve. What Q.3 did establish — the
+bundle-validation gap, the bypasses that exit 0 — is untouched. The status is now **NOT VERIFIED (unasserted)**, and
+closing it needs a real `Unpack-Archive` listing, which is packaging work the owner has not authorized this round.
+
+### S.14.6 What this addendum still does not buy
+
+The session itself, when the owner runs it, is the only thing that converts documented behaviour into observed
+behaviour. Still NOT VERIFIED after this addendum: every user-visible string in the pack's §1–§12 (no window has
+been opened by me at any head), the same package under a **tag** rather than a dispatch (`0.0.0-ci (5)` is not
+`2.0.0 (N)`, and §2's identity rows can only be closed against a tagged artefact), the x86_64 image's contents, the
+Windows MSI's notice payload, and §14 row 15's licence-refusal sentence as a user actually reads it — unreachable
+in Branch A by construction. **No readiness percentage is stated here, and none would be supported by the evidence
+above.** Open owner decisions after this addendum: accept/reject the session outcome, authorise tag + publication,
+and decide the Windows artefact explicitly.
 
 
