@@ -264,7 +264,11 @@ class ServerTests(unittest.TestCase):
                 self.assertIn("weights verdict: unknown", record["reason"])
                 reply = self.session.call("job.submit", {
                     "kind": "patch_edit", "capabilityId": capability, "params": {}})
-                self.assertEqual(reply["error"]["code"], UNSUPPORTED)
+                # `-32020` with a `blocked` state is the shape the host routes to
+                # Manage Models, where an adopt tap or an install settles it. A
+                # permission settles there no more than a download settles it,
+                # so the gate answers with the licence class the report uses.
+                self.assertEqual(reply["error"]["code"], LICENSE_BLOCKED)
                 self.assertEqual(reply["error"]["data"]["state"], BLOCKED)
                 self.assertIn("no established permission", reply["error"]["message"])
         self.assertEqual(catalog._leases, {})
@@ -580,7 +584,7 @@ class ServerTests(unittest.TestCase):
                 "kind": "upscale", "capabilityId": "upscale.4x", "params": {}})
             listed = {item["capabilityId"]: item for item in
                       self.session.call("capability.list")["result"]["capabilities"]}
-        self.assertEqual(reply["error"]["code"], UNSUPPORTED)
+        self.assertEqual(reply["error"]["code"], LICENSE_BLOCKED)
         self.assertEqual(reply["error"]["data"]["capabilityId"], "upscale.4x")
         self.assertEqual(reply["error"]["data"]["state"], BLOCKED)
         self.assertIn("no established permission", reply["error"]["message"])
@@ -648,8 +652,10 @@ class ServerTests(unittest.TestCase):
         # This used to answer `-32011 MODEL_MISSING`, because flux was admitted on
         # licence and simply had no weights here. Its record now refuses it, so the
         # gate answers with the licence class — which is the whole point: a
-        # download cannot repair a permission.
-        self.assertEqual(gated["error"]["code"], UNSUPPORTED)
+        # download cannot repair a permission. The label below stays ungated,
+        # because `requestedCapability` records a name rather than claiming a
+        # capability this adapter offers.
+        self.assertEqual(gated["error"]["code"], LICENSE_BLOCKED)
         self.assertEqual(gated["error"]["data"]["state"], BLOCKED)
 
         started = self.session.call("job.submit", {
@@ -727,6 +733,60 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status["status"], "failed")
         self.assertEqual(result["error"]["code"], CHECKSUM_MISMATCH)
         self.assertEqual(result["error"]["data"]["model"], "swin2sr-x4")
+
+    def test_a_job_that_names_no_capability_still_refuses_on_permission(self):
+        # S-FLUX left one question open: the gate only runs when the host names a
+        # capability, and the macOS Quick Edit tools send a provenance label
+        # instead. So the kind-only path has to answer the permission question
+        # itself, on the shipping table, over a real connection. It does, because
+        # the model accessor refuses the licence class before it looks at disk
+        # state — which is what stops that job from being reported as weights that
+        # a download could fix.
+        class FluxEngine:
+            """The `Engine._ensure_flux` shape (engine.py:971): resolve the weights
+            through the catalog and hand the bytes to a runtime. The refusal has
+            to survive that hop, which is what this double exists to test."""
+
+            def __init__(self, catalog):
+                self.catalog = catalog
+                self.providers = []
+
+            def run(self, kind, params, ctx):
+                return {"root": str(self.catalog.require_verified(
+                    "flux2-klein-4b-q4"))}
+
+            def execution_providers(self):
+                return [], "no model has been loaded"
+
+        root = Path(self.tmp.name)
+        catalog = self.use_shipping_catalog()
+        inputs = root / "inputs"
+        inputs.mkdir(exist_ok=True)
+
+        manager = JobManager(FluxEngine(catalog), root / "flux-jobs", (inputs,))
+        server = WorkerServer(root / "flux.sock", manager, catalog, (inputs,))
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        session = Session(root / "flux.sock")
+        try:
+            job_id = session.call("job.submit", {"kind": "patch_edit",
+                                                 "params": {}})["result"]["job_id"]
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                status = session.call("job.status", {"job_id": job_id})["result"]
+                if status["status"] in ("succeeded", "failed", "cancelled"):
+                    break
+                time.sleep(0.02)
+            result = session.call("job.result", {"job_id": job_id})["result"]
+        finally:
+            session.close()
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(status["status"], "failed", result)
+        self.assertEqual(result["error"]["code"], LICENSE_BLOCKED)
+        self.assertEqual(result["error"]["data"]["model"], "flux2-klein-4b-q4")
+        self.assertEqual(result["error"]["data"]["verdict"], "unknown")
 
     # --- integrity refusals over the wire ---------------------------------
     #

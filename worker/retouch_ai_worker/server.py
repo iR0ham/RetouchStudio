@@ -27,11 +27,13 @@ from pathlib import Path
 from . import PROTOCOL_VERSION_STRING, __version__, provenance
 from .protocol import CONTRACT_VERSION, PROTOCOL_VERSION
 from .catalog import Catalog
-from .capabilities import PROVIDER, job_capability, record, report
+from .capabilities import (BLOCKED, PROVIDER, capability_permission_refusal,
+                           job_capability, record, report)
 from .engine import Cancelled, Context, Engine
 from .plan import manifest
-from .protocol import (BUSY, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
-                       MODEL_MISSING, UNSUPPORTED, WorkerError, decode, encode,
+from .protocol import (BUSY, INTERNAL_ERROR, INVALID_PARAMS, LICENSE_BLOCKED,
+                       METHOD_NOT_FOUND, MODEL_MISSING, UNSUPPORTED, WorkerError,
+                       decode, encode,
                        error_response, notification, parse_request,
                        result_response)
 from .transport import BufferRegistry
@@ -317,8 +319,11 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
         """Refuse a job the adapter does not truthfully provide.
 
         The host may name a capability; a missing model is E_MODEL_MISSING (the
-        app opens the model manager), anything else is E_UNSUPPORTED. A request
-        without a capability id keeps the pre-W5-3 job path unchanged.
+        app opens the model manager), a refused permission is E_LICENCE_REFUSED
+        (nothing opens, because nothing there settles it), and anything else is
+        E_UNSUPPORTED. A request without a capability id keeps the pre-W5-3 job
+        path unchanged: the model accessor then answers the licence first, so an
+        unlabelled job still dies on the permission rather than on the weights.
         """
         spec = next((item for item in job_capability(kind)
                      if item.id == capability_id), None)
@@ -326,6 +331,18 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
             raise WorkerError(UNSUPPORTED,
                               f"{capability_id} is not a {kind} capability",
                               {"capabilityId": capability_id, "kind": kind})
+        refusal = capability_permission_refusal(capability_id, self.catalog)
+        if refusal is not None:
+            # The licence class, and not the generic one. A `blocked` capability
+            # answered as `E_UNSUPPORTED` is what the host routes to Manage
+            # Models, because a blocked capability normally waits for something
+            # there — an adopt tap, an install, a recorded run. A permission is
+            # none of those: the manager can only repeat the refusal, and the
+            # sentence the host shows would offer a download that `manifest`
+            # then refuses. Naming a capability has to answer with the class of
+            # the thing that is actually missing.
+            raise WorkerError(LICENSE_BLOCKED, refusal,
+                              {"capabilityId": capability_id, "state": BLOCKED})
         item = record(capability_id, self.catalog)
         if item is None or item["state"] not in ("supported", "requires_model"):
             reason = (item or {}).get("reason") or "the adapter does not provide it"
