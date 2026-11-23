@@ -157,9 +157,9 @@ like any other change.
 4. Open it the way you would open any app. Because this build is signed ad-hoc and is not
    notarized — see the note below — macOS may say it cannot verify the app. In that case right-click
    (or Control-click) **Retouch Studio** in Applications, choose **Open**, and confirm once. If you
-   dismissed that dialog already, open **System Settings → Privacy & Security**, find the line about
-   Retouch Studio and press **Open Anyway**, then start the app again. You only do this once; the
-   second launch is normal.
+   dismissed that dialog already, open **System Settings → Privacy & Security**, find the message
+   about Retouch Studio being blocked and press **Open Anyway** there, then start the app again. You
+   only do this once; the second launch is normal.
 
 **Why that prompt can appear, said plainly.** Retouch Studio is free, open-source software published
 without an Apple Developer Program membership. Ad-hoc signing is therefore permanent for this project
@@ -196,8 +196,8 @@ shasum -a 256 -c RetouchStudio-2.0.0-arm64.dmg.sha256
 است (توضیح پایین را ببینید)، ممکن است مک بگوید صحت این برنامه قابل بررسی نیست. در این حالت روی
 **Retouch Studio** در پوشهٔ Applications راست‌کلیک کنید (یا کلید Control را نگه دارید و کلیک کنید)،
 **Open** را انتخاب کنید و یک بار تأیید کنید. اگر آن پیام را بسته‌اید، به **System Settings → Privacy
-& Security** بروید، مربوط به Retouch Studio پیامی دربارهٔ مسدود شدن برنامه می‌بینید و دکمهٔ **Open
-Anyway** را بزنید؛ سپس دوباره برنامه را باز کنید. این کار فقط یک بار لازم است و اجرای دوم عادی است.
+& Security** بروید، پیام مسدود شدن Retouch Studio را پیدا کنید و همان‌جا **Open Anyway** را بزنید؛
+سپس دوباره برنامه را باز کنید. این کار فقط یک بار لازم است و اجرای دوم عادی است.
 
 **این پیام چرا ممکن است ظاهر شود، صریح بگوییم.** Retouch Studio یک نرم‌افزار آزاد و متن‌باز است که
 بدون عضویت در برنامهٔ توسعه‌دهندگان اپل منتشر می‌شود. بنابراین امضای ad-hoc برای این پروژه دائمی است و
@@ -244,7 +244,7 @@ uploaded, in either language, in either direction.
 
 | | macOS | Windows |
 |---|---|---|
-| System | macOS 14 Sonoma or later, Apple silicon or Intel | 64-bit Windows 10 or 11 |
+| System | macOS 14 Sonoma or later, Apple silicon or Intel | 64-bit Windows on a current release (the build targets the Windows 10 2004 SDK baseline or newer) |
 | Editor | full: twelve tools, analysis, projects, presets, recovery, batch export | light editor: open/save, crop, orientation, nine global sliders, zoom and pan, compare, histogram, batch export, shared projects, history, recovery prompt |
 | AI | optional, Apple silicon only, helper must be present | not available; the app states this |
 | Language | English and Persian | English interface |
@@ -254,7 +254,7 @@ uploaded, in either language, in either direction.
 
 | | مک | ویندوز |
 |---|---|---|
-| سیستم | macOS 14 Sonoma یا جدیدتر، Apple silicon یا Intel | ویندوز ۱۰ یا ۱۱ شصت‌وچار بیتی |
+| سیستم | macOS 14 Sonoma یا جدیدتر، Apple silicon یا Intel | ویندوز شصت‌وچار بیتی روی یک نسخهٔ به‌روز (پایهٔ ساخت، SDK ویندوز ۱۰ نسخهٔ 2004 یا جدیدتر است) |
 | ویرایشگر | کامل: دوازده ابزار، آنالیز، پروژه، پیش‌تنظیم، بازیابی، خروجی گروهی | ویرایشگر سبک: باز و ذخیره کردن، برش، چرخش، نه اسلایدر سراسری، بزرگ‌نمایی و جابه‌جایی، مقایسه، هیستوگرام، خروجی گروهی، پروژهٔ مشترک، تاریخچه، پرسش بازیابی |
 | هوش مصنوعی | اختیاری، فقط Apple silicon، و کمک‌یار باید نصب باشد | موجود نیست؛ خودِ برنامه همین را اعلام می‌کند |
 | زبان | فارسی و انگلیسی | رابط انگلیسی |
