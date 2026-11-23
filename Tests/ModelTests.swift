@@ -7433,6 +7433,7 @@ func runAll() async {
     await testModelStoresMaskBesideEdit()
     testPersianStorageSizeIsOneIsolatedRun()
     testStatusToastStaysClearOfCompareChrome()
+    testToastObstaclesMirrorTheDrawnChrome()
 
     // Invalidate any debounced write left by the last scenario: the scratch
     // directory is about to disappear, and no timer may outlive it.
@@ -7989,7 +7990,8 @@ func testStatusToastStaysClearOfCompareChrome() {
     // Holding Space paints the original over the split, so the AFTER tag and the
     // divider leave the stage — but a single BEFORE badge stays, drawn against
     // the canvas' own top-leading corner and ungated by Compare or by the tool
-    // mode (CompareCanvas.swift:339-348). The pill has to clear it like any
+    // mode (the `model.isPeekingOriginal` branch of the canvas overlay). The
+    // pill has to clear it like any
     // other piece of chrome; treating the peek as tag-free parked the toast
     // straight on top of it, which is the defect this test is for.
     let peek = placement(canvas: fullCanvas, photo: fullPhoto, peeking: true)
@@ -8051,36 +8053,163 @@ func testStatusToastStaysClearOfCompareChrome() {
     // The reservations only protect the owner if they describe what the shell
     // actually draws. The badge is `Text` in Vazirmatn-SemiBold at 9 pt with
     // tracking 0.6 and 3 pt vertical / 7 pt horizontal padding
-    // (CompareCanvas.swift:442-458), so measure that face from the file the app
+    // (compareBadge), so measure that face from the file the app
     // ships instead of trusting a hand-picked constant: a type change that
     // grows the tag must not leave the pill believing it cleared a taller one.
     let faceURL = testsDirectory().deletingLastPathComponent()
         .appendingPathComponent("Resources/Fonts/Vazirmatn-SemiBold.ttf")
     let descriptors = CTFontManagerCreateFontDescriptorsFromURL(faceURL as CFURL) as? [CTFontDescriptor]
-    guard let descriptor = descriptors?.first else {
+    // A missing face invalidates the two measurements below it, not the whole
+    // test. Returning here once silenced the handle reservation check too, so a
+    // fixture problem could hide a real geometry break.
+    if let descriptor = descriptors?.first {
+        let badgeFont = CTFontCreateWithFontDescriptor(descriptor, 9, nil)
+        let badgeHeight = CTFontGetAscent(badgeFont) + CTFontGetDescent(badgeFont)
+            + CTFontGetLeading(badgeFont) + 6
+
+        func tagWidth(_ text: String) -> CGFloat {
+            let attributes: [NSAttributedString.Key: Any] = [.font: badgeFont, .kern: 0.6]
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: text.uppercased(),
+                                                                          attributes: attributes))
+            return ceil(CTLineGetTypographicBounds(line, nil, nil, nil)) + 14
+        }
+
+        let widestTag = max(tagWidth(L10n().before), tagWidth(L10n().after),
+                            tagWidth(PersianL10n.table.before), tagWidth(PersianL10n.table.after))
+        check(ToastPlacement.labelHeight + 0.01 >= badgeHeight,
+              "the label reservation is at least as tall as the badge",
+              "badge \(badgeHeight) pt vs reserve \(ToastPlacement.labelHeight) pt")
+        check(ToastPlacement.labelReserveWidth >= widestTag,
+              "the label reservation is wide enough for the widest localised tag",
+              "widest \(widestTag) pt vs reserve \(ToastPlacement.labelReserveWidth) pt")
+    } else {
         check(false, "the badge face can be measured from the shipped font", faceURL.path)
-        return
     }
-    let badgeFont = CTFontCreateWithFontDescriptor(descriptor, 9, nil)
-    let badgeHeight = CTFontGetAscent(badgeFont) + CTFontGetDescent(badgeFont)
-        + CTFontGetLeading(badgeFont) + 6
-
-    func tagWidth(_ text: String) -> CGFloat {
-        let attributes: [NSAttributedString.Key: Any] = [.font: badgeFont, .kern: 0.6]
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text.uppercased(),
-                                                                      attributes: attributes))
-        return ceil(CTLineGetTypographicBounds(line, nil, nil, nil)) + 14
-    }
-
-    let widestTag = max(tagWidth(L10n().before), tagWidth(L10n().after),
-                        tagWidth(PersianL10n.table.before), tagWidth(PersianL10n.table.after))
-    check(ToastPlacement.labelHeight + 0.01 >= badgeHeight,
-          "the label reservation is at least as tall as the badge",
-          "badge \(badgeHeight) pt vs reserve \(ToastPlacement.labelHeight) pt")
-    check(ToastPlacement.labelReserveWidth >= widestTag,
-          "the label reservation is wide enough for the widest localised tag",
-          "widest \(widestTag) pt vs reserve \(ToastPlacement.labelReserveWidth) pt")
     // The divider obstacle models the strip that grabs it, not the 1 pt line.
     check(ToastPlacement.handleWidth == 28,
-          "the handle reservation matches the drag strip in CompareCanvas.swift:403")
+          "the handle reservation matches the drag strip hitWidth in compareHandle")
+}
+
+/// The reservations only protect the owner while they describe the chrome the
+/// shell really paints. The canvas overlay lays the tag strip out with
+/// `max(0, …)` / `min(canvas, …)` clamps of the centre the photo is drawn at,
+/// and the divider with `center.x - displayed.width/2 + displayed.width *
+/// position` inside a 28 pt grab column; `compareWorkspace` rebuilds the same
+/// boxes from `photo.intersection(canvas)`. That is the same arithmetic written
+/// twice, and the day the two drift the pill either dodges chrome that is
+/// nowhere on the stage or lands on chrome it believes is empty — so pin the
+/// agreement, including pans past `clampPan` and a photo pushed off the canvas,
+/// which is where a hand-clamped rect is easiest to get wrong.
+@MainActor
+func testToastObstaclesMirrorTheDrawnChrome() {
+    print("\n[ui] the toast obstacles describe the chrome that is actually drawn")
+
+    let image = CGSize(width: 1200, height: 800)
+    let canvases = [CGSize(width: 654, height: 772), CGSize(width: 454, height: 612)]
+    let zooms: [Double] = [1, 2, 4]
+    let pans: [CGSize] = [.zero, CGSize(width: 180, height: -120),
+                          CGSize(width: 500, height: 0),      // past the pan clamp
+                          CGSize(width: 5000, height: 5000),  // photo off the stage
+                          CGSize(width: -5000, height: -5000)]
+    let splits: [Double] = [0, 0.4, 0.75, 1]
+    var states = 0
+    var mismatches: [String] = []
+
+    for canvas in canvases {
+        let scale = min(canvas.width / image.width, canvas.height / image.height)
+        for zoom in zooms {
+            let shown = CGSize(width: image.width * scale * CGFloat(zoom),
+                               height: image.height * scale * CGFloat(zoom))
+            for pan in pans {
+                for split in splits {
+                    let center = CGPoint(x: canvas.width / 2 + pan.width,
+                                         y: canvas.height / 2 + pan.height)
+                    let photo = CGRect(x: center.x - shown.width / 2,
+                                       y: center.y - shown.height / 2,
+                                       width: shown.width, height: shown.height)
+                    let label = "canvas \(Int(canvas.width))x\(Int(canvas.height)) zoom \(Int(zoom)) pan (\(Int(pan.width)),\(Int(pan.height))) split \(split)"
+
+                    // The tag strip, derived the way the overlay derives it.
+                    let left = max(0, center.x - shown.width / 2)
+                    let top = max(0, center.y - shown.height / 2)
+                    let right = min(canvas.width, center.x + shown.width / 2)
+                    let bottom = min(canvas.height, center.y + shown.height / 2)
+                    let strip = (right - left > 0 && bottom - top > 0)
+                        ? CGRect(x: left, y: top, width: right - left, height: bottom - top)
+                        : nil
+
+                    // The overlay only draws the split while its boundary is on
+                    // the stage, and the badges cannot be inset further than the
+                    // strip is wide.
+                    let splitX = center.x - shown.width / 2 + shown.width * CGFloat(split)
+                    let expectTags = strip != nil && splitX >= 0 && splitX <= canvas.width
+                        && (strip?.width ?? 0) > 20
+
+                    let obstacles = ToastObstacles.compareWorkspace(canvas: canvas, photo: photo,
+                                                                    compareEnabled: true,
+                                                                    comparePosition: split,
+                                                                    toolOwnsCanvas: false,
+                                                                    peeking: false,
+                                                                    dock: nil)
+
+                    if let strip = strip, let model = obstacles.photo {
+                        let off = max(abs(strip.minX - model.minX), abs(strip.maxX - model.maxX),
+                                      abs(strip.minY - model.minY), abs(strip.maxY - model.maxY))
+                        if off > 0.01 {
+                            mismatches.append("\(label): photo box \(model) vs drawn \(strip)")
+                        }
+                    } else if obstacles.photo != nil {
+                        mismatches.append("\(label): photo box \(String(describing: obstacles.photo)) vs drawn nil")
+                    }
+
+                    let hasTags = obstacles.beforeLabel != nil && obstacles.afterLabel != nil
+                    if hasTags != expectTags {
+                        mismatches.append("\(label): tags \(hasTags) but the overlay draws \(expectTags)")
+                    }
+                    if let strip = strip, let before = obstacles.beforeLabel,
+                       let after = obstacles.afterLabel {
+                        // compareBadge sits inside the strip's own 10 pt padding.
+                        if abs(before.minX - (strip.minX + 10)) > 0.01
+                            || abs(before.minY - (strip.minY + 10)) > 0.01
+                            || abs(after.maxX - (strip.maxX - 10)) > 0.01
+                            || abs(after.minY - (strip.minY + 10)) > 0.01 {
+                            mismatches.append("\(label): tags \(before)/\(after) vs strip \(strip)")
+                        }
+                    }
+
+                    if let handle = obstacles.compareHandle {
+                        if abs(handle.minX - (splitX - 14)) > 0.01
+                            || abs(handle.maxX - (splitX + 14)) > 0.01 {
+                            mismatches.append("\(label): handle \(handle) vs split x \(splitX)")
+                        }
+                        // The column is drawn as tall as max(displayed, canvas)
+                        // around center.y and then clipped to the canvas, so the
+                        // reservation has to cover whatever survives the clip.
+                        let lineHeight = max(shown.height, canvas.height)
+                        let drawnTop = max(0, center.y - lineHeight / 2)
+                        let drawnBottom = min(canvas.height, center.y + lineHeight / 2)
+                        if drawnBottom - drawnTop > 0
+                            && (handle.minY > drawnTop + 0.01 || handle.maxY < drawnBottom - 0.01) {
+                            mismatches.append("\(label): handle \(handle) vs drawn span \(drawnTop)–\(drawnBottom)")
+                        }
+                    }
+
+                    let stage = CGRect(origin: .zero, size: canvas)
+                    for box in obstacles.hardRects {
+                        // The reservation may overhang the edge — at split 0 and
+                        // 1 the divider's 28 pt grab strip straddles it and the
+                        // overlay clips the drawing — but a box wholly off the
+                        // stage would mean the pill is dodging nothing.
+                        if !stage.intersects(box) {
+                            mismatches.append("\(label): obstacle \(box) is off the stage")
+                        }
+                    }
+                    states += 1
+                }
+            }
+        }
+    }
+    check(states == 120, "every zoom and pan state was exercised", "\(states)")
+    check(mismatches.isEmpty, "the obstacles match what the shell draws",
+          mismatches.prefix(6).joined(separator: " | "))
 }
