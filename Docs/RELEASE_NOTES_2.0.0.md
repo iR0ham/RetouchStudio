@@ -1,6 +1,6 @@
 # Retouch Studio 2.0.0 · نسخهٔ ۲٫۰٫۰
 
-**English** · [فارسی](#retouch-studio-200--نسخهٔ-۲۰۰)
+**English** · **فارسی** — every section below is written in both languages, English first.
 
 *Retouch Studio is a local-first portrait retouching studio for macOS. Analysis, editing,
 masking, upscaling and export all run on your own Mac: there is no account, no subscription, no
