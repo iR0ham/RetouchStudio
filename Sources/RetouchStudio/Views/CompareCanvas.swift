@@ -8,6 +8,10 @@ struct CompareCanvas: View {
     @State private var panStart: CGSize?
     @State private var isPanning = false
     @State private var compareDrag: (fraction: Double, x: CGFloat)?
+    /// Natural size of the status pill and the canvas dock, measured so the
+    /// toast can be placed without guessing how wide its text is.
+    @State private var toastSize = CGSize(width: 200, height: 26)
+    @State private var dockSize = CGSize.zero
 
     /// Canvas-wide coordinate space. The handle moves as it is dragged, so
     /// measuring the gesture against a space that stays put is the only way
@@ -74,20 +78,42 @@ struct CompareCanvas: View {
             events.start()
         }
         .onDisappear { events.stop() }
+        // A hidden twin keeps the pill's natural size current even while no
+        // toast is showing; the visible pill is fitted to whatever width the
+        // placement can spare.
         .overlay(alignment: .topLeading) {
-            // The face count lives in the status card; this pill is only for
-            // what just happened, so it does not sit there repeating itself.
-            if model.isBusy || showsToast {
-                statusPill.padding(14)
-                    .transition(.opacity.combined(with: .offset(y: -6)))
-            }
+            statusPill
+                .fixedSize()
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: ToastSizeKey.self, value: proxy.size)
+                    }
+                )
+                .hidden()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
+        .overlay { statusOverlay }
         .animation(Motion.smooth, value: model.status)
         .animation(Motion.smooth, value: model.isBusy)
         .overlay(alignment: .bottom) {
             if model.hasImage {
-                canvasDock.padding(.bottom, 14)
+                canvasDock
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: DockSizeKey.self, value: proxy.size)
+                        }
+                    )
+                    .padding(.bottom, Theme.Metrics.gutter)
             }
+        }
+        // The handlers sit after every overlay that reports a size, or their
+        // preferences would never reach them.
+        .onPreferenceChange(ToastSizeKey.self) { size in
+            if size.width > 1, size.height > 1, size != toastSize { toastSize = size }
+        }
+        .onPreferenceChange(DockSizeKey.self) { size in
+            if size != dockSize { dockSize = size }
         }
         .overlay {
             if isDropTarget {
@@ -106,6 +132,63 @@ struct CompareCanvas: View {
         )
         .shadow(color: .black.opacity(0.30), radius: 12, y: 5)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Status toast
+
+    /// The toast floats over the stage without joining its layout, and its
+    /// position is chosen from the canvas geometry. The photo plane is kept
+    /// left-to-right even in a mirrored shell, so the toast's coordinates are
+    /// physical too.
+    private var statusOverlay: some View {
+        GeometryReader { proxy in
+            if model.isBusy || showsToast {
+                statusToast(canvas: proxy.size)
+                    .transition(.opacity.combined(with: .offset(y: -6)))
+            }
+        }
+        .environment(\.layoutDirection, .leftToRight)
+        .allowsHitTesting(false)
+    }
+
+    private func statusToast(canvas: CGSize) -> some View {
+        let frame = ToastPlacement.frame(in: canvas,
+                                         toast: toastSize,
+                                         obstacles: toastObstacles(in: canvas))
+        return statusPill
+            .frame(width: frame.width, alignment: .leading)
+            .position(x: frame.midX, y: frame.midY)
+            .animation(Motion.snappy, value: frame)
+    }
+
+    /// The chrome the pill must clear: the compare tags, the divider's grab
+    /// strip, the dock, and (as a preference) the photo itself.
+    private func toastObstacles(in canvas: CGSize) -> ToastObstacles {
+        guard model.hasImage, canvas.width > 0, canvas.height > 0 else { return ToastObstacles() }
+        let displayed = model.displayedCanvasSize
+        guard displayed.width > 0, displayed.height > 0 else { return ToastObstacles() }
+
+        let center = CGPoint(x: canvas.width / 2 + model.panOffset.width,
+                             y: canvas.height / 2 + model.panOffset.height)
+        let photo = CGRect(x: center.x - displayed.width / 2,
+                           y: center.y - displayed.height / 2,
+                           width: displayed.width,
+                           height: displayed.height)
+        let dock: CGRect? = {
+            guard dockSize.width > 0, dockSize.height > 0 else { return nil }
+            return CGRect(x: (canvas.width - dockSize.width) / 2,
+                          y: canvas.height - Theme.Metrics.gutter - dockSize.height,
+                          width: dockSize.width,
+                          height: dockSize.height)
+        }()
+
+        return ToastObstacles.compareWorkspace(canvas: canvas,
+                                               photo: photo,
+                                               compareEnabled: model.compareEnabled,
+                                               comparePosition: model.comparePosition,
+                                               toolOwnsCanvas: model.toolOwnsCanvas,
+                                               peeking: model.isPeekingOriginal,
+                                               dock: dock)
     }
 
     // MARK: - Canvas
@@ -515,6 +598,22 @@ private struct DockButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Theme.bone.opacity(configuration.isPressed ? 0.08 : 0))
             )
+    }
+}
+
+/// Natural size of the measuring twin behind the status pill.
+private struct ToastSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = ToastPlacement.mergedMeasurement(value, nextValue())
+    }
+}
+
+/// Natural size of the zoom/compare dock, so the toast can sit beside it.
+private struct DockSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = ToastPlacement.mergedMeasurement(value, nextValue())
     }
 }
 

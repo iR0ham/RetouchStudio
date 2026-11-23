@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import CoreImage
+import CoreText
 import Dispatch
 import Foundation
 import StudioCore
@@ -7431,6 +7432,7 @@ func runAll() async {
     testAIEditStoreProvenance()
     await testModelStoresMaskBesideEdit()
     testPersianStorageSizeIsOneIsolatedRun()
+    testStatusToastStaysClearOfCompareChrome()
 
     // Invalidate any debounced write left by the last scenario: the scratch
     // directory is about to disappear, and no timer may outlive it.
@@ -7823,3 +7825,262 @@ func testModelStoresMaskBesideEdit() async {
     check(await waitUntil { !m5Model.isBusy }, "the preview settles again")
 }
 
+
+// MARK: - Canvas status placement
+
+/// The success toast used to be pinned to the top-leading corner, which is
+/// exactly where the BEFORE tag sits once the photo reaches the top of the
+/// canvas. These checks drive the pure placement rule through every state the
+/// compare workspace can be in, including a resize sweep.
+@MainActor
+func testStatusToastStaysClearOfCompareChrome() {
+    print("\n[ui] the status toast stays clear of the compare labels and controls")
+
+    let toast = CGSize(width: 232, height: 24)
+
+    func overlaps(_ a: CGRect, _ b: CGRect) -> Bool {
+        let hit = a.intersection(b)
+        return !hit.isNull && hit.width > 0.5 && hit.height > 0.5
+    }
+
+    func photoRect(canvas: CGSize, image: CGSize, zoom: Double = 1,
+                   pan: CGSize = .zero) -> CGRect {
+        let scale = min(canvas.width / image.width, canvas.height / image.height)
+        let shown = CGSize(width: image.width * scale * zoom, height: image.height * scale * zoom)
+        return CGRect(x: canvas.width / 2 + pan.width - shown.width / 2,
+                      y: canvas.height / 2 + pan.height - shown.height / 2,
+                      width: shown.width, height: shown.height)
+    }
+
+    /// The dock stands in for the 337 pt pill measured in the running app.
+    func dockRect(in canvas: CGSize) -> CGRect {
+        let size = CGSize(width: 337, height: 36)
+        return CGRect(x: (canvas.width - size.width) / 2,
+                      y: canvas.height - 14 - size.height,
+                      width: size.width, height: size.height)
+    }
+
+    func placement(canvas: CGSize, photo: CGRect, split: Double = 0.45,
+                   compare: Bool = true, peeking: Bool = false, toolOwns: Bool = false)
+        -> (frame: CGRect, obstacles: ToastObstacles, dock: CGRect) {
+        let dock = dockRect(in: canvas)
+        let obstacles = ToastObstacles.compareWorkspace(canvas: canvas, photo: photo,
+                                                        compareEnabled: compare,
+                                                        comparePosition: split,
+                                                        toolOwnsCanvas: toolOwns,
+                                                        peeking: peeking,
+                                                        dock: dock)
+        return (ToastPlacement.frame(in: canvas, toast: toast, obstacles: obstacles),
+                obstacles, dock)
+    }
+
+    func violation(_ frame: CGRect, _ obstacles: ToastObstacles, dock: CGRect,
+                   canvas: CGSize) -> String? {
+        if frame.minX < -0.01 || frame.minY < -0.01
+            || frame.maxX > canvas.width + 0.01 || frame.maxY > canvas.height + 0.01 {
+            return "left the canvas: \(frame)"
+        }
+        if let tag = obstacles.beforeLabel, overlaps(frame, tag) {
+            return "covered BEFORE: \(frame) vs \(tag)"
+        }
+        if let tag = obstacles.afterLabel, overlaps(frame, tag) {
+            return "covered AFTER: \(frame) vs \(tag)"
+        }
+        if let handle = obstacles.compareHandle, overlaps(frame, handle) {
+            return "covered the split handle: \(frame) vs \(handle)"
+        }
+        if overlaps(frame, dock) {
+            return "covered the dock: \(frame) vs \(dock)"
+        }
+        if frame.width + 0.01 < ToastPlacement.minimumWidth {
+            return "shrank to \(Int(frame.width)) pt"
+        }
+        return nil
+    }
+
+    func assertClear(_ frame: CGRect, _ obstacles: ToastObstacles, dock: CGRect,
+                     canvas: CGSize, _ label: String) {
+        let problem = violation(frame, obstacles, dock: dock, canvas: canvas)
+        check(problem == nil, "\(label): clear of labels, handle and dock",
+              problem ?? "\(frame)")
+    }
+
+    // The reported case: a photo that fills the canvas with the split at 45%.
+    let fullCanvas = CGSize(width: 654, height: 772)
+    let fullPhoto = CGRect(origin: .zero, size: fullCanvas)
+    let (fullFrame, fullObstacles, fullDock) = placement(canvas: fullCanvas, photo: fullPhoto)
+    let oldCorner = CGRect(x: 14, y: 14, width: toast.width, height: toast.height)
+    check(overlaps(oldCorner, fullObstacles.beforeLabel!),
+          "the old top-leading pill would have covered BEFORE")
+    assertClear(fullFrame, fullObstacles, dock: fullDock, canvas: fullCanvas, "full-bleed")
+
+    // Window widths from the editor's minimum to a wide screen, three photo
+    // shapes, and the split at both ends and in common places.
+    let canvases = [CGSize(width: 454, height: 612), fullCanvas,
+                    CGSize(width: 1100, height: 900)]
+    let images = [CGSize(width: 1200, height: 800), CGSize(width: 800, height: 1200),
+                  CGSize(width: 1000, height: 1000)]
+    let splits: [Double] = [0, 0.45, 0.5, 1]
+    var states = 0
+    for canvas in canvases {
+        for image in images {
+            for split in splits {
+                let (frame, obstacles, dock) = placement(
+                    canvas: canvas,
+                    photo: photoRect(canvas: canvas, image: image),
+                    split: split)
+                assertClear(frame, obstacles, dock: dock, canvas: canvas,
+                            "compare \(Int(canvas.width))x\(Int(canvas.height)) split \(split)")
+                states += 1
+            }
+        }
+    }
+    check(states == 36, "every compare state was exercised", "\(states)")
+
+    // Zoom and pan make the photo fill the canvas in a different place.
+    let zoomed = placement(canvas: fullCanvas,
+                           photo: photoRect(canvas: fullCanvas,
+                                            image: CGSize(width: 800, height: 1200),
+                                            zoom: 2,
+                                            pan: CGSize(width: 120, height: -200)))
+    assertClear(zoomed.frame, zoomed.obstacles, dock: zoomed.dock,
+                canvas: fullCanvas, "zoomed and panned")
+
+    // Grow the canvas in each direction one step at a time; the placement has
+    // to stay legal on the way, not just at the endpoints.
+    var widthSweep: String?
+    for width in stride(from: 454.0, through: 900.0, by: 7.0) {
+        let canvas = CGSize(width: width, height: 700)
+        let result = placement(canvas: canvas,
+                               photo: photoRect(canvas: canvas,
+                                                image: CGSize(width: 900, height: 700)))
+        if let problem = violation(result.frame, result.obstacles,
+                                   dock: result.dock, canvas: canvas) {
+            widthSweep = "width \(Int(width)): \(problem)"
+            break
+        }
+    }
+    check(widthSweep == nil, "resizing the width keeps the toast clear", widthSweep ?? "")
+
+    var heightSweep: String?
+    for height in stride(from: 612.0, through: 1000.0, by: 11.0) {
+        let canvas = CGSize(width: 654, height: height)
+        let result = placement(canvas: canvas,
+                               photo: photoRect(canvas: canvas,
+                                                image: CGSize(width: 1200, height: 800)),
+                               split: 0.5)
+        if let problem = violation(result.frame, result.obstacles,
+                                   dock: result.dock, canvas: canvas) {
+            heightSweep = "height \(Int(height)): \(problem)"
+            break
+        }
+    }
+    check(heightSweep == nil, "resizing the height keeps the toast clear", heightSweep ?? "")
+
+    // With Compare off there are no tags or divider to dodge, so the pill keeps
+    // its original corner.
+    let plain = placement(canvas: fullCanvas, photo: fullPhoto, compare: false)
+    check(plain.obstacles.beforeLabel == nil && plain.obstacles.afterLabel == nil
+            && plain.obstacles.compareHandle == nil,
+          "Compare off leaves no tags or handle")
+    check(plain.frame.origin == CGPoint(x: ToastPlacement.margin, y: ToastPlacement.margin),
+          "Compare off keeps the top-leading pill")
+
+    // Holding Space paints the original over the split, so the AFTER tag and the
+    // divider leave the stage — but a single BEFORE badge stays, drawn against
+    // the canvas' own top-leading corner and ungated by Compare or by the tool
+    // mode (CompareCanvas.swift:339-348). The pill has to clear it like any
+    // other piece of chrome; treating the peek as tag-free parked the toast
+    // straight on top of it, which is the defect this test is for.
+    let peek = placement(canvas: fullCanvas, photo: fullPhoto, peeking: true)
+    check(peek.obstacles.afterLabel == nil && peek.obstacles.compareHandle == nil,
+          "the peek drops the AFTER tag and the handle")
+    check(peek.obstacles.beforeLabel
+            == CGRect(x: ToastPlacement.labelInset, y: ToastPlacement.labelInset,
+                      width: ToastPlacement.labelReserveWidth,
+                      height: ToastPlacement.labelHeight),
+          "the peek keeps a BEFORE badge against the canvas corner",
+          String(describing: peek.obstacles.beforeLabel))
+    assertClear(peek.frame, peek.obstacles, dock: peek.dock, canvas: fullCanvas, "peek")
+    if let badge = peek.obstacles.beforeLabel {
+        check(peek.frame.minX >= badge.maxX + ToastPlacement.clearance - 0.01
+                || peek.frame.minY >= badge.maxY + ToastPlacement.clearance - 0.01,
+              "the toast keeps its clearance beside or below the peek badge",
+              "\(peek.frame) vs \(badge)")
+    }
+
+    check(overlaps(oldCorner, peek.obstacles.beforeLabel!),
+          "the old top-leading pill would have covered the peek badge too")
+
+    // Compare off and a tool holding the canvas both still draw that badge, so
+    // neither may hand the corner back to the pill.
+    let peekPlain = placement(canvas: fullCanvas, photo: fullPhoto,
+                              compare: false, peeking: true)
+    check(peekPlain.obstacles.beforeLabel != nil,
+          "Compare off peeks with a BEFORE badge")
+    assertClear(peekPlain.frame, peekPlain.obstacles, dock: peekPlain.dock, canvas: fullCanvas,
+                "peek with Compare off")
+    let peekTool = placement(canvas: fullCanvas, photo: fullPhoto,
+                             peeking: true, toolOwns: true)
+    check(peekTool.obstacles.beforeLabel != nil,
+          "a tool on the canvas peeks with a BEFORE badge")
+    assertClear(peekTool.frame, peekTool.obstacles, dock: peekTool.dock, canvas: fullCanvas,
+                "peek with a tool owning the canvas")
+
+    // A canvas barely wider than the badge cannot get out of its way sideways, so
+    // the search has to drop the pill below the badge instead of covering it.
+    let tightCanvas = CGSize(width: 220, height: 150)
+    let tight = placement(canvas: tightCanvas,
+                          photo: CGRect(origin: .zero, size: tightCanvas), peeking: true)
+    assertClear(tight.frame, tight.obstacles, dock: tight.dock, canvas: tightCanvas,
+                "peek in a tight canvas")
+
+    // The sizes reach the toast through preferences, whose reduce runs once per
+    // child. A child that never measured reports the default, and taking that
+    // default blindly erased the twin's real measurement: the pill kept its
+    // fallback 200 pt width and could truncate or misplace a longer message.
+    let measured = CGSize(width: 154, height: 27)
+    check(ToastPlacement.mergedMeasurement(.zero, measured) == measured,
+          "a real measurement replaces the default")
+    check(ToastPlacement.mergedMeasurement(measured, .zero) == measured,
+          "a later default child cannot wipe the measurement")
+    let newer = CGSize(width: 208, height: 27)
+    check(ToastPlacement.mergedMeasurement(measured, newer) == newer,
+          "a newer measurement wins")
+
+    // The reservations only protect the owner if they describe what the shell
+    // actually draws. The badge is `Text` in Vazirmatn-SemiBold at 9 pt with
+    // tracking 0.6 and 3 pt vertical / 7 pt horizontal padding
+    // (CompareCanvas.swift:442-458), so measure that face from the file the app
+    // ships instead of trusting a hand-picked constant: a type change that
+    // grows the tag must not leave the pill believing it cleared a taller one.
+    let faceURL = testsDirectory().deletingLastPathComponent()
+        .appendingPathComponent("Resources/Fonts/Vazirmatn-SemiBold.ttf")
+    let descriptors = CTFontManagerCreateFontDescriptorsFromURL(faceURL as CFURL) as? [CTFontDescriptor]
+    guard let descriptor = descriptors?.first else {
+        check(false, "the badge face can be measured from the shipped font", faceURL.path)
+        return
+    }
+    let badgeFont = CTFontCreateWithFontDescriptor(descriptor, 9, nil)
+    let badgeHeight = CTFontGetAscent(badgeFont) + CTFontGetDescent(badgeFont)
+        + CTFontGetLeading(badgeFont) + 6
+
+    func tagWidth(_ text: String) -> CGFloat {
+        let attributes: [NSAttributedString.Key: Any] = [.font: badgeFont, .kern: 0.6]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text.uppercased(),
+                                                                      attributes: attributes))
+        return ceil(CTLineGetTypographicBounds(line, nil, nil, nil)) + 14
+    }
+
+    let widestTag = max(tagWidth(L10n().before), tagWidth(L10n().after),
+                        tagWidth(PersianL10n.table.before), tagWidth(PersianL10n.table.after))
+    check(ToastPlacement.labelHeight + 0.01 >= badgeHeight,
+          "the label reservation is at least as tall as the badge",
+          "badge \(badgeHeight) pt vs reserve \(ToastPlacement.labelHeight) pt")
+    check(ToastPlacement.labelReserveWidth >= widestTag,
+          "the label reservation is wide enough for the widest localised tag",
+          "widest \(widestTag) pt vs reserve \(ToastPlacement.labelReserveWidth) pt")
+    // The divider obstacle models the strip that grabs it, not the 1 pt line.
+    check(ToastPlacement.handleWidth == 28,
+          "the handle reservation matches the drag strip in CompareCanvas.swift:403")
+}
