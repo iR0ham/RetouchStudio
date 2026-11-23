@@ -149,6 +149,11 @@ That last line must print `b3711d0c…2ed2b4`, i.e. the digest above, **before**
 form `shasum -a 256 -c "RetouchStudio-0.0.0-ci-arm64.dmg.sha256"` must print `: OK`. Any other digest ⇒ stop,
 you are not holding the accepted build (§2, row 2.0).
 
+A verified copy is already staged on this Mac at `~/Downloads/rs-rc-0758ad8/RetouchStudio-0.0.0-ci-arm64.dmg`
+beside its sidecar; the re-hash and `hdiutil verify` that prove it are recorded in ledger S.14.2. Treat that
+directory as convenience, not provenance — it is outside the repository and can be moved or cleaned, so re-derive
+from the run above whenever the digest does not answer.
+
 **Two traps on this Mac right now, both real:**
 
 1. A **different** arm64 DMG from a different run exists locally

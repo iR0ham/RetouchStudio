@@ -2908,11 +2908,12 @@ freeze S.12.9 chose covers documentation only. They are also a live trap for the
 defined string and a translated twin as evidence that a Download affordance exists in the Model Manager.
 
 > **Dated marker, 2026-11-23 (S.14):** the three bare line anchors above are historical and now point elsewhere —
-> S.14's own additions to that pack pushed those unchanged sentences to `:565`, `:583` and `:858` (re-measured after
-> the edit; the quoted text is identical). The lesson is the one this addendum series keeps learning: **a line anchor
-> into a document that the same ledger keeps appending to is not durable**, and an "is the line non-blank" probe
-> cannot see the difference. Resolve them by section instead — §9's chip paragraph, §9's Verify paragraph, §14
-> row 16.
+> S.14's own additions to that pack pushed those unchanged sentences (the quoted text is identical). The lesson is
+> the one this addendum series keeps learning: **a line anchor into a document that the same ledger keeps appending
+> to is not durable**, and an "is the line non-blank" probe cannot see the difference. Measured again on the head of
+> this PR — `:571`, `:589`, `:864` — which is the third different set of numbers this one sentence has carried, so
+> treat any number here as a snapshot and **resolve them by section instead**: §9's chip paragraph, §9's Verify
+> paragraph, §14 row 16.
 
 ### S.13.4 The one test anchor that no longer points where its comment says
 
@@ -3007,6 +3008,16 @@ Two hazards this naming removes, both of them real on this machine right now:
   path. The missing quarantine attribute is measured, not assumed: it confirms the warning §0 already carried —
   a Gatekeeper outcome taken from an Actions zip round-trip is **indicative only**, and a silent double-click is an
   artefact of the transport rather than a verdict about ad-hoc signing.
+- *Superseding half of the bullet above, same night, because the owner asked for a location and not only a recipe:*
+  the accepted image **is** now staged at a durable path — `~/Downloads/rs-rc-0758ad8/RetouchStudio-0.0.0-ci-arm64.dmg`
+  beside the sidecar `RetouchStudio-0.0.0-ci-arm64.dmg.sha256` — so §0b names that path too. Verification re-run there
+  on 2026-11-23, output quoted rather than summarised: `shasum -a 256 -c RetouchStudio-0.0.0-ci-arm64.dmg.sha256` →
+  `RetouchStudio-0.0.0-ci-arm64.dmg: OK`; `shasum -a 256 RetouchStudio-0.0.0-ci-arm64.dmg` → `b3711d0c…2ed2b4`;
+  `hdiutil verify RetouchStudio-0.0.0-ci-arm64.dmg` → `hdiutil: verify: checksum of "RetouchStudio-0.0.0-ci-arm64.dmg"
+  is VALID`, after every master block reported `verified CRC32 …` and the image-wide value `CRC32 $7E7AA1F5`.
+  Downloads was chosen over
+  `/private/tmp` precisely because the previous bullet's objection stands; the fetch recipe stays authoritative, and
+  a staged copy is still only an assertion until someone re-hashes it.
 
 ### S.14.3 The 75-vs-72 discrepancy, closed by adding the rows
 
