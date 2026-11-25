@@ -621,7 +621,7 @@ public sealed class ModelStore
                 {
                     response.Dispose();
                 }
-                uri = target!.Value;
+                uri = target!;
                 // The hop passed the rule, so it belongs in the audit trail: the
                 // parameter promises the origin plus every admitted hop, which is
                 // exactly what the macOS delegate reports through `onRedirect`.
