@@ -161,6 +161,21 @@ else
   exit 1
 fi
 
+# The independent M3 reference is exact developer-runtime evidence. Stage only
+# the canonical six-file fixture; there is no developer-root override, fallback
+# or tolerance. Validate both source and staged bytes before any code is signed.
+M3_SOURCE="$PWD/Tests/Fixtures/upscale-m3"
+M3_DEST="$APP_BUNDLE/Contents/Resources/Tests/Fixtures/upscale-m3"
+M3_FILES=(manifest.json source.rgb input.f32 reference.mps.rgb reference.cpu.rgb bicubic.rgb)
+/usr/bin/python3 "$PWD/Tools/validate-m3-fixture.py" verify-source \
+  "$M3_SOURCE" "$PWD/Resources/model-catalog.json"
+mkdir -p "$M3_DEST"
+for m3_file in "${M3_FILES[@]}"; do
+  cp "$M3_SOURCE/$m3_file" "$M3_DEST/$m3_file"
+done
+/usr/bin/python3 "$PWD/Tools/validate-m3-fixture.py" verify-source \
+  "$M3_DEST" "$APP_BUNDLE/Contents/Resources/model-catalog.json"
+
 # Python interpreter, wheels and the worker package, so the app does not depend
 # on this checkout or on Homebrew. Model weights stay out: they are downloaded
 # by explicit consent. The worker source and its hashed lockfile live in this
@@ -216,17 +231,31 @@ if [ -d "$APP_BUNDLE/Contents/Resources/Worker" ]; then
   done < <(find "$APP_BUNDLE/Contents/Resources/Worker" -type f \
              \( -name '*.so' -o -name '*.dylib' -o -perm -111 \) -print0 2>/dev/null || true)
   echo "  · nested Mach-O signed: $nested"
+  # bundle-worker.sh seals its ad-hoc signatures, but the final nested signing
+  # above can replace those bytes (and always does for Developer ID/Hardened
+  # Runtime). Re-seal the exact signed tree before the outer signature covers it.
+  /usr/bin/python3 "$PWD/Tools/worker-integrity.py" write \
+    "$APP_BUNDLE/Contents/Resources/Worker"
 fi
 codesign "${SIGN_ARGS[@]}" --sign "$SIGN_TARGET" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
 
 echo "→ بررسی بسته…"
-./Tools/validate-bundle.sh "$APP_BUNDLE" "$BUNDLE_ARCH" || exit 1
+if [ "${RETOUCH_SKIP_WORKER:-}" = "1" ]; then
+  WORKER_POLICY="--forbid-worker"
+else
+  WORKER_POLICY="--require-worker"
+fi
+./Tools/validate-bundle.sh "$APP_BUNDLE" "$BUNDLE_ARCH" "$WORKER_POLICY" || exit 1
 
 echo "→ بررسی سلامت موتور پردازش…"
 mkdir -p build/selftest
 BUNDLED_BINARY="$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
-if "$BUNDLED_BINARY" --selftest --out build/selftest > build/selftest/selftest.log 2>&1; then
+SELFTEST_ARGS=(--selftest --out build/selftest)
+if [ "$WORKER_POLICY" = "--require-worker" ] && [ "$BUNDLE_ARCH" = "arm64" ]; then
+  SELFTEST_ARGS+=(--require-worker)
+fi
+if "$BUNDLED_BINARY" "${SELFTEST_ARGS[@]}" > build/selftest/selftest.log 2>&1; then
   echo "  ✓ خودآزمون پردازش پاس شد"
 else
   echo "✗ خودآزمون پردازش خطا داد — بیلد متوقف شد." >&2
