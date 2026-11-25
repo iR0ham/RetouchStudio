@@ -657,7 +657,8 @@ struct PackagedUpscaleSelfTest {
         guard let context = CGContext(data: &bytes, width: width, height: height,
                                       bitsPerComponent: 8, bytesPerRow: width * 4,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                      bitmapInfo: [.byteOrder32Big, CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)]) else { return nil }
+                                      bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                                          CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)).rawValue) else { return nil }
         context.interpolationQuality = interpolation
         context.draw(source, in: CGRect(origin: .zero, size: size))
         return bytes
