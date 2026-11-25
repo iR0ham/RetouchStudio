@@ -749,12 +749,36 @@ final class PersianL10n: L10n {
     }
     override func modelsConsentBody(files: Int, size: String, codeLicense: String,
                                     weightsLicense: String, host: String, sha: String) -> String {
+        modelsConsentBody(files: files, size: size, codeLicense: codeLicense,
+                          weightsLicense: weightsLicense, host: host, sha: sha,
+                          redirectHosts: [])
+    }
+
+    /// The size arrives as the Latin string its formatter wrote, so it goes through
+    /// `Digits.size` like every other Persian readout. `L10n.byteSize(_:)` cannot be
+    /// used here: it is a *static* method on the base class, so Swift resolves it at
+    /// compile time and no Persian override can ever run — which is how the raw byte
+    /// count reached the middle of a Persian sentence.
+    override func modelsConsentBody(files: Int, size: String, codeLicense: String,
+                                    weightsLicense: String, host: String, sha: String,
+                                    redirectHosts: [String]) -> String {
         """
-        \(Digits.persian(String(files))) فایل، \(L10n.byteSize(size))، از \(host).
+        \(Digits.persian(String(files))) فایل، \(Digits.size(size, language: .persian))، از \(host).
+        \(modelsRedirectDisclosure(redirectHosts))
         مجوز کد: \(codeLicense). مجوز وزن‌ها: \(weightsLicense).
         SHA-256 (مانیفست): \(sha)…
         این تنها مرحله‌ای است که از اینترنت استفاده می‌کند. چیزی نصب نمی‌شود مگر آنکه هر فایل با اندازه و چک‌سام خودش مطابقت داشته باشد.
         """
+    }
+
+    /// میزبان‌ها و پیشوند مسیر به‌صورت خودِ توکن فنی و در یک گریهٔ جدا نوشته
+    /// می‌شوند؛ رقمی اینجا فارسی نمی‌شود چون هیچ عددی در فهرست نیست.
+    override func modelsRedirectDisclosure(_ hosts: [String]) -> String {
+        guard !hosts.isEmpty else {
+            return "هیچ میزبان دیگری نمی‌تواند این فایل‌ها را بدهد؛ هر تغییر مسیر رد می‌شود."
+        }
+        let names = hosts.map { Digits.isolate($0) }.joined(separator: "، ")
+        return "اگر منبع تغییر مسیر بدهد، تنها مقصدهای مجاز این‌ها هستند: \(names)."
     }
     /// The sizes arrive as the Latin strings their formatters write, so this
     /// table converts each one here: Persian digits, the Latin unit token and

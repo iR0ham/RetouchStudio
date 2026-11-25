@@ -26,6 +26,20 @@ public sealed class ModelPreprocess
     public string Version { get; set; } = "";
 }
 
+/// <summary>
+/// One redirect destination the catalog admits: a host plus the path class on
+/// that host. Both halves are required, because Hugging Face answers a binary
+/// file with <c>302</c> to <c>us.aws.cdn.hf.co/xet-bridge-us/…</c> and a config
+/// file with a relative <c>307</c> to <c>huggingface.co/api/resolve-cache/…</c>.
+/// An absent catalog key means no rules, which is the historical
+/// refuse-every-redirect behaviour.
+/// </summary>
+public sealed class ModelRedirectRule
+{
+    public string Host { get; set; } = "";
+    public string PathPrefix { get; set; } = "";
+}
+
 /// <summary>Everything the manager needs to show and install one version.</summary>
 public sealed class ModelCatalogEntry
 {
@@ -84,6 +98,13 @@ public sealed class ModelCatalog
     public string CatalogVersion { get; set; } = "";
     public List<ModelCatalogEntry> Entries { get; set; } = new();
 
+    /// <summary>
+    /// Host-and-path-class destinations a download may be redirected to. Absent
+    /// in the JSON decodes to an empty list, so the safe default is "no
+    /// redirects", exactly as before this key existed.
+    /// </summary>
+    public List<ModelRedirectRule> RedirectAllowList { get; set; } = new();
+
     public ModelCatalogEntry? Entry(string id) =>
         Entries.FirstOrDefault(e => e.Id == id);
 
@@ -106,6 +127,8 @@ public sealed class ModelCatalog
                 throw new ModelStoreError("E_INVALID_INPUT",
                     $"unsupported catalog schema {catalog.Schema}");
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var rule in catalog.RedirectAllowList)
+                ModelCatalogRules.ValidateRedirectRule(rule);
             foreach (var entry in catalog.Entries)
             {
                 if (!seen.Add(entry.Id))
@@ -171,7 +194,7 @@ public static class ModelCatalogRules
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length > 0 ||
-            url.Contains('#'))
+            url.Contains('#') || RawAuthorityContainsAt(url))
             return false;
         var https = uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
         var testHttp = allowLocalHttp &&
@@ -182,7 +205,8 @@ public static class ModelCatalogRules
     }
 
     public static bool IsAllowedPort(Uri uri, bool allowLocalHttp) =>
-        uri.IsDefaultPort || (allowLocalHttp && IsLoopback(uri));
+        uri.IsDefaultPort || (allowLocalHttp && IsLoopback(uri) &&
+            uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// A file must come from the entry's recorded source: same scheme, same
@@ -205,6 +229,167 @@ public static class ModelCatalogRules
     public static bool IsLoopback(Uri uri) =>
         uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
         uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A path prefix is a destination policy, not a traversal defence. Refuse
+    /// dot segments and encoded separators before normalization, including
+    /// repeated percent-encoding. A stable literal percent sign is valid; an
+    /// escape sequence that never stabilizes fails closed.
+    /// </summary>
+    internal static bool IsSafeRedirectPath(string path)
+    {
+        static bool Unsafe(string value) =>
+            value is "." or ".." || value.Contains('/') || value.Contains('\\');
+
+        foreach (var segment in path.Split('/'))
+        {
+            var value = segment;
+            var stable = false;
+            for (var depth = 0; depth < 8; depth++)
+            {
+                if (Unsafe(value)) return false;
+                if (!value.Contains('%'))
+                {
+                    stable = true;
+                    break;
+                }
+                var decoded = Uri.UnescapeDataString(value);
+                if (decoded == value)
+                {
+                    stable = true;
+                    break;
+                }
+                value = decoded;
+            }
+            if (!stable || Unsafe(value)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// An at sign is forbidden only in the authority. Inspecting the raw text is
+    /// necessary because an empty userinfo can canonicalize to an absent one.
+    /// </summary>
+    internal static bool RawAuthorityContainsAt(string value)
+    {
+        var start = value.StartsWith("//", StringComparison.Ordinal) ? 2 : -1;
+        if (start < 0)
+        {
+            var scheme = value.IndexOf("://", StringComparison.Ordinal);
+            if (scheme >= 0) start = scheme + 3;
+        }
+        if (start < 0) return false;
+        var end = value.IndexOfAny(['/', '?', '#'], start);
+        var authority = end < 0 ? value[start..] : value[start..end];
+        return authority.Contains('@');
+    }
+
+    /// <summary>
+    /// Validates the path carried by a raw Location before Uri resolution can
+    /// remove literal dot segments. This parses only enough URI-reference syntax
+    /// to find the path; authority, scheme, port and fragment checks still belong
+    /// to the resolved destination. Nothing here echoes the raw header.
+    /// </summary>
+    internal static bool IsSafeRawRedirectPath(string location)
+    {
+        var reference = location.Trim();
+        if (reference.Length == 0 || reference.Contains('\\')) return false;
+
+        var path = reference;
+        var delimiter = path.IndexOfAny(['/', '?', '#']);
+        var colon = path.IndexOf(':');
+        if (colon >= 0 && (delimiter < 0 || colon < delimiter))
+        {
+            var scheme = path[..colon];
+            if (scheme.Length == 0 || !char.IsAsciiLetter(scheme[0]) ||
+                !scheme.All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '-' or '.'))
+                return false;
+            path = path[(colon + 1)..];
+        }
+
+        // Both an absolute URI with an authority and a network-path reference
+        // put the authority between // and the next path/query/fragment marker.
+        if (path.StartsWith("//", StringComparison.Ordinal))
+        {
+            path = path[2..];
+            var authorityEnd = path.IndexOfAny(['/', '?', '#']);
+            path = authorityEnd < 0 ? "" : path[authorityEnd..];
+        }
+        var pathEnd = path.IndexOfAny(['?', '#']);
+        if (pathEnd >= 0) path = path[..pathEnd];
+        if (path.Length == 0) path = "/";
+        else if (!path.StartsWith('/')) path = "/" + path;
+        return IsSafeRedirectPath(path);
+    }
+
+    internal static bool IsSafeRawRedirectLocation(string location) =>
+        !RawAuthorityContainsAt(location) && IsSafeRawRedirectPath(location);
+
+    /// <summary>
+    /// Refuses a redirect rule that cannot be honoured, instead of dropping it
+    /// silently. Host: lowercase, no scheme, no port, no wildcard. Path prefix:
+    /// starts with <c>/</c> and carries no query, fragment, traversal, backslash
+    /// or whitespace. An invalid rule fails the catalog load with the same
+    /// unsafe class every other catalog defect uses.
+    /// </summary>
+    public static void ValidateRedirectRule(ModelRedirectRule rule)
+    {
+        if (string.IsNullOrEmpty(rule.Host))
+            throw Unsafe("a redirect rule has an empty host");
+        if (rule.Host != rule.Host.ToLowerInvariant() || rule.Host.Contains('*'))
+            throw Unsafe($"redirect rule host '{rule.Host}' is not a plain lowercase host");
+        if (!rule.Host.All(IsRedirectHostChar))
+            throw Unsafe($"redirect rule host '{rule.Host}' is not a plain host name");
+        if (string.IsNullOrEmpty(rule.PathPrefix) || !rule.PathPrefix.StartsWith('/'))
+            throw Unsafe($"redirect rule for {rule.Host} has a path prefix not starting with /");
+        foreach (var bad in new[] { "?", "#", "..", "\\" })
+            if (rule.PathPrefix.Contains(bad, StringComparison.Ordinal))
+                throw Unsafe(
+                    $"redirect rule for {rule.Host} has '{bad}' in its path prefix");
+        if (rule.PathPrefix.Any(char.IsWhiteSpace))
+            throw Unsafe($"redirect rule for {rule.Host} has whitespace in its path prefix");
+    }
+
+    private static bool IsRedirectHostChar(char c) =>
+        c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9'
+            or '-' or '.' or '_';
+
+    /// <summary>
+    /// The shape a redirect destination must have, independent of the allow-list:
+    /// the same rules the request URL already passed. A <c>file:</c> or
+    /// <c>ftp:</c> Location, a userinfo, a fragment or a non-default port fails.
+    /// </summary>
+    public static bool IsAllowedRedirectTarget(Uri uri, bool allowLocalHttp)
+    {
+        if (string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length > 0 || uri.Fragment.Length > 0 ||
+            !IsSafeRedirectPath(uri.AbsolutePath))
+            return false;
+        // Inspect only the authority: an empty userinfo must not read as absent,
+        // while an at sign in the path or query is ordinary destination data.
+        if (RawAuthorityContainsAt(uri.OriginalString))
+            return false;
+        var https = uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+        var testHttp = allowLocalHttp &&
+                       uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) &&
+                       IsLoopback(uri);
+        if (!https && !testHttp) return false;
+        return IsAllowedPort(uri, allowLocalHttp);
+    }
+
+    /// <summary>
+    /// The rule that admits <c>uri</c>, if any. Hosts compare as full,
+    /// case-insensitive strings — never suffix, substring or wildcard — and the
+    /// path must sit inside the rule's prefix. An empty list admits nothing.
+    /// </summary>
+    public static ModelRedirectRule? RedirectRuleMatching(Uri uri,
+        IReadOnlyList<ModelRedirectRule> allowList)
+    {
+        if (string.IsNullOrEmpty(uri.Host) || !IsSafeRedirectPath(uri.AbsolutePath)) return null;
+        var path = string.IsNullOrEmpty(uri.AbsolutePath) ? "/" : uri.AbsolutePath;
+        return allowList.FirstOrDefault(rule =>
+            string.Equals(rule.Host, uri.Host, StringComparison.OrdinalIgnoreCase) &&
+            path.StartsWith(rule.PathPrefix, StringComparison.Ordinal));
+    }
 
     public static void RequireComponent(string value, string field)
     {

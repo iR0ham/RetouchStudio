@@ -158,6 +158,7 @@ public static class ModelStoreChecks
         RunBadBytes();
         RunInterruption();
         RunCancellation();
+        RunProgressIdentitySourceContract();
         RunDisk();
         RunSourceAndReparse();
         RunLeases();
@@ -170,6 +171,7 @@ public static class ModelStoreChecks
         RunLegacy();
         RunLegacyLeases();
         RunProductionCatalog();
+        RunRedirects();
         Console.WriteLine(_failures == 0
             ? "MODEL STORE CHECKS: PASS"
             : $"MODEL STORE CHECKS: FAIL ({_failures})");
@@ -332,6 +334,40 @@ public static class ModelStoreChecks
         C(!StagingDirs(store).Any(),
             "cancellation cleaned staging");
         C(store.ActivePointer("fixture-good") is null, "cancellation wrote no pointer");
+    }
+
+    private static void RunProgressIdentitySourceContract()
+    {
+        Console.WriteLine("[M6b] cancelled progress cannot reach a retry (source contract)");
+        var store = File.ReadAllText(Path.Combine(RepositoryRoot, "Windows",
+            "RetouchStudio.AI", "Models", "ModelStore.cs")).ReplaceLineEndings("\n");
+        var window = File.ReadAllText(Path.Combine(RepositoryRoot, "Windows",
+            "RetouchStudio.App", "ModelManagerWindow.xaml.cs")).ReplaceLineEndings("\n");
+
+        C(store.Contains("value => ReportProgress(progress, cancellationToken, value)",
+            StringComparison.Ordinal) &&
+          store.Contains("ReportProgress(progress, cancellationToken, new ModelTransferProgress",
+            StringComparison.Ordinal),
+          "install and adoption both report through the cancellation-aware transfer boundary");
+        C(store.Contains("if (!cancellationToken.IsCancellationRequested)\n" +
+                        "            progress?.Report(value);", StringComparison.Ordinal),
+          "the store does not publish a callback after its transfer is cancelled");
+        C(window.Contains("var generation = ++_transferGeneration;", StringComparison.Ordinal) &&
+          window.Contains("_activeTransferGeneration = generation;", StringComparison.Ordinal) &&
+          window.Contains("TransferProgress(entry, generation)", StringComparison.Ordinal),
+          "each retry receives a new active UI generation");
+
+        var progressStart = window.IndexOf(
+            "private IProgress<ModelTransferProgress> TransferProgress", StringComparison.Ordinal);
+        var progressSource = progressStart < 0 ? "" : window[progressStart..];
+        var guard = progressSource.IndexOf(
+            "if (generation != _activeTransferGeneration || !_busy) return;",
+            StringComparison.Ordinal);
+        var apply = progressSource.IndexOf("var total = update.TotalBytes", StringComparison.Ordinal);
+        C(guard >= 0 && apply > guard,
+          "a queued callback is rejected before it can touch the retry's progress UI");
+        C(window.Contains("_activeTransferGeneration = 0;", StringComparison.Ordinal),
+          "a completed transfer stops accepting queued callbacks");
     }
 
     private static void RunDisk()
@@ -810,6 +846,892 @@ public static class ModelStoreChecks
             "every shipped entry has an HTTPS licence evidence URL");
     }
 
+    // MARK: Redirect policy (R1)
+
+    /// <summary>
+    /// The signed-query token every refusal check looks for. A message that carried
+    /// it would hand out a credential, which is why the Windows client builds its
+    /// text from a re-parsed URI's host and path and never from the raw header.
+    /// Mirrors the macOS suite's marker of the same name.
+    /// </summary>
+    private const string SignedQueryMarker = "sig=xet-signed-token-must-not-appear";
+
+    private static void RunRedirects()
+    {
+        Console.WriteLine("[M19] redirects follow the catalog's host-and-path-class allow-list only");
+
+        // Case 1 — an admitted 302 to another path class downloads the redirected
+        // body, reaches the file, and records the origin plus the hop as host/path
+        // only. Also proves the audit callback really fires for an admitted hop.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/payload.bin", "fixture-one\n");
+            server.Redirect("/redirect-signed/payload.bin",
+                $"/allowed-dest/payload.bin?{SignedQueryMarker}", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            var hops = new List<ModelRedirectHop>();
+            var destination = RedirectDestination(store);
+            RunDownload(store, $"{server.Base}/redirect-signed/payload.bin", destination,
+                RedirectFile(store), hops);
+            C(File.Exists(destination) && File.ReadAllText(destination) == "fixture-one\n",
+                "an allowed 302 downloads the redirected body",
+                File.Exists(destination) ? File.ReadAllText(destination) : "(no file)");
+            C(hops.Select(hop => hop.Path).SequenceEqual(
+                    new[] { "/redirect-signed/payload.bin", "/allowed-dest/payload.bin" }),
+                "the hop list records origin then destination",
+                string.Join(" -> ", hops.Select(hop => hop.Display)));
+            C(hops.Count > 0 && hops[0].StatusCode == 0 && hops.Count > 1 &&
+              hops[1].StatusCode == 302,
+                "the origin carries no status and the hop carries the redirect status",
+                string.Join(",", hops.Select(hop => hop.StatusCode)));
+            C(!hops.Any(hop => hop.Display.Contains(SignedQueryMarker)),
+                "no recorded hop carries the signed query",
+                string.Join(" ", hops.Select(hop => hop.Display)));
+            C(server.Paths[^1] == "/allowed-dest/payload.bin",
+                "the client followed the redirect to the second route",
+                string.Join(" ", server.Paths));
+        }
+
+        // The full install path through the same rule, ending in a verified version.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/payload.bin", "fixture-one\n");
+            server.Redirect("/good/payload.bin",
+                $"/allowed-dest/payload.bin?{SignedQueryMarker}", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            var entry = store.Catalog.Entry("fixture-good")!;
+            var hops = new List<ModelRedirectHop>();
+            // The progress argument is explicit so the hop recorder below cannot be
+            // taken for the IProgress overload.
+            var state = store.InstallAsync(entry, null, hops.Add)
+                .GetAwaiter().GetResult();
+            C(state.Version == "1.0.0" && state.Active,
+                "install reaches a version through a redirect");
+            C(store.Verify(entry, "1.0.0", true).Ok,
+                "the redirect-installed version verifies");
+            C(store.ActivePointer("fixture-good")?.Version == "1.0.0",
+                "the redirect-installed version is active");
+            C(hops.Select(hop => hop.Path).SequenceEqual(
+                    new[] { "/good/payload.bin", "/allowed-dest/payload.bin" }),
+                "InstallAsync forwards the hop recorder it documents",
+                string.Join(" -> ", hops.Select(hop => hop.Display)));
+            C(!hops.Any(hop => hop.Display.Contains(SignedQueryMarker)),
+                "and the install trail leaks nothing",
+                string.Join(" ", hops.Select(hop => hop.Display)));
+            C(!StagingDirs(store).Any(), "a redirect install leaves no staging tree");
+        }
+
+        // Case 2 — Hugging Face's same-host relative 307 changes the path class. A
+        // host-only allow-list would still fail this, so it is asserted separately.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-relative/payload.bin", "fixture-one\n");
+            server.Redirect("/config.json",
+                $"/allowed-relative/payload.bin?{SignedQueryMarker}&etag=W/\"abc\"", status: 307);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-relative/"));
+            var hops = new List<ModelRedirectHop>();
+            var destination = RedirectDestination(store);
+            RunDownload(store, $"{server.Base}/config.json", destination,
+                RedirectFile(store), hops);
+            C(File.Exists(destination) && File.ReadAllText(destination) == "fixture-one\n",
+                "a relative 307 that changes path class is followed");
+            C(hops.Count == 2 && hops[^1].Path == "/allowed-relative/payload.bin" &&
+              hops[^1].Host == "127.0.0.1" && hops[^1].StatusCode == 307,
+                "the relative Location resolved against the request URL",
+                hops.LastOrDefault()?.Display ?? "(none)");
+            C(!hops.Any(hop => hop.Display.Contains("etag") ||
+                               hop.Display.Contains(SignedQueryMarker)),
+                "neither the etag nor the signed query survives into the trail",
+                string.Join(" ", hops.Select(hop => hop.Display)));
+
+            // An at sign in a query is data, not URL authority. The redirect
+            // gate must not reject a valid destination merely for containing it.
+            server.Redirect("/at-query.json",
+                "/allowed-relative/payload.bin?token=a@b", status: 302);
+            var atHops = new List<ModelRedirectHop>();
+            var atDestination = RedirectDestination(store);
+            RunDownload(store, $"{server.Base}/at-query.json", atDestination,
+                RedirectFile(store), atHops);
+            C(File.Exists(atDestination) && File.ReadAllText(atDestination) == "fixture-one\n" &&
+              atHops.Count == 2 && atHops[^1].Path == "/allowed-relative/payload.bin",
+                "an admitted destination may carry an at sign in its query",
+                atHops.LastOrDefault()?.Display ?? "(none)");
+
+            // Dot segments are refused before URI resolution can erase them.
+            // Relative Locations remain supported, but `..` cannot walk out of
+            // the wire path the catalog admitted.
+            server.Serve("/redirected/allowed-relative/payload.bin", "fixture-one\n");
+            server.Redirect("/nested/start.json",
+                "../redirected/allowed-relative/payload.bin", status: 307);
+            var parentStore = MakeRedirectStore(server,
+                Rule("127.0.0.1", "/redirected/allowed-relative/"));
+            var parentHops = new List<ModelRedirectHop>();
+            var parentBefore = server.Count;
+            var parentError = Capture(() => RunDownload(parentStore,
+                $"{server.Base}/nested/start.json", RedirectDestination(parentStore),
+                RedirectFile(parentStore), parentHops));
+            C(parentError?.Message.Contains("refused a redirect") == true,
+                "a parent-relative dot segment is refused before normalization",
+                parentError?.Message);
+            C(server.Count == parentBefore + 1 && server.Paths[^1] == "/nested/start.json",
+                "the normalized parent destination is never requested",
+                string.Join(" ", server.Paths));
+            C(parentHops.Count == 1,
+                "a refused relative hop never reaches the audit trail",
+                string.Join(" ", parentHops.Select(hop => hop.Display)));
+        }
+
+        // Case 4 — a listed host whose path sits outside every pathPrefix.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/unlisted/payload.bin", "fixture-one\n");
+            server.Serve("/allowed-dest/payload.bin", "fixture-one\n");
+            server.Redirect("/r/wrong-path",
+                $"{server.Base}/unlisted/payload.bin?{SignedQueryMarker}", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            var error = Capture(() => RunDownload(store, $"{server.Base}/r/wrong-path",
+                RedirectDestination(store), RedirectFile(store)));
+            C(error?.Message.Contains("refused a redirect") == true &&
+              error.Message.Contains("host and path") &&
+              error.Message.Contains("/unlisted/payload.bin"),
+                "a listed host with an unlisted path class is refused", error?.Message);
+            // The Location carried the signed token, so the refusal text must not:
+            // it names host and path of the destination only.
+            C(!error!.Message.Contains(SignedQueryMarker) && !error.Message.Contains('?'),
+                "the path-class refusal carries no query", error.Message);
+            C(!error.Message.Contains($"{server.Base}/r/wrong-path"),
+                "the refusal names the destination, not the origin", error.Message);
+
+            // A prefix match is not enough when a client or server may normalize
+            // the path. Refuse traversal and encoded separators before requesting
+            // the destination; SHA-256 is a byte gate, not a destination policy.
+            var unsafeDestinations = new[]
+            {
+                "/allowed-dest/../unlisted/payload.bin",
+                "/allowed-dest/a/../payload.bin",
+                "/allowed-dest/%2e%2e/unlisted/payload.bin",
+                "/allowed-dest/.%2e/unlisted/payload.bin",
+                "/allowed-dest/%2e./unlisted/payload.bin",
+                "/allowed-dest/%252e%252e/unlisted/payload.bin",
+                "/allowed-dest/a%2f..%2funlisted/payload.bin",
+                "/allowed-dest/a%5c..%5cunlisted/payload.bin",
+            };
+            for (var index = 0; index < unsafeDestinations.Length; index++)
+            {
+                var destination = unsafeDestinations[index];
+                var origin = $"/r/unsafe-path-{index}";
+                server.Redirect(origin, $"{server.Base}{destination}?{SignedQueryMarker}",
+                    status: 302);
+                var before = server.Count;
+                var unsafeError = Capture(() => RunDownload(store, $"{server.Base}{origin}",
+                    RedirectDestination(store), RedirectFile(store)));
+                C(unsafeError?.Message.Contains("refused a redirect") == true,
+                    $"an unsafe redirect path is refused: {destination}", unsafeError?.Message);
+                C(server.Count == before + 1 && server.Paths[^1] == origin,
+                    $"the unsafe destination is never requested: {destination}",
+                    string.Join(" ", server.Paths));
+                C(unsafeError is not null && !unsafeError.Message.Contains(SignedQueryMarker),
+                    $"the unsafe-path refusal carries no signed query: {destination}",
+                    unsafeError?.Message);
+            }
+        }
+
+        // Cases 3 and 5 — an off-list host, and the absent-key default. Both refuse
+        // without ever requesting the disallowed body.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/unlisted/payload.bin", "fixture-one\n");
+            server.Redirect("/r/off-list", $"{server.Base}/unlisted/payload.bin", status: 302);
+            var empty = MakeRedirectStore(server);
+            var emptyError = Capture(() => RunDownload(empty, $"{server.Base}/r/off-list",
+                RedirectDestination(empty), RedirectFile(empty)));
+            C(empty.Catalog.RedirectAllowList.Count == 0,
+                "the fixture catalog with no rules has an empty allow-list",
+                $"{empty.Catalog.RedirectAllowList.Count}");
+            C(emptyError?.Message.Contains("refused a redirect") == true &&
+              emptyError.Message.Contains("127.0.0.1") &&
+              emptyError.Message.Contains("/unlisted/"),
+                "with no rules at all a redirect is refused by host and path",
+                emptyError?.Message);
+            C(!server.Paths.Contains("/unlisted/payload.bin"),
+                "the disallowed body was never requested", string.Join(" ", server.Paths));
+
+            // The identical server answer, now admitted: proves the refusal above
+            // came from the missing key and not from anything about the response.
+            var listed = MakeRedirectStore(server, Rule("127.0.0.1", "/unlisted/"));
+            var listedDestination = RedirectDestination(listed);
+            RunDownload(listed, $"{server.Base}/r/off-list", listedDestination,
+                RedirectFile(listed));
+            C(File.Exists(listedDestination) &&
+              File.ReadAllText(listedDestination) == "fixture-one\n",
+                "the same redirect succeeds once the catalog lists it");
+        }
+
+        // An absolute Location to another host is refused by host, not mangled into
+        // a path on the origin.
+        {
+            using var server = new FixtureServer();
+            server.Redirect("/absolute-offsite", "http://elsewhere.example/x", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            var error = Capture(() => RunDownload(store, $"{server.Base}/absolute-offsite",
+                RedirectDestination(store), RedirectFile(store)));
+            C(error?.Message.Contains("refused a redirect") == true &&
+              error.Message.Contains("elsewhere.example"),
+                "an absolute Location to an unlisted host is refused by host",
+                error?.Message);
+            C(!error!.Message.Contains("127.0.0.1/x"),
+                "the Location was not treated as a path on the origin", error.Message);
+            // The refusal is host-shaped, so it must name the off-site destination,
+            // never the loopback origin that produced it.
+            C(!error.Message.Contains($"{server.Base}/absolute-offsite"),
+                "an off-host refusal names the destination, not the origin", error.Message);
+        }
+
+        // Case 6 — the hop budget: three redirects are followed, a fourth is refused.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/payload.bin", "fixture-one\n");
+            server.Serve("/hop1/payload.bin", "", status: 302,
+                location: $"{server.Base}/hop2/payload.bin?{SignedQueryMarker}");
+            server.Serve("/hop2/payload.bin", "", status: 302,
+                location: $"{server.Base}/hop3/payload.bin?{SignedQueryMarker}");
+            server.Serve("/hop3/payload.bin", "", status: 302,
+                location: $"{server.Base}/hop4/payload.bin?{SignedQueryMarker}");
+            // While hop4 still redirects, the fourth hop is over budget; below it
+            // answers 200, so exactly three redirects complete. The Location keeps
+            // the signed token so the budget refusal is proven leak-free too.
+            server.Serve("/hop4/payload.bin", "", status: 302,
+                location: $"{server.Base}/allowed-dest/payload.bin?{SignedQueryMarker}");
+            var rules = new[] { Rule("127.0.0.1", "/hop"), Rule("127.0.0.1", "/allowed-dest/") };
+            C(ModelStore.MaxRedirectHops == 3, "the budget is three hops on both platforms",
+                $"{ModelStore.MaxRedirectHops}");
+
+            var over = MakeRedirectStore(server, rules);
+            var overError = Capture(() => RunDownload(over, $"{server.Base}/hop1/payload.bin",
+                RedirectDestination(over), RedirectFile(over)));
+            C(overError?.Message.Contains("refused a redirect") == true &&
+              overError.Message.Contains("budget"),
+                "a chain longer than three redirects is refused", overError?.Message);
+            C(!overError!.Message.Contains('?'), "and the over-budget refusal carries no query",
+                overError.Message);
+
+            // Budget refusal precedes Location parsing on both hosts: a malformed
+            // fourth hop is still a budget refusal, not a different failure class.
+            server.Serve("/hop4/payload.bin", "", status: 302);
+            var missingLocation = MakeRedirectStore(server, rules);
+            var missingLocationError = Capture(() => RunDownload(missingLocation,
+                $"{server.Base}/hop1/payload.bin", RedirectDestination(missingLocation),
+                RedirectFile(missingLocation)));
+            C(missingLocationError?.Message.Contains("budget") == true,
+                "the redirect budget is checked before a fourth Location is parsed",
+                missingLocationError?.Message);
+
+            // The fourth answer is a 200, so exactly three redirects complete.
+            server.Serve("/hop4/payload.bin", "fixture-one\n");
+            var at = MakeRedirectStore(server, rules);
+            var hops = new List<ModelRedirectHop>();
+            var destination = RedirectDestination(at);
+            RunDownload(at, $"{server.Base}/hop1/payload.bin", destination,
+                RedirectFile(at), hops);
+            C(File.Exists(destination) && File.ReadAllText(destination) == "fixture-one\n",
+                "exactly three redirects are followed");
+            C(hops.Count == 4 && hops[0].StatusCode == 0 &&
+              hops.Skip(1).All(hop => hop.StatusCode == 302),
+                "the trail holds the origin plus the three admitted hops",
+                string.Join(" -> ", hops.Select(hop => $"{hop.StatusCode}:{hop.Display}")));
+        }
+
+        // Each hop is re-checked, so a chain cannot launder a disallowed destination.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/payload.bin", "fixture-one\n");
+            server.Serve("/chain1/payload.bin", "", status: 302,
+                location: $"{server.Base}/chain2/payload.bin?{SignedQueryMarker}");
+            server.Serve("/chain2/payload.bin", "", status: 302,
+                location: $"{server.Base}/unlisted/payload.bin?{SignedQueryMarker}");
+            var store = MakeRedirectStore(server,
+                Rule("127.0.0.1", "/chain2/"), Rule("127.0.0.1", "/allowed-dest/"));
+            var hops = new List<ModelRedirectHop>();
+            var error = Capture(() => RunDownload(store, $"{server.Base}/chain1/payload.bin",
+                RedirectDestination(store), RedirectFile(store), hops));
+            C(error?.Message.Contains("refused a redirect") == true,
+                "a second hop to an unlisted path is refused", error?.Message);
+            C(!error!.Message.Contains(SignedQueryMarker) && !error.Message.Contains('?'),
+                "and the refusal of the laundered hop leaks no signed query",
+                error.Message);
+            C(hops.Count == 2 && hops[1].Path == "/chain2/payload.bin",
+                "the admitted first hop was recorded before the second was refused",
+                string.Join(" -> ", hops.Select(hop => hop.Display)));
+            C(!server.Paths.Contains("/unlisted/payload.bin"),
+                "the refused hop never asked for the unlisted body",
+                string.Join(" ", server.Paths));
+        }
+
+        // Case 7 — a Location that is file:/ftp: or carries credentials is refused
+        // by shape, and its credentials are never quoted.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/payload.bin", "fixture-one\n");
+            server.Redirect("/r/file-scheme", "file:///etc/passwd", status: 302);
+            server.Redirect("/r/ftp-scheme", "ftp://127.0.0.1:2121/allowed-dest/payload.bin",
+                status: 302);
+            server.Redirect("/r/userinfo",
+                "http://user:pass@127.0.0.1/allowed-dest/payload.bin", status: 302);
+            server.Redirect("/r/empty-host-userinfo",
+                "http://redirect-user:redirect-secret@", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            // Each refusal gets its own destination path and hop list: the shapes are
+            // refused before a byte is written, and shared state would let one failure
+            // hide another's file. The hop lists stay empty on purpose — that is what
+            // proves a refused Location never reaches the audit trail.
+            var fileDestination = Path.Combine(store.Layout.Root, "file-scheme.bin");
+            var ftpDestination = Path.Combine(store.Layout.Root, "ftp-scheme.bin");
+            var userinfoDestination = Path.Combine(store.Layout.Root, "userinfo.bin");
+            var emptyHostDestination = Path.Combine(store.Layout.Root, "empty-host.bin");
+            var shapeHops = new List<ModelRedirectHop>();
+
+            var fileError = Capture(() => RunDownload(store, $"{server.Base}/r/file-scheme",
+                fileDestination, RedirectFile(store), shapeHops));
+            C(fileError?.Message.Contains("refused a redirect") == true &&
+              !File.Exists(fileDestination),
+                "a file: Location is refused and writes nothing", fileError?.Message);
+            C(fileError!.Message.Contains("/etc/passwd"),
+                "the refusal still names the destination path", fileError.Message);
+            C(shapeHops.Count > 0 && shapeHops[0].StatusCode == 0 &&
+              shapeHops[0].Path == "/r/file-scheme",
+                "a refused hop is audited as the origin only",
+                string.Join(" ", shapeHops.Select(hop => hop.Display)));
+
+            var ftpError = Capture(() => RunDownload(store, $"{server.Base}/r/ftp-scheme",
+                ftpDestination, RedirectFile(store), shapeHops));
+            C(ftpError?.Message.Contains("refused a redirect") == true &&
+              ftpError.Message.Contains("127.0.0.1") &&
+              ftpError.Message.Contains("/allowed-dest/payload.bin"),
+                "an ftp: Location is refused and names only host and path", ftpError?.Message);
+            C(!File.Exists(ftpDestination), "and it wrote nothing", ftpDestination);
+
+            var userinfoError = Capture(() => RunDownload(store, $"{server.Base}/r/userinfo",
+                userinfoDestination, RedirectFile(store), shapeHops));
+            C(userinfoError?.Message.Contains("refused a redirect") == true,
+                "a Location with credentials is refused", userinfoError?.Message);
+            C(!userinfoError!.Message.Contains("user:pass") &&
+              !userinfoError.Message.Contains("pass") &&
+              !userinfoError.Message.Contains('@'),
+                "and its credentials are not quoted", userinfoError.Message);
+            C(!File.Exists(userinfoDestination), "and it wrote nothing", userinfoDestination);
+
+            var emptyHostHops = new List<ModelRedirectHop>();
+            var emptyHostBefore = server.Count;
+            var emptyHostError = Capture(() => RunDownload(store,
+                $"{server.Base}/r/empty-host-userinfo", emptyHostDestination,
+                RedirectFile(store), emptyHostHops));
+            C(emptyHostError is ModelStoreError { Code: "E_INVALID_INPUT" } &&
+              emptyHostError.Message.Contains("refused a redirect") &&
+              !emptyHostError.Message.Contains("redirect-user") &&
+              !emptyHostError.Message.Contains("redirect-secret"),
+                "an unreadable Location is a typed policy refusal and never echoes credentials",
+                emptyHostError?.Message);
+            C(!File.Exists(emptyHostDestination), "and it wrote nothing", emptyHostDestination);
+            C(emptyHostHops.Count == 1 && emptyHostHops[0].StatusCode == 0 &&
+              emptyHostHops[0].Path == "/r/empty-host-userinfo",
+                "the unreadable Location records only the origin",
+                string.Join(" ", emptyHostHops.Select(hop => $"{hop.StatusCode}:{hop.Display}")));
+            C(server.Count == emptyHostBefore + 1 &&
+              server.Paths[^1] == "/r/empty-host-userinfo",
+                "the unreadable Location caused no destination request",
+                string.Join(" ", server.Paths));
+
+            // A readable URI with an empty userinfo is still credentials on the
+            // wire. Refuse it before Uri can canonicalize the authority away.
+            server.Redirect("/r/empty-valid-userinfo",
+                "http://@127.0.0.1/allowed-dest/payload.bin", status: 302);
+            var emptyValidDestination = Path.Combine(store.Layout.Root, "empty-valid.bin");
+            var emptyValidHops = new List<ModelRedirectHop>();
+            var emptyValidBefore = server.Count;
+            var emptyValidError = Capture(() => RunDownload(store,
+                $"{server.Base}/r/empty-valid-userinfo", emptyValidDestination,
+                RedirectFile(store), emptyValidHops));
+            C(emptyValidError is ModelStoreError { Code: "E_INVALID_INPUT" } &&
+              emptyValidError.Message.Contains("refused a redirect"),
+                "a valid-host empty userinfo is refused before canonicalization",
+                emptyValidError?.Message);
+            C(!File.Exists(emptyValidDestination), "the empty-userinfo refusal wrote nothing",
+                emptyValidDestination);
+            C(emptyValidHops.Count == 1 && emptyValidHops[0].StatusCode == 0,
+                "the empty-userinfo refusal records only the origin",
+                string.Join(" ", emptyValidHops.Select(hop => hop.Display)));
+            C(server.Count == emptyValidBefore + 1 &&
+              server.Paths[^1] == "/r/empty-valid-userinfo" &&
+              !server.Paths.Contains("/allowed-dest/payload.bin"),
+                "the empty-userinfo destination was never requested",
+                string.Join(" ", server.Paths));
+            C(shapeHops.Count == 3 && shapeHops.All(hop => hop.StatusCode == 0),
+                "no earlier refused hop reached the audit trail",
+                string.Join(" ", shapeHops.Select(hop => $"{hop.StatusCode}:{hop.Display}")));
+        }
+
+        // A Location that is absent or unreadable is refused, and the refusal text
+        // still carries no query.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/no-location/payload.bin", "", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/no-location/"));
+            var bareDestination = Path.Combine(store.Layout.Root, "no-location.bin");
+            var hops = new List<ModelRedirectHop>();
+            var error = Capture(() => RunDownload(store, $"{server.Base}/no-location/payload.bin",
+                bareDestination, RedirectFile(store), hops));
+            C(error?.Message.Contains("refused a redirect") == true &&
+              error.Message.Contains("Location"),
+                "a redirect with no usable Location is refused", error?.Message);
+            C(!File.Exists(bareDestination),
+                "the 302 body was never treated as the payload", bareDestination);
+            C(hops.Count > 0 && hops[0].StatusCode == 0,
+                "a Location-less redirect records only the origin",
+                string.Join(" ", hops.Select(hop => hop.Display)));
+
+            server.Redirect("/leaky", $"/unlisted/payload.bin?{SignedQueryMarker}",
+                status: 302);
+            var leakyDestination = Path.Combine(store.Layout.Root, "leaky.bin");
+            var leakyHops = new List<ModelRedirectHop>();
+            var leaky = Capture(() => RunDownload(store, $"{server.Base}/leaky",
+                leakyDestination, RedirectFile(store), leakyHops));
+            C(leaky?.Message.Contains("127.0.0.1") == true &&
+              leaky.Message.Contains("/unlisted/payload.bin"),
+                "the refusal names the destination host and path", leaky?.Message);
+            C(!leaky!.Message.Contains(SignedQueryMarker) && !leaky.Message.Contains('?'),
+                "and never the query string", leaky.Message);
+            C(leakyHops.Count == 1,
+                "a redirect refused outside its path class leaks nothing to the trail either",
+                string.Join(" ", leakyHops.Select(hop => hop.Display)));
+        }
+
+        // Case 8 — a chain ending in a non-200 is refused as an invalid answer.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/missing.bin", "nope", status: 404);
+            server.Redirect("/good/payload.bin", "/allowed-dest/missing.bin", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            var error = Capture(() => store.InstallAsync(store.Catalog.Entry("fixture-good")!)
+                .GetAwaiter().GetResult());
+            C(error?.Message.Contains("HTTP 404") == true,
+                "a redirect ending in a non-200 is refused", error?.Message);
+            C(!Directory.Exists(store.Layout.VersionDirectory("fixture-good", "1.0.0")),
+                "the refused chain installed no version");
+            C(!StagingDirs(store).Any(), "the refused chain left no staging tree");
+        }
+
+        // The redirect-status vocabulary is exact. Exercise 301/303/308 through
+        // the real manual loop as well as the predicate-level tests.
+        {
+            using var server = new FixtureServer();
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            foreach (var status in new[] { 301, 303, 308 })
+            {
+                var origin = $"/status-{status}/payload.bin";
+                var target = $"/allowed-dest/status-{status}/payload.bin";
+                server.Serve(target, "fixture-one\n");
+                server.Redirect(origin, $"{target}?{SignedQueryMarker}", status);
+                var destination = RedirectDestination(store);
+                var hops = new List<ModelRedirectHop>();
+                var error = Capture(() => RunDownload(store, $"{server.Base}{origin}",
+                    destination, RedirectFile(store), hops));
+                C(error is null && File.Exists(destination) && hops.Count == 2 &&
+                  hops[^1].StatusCode == status && hops[^1].Path == target,
+                    $"HTTP {status} is admitted over the real transport",
+                    error?.Message ?? string.Join(" -> ", hops.Select(hop => hop.Display)));
+            }
+
+            foreach (var status in new[] { 300, 304 })
+            {
+                var origin = $"/not-redirect-{status}/payload.bin";
+                server.Serve(origin, "fixture-one\n", status: status);
+                var destination = RedirectDestination(store);
+                var hops = new List<ModelRedirectHop>();
+                var before = server.Count;
+                var error = Capture(() => RunDownload(store, $"{server.Base}{origin}",
+                    destination, RedirectFile(store), hops));
+                C(error is ModelStoreError { Code: "E_INVALID_INPUT" } &&
+                  error.Message.Contains($"HTTP {status}", StringComparison.Ordinal),
+                    $"HTTP {status} is refused as a non-200 answer", error?.Message);
+                C(!File.Exists(destination),
+                    $"HTTP {status} wrote no destination file", destination);
+                C(server.Count == before + 1 && hops.Count == 1 && hops[0].StatusCode == 0,
+                    $"HTTP {status} caused no redirect follow or admitted hop",
+                    string.Join(" ", server.Paths));
+            }
+
+            foreach (var (label, location) in new[]
+                     {
+                         ("missing", (string?)null), ("empty", "")
+                     })
+            {
+                var origin = $"/{label}-location/payload.bin";
+                server.Serve(origin, "", status: 302, location: location);
+                var destination = RedirectDestination(store);
+                var hops = new List<ModelRedirectHop>();
+                var before = server.Count;
+                var error = Capture(() => RunDownload(store, $"{server.Base}{origin}",
+                    destination, RedirectFile(store), hops));
+                C(error is ModelStoreError { Code: "E_INVALID_INPUT" } &&
+                  error.Message.Contains("refused a redirect", StringComparison.Ordinal) &&
+                  error.Message.Contains("Location", StringComparison.Ordinal),
+                    $"a {label} Location is a typed policy refusal", error?.Message);
+                C(!File.Exists(destination),
+                    $"the {label}-Location response wrote no destination", destination);
+                C(server.Count == before + 1 && hops.Count == 1 && hops[0].StatusCode == 0,
+                    $"the {label}-Location refusal audited only the origin",
+                    string.Join(" ", server.Paths));
+            }
+
+            server.Redirect("/empty-fragment/payload.bin",
+                "/allowed-dest/payload.bin#", status: 302);
+            var fragmentDestination = RedirectDestination(store);
+            var fragmentHops = new List<ModelRedirectHop>();
+            var fragmentBefore = server.Count;
+            var fragmentError = Capture(() => RunDownload(store,
+                $"{server.Base}/empty-fragment/payload.bin", fragmentDestination,
+                RedirectFile(store), fragmentHops));
+            C(fragmentError is ModelStoreError { Code: "E_INVALID_INPUT" } &&
+              fragmentError.Message.Contains("refused a redirect", StringComparison.Ordinal),
+                "an empty redirect fragment is a typed policy refusal",
+                fragmentError?.Message);
+            C(!File.Exists(fragmentDestination),
+                "the empty-fragment refusal wrote nothing", fragmentDestination);
+            C(server.Count == fragmentBefore + 1 && fragmentHops.Count == 1 &&
+              fragmentHops[0].StatusCode == 0,
+                "the empty-fragment destination was never requested or audited",
+                string.Join(" ", server.Paths));
+
+            var percentTarget = "/allowed-dest/100%25/payload.bin";
+            server.Serve(percentTarget, "fixture-one\n");
+            server.Redirect("/stable-percent/payload.bin",
+                $"{percentTarget}?{SignedQueryMarker}", status: 302);
+            var percentDestination = RedirectDestination(store);
+            var percentHops = new List<ModelRedirectHop>();
+            var percentError = Capture(() => RunDownload(store,
+                $"{server.Base}/stable-percent/payload.bin", percentDestination,
+                RedirectFile(store), percentHops));
+            C(percentError is null && File.Exists(percentDestination) &&
+              server.Paths.LastOrDefault() == percentTarget &&
+              percentHops.LastOrDefault()?.Path == percentTarget,
+                "a stable %25 reaches the wire and the redacted audit unchanged",
+                $"{server.Paths.LastOrDefault()} / {percentHops.LastOrDefault()?.Display}");
+
+            // Windows exposes both raw Location values to the manual policy loop;
+            // it must reject the response without following either destination.
+            server.RepeatedLocations("/duplicate-location/payload.bin",
+                $"/allowed-dest/one.bin?{SignedQueryMarker}",
+                $"/allowed-dest/two.bin?{SignedQueryMarker}");
+            var duplicateDestination = RedirectDestination(store);
+            var duplicateHops = new List<ModelRedirectHop>();
+            var duplicateBefore = server.Count;
+            var duplicateError = Capture(() => RunDownload(store,
+                $"{server.Base}/duplicate-location/payload.bin", duplicateDestination,
+                RedirectFile(store), duplicateHops));
+            C(duplicateError is ModelStoreError { Code: "E_INVALID_INPUT" } &&
+              duplicateError.Message.Contains("refused a redirect", StringComparison.Ordinal) &&
+              !duplicateError.Message.Contains(SignedQueryMarker, StringComparison.Ordinal),
+                "repeated Location headers are a typed policy refusal and echo no query",
+                duplicateError?.Message);
+            C(!File.Exists(duplicateDestination),
+                "the duplicate-Location response wrote nothing", duplicateDestination);
+            C(server.Count == duplicateBefore + 1 && duplicateHops.Count == 1 &&
+              duplicateHops[0].StatusCode == 0 &&
+              server.Paths[^1] == "/duplicate-location/payload.bin" &&
+              !server.Paths.Contains("/allowed-dest/one.bin") &&
+              !server.Paths.Contains("/allowed-dest/two.bin"),
+                "the duplicate-Location response made no destination request",
+                string.Join(" ", server.Paths));
+        }
+
+        // Transport exceptions are outside redirect policy but can quote the
+        // complete signed URL. The user-visible failure must not echo them.
+        {
+            using var server = new FixtureServer();
+            var catalog = ModelCatalog.LoadJson(
+                RedirectCatalogJson(new[] { Rule("127.0.0.1", "/allowed-dest/") }, server.Base),
+                allowLocalHttp: true);
+            var root = Path.Combine(Path.GetTempPath(), $"rsstore-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var handler = new SignedUrlFailureHandler();
+            var store = new ModelStore(root, catalog, "windows-x64", allowLocalHttp: true,
+                handler: handler);
+            var destination = Path.Combine(root, "transport-error.bin");
+            var signedUrl = $"{server.Base}/good/payload.bin?{SignedQueryMarker}";
+            var error = Capture(() => RunDownload(store, signedUrl, destination,
+                RedirectFile(store)));
+            C(handler.LastRequestUrl.Contains(SignedQueryMarker),
+                "the transport seam received the complete signed source URL",
+                handler.LastRequestUrl);
+            C(error is ModelStoreError { Code: "E_INVALID_INPUT" },
+                "a transport exception becomes a typed download failure", error?.Message);
+            C(error?.Message.Contains(SignedQueryMarker) == false &&
+              error.Message.Contains(signedUrl, StringComparison.Ordinal) == false &&
+              !error.Message.Contains('?'),
+                "a transport failure never echoes the complete signed source URL", error.Message);
+            C(!File.Exists(destination),
+                "the transport failure wrote no destination file", destination);
+        }
+
+        // Case 9 — integrity stays final after an admitted redirect.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/sha.bin", "different!\n");   // 11 bytes, wrong hash
+            server.Serve("/allowed-dest/size.bin", "short\n");       // wrong size
+            server.Redirect("/good/payload.bin", "/allowed-dest/sha.bin", status: 302);
+            var shaStore = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            ExpectCode(() => shaStore.InstallAsync(shaStore.Catalog.Entry("fixture-sha")!)
+                    .GetAwaiter().GetResult(),
+                "E_MODEL_UNVERIFIED", "a redirect to mismatched bytes fails the pinned SHA-256",
+                C);
+            C(!Directory.Exists(shaStore.Layout.VersionDirectory("fixture-sha", "1.0.0")),
+                "no version from a redirect with a SHA mismatch");
+
+            server.Redirect("/good/payload.bin", "/allowed-dest/size.bin", status: 302);
+            var sizeStore = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            ExpectCode(() => sizeStore.InstallAsync(sizeStore.Catalog.Entry("fixture-size")!)
+                    .GetAwaiter().GetResult(),
+                "E_MODEL_UNVERIFIED", "a redirect to a different length fails the declared size",
+                C);
+            C(!StagingDirs(sizeStore).Any(), "an integrity failure leaves no staging tree");
+        }
+
+        // A successful HTTP status is not proof of a usable payload: an empty final
+        // response still fails the declared size and leaves no installed version.
+        {
+            using var server = new FixtureServer();
+            server.Serve("/allowed-dest/empty.bin", "", status: 200);
+            server.Redirect("/good/payload.bin", "/allowed-dest/empty.bin", status: 302);
+            var store = MakeRedirectStore(server, Rule("127.0.0.1", "/allowed-dest/"));
+            ExpectCode(() => store.InstallAsync(store.Catalog.Entry("fixture-size")!)
+                    .GetAwaiter().GetResult(),
+                "E_MODEL_UNVERIFIED", "an empty final 200 fails the declared size", C);
+            C(!Directory.Exists(store.Layout.VersionDirectory("fixture-size", "1.0.0")),
+                "an empty final 200 installed no version");
+            C(!StagingDirs(store).Any(), "an empty final 200 left no staging tree");
+        }
+
+        // The production API cannot accept an arbitrary HttpClient that follows
+        // redirects before policy sees them. The internal test seam rejects known
+        // auto-redirecting handlers, and a relative Location uses the response's
+        // actual request URL rather than the loop's previous URI.
+        {
+            using var server = new FixtureServer();
+            var catalog = ModelCatalog.LoadJson(RedirectCatalogJson(
+                new[] { Rule("127.0.0.1", "/rewritten/nested/") }, server.Base),
+                allowLocalHttp: true);
+            var root = Path.Combine(Path.GetTempPath(), $"rsstore-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var autoError = Capture(() => _ = new ModelStore(root, catalog, "windows-x64",
+                allowLocalHttp: true, handler: new SocketsHttpHandler
+                {
+                    AllowAutoRedirect = true,
+                }));
+            C(autoError is ArgumentException,
+                "the internal handler seam rejects an auto-redirecting sockets handler",
+                autoError?.GetType().Name);
+            var legacyAutoError = Capture(() => _ = new ModelStore(root, catalog, "windows-x64",
+                allowLocalHttp: true, handler: new HttpClientHandler
+                {
+                    AllowAutoRedirect = true,
+                }));
+            C(legacyAutoError is ArgumentException,
+                "the internal handler seam rejects an auto-redirecting legacy handler",
+                legacyAutoError?.GetType().Name);
+            C(typeof(ModelStore).GetConstructors().All(constructor => constructor
+                    .GetParameters().All(parameter => parameter.ParameterType != typeof(HttpClient))),
+                "no public constructor accepts an arbitrary HttpClient");
+
+            var handler = new ResponseBaseHandler();
+            var store = new ModelStore(root, catalog, "windows-x64", allowLocalHttp: true,
+                handler: handler);
+            var hops = new List<ModelRedirectHop>();
+            var destination = RedirectDestination(store);
+            RunDownload(store, $"{server.Base}/original/nested/start.json", destination,
+                RedirectFile(store), hops);
+            C(handler.Requests.Count == 2 &&
+              handler.Requests[1].AbsolutePath == "/rewritten/nested/dest/payload.bin",
+                "a relative Location resolves against response.RequestMessage.RequestUri",
+                string.Join(" -> ", handler.Requests.Select(request => request.AbsolutePath)));
+            C(File.Exists(destination) && File.ReadAllText(destination) == "fixture-one\n",
+                "the response-base redirect reaches the real payload bytes");
+            C(hops.Count == 2 && hops[1].Path == "/rewritten/nested/dest/payload.bin",
+                "the response-base destination is audited without its query",
+                string.Join(" -> ", hops.Select(hop => hop.Display)));
+        }
+
+        // The gates this change must not have widened: the recorded-source rule and
+        // the shapes a rule may name.
+        {
+            var rules = new[]
+            {
+                Rule("huggingface.co", "/api/resolve-cache/"),
+                Rule("us.aws.cdn.hf.co", "/xet-bridge-us/"),
+            };
+            Uri Url(string value) => new(value);
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://US.AWS.CDN.HF.CO/xet-bridge-us/repo/a"), rules) is not null,
+                "the host comparison is case-insensitive");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://evil-us.aws.cdn.hf.co/xet-bridge-us/a"), rules) is null,
+                "a suffix of an allowed host is not the allowed host");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://hf.co/xet-bridge-us/a"), rules) is null,
+                "a prefix of an allowed host is not the allowed host");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://xet-bridge-us.aws.cdn.hf.co.attacker.example/a"), rules) is null,
+                "a label-suffixed lookalike host is refused");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://us.aws.cdn.hf.co/other/a"), rules) is null,
+                "an allowed host with an unlisted path class is refused");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us"), rules) is null,
+                "the prefix must actually cover the path");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us/a"), Array.Empty<ModelRedirectRule>())
+                is null, "an empty allow-list admits nothing");
+            // The prefix is matched on the path the wire carries, so an encoded
+            // delimiter cannot splice a second path class into an admitted one.
+            // macOS has to agree with this pair: its URL exposes both a decoded and
+            // an encoded path, and matching the decoded one would let
+            // `/xet-bridge-us%2f…` through on one platform and refuse it here.
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us%2fapi/resolve-cache/x"),
+                rules) is null,
+                "an encoded slash cannot smuggle another class into an admitted one");
+            foreach (var unsafePath in new[]
+                     {
+                         "/xet-bridge-us/../private/x",
+                         "/xet-bridge-us/%2e%2e/x",
+                         "/xet-bridge-us/.%2e/x",
+                         "/xet-bridge-us/%2e./x",
+                         "/xet-bridge-us/%252e%252e/x",
+                         "/xet-bridge-us/a%2f..%2fprivate/x",
+                         "/xet-bridge-us/a%5c..%5cprivate/x",
+                         "/xet-bridge-us/%2fprivate/x",
+                     })
+                C(ModelCatalogRules.RedirectRuleMatching(
+                    Url($"https://us.aws.cdn.hf.co{unsafePath}"), rules) is null,
+                    $"a redirect path with traversal or an encoded separator is refused: {unsafePath}");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us/repo/a"), rules) is not null,
+                "an ordinary path inside the admitted class still matches");
+            C(ModelCatalogRules.RedirectRuleMatching(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us/repo/100%25/file"), rules) is not null,
+                "a stable encoded percent sign remains an ordinary path");
+            C(ModelCatalogRules.IsSafeRawRedirectPath(
+                "https://us.aws.cdn.hf.co/xet-bridge-us/repo/100%25/file?token=a@b"),
+                "raw absolute Location paths preserve stable percent escapes");
+            C(ModelCatalogRules.IsSafeRawRedirectPath(
+                "../xet-bridge-us/repo/file") == false,
+                "a raw parent-relative Location is unsafe before URI normalization");
+            C(ModelCatalogRules.IsSafeRawRedirectPath(
+                "https://us.aws.cdn.hf.co/xet-bridge-us/a/../payload.bin") == false,
+                "a raw absolute Location cannot hide traversal behind normalization");
+            C(ModelCatalogRules.IsSafeRawRedirectLocation(
+                "https://@us.aws.cdn.hf.co/xet-bridge-us/repo/file") == false,
+                "a raw empty userinfo is refused before URI canonicalization");
+            C(ModelCatalogRules.IsSafeRawRedirectLocation(
+                "https://us.aws.cdn.hf.co/xet-bridge-us/repo/file?token=a@b"),
+                "a raw at sign in the query is not authority userinfo");
+            C(ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us/a"), allowLocalHttp: false),
+                "an HTTPS default-port target has an allowed shape");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("http://us.aws.cdn.hf.co/xet-bridge-us/a"), allowLocalHttp: false),
+                "plain HTTP is refused outside the test opt-in");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("https://us.aws.cdn.hf.co:8443/xet-bridge-us/a"), allowLocalHttp: false),
+                "a non-default port is refused");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("https://paid:secret@us.aws.cdn.hf.co/xet-bridge-us/a"),
+                allowLocalHttp: false), "userinfo is refused");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("https://@us.aws.cdn.hf.co/xet-bridge-us/a"),
+                allowLocalHttp: false), "an empty userinfo authority is refused");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us/a#"),
+                allowLocalHttp: false), "even an empty fragment is refused");
+            C(ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("https://us.aws.cdn.hf.co/xet-bridge-us/repo/@scope/file?token=a@b"),
+                allowLocalHttp: false), "an at sign in the path or query is not userinfo");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(Url("file:///etc/passwd"),
+                allowLocalHttp: false), "a file: target has no allowed shape");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("ftp://us.aws.cdn.hf.co/xet-bridge-us/a"), allowLocalHttp: false),
+                "an ftp: target has no allowed shape");
+            C(ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("http://127.0.0.1:8080/allowed-dest/payload.bin"), allowLocalHttp: true),
+                "the loopback-HTTP test allowance is unchanged, nothing more");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("https://127.0.0.1:8443/allowed-dest/payload.bin"), allowLocalHttp: true),
+                "the loopback test opt-in does not widen HTTPS ports");
+            C(!ModelCatalogRules.IsAllowedRedirectTarget(
+                Url("http://example.com:8080/x"), allowLocalHttp: true),
+                "the test opt-in never widens beyond loopback");
+            C(ModelCatalogRules.IsRecordedFileSource("https://huggingface.co/a/b",
+                    "https://huggingface.co/a", allowLocalHttp: false),
+                "the recorded-source gate still accepts the recorded host");
+            C(!ModelCatalogRules.IsRecordedFileSource(
+                    "https://us.aws.cdn.hf.co/xet-bridge-us/a", "https://huggingface.co/a",
+                    allowLocalHttp: false),
+                "an allow-listed redirect host never becomes a recorded source");
+            C(!ModelCatalogRules.IsRecordedFileSource("https://@huggingface.co/a/b",
+                    "https://huggingface.co/a", allowLocalHttp: false),
+                "a malformed empty userinfo cannot become a recorded source");
+
+            // The load gate: an invalid rule fails the whole catalog with the same
+            // unsafe class every other catalog defect uses, instead of being dropped.
+            foreach (var (label, host, prefix) in new[]
+                     {
+                         ("a wildcard host", "*.hf.co", "/xet-bridge-us/"),
+                         ("a host with a scheme", "https://us.aws.cdn.hf.co", "/xet-bridge-us/"),
+                         ("a host with a port", "us.aws.cdn.hf.co:443", "/xet-bridge-us/"),
+                         ("an uppercase host", "HuggingFace.CO", "/api/resolve-cache/"),
+                         ("a path-less prefix", "huggingface.co", "api/resolve-cache/"),
+                         ("a query in the prefix", "huggingface.co", "/api/resolve-cache/?t=1"),
+                         ("a fragment in the prefix", "huggingface.co", "/api/resolve-cache/#x"),
+                         ("a traversal in the prefix", "huggingface.co", "/api/../private/"),
+                         ("a backslash in the prefix", "huggingface.co", "/api\\resolve-cache/"),
+                         ("whitespace in the prefix", "huggingface.co", "/api/resolve cache/"),
+                         ("an empty prefix", "huggingface.co", ""),
+                         ("an empty host", "", "/api/resolve-cache/"),
+                     })
+            {
+                ModelStoreError? failure = null;
+                try { _ = RedirectCatalog(new[] { Rule(host, prefix) }, out _); }
+                catch (ModelStoreError error) { failure = error; }
+                C(failure is not null &&
+                  failure.Message.Contains("unsafe", StringComparison.Ordinal),
+                  $"the catalog refuses {label}",
+                  failure?.Message ?? "accepted");
+            }
+
+            // An absent key decodes to no rules, and the shipped catalog states
+            // exactly the two destinations that were measured.
+            {
+                var defaulted = RedirectCatalog(null, out var withoutKey);
+                C(defaulted.RedirectAllowList.Count == 0,
+                    "an absent redirectAllowList decodes to no rules — the safe default",
+                    $"{defaulted.RedirectAllowList.Count}");
+                C(withoutKey.Contains("entries") && !withoutKey.Contains("redirectAllowList"),
+                    "the fixture really dropped the key");
+                var shipped = ModelCatalog.Load(
+                    Path.Combine(RepositoryRoot, "Resources", "model-catalog.json"));
+                C(string.Join(",", shipped.RedirectAllowList.Select(r => r.Host)) ==
+                    "huggingface.co,us.aws.cdn.hf.co",
+                  "the shipped catalog lists the two measured hosts",
+                  string.Join(" ", shipped.RedirectAllowList.Select(r => r.Host)));
+                C(string.Join(",", shipped.RedirectAllowList.Select(r => r.PathPrefix)) ==
+                    "/api/resolve-cache/,/xet-bridge-us/",
+                  "and their measured path classes",
+                  string.Join(" ", shipped.RedirectAllowList.Select(r => r.PathPrefix)));
+                C(!shipped.RedirectAllowList.Any(r => r.Host == "cdn-lfs.hf.co"),
+                    "no unmeasured host was added on assumption");
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private static ModelCatalog LoadCatalog(string name, string baseUrl) =>
@@ -857,6 +1779,102 @@ public static class ModelStoreChecks
         Directory.Exists(store.Layout.Staging)
             ? Directory.GetDirectories(store.Layout.Staging)
             : Array.Empty<string>();
+
+    /// <summary>
+    /// One allow-list rule, built the way the catalog JSON builds it. Mirrors the
+    /// macOS suite's `rule(_:_:)`.
+    /// </summary>
+    private static ModelRedirectRule Rule(string host, string pathPrefix) =>
+        new() { Host = host, PathPrefix = pathPrefix };
+
+    /// <summary>
+    /// Catalog bytes for one fixture entry whose file lives at
+    /// <c>{base}/good/payload.bin</c>, with the allow-list set exactly as asked. A
+    /// null list drops the key entirely — the default that must reproduce the
+    /// historical refuse-every-redirect behaviour. Passing a loopback rule through
+    /// this text is also what proves the new catalog key really decodes.
+    /// </summary>
+    private static string RedirectCatalogJson(IEnumerable<ModelRedirectRule>? rules,
+        string baseUrl)
+    {
+        var document = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(FixtureDirectory, "catalog-fixture.json"))).RootElement;
+        var entries = document.GetProperty("entries").EnumerateArray()
+            .Where(e => new[] { "fixture-good", "fixture-sha", "fixture-size" }
+                .Contains(e.GetProperty("id").GetString()))
+            .Select(e => e.GetRawText());
+        var root = new JsonObject
+        {
+            ["schema"] = document.GetProperty("schema").GetString(),
+            ["catalogVersion"] = document.GetProperty("catalogVersion").GetString(),
+            ["entries"] = new JsonArray(entries.Select(JsonNode.Parse).ToArray()),
+        };
+        if (rules is not null)
+        {
+            root["redirectAllowList"] = new JsonArray(rules.Select(rule => (JsonNode)
+                new JsonObject { ["host"] = rule.Host, ["pathPrefix"] = rule.PathPrefix })
+                .ToArray());
+        }
+        return root.ToJsonString().Replace("{base}", baseUrl);
+    }
+
+    /// <summary>
+    /// The same JSON plus a store over it. <c>rules</c> omitted means the key is
+    /// absent, which is the fail-closed default.
+    /// </summary>
+    private static ModelCatalog RedirectCatalog(ModelRedirectRule[]? rules, out string json)
+    {
+        using var server = new FixtureServer();
+        json = RedirectCatalogJson(rules, server.Base);
+        return ModelCatalog.LoadJson(json, allowLocalHttp: true);
+    }
+
+    private static ModelStore MakeRedirectStore(FixtureServer server,
+        params ModelRedirectRule[] rules)
+    {
+        var catalog = ModelCatalog.LoadJson(
+            RedirectCatalogJson(rules.Length == 0 ? null : rules, server.Base),
+            allowLocalHttp: true);
+        var root = Path.Combine(Path.GetTempPath(), $"rsstore-{Guid.NewGuid():N}");
+        // DownloadAsync writes its destination directly, so the root has to exist
+        // before a bare download runs. InstallAsync creates it itself.
+        Directory.CreateDirectory(root);
+        return new ModelStore(root, catalog, "windows-x64", allowLocalHttp: true);
+    }
+
+    /// <summary>The fixture payload path, so a download test needs no staging tree.</summary>
+    private static string RedirectDestination(ModelStore store) =>
+        Path.Combine(store.Layout.Root, $"redirect-payload-{Guid.NewGuid():N}.bin");
+
+    private static ModelCatalogFile RedirectFile(ModelStore store) =>
+        store.Catalog.Entry("fixture-good")!.Files[0];
+
+    /// <summary>
+    /// Drives one download through the same internal path <c>InstallAsync</c> uses,
+    /// recording the hop list the audit trail carries. The mirror of the macOS
+    /// <c>runRedirectDownload</c>.
+    /// </summary>
+    private static void RunDownload(ModelStore store, string url, string destination,
+        ModelCatalogFile file, ICollection<ModelRedirectHop>? hops = null) =>
+        store.DownloadAsync(url, destination, store.Catalog.Entry("fixture-good")!,
+            file.SizeBytes ?? 12, file.Path, 1, 1, 0, _ => { },
+            store.Catalog.RedirectAllowList,
+            hops is null ? null : hop => hops.Add(hop), CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+    /// <summary>Runs one action that must throw and hands back the failure.</summary>
+    private static Exception? Capture(Action action)
+    {
+        try
+        {
+            action();
+            return null;
+        }
+        catch (Exception error)
+        {
+            return error;
+        }
+    }
 
     private static ModelStore MakeStore(FixtureServer server, bool allowLocalHttp = true)
     {
@@ -1042,7 +2060,7 @@ public static class ModelStoreChecks
     }
 
     private sealed record Route(byte[] Body, int Status, int DelayMilliseconds,
-        int? DropAfter);
+        int? DropAfter, string? Location = null, string[]? AdditionalLocations = null);
 
     private sealed class SyncProgress<T> : IProgress<T>
     {
@@ -1051,6 +2069,48 @@ public static class ModelStoreChecks
         public SyncProgress(Action<T> report) => _report = report;
 
         public void Report(T value) => _report(value);
+    }
+
+    /// <summary>
+    /// No network and no redirect behaviour of its own. The first response points
+    /// at a request URI different from the loop's current URI, proving that a
+    /// relative Location is based on the response rather than stale loop state.
+    /// </summary>
+    private sealed class SignedUrlFailureHandler : HttpMessageHandler
+    {
+        public string LastRequestUrl { get; private set; } = "";
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            LastRequestUrl = request.RequestUri!.ToString();
+            throw new HttpRequestException($"transport exploded at {LastRequestUrl}");
+        }
+    }
+
+    private sealed class ResponseBaseHandler : HttpMessageHandler
+    {
+        public List<Uri> Requests { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request.RequestUri!);
+            if (Requests.Count > 1)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(Encoding.UTF8.GetBytes("fixture-one\n")),
+                    RequestMessage = request,
+                });
+
+            var response = new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get,
+                    new Uri(request.RequestUri!, "/rewritten/nested/start.json")),
+            };
+            response.Headers.TryAddWithoutValidation("Location", "dest/payload.bin?token=a@b");
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class FixtureServer : IDisposable
@@ -1079,9 +2139,25 @@ public static class ModelStoreChecks
         }
 
         public void Serve(string path, string body, int delayMilliseconds = 0,
-            int? dropAfter = null, int status = 200) =>
+            int? dropAfter = null, int status = 200, string? location = null,
+            string[]? additionalLocations = null) =>
             _routes[path] = new Route(Encoding.UTF8.GetBytes(body), status,
-                delayMilliseconds, dropAfter);
+                delayMilliseconds, dropAfter, location, additionalLocations);
+
+        /// <summary>
+        /// Serves a redirect: the caller's status plus a <c>Location</c>. The body
+        /// is empty with <c>Content-Length: 0</c>, so nothing but the header answers
+        /// a hop. Routing strips the query, which is why the signed token a Location
+        /// carries can only be observed in the client's own text — exactly what the
+        /// redirect tests need to prove never leaks.
+        /// </summary>
+        public void Redirect(string path, string location, int status = 302) =>
+            _routes[path] = new Route(Array.Empty<byte>(), status, 0, null, location);
+
+        public void RepeatedLocations(string path, params string[] locations) =>
+            _routes[path] = new Route(Array.Empty<byte>(), 302, 0, null,
+                locations.Length > 0 ? locations[0] : null,
+                locations.Length > 1 ? locations.Skip(1).ToArray() : Array.Empty<string>());
 
         private async Task AcceptLoop()
         {
@@ -1145,8 +2221,28 @@ public static class ModelStoreChecks
         private async Task WriteResponse(NetworkStream stream, int status, byte[] body,
             Route? route)
         {
-            var header = $"HTTP/1.1 {status} {(status == 200 ? "OK" : "Error")}\r\n" +
+            // 307/308 keep their method on both platforms; the label only has to be
+            // a valid reason-phrase, and the body stays empty for every redirect.
+            var reason = status switch
+            {
+                200 => "OK",
+                301 => "Moved Permanently",
+                302 => "Found",
+                303 => "See Other",
+                307 => "Temporary Redirect",
+                308 => "Permanent Redirect",
+                404 => "Not Found",
+                _ => "Error",
+            };
+            var locations = "";
+            if (route?.Location is not null)
+                locations += $"Location: {route.Location}\r\n";
+            if (route?.AdditionalLocations is { } additional)
+                foreach (var target in additional)
+                    locations += $"Location: {target}\r\n";
+            var header = $"HTTP/1.1 {status} {reason}\r\n" +
                          $"Content-Length: {body.Length}\r\n" +
+                         locations +
                          "Connection: close\r\nContent-Type: application/octet-stream\r\n\r\n";
             var headerBytes = Encoding.ASCII.GetBytes(header);
             await stream.WriteAsync(headerBytes, _stop.Token);

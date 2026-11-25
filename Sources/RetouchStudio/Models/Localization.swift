@@ -735,13 +735,34 @@ class L10n {
     }
     func modelsConsentBody(files: Int, size: String, codeLicense: String,
                            weightsLicense: String, host: String, sha: String) -> String {
+        modelsConsentBody(files: files, size: size, codeLicense: codeLicense,
+                          weightsLicense: weightsLicense, host: host, sha: sha,
+                          redirectHosts: [])
+    }
+
+    /// `redirectHosts` are the destinations the catalog admits a redirect to —
+    /// host and path class, never a signed query. Naming them here is what keeps
+    /// the approval honest now that one recorded source answers with another host.
+    func modelsConsentBody(files: Int, size: String, codeLicense: String,
+                           weightsLicense: String, host: String, sha: String,
+                           redirectHosts: [String]) -> String {
         let count = files == 1 ? "1 file" : "\(files) files"
         return """
         \(count), \(size), from \(host).
+        \(modelsRedirectDisclosure(redirectHosts))
         Code licence: \(codeLicense). Weights licence: \(weightsLicense).
         SHA-256 (manifest): \(sha)…
         This is the only step that uses the internet. Nothing is installed unless every file matches its size and checksum.
         """
+    }
+
+    /// The one sentence that names where redirected bytes come from. With no
+    /// admitted destination it says so, which is the catalog's safe default.
+    func modelsRedirectDisclosure(_ hosts: [String]) -> String {
+        guard !hosts.isEmpty else {
+            return "No other host may supply these bytes; a redirect is refused."
+        }
+        return "If the source redirects, the only allowed destinations are: \(hosts.joined(separator: ", "))."
     }
     func modelsDiskUsage(used: String, free: String) -> String {
         "On disk: \(used) · Free: \(free)"

@@ -11,6 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The model-store conformance suite drives the redirect seams (an explicit
+         allow-list and the hop recorder) that no production caller needs. -->
+    <InternalsVisibleTo Include="RetouchStudio.AI.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Pinned baseline approved for W5. Keep the version, published size and
          nupkg SHA-256 in Windows/README.md in sync. CPU is the only required
          execution provider; DirectML is never mandatory. -->

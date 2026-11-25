@@ -73,6 +73,29 @@ public sealed class ModelTransferProgress
     public int FileCount { get; init; }
 }
 
+/// <summary>
+/// Where one downloaded file actually ended up after redirects. Only the host
+/// and path are ever carried, because Hugging Face's XET <c>Location</c> contains
+/// a signed query string: anything that prints a hop — the audit trail or a
+/// refusal message — gets a value that cannot leak credentials. Mirrors the
+/// macOS <c>ModelRedirectHop</c>.
+/// </summary>
+public sealed class ModelRedirectHop
+{
+    public int StatusCode { get; init; }
+    public string Host { get; init; } = "";
+    public string Path { get; init; } = "/";
+
+    public string Display => Host + Path;
+
+    public static ModelRedirectHop For(int statusCode, Uri uri) => new()
+    {
+        StatusCode = statusCode,
+        Host = uri.Host,
+        Path = string.IsNullOrEmpty(uri.AbsolutePath) ? "/" : uri.AbsolutePath,
+    };
+}
+
 public sealed class ModelVerifyProblem
 {
     public string File { get; init; } = "";
@@ -265,21 +288,43 @@ public sealed class ModelStore
     public bool AllowLocalHttp { get; }
 
     public ModelStore(string root, ModelCatalog catalog, string? platform = null,
-        bool allowLocalHttp = false, HttpClient? http = null)
+        bool allowLocalHttp = false)
+        : this(root, catalog, platform, allowLocalHttp, handler: null)
+    {
+    }
+
+    /// <summary>
+    /// Test-only transport seam. Production callers cannot inject an HttpClient
+    /// that follows redirects before the catalog policy sees them; known handlers
+    /// that automatically redirect or decompress are rejected here as well.
+    /// </summary>
+    internal ModelStore(string root, ModelCatalog catalog, string? platform,
+        bool allowLocalHttp, HttpMessageHandler? handler)
     {
         Layout = new ModelStoreLayout(root);
         Catalog = catalog;
         Platform = platform ?? ModelCatalog.Platform;
         AllowLocalHttp = allowLocalHttp;
-        _http = http ?? new HttpClient(new SocketsHttpHandler
+        _http = CreateHttpClient(handler);
+    }
+
+    private static HttpClient CreateHttpClient(HttpMessageHandler? handler)
+    {
+        handler ??= new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.None,
             ConnectTimeout = TimeSpan.FromSeconds(30),
-        })
-        {
-            Timeout = Timeout.InfiniteTimeSpan,
         };
+        if (handler is SocketsHttpHandler sockets &&
+            (sockets.AllowAutoRedirect || sockets.AutomaticDecompression != DecompressionMethods.None))
+            throw new ArgumentException("the model transport must not redirect or decompress",
+                nameof(handler));
+        if (handler is HttpClientHandler legacy &&
+            (legacy.AllowAutoRedirect || legacy.AutomaticDecompression != DecompressionMethods.None))
+            throw new ArgumentException("the model transport must not redirect or decompress",
+                nameof(handler));
+        return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     public static ModelStore CreateProduction()
@@ -395,6 +440,16 @@ public sealed class ModelStore
 
     public async Task<ModelVersionState> InstallAsync(ModelCatalogEntry entry,
         IProgress<ModelTransferProgress>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        await InstallAsync(entry, progress, null, cancellationToken);
+
+    /// <param name="redirectHops">
+    /// Receives the origin and every admitted hop, for the audit trail and for the
+    /// redirect tests. Only host and path ever reach it.
+    /// </param>
+    public async Task<ModelVersionState> InstallAsync(ModelCatalogEntry entry,
+        IProgress<ModelTransferProgress>? progress,
+        Action<ModelRedirectHop>? redirectHops,
         CancellationToken cancellationToken = default)
     {
         Validate(entry);
@@ -446,7 +501,8 @@ public sealed class ModelStore
                 var indexCopy = index;
                 await DownloadAsync(file.SourceUrl, destination, entry, size,
                     file.Path, indexCopy + 1, entry.Files.Count, offset,
-                    value => progress?.Report(value), cancellationToken);
+                    value => ReportProgress(progress, cancellationToken, value),
+                    Catalog.RedirectAllowList, redirectHops, cancellationToken);
                 var actualSize = new FileInfo(destination).Length;
                 if (actualSize != size)
                     throw ModelStoreError.Unverified(
@@ -496,44 +552,112 @@ public sealed class ModelStore
         return VersionState(entry, entry.Version);
     }
 
+    /// <summary>
+    /// The transfer's cancellation token is its identity at the reporting boundary.
+    /// A callback that reaches this method after cancellation is stale and must not
+    /// be queued into a progress sink that may already belong to a retry.
+    /// </summary>
+    private static void ReportProgress(IProgress<ModelTransferProgress>? progress,
+        CancellationToken cancellationToken, ModelTransferProgress value)
+    {
+        if (!cancellationToken.IsCancellationRequested)
+            progress?.Report(value);
+    }
+
+    /// <summary>
+    /// Redirects one file may follow. Every hop is re-checked against the catalog's
+    /// allow-list, so a longer chain cannot launder a disallowed destination.
+    /// Same budget as the macOS delegate.
+    /// </summary>
+    public const int MaxRedirectHops = 3;
+
     private async Task DownloadAsync(string url, string destination, ModelCatalogEntry entry,
         long expectedSize, string relativePath, int index, int count, long offset,
-        Action<ModelTransferProgress> report, CancellationToken cancellationToken)
+        Action<ModelTransferProgress> report, CancellationToken cancellationToken) =>
+        await DownloadAsync(url, destination, entry, expectedSize, relativePath, index, count,
+            offset, report, Catalog.RedirectAllowList, null, cancellationToken);
+
+    /// <summary>
+    /// Fetches one recorded file, following only the redirects the catalog admits.
+    /// <c>redirectAllowList</c> and <c>redirectHops</c> are the seams the tests use:
+    /// a refusal can be exercised without rewriting the shared fixture, and the hop
+    /// list is the audit trail. Integrity is unchanged and still final — declared
+    /// size then pinned SHA-256, checked by the caller after this returns.
+    /// </summary>
+    internal async Task DownloadAsync(string url, string destination, ModelCatalogEntry entry,
+        long expectedSize, string relativePath, int index, int count, long offset,
+        Action<ModelTransferProgress> report, IReadOnlyList<ModelRedirectRule> redirectAllowList,
+        Action<ModelRedirectHop>? redirectHops, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             !ModelCatalogRules.IsRecordedFileSource(url, entry.SourceUrl, AllowLocalHttp))
             throw ModelStoreError.Invalid("refusing an unrecorded source");
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        redirectHops?.Invoke(ModelRedirectHop.For(0, uri));
+        var hops = 0;
         try
         {
-            using var response = await _http.SendAsync(request,
-                HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (response.StatusCode != HttpStatusCode.OK)
-                throw ModelStoreError.Invalid(
-                    $"the model source answered HTTP {(int)response.StatusCode}");
-            await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-            await using var output = new FileStream(destination, FileMode.CreateNew,
-                FileAccess.Write, FileShare.None, 1 << 20,
-                FileOptions.Asynchronous | FileOptions.WriteThrough);
-            var buffer = new byte[1 << 20];
-            long written = 0;
+            HttpResponseMessage response;
             while (true)
             {
-                var read = await input.ReadAsync(buffer, cancellationToken);
-                if (read == 0) break;
-                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                written += read;
-                report(new ModelTransferProgress
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                response = await _http.SendAsync(request,
+                    HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                if (!IsRedirectStatus(response.StatusCode)) break;
+                // The handler answers 3xx itself (AllowAutoRedirect = false), so the
+                // Location must be resolved here: HF sends relative ones. Disposal is
+                // in finally so a refusal cannot leak the intermediate response.
+                var statusCode = (int)response.StatusCode;
+                var hopCount = ++hops;
+                Uri? target = null;
+                try
                 {
-                    File = relativePath,
-                    ReceivedBytes = offset + written,
-                    TotalBytes = entry.SizeBytes,
-                    FileIndex = index,
-                    FileCount = count,
-                });
+                    // Match macOS: once the budget is exhausted, do not parse a new
+                    // Location merely to discover that the hop is already forbidden.
+                    if (hopCount <= MaxRedirectHops)
+                        target = ResolveRedirectLocation(response);
+                    RefuseRedirect(target, response.StatusCode, hopCount, redirectAllowList);
+                }
+                finally
+                {
+                    response.Dispose();
+                }
+                uri = target!.Value;
+                // The hop passed the rule, so it belongs in the audit trail: the
+                // parameter promises the origin plus every admitted hop, which is
+                // exactly what the macOS delegate reports through `onRedirect`.
+                // Only host and path are carried — a signed query never leaves here.
+                redirectHops?.Invoke(ModelRedirectHop.For(statusCode, uri));
             }
-            await output.FlushAsync(cancellationToken);
-            output.Flush(true);
+            using (response)
+            {
+                if (response.StatusCode != HttpStatusCode.OK)
+                    throw ModelStoreError.Invalid(
+                        $"the model source answered HTTP {(int)response.StatusCode}");
+                await using var input =
+                    await response.Content.ReadAsStreamAsync(cancellationToken);
+                await using var output = new FileStream(destination, FileMode.CreateNew,
+                    FileAccess.Write, FileShare.None, 1 << 20,
+                    FileOptions.Asynchronous | FileOptions.WriteThrough);
+                var buffer = new byte[1 << 20];
+                long written = 0;
+                while (true)
+                {
+                    var read = await input.ReadAsync(buffer, cancellationToken);
+                    if (read == 0) break;
+                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    written += read;
+                    report(new ModelTransferProgress
+                    {
+                        File = relativePath,
+                        ReceivedBytes = offset + written,
+                        TotalBytes = entry.SizeBytes,
+                        FileIndex = index,
+                        FileCount = count,
+                    });
+                }
+                await output.FlushAsync(cancellationToken);
+                output.Flush(true);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -541,8 +665,74 @@ public sealed class ModelStore
         }
         catch (Exception error) when (error is HttpRequestException or IOException)
         {
-            throw ModelStoreError.Invalid($"the download failed: {error.Message}");
+            // HttpRequestException.Message can quote the complete request URL,
+            // including signed query credentials. Preserve the typed failure, not
+            // arbitrary exception text.
+            _ = error;
+            throw ModelStoreError.Invalid(
+                "the download failed while contacting the recorded source");
         }
+    }
+
+    private static bool IsRedirectStatus(HttpStatusCode status) =>
+        status is HttpStatusCode.Moved or HttpStatusCode.Found
+            or HttpStatusCode.RedirectMethod or HttpStatusCode.TemporaryRedirect
+            or HttpStatusCode.PermanentRedirect;
+
+    /// <summary>
+    /// Resolves exactly one raw <c>Location</c> against the request that produced
+    /// the response. The raw path is checked before Uri can erase literal dot
+    /// segments; absent, repeated, unreadable or unsafe values all fail closed.
+    /// </summary>
+    internal static Uri? ResolveRedirectLocation(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("Location", out var values)) return null;
+        var locations = values.ToArray();
+        if (locations.Length != 1) return null;
+        var raw = locations[0].Trim();
+        if (raw.Length == 0 || !ModelCatalogRules.IsSafeRawRedirectLocation(raw)) return null;
+        if (response.RequestMessage?.RequestUri is not { IsAbsoluteUri: true } from) return null;
+        return Uri.TryCreate(from, raw, out var absolute) && absolute.IsAbsoluteUri
+            ? absolute
+            : null;
+    }
+
+    /// <summary>
+    /// The rule, identical to the macOS delegate: a redirect may be followed only
+    /// when its status is a redirect, its Location resolves, the destination passes
+    /// the shape rules the request URL already passed, the host matches one
+    /// allow-list entry exactly and that entry's path prefix covers the path, all
+    /// inside the hop budget. The refusal names host and path only — never the
+    /// query, which on Hugging Face is a signed URL.
+    /// </summary>
+    private void RefuseRedirect(Uri? target, HttpStatusCode status, int hopCountUsed,
+        IReadOnlyList<ModelRedirectRule> allowList)
+    {
+        var code = (int)status;
+        if (hopCountUsed > MaxRedirectHops)
+            throw ModelStoreError.Invalid(
+                $"the download refused a redirect (exceeds the {MaxRedirectHops}-redirect budget)");
+        if (target is null)
+            throw ModelStoreError.Invalid(
+                $"the download refused a redirect (HTTP {code} carried no usable Location)");
+        if (!ModelCatalogRules.IsAllowedRedirectTarget(target, AllowLocalHttp))
+            throw ModelStoreError.Invalid(
+                $"the download refused a redirect (HTTP {code} to {HopDisplay(target)} leaves " +
+                "the recorded source scheme, port or shape)");
+        if (ModelCatalogRules.RedirectRuleMatching(target, allowList) is null)
+            throw ModelStoreError.Invalid(
+                $"the download refused a redirect (HTTP {code} to {HopDisplay(target)} is not " +
+                "an allowed redirect host and path)");
+        RedirectAudit(target, code);
+    }
+
+    /// <summary>Host and path of an admitted hop; the query is never carried.</summary>
+    private static string HopDisplay(Uri uri) => ModelRedirectHop.For(0, uri).Display;
+
+    private static void RedirectAudit(Uri uri, int statusCode)
+    {
+        Trace.WriteLine($"RetouchStudio model download redirect {statusCode} -> " +
+                        HopDisplay(uri));
     }
 
     // MARK: Verify / activate / delete
@@ -763,7 +953,7 @@ public sealed class ModelStore
                 throw ModelStoreError.Unverified(
                     $"{file.Path} does not match the catalog; it is left where it is");
             received += size;
-            progress?.Report(new ModelTransferProgress
+            ReportProgress(progress, cancellationToken, new ModelTransferProgress
             {
                 File = file.Path, ReceivedBytes = received, TotalBytes = entry.SizeBytes,
                 FileIndex = index + 1, FileCount = entry.Files.Count,
