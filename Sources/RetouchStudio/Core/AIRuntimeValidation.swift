@@ -122,7 +122,9 @@ enum AIRuntimeValidation {
 
     // MARK: - Functional
 
-    static func functional(root: URL, timeout: TimeInterval = 60) -> RuntimeValidationReport {
+    static func functional(root: URL, timeout: TimeInterval = 60,
+                           stateRoot: URL? = nil,
+                           handshakeProbeDirectory: URL? = nil) -> RuntimeValidationReport {
         let layout = structural(root: root)
         guard layout.ok else {
             let report = RuntimeValidationReport(stage: .functional, issues: layout.issues)
@@ -137,6 +139,7 @@ enum AIRuntimeValidation {
             python(in: root),
             script: environmentScript,
             environment: environment,
+            stateRoot: stateRoot,
             timeout: min(15, remaining(deadline)))
         guard let info = jsonObject(from: environmentResult.stdout) else {
             return finish(.failure(.functional, "environment",
@@ -153,7 +156,7 @@ enum AIRuntimeValidation {
         }
 
         let core = runPython(python(in: root), script: coreImportScript,
-                             environment: environment,
+                             environment: environment, stateRoot: stateRoot,
                              timeout: min(20, remaining(deadline)))
         guard let coreResult = jsonObject(from: core.stdout) else {
             return finish(.failure(.functional, "core-dependency",
@@ -176,12 +179,13 @@ enum AIRuntimeValidation {
         }
 
         if let issue = startHandshake(root: root, environment: environment,
-                                      deadline: deadline) {
+                                      stateRoot: stateRoot, deadline: deadline,
+                                      probeDirectory: handshakeProbeDirectory) {
             return finish(.failure(.functional, issue.code, issue.detail))
         }
 
         let capabilities = probeOptionalCapabilities(
-            root: root, environment: environment,
+            root: root, environment: environment, stateRoot: stateRoot,
             timeout: min(45, remaining(deadline)))
 
         let report = RuntimeValidationReport.success(.functional, capabilities: capabilities)
@@ -204,6 +208,10 @@ enum AIRuntimeValidation {
         ].joined(separator: ":")
         environment["PYTHONNOUSERSITE"] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        // PYTHONPATH explicitly names the runtime and its site-packages. Safe
+        // path mode removes the implicit current-directory entry, so a helper
+        // cannot import code from the app's launch directory.
+        environment["PYTHONSAFEPATH"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
         environment.removeValue(forKey: "PYTHONSTARTUP")
         environment.removeValue(forKey: "PYTHONEXECUTABLE")
@@ -213,7 +221,7 @@ enum AIRuntimeValidation {
     }
 
     private static let environmentScript = """
-    import json, platform, sys
+    import json, platform, sys, sysconfig
     print(json.dumps({
         "implementation": platform.python_implementation(),
         "version": list(sys.version_info[:3]),
@@ -221,6 +229,8 @@ enum AIRuntimeValidation {
         "prefix": sys.prefix,
         "base_prefix": sys.base_prefix,
         "executable": sys.executable,
+        "path": sys.path,
+        "sysconfig_paths": sysconfig.get_paths(),
     }))
     """
 
@@ -256,15 +266,43 @@ enum AIRuntimeValidation {
               isContained(URL(fileURLWithPath: prefix), in: root) else {
             return "the interpreter does not use the runtime as its Python home"
         }
+        guard let basePrefix = info["base_prefix"] as? String,
+              isContained(URL(fileURLWithPath: basePrefix), in: root) else {
+            return "the interpreter does not use the runtime as its base Python home"
+        }
         if let executable = info["executable"] as? String,
            !isContained(URL(fileURLWithPath: executable), in: root) {
             return "the interpreter refers outside the runtime"
+        }
+        guard let searchPaths = info["path"] as? [Any], !searchPaths.isEmpty else {
+            return "the interpreter did not report its module search path"
+        }
+        for entry in searchPaths {
+            guard let path = entry as? String, path.hasPrefix("/") else {
+                return "the module search path contains a relative or non-string entry"
+            }
+            if !isContained(URL(fileURLWithPath: path), in: root) {
+                return "the module search path refers outside the runtime: \(path)"
+            }
+        }
+        guard let configurationPaths = info["sysconfig_paths"] as? [String: String],
+              !configurationPaths.isEmpty else {
+            return "the interpreter did not report its Python configuration paths"
+        }
+        for (name, path) in configurationPaths.sorted(by: { $0.key < $1.key }) {
+            guard path.hasPrefix("/") else {
+                return "the Python configuration path \(name) is relative or empty"
+            }
+            if !isContained(URL(fileURLWithPath: path), in: root) {
+                return "the Python configuration path \(name) refers outside the runtime: \(path)"
+            }
         }
         return nil
     }
 
     private static func probeOptionalCapabilities(root: URL,
                                                   environment: [String: String],
+                                                  stateRoot: URL?,
                                                   timeout: TimeInterval) -> [String: Bool] {
         var result: [String: Bool] = [:]
         for capability in optionalCapabilities { result[capability.name] = false }
@@ -292,7 +330,7 @@ enum AIRuntimeValidation {
         """
 
         let command = runPython(python(in: root), script: script,
-                                environment: environment, timeout: timeout)
+                                environment: environment, stateRoot: stateRoot, timeout: timeout)
         guard !command.timedOut, command.status == 0,
               let parsed = jsonObject(from: command.stdout) else {
             NSLog("[RetouchStudio] runtime validation optional probe failed: %@",
@@ -307,16 +345,29 @@ enum AIRuntimeValidation {
 
     // MARK: - Startup handshake
 
+    /// All validation-owned scratch lives below the caller's diagnostic state
+    /// root when one is supplied. Ordinary installer validation keeps its
+    /// historical `/tmp` location; the packaged self-test never takes that path.
+    static func scratchDirectory(stateRoot: URL?, prefix: String) -> URL {
+        let base = stateRoot.map { $0.standardizedFileURL }
+            ?? URL(fileURLWithPath: "/tmp", isDirectory: true)
+        return base.appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
     private struct HandshakeIssue {
         let code: String
         let detail: String
     }
 
     private static func startHandshake(root: URL, environment: [String: String],
-                                       deadline: Date) -> HandshakeIssue? {
+                                       stateRoot: URL?, deadline: Date,
+                                       probeDirectory: URL?) -> HandshakeIssue? {
         let manager = FileManager.default
-        let probe = URL(fileURLWithPath: "/tmp/retouch-runtime-probe-\(UUID().uuidString)",
-                        isDirectory: true)
+        // A packaged diagnostic may supply a short, deterministic directory in
+        // its fresh output-owned state root so its AF_UNIX path can be preflighted
+        // before any artifact exists. Ordinary validation keeps unique scratch.
+        let probe = probeDirectory ?? scratchDirectory(stateRoot: stateRoot,
+                                                        prefix: "retouch-runtime-probe")
         let socket = probe.appendingPathComponent("worker.sock")
         let jobs = probe.appendingPathComponent("jobs", isDirectory: true)
         let models = probe.appendingPathComponent("models", isDirectory: true)
@@ -507,11 +558,10 @@ enum AIRuntimeValidation {
     }
 
     private static func runPython(_ executable: URL, script: String,
-                                  environment: [String: String],
+                                  environment: [String: String], stateRoot: URL?,
                                   timeout: TimeInterval) -> CommandResult {
         let manager = FileManager.default
-        let base = URL(fileURLWithPath: "/tmp/retouch-runtime-command-\(UUID().uuidString)",
-                       isDirectory: true)
+        let base = scratchDirectory(stateRoot: stateRoot, prefix: "retouch-runtime-command")
         let out = base.appendingPathComponent("stdout")
         let err = base.appendingPathComponent("stderr")
         defer { try? manager.removeItem(at: base) }
@@ -617,9 +667,31 @@ enum AIRuntimeValidation {
     }
 
     private static func isContained(_ candidate: URL, in base: URL) -> Bool {
-        let path = candidate.standardizedFileURL.resolvingSymlinksInPath().path
-        let root = base.standardizedFileURL.resolvingSymlinksInPath().path
+        // CPython reports optional paths such as lib/python313.zip even when the
+        // file is absent. Foundation only resolves links on an existing full
+        // path, so resolving the candidate directly can leave a temporary
+        // directory alias unresolved while the existing root is canonicalized.
+        // Canonicalize the nearest existing ancestor, then append the missing
+        // suffix; existing symlinks still resolve and cannot point the check
+        // outside the root.
+        let path = canonicalPath(candidate)
+        let root = canonicalPath(base)
         return path == root || path.hasPrefix(root + "/")
+    }
+
+    private static func canonicalPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path) {
+            guard existing.path != "/", !existing.lastPathComponent.isEmpty else { break }
+            missing.insert(existing.lastPathComponent, at: 0)
+            existing.deleteLastPathComponent()
+        }
+        let resolved = existing.resolvingSymlinksInPath().path
+        guard !missing.isEmpty else { return resolved }
+        return URL(fileURLWithPath: resolved, isDirectory: true)
+            .appendingPathComponent(missing.joined(separator: "/"))
+            .standardizedFileURL.path
     }
 
     private struct ProbeFailure: Error, CustomStringConvertible {

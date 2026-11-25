@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreImage
+import CryptoKit
 import Darwin
 import Foundation
 import ImageIO
@@ -41,6 +42,216 @@ extension ExportSource {
                                 photoAspect: Double(photoAspect),
                                 faceCount: faces.count,
                                 colorProfileName: colorSpace?.name as String?)
+    }
+}
+
+/// Descriptor-relative file operations for paths that cross a trust boundary.
+/// Final components are opened with `O_NOFOLLOW` and checked with `fstat`.
+/// This deliberately does not claim to close races in ancestor directories or
+/// in a separate consumer (the Python helper) that later reopens a pathname.
+enum SecureFileIO {
+    static func openDirectory(_ url: URL) throws -> Int32 {
+        try openDirectory(at: url.path)
+    }
+
+    static func openDirectory(in parent: Int32, name: String) throws -> Int32 {
+        try validateComponent(name)
+        let descriptor = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw failure("could not open directory \(name)") }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
+            let error = errno
+            close(descriptor)
+            throw failure("not a directory: \(name)", code: error)
+        }
+        return descriptor
+    }
+
+    static func createDirectory(in parent: Int32, name: String) throws -> Int32 {
+        try validateComponent(name)
+        guard mkdirat(parent, name, 0o700) == 0 else {
+            throw failure("could not create directory \(name)")
+        }
+        return try openDirectory(in: parent, name: name)
+    }
+
+    static func openRegularFile(_ url: URL) throws -> (descriptor: Int32, info: stat) {
+        let parent = try openDirectory(url.deletingLastPathComponent())
+        defer { close(parent) }
+        return try openRegularFile(in: parent, name: url.lastPathComponent)
+    }
+
+    static func openRegularFile(in parent: Int32, name: String) throws -> (descriptor: Int32, info: stat) {
+        try validateComponent(name)
+        let descriptor = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw failure("could not open regular file \(name)") }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            let error = errno
+            close(descriptor)
+            throw failure("not a regular non-symlink file: \(name)", code: error)
+        }
+        return (descriptor, info)
+    }
+
+    static func readFile(at url: URL) throws -> Data {
+        let parent = try openDirectory(url.deletingLastPathComponent())
+        defer { close(parent) }
+        return try readFile(in: parent, name: url.lastPathComponent)
+    }
+
+    static func readFile(in parent: Int32, name: String) throws -> Data {
+        let file = try openRegularFile(in: parent, name: name)
+        defer { close(file.descriptor) }
+        return try readAll(file.descriptor)
+    }
+
+    static func readAll(_ descriptor: Int32) throws -> Data {
+        var result = Data()
+        var chunk = [UInt8](repeating: 0, count: 1 << 20)
+        while true {
+            let count = chunk.withUnsafeMutableBytes {
+                read(descriptor, $0.baseAddress, $0.count)
+            }
+            if count == 0 { return result }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw failure("could not read file")
+            }
+            result.append(contentsOf: chunk.prefix(count))
+        }
+    }
+
+    static func writeAll(_ data: Data, to descriptor: Int32) throws {
+        try data.withUnsafeBytes { bytes in
+            var sent = 0
+            while sent < bytes.count {
+                let count = Darwin.write(descriptor, bytes.baseAddress!.advanced(by: sent), bytes.count - sent)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw failure("could not write file")
+                }
+                guard count > 0 else { throw failure("could not finish writing file") }
+                sent += count
+            }
+        }
+    }
+
+    static func createRegularFile(in parent: Int32, name: String,
+                                  mode: mode_t = 0o644) throws -> Int32 {
+        try validateComponent(name)
+        let descriptor = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
+        guard descriptor >= 0 else { throw failure("could not create new file \(name)") }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            let error = errno
+            close(descriptor)
+            throw failure("created file is not regular: \(name)", code: error)
+        }
+        return descriptor
+    }
+
+    static func write(_ data: Data, toDirectory parent: Int32, name: String) throws {
+        let descriptor = try createRegularFile(in: parent, name: name)
+        var complete = false
+        defer {
+            close(descriptor)
+            if !complete { unlinkat(parent, name, 0) }
+        }
+        try writeAll(data, to: descriptor)
+        complete = true
+    }
+
+    static func copy(from source: URL, toDirectory parent: Int32, name: String,
+                     expectedSize: Int? = nil, expectedSHA256: String? = nil) throws {
+        let opened = try openRegularFile(source)
+        defer { close(opened.descriptor) }
+        try copy(opened.descriptor, info: opened.info, toDirectory: parent, name: name,
+                 expectedSize: expectedSize, expectedSHA256: expectedSHA256)
+    }
+
+    static func copy(_ source: Int32, info: stat, toDirectory parent: Int32, name: String,
+                     expectedSize: Int? = nil, expectedSHA256: String? = nil) throws {
+        if let expectedSize, Int(info.st_size) != expectedSize {
+            throw failure("file size does not match its trusted pin: \(name)")
+        }
+        let destination = try createRegularFile(in: parent, name: name)
+        var complete = false
+        defer {
+            close(destination)
+            if !complete { unlinkat(parent, name, 0) }
+        }
+        var hasher = SHA256()
+        var chunk = [UInt8](repeating: 0, count: 1 << 20)
+        while true {
+            let count = chunk.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw failure("could not read source file \(name)")
+            }
+            let data = Data(chunk.prefix(count))
+            try writeAll(data, to: destination)
+            hasher.update(data: data)
+        }
+        if let expectedSHA256,
+           hasher.finalize().map({ String(format: "%02x", $0) }).joined() != expectedSHA256 {
+            throw failure("file digest does not match its trusted pin: \(name)")
+        }
+        guard fchmod(destination, 0o644) == 0 else {
+            throw failure("could not set file mode: \(name)")
+        }
+        complete = true
+    }
+
+    static func unlink(in parent: Int32, name: String) {
+        do {
+            try validateComponent(name)
+            unlinkat(parent, name, 0)
+        } catch {}
+    }
+
+    static func sha256(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func sha256(of descriptor: Int32) throws -> String {
+        guard lseek(descriptor, 0, SEEK_SET) >= 0 else { throw failure("could not rewind file") }
+        var hasher = SHA256()
+        var chunk = [UInt8](repeating: 0, count: 1 << 20)
+        while true {
+            let count = chunk.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
+            if count == 0 { return hasher.finalize().map { String(format: "%02x", $0) }.joined() }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw failure("could not hash file")
+            }
+            hasher.update(data: Data(chunk.prefix(count)))
+        }
+    }
+
+    private static func openDirectory(at path: String) throws -> Int32 {
+        let descriptor = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw failure("could not open directory \(path)") }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
+            let error = errno
+            close(descriptor)
+            throw failure("not a directory: \(path)", code: error)
+        }
+        return descriptor
+    }
+
+    private static func validateComponent(_ name: String) throws {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0") else {
+            throw failure("unsafe file component")
+        }
+    }
+
+    private static func failure(_ detail: String, code: Int32? = nil) -> AIWorkerFailure {
+        let error = code ?? errno
+        return AIWorkerFailure(code: -32603,
+                               message: "\(detail): \(String(cString: strerror(error)))")
     }
 }
 
@@ -198,6 +409,207 @@ enum ExportService {
         }
     }
 
+    struct UpscaleArtifact {
+        let image: CIImage
+        let artifact: URL
+        let provenance: URL
+        let jobID: String?
+        let inputSHA256: String?
+        let model: ModelCatalogEntry?
+        /// The device the worker says it actually used. Nil is deliberately
+        /// not inferred from pixels or catalog metadata; the diagnostic fails
+        /// closed when the result cannot establish it.
+        let provider: String?
+
+        init(image: CIImage, artifact: URL, provenance: URL,
+             jobID: String? = nil, inputSHA256: String? = nil,
+             model: ModelCatalogEntry? = nil, provider: String? = nil) {
+            self.image = image
+            self.artifact = artifact
+            self.provenance = provenance
+            self.jobID = jobID
+            self.inputSHA256 = inputSHA256
+            self.model = model
+            self.provider = provider
+        }
+    }
+
+    /// The only model identity an upscale may claim: the exact Swin2SR entry in
+    /// the catalog sealed into this app. A self-consistent manifest supplied by
+    /// a caller is not a trust root.
+    static func trustedUpscaleEntry() throws -> ModelCatalogEntry {
+        let catalog = try ModelCatalog.bundled()
+        guard let entry = catalog.entry(id: "swin2sr-x4"),
+              entry.version == "1.0.0",
+              entry.format == "pytorch",
+              entry.capabilities.contains(AICapabilityReport.upscale4x),
+              entry.sha256 == "e0da6778bbcffbb26d61fda450648998e22f66d5867924706fee6d929aa50cdf",
+              entry.unverifiableReason == nil else {
+            throw AIWorkerFailure(code: -32021,
+                                  message: "the bundled catalog does not pin the approved 4× upscaler")
+        }
+        let required = Set(["config.json", "preprocessor_config.json", "pytorch_model.bin"])
+        var files: [String: ModelCatalogFile] = [:]
+        for file in entry.files {
+            guard required.contains(file.path), file.isVerifiable,
+                  files[file.path] == nil else {
+                throw AIWorkerFailure(code: -32021,
+                                      message: "the bundled upscaler catalog has invalid file pins")
+            }
+            files[file.path] = file
+        }
+        guard Set(files.keys) == required else {
+            throw AIWorkerFailure(code: -32021,
+                                  message: "the bundled upscaler catalog does not pin the exact checkpoint")
+        }
+        return entry
+    }
+
+    /// Hashes the RGB8 pixels the helper will decode from the submitted PNG.
+    /// The PNG container bytes are not the input identity: the worker records
+    /// `array.tobytes()` after `PIL.Image.convert("RGB")`.
+    static func rgb8SHA256(of url: URL) throws -> String {
+        let data = try SecureFileIO.readFile(at: url)
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw AIWorkerFailure(code: -32603, message: "the submitted RGB input cannot be decoded")
+        }
+        let width = image.width, height = image.height
+        let bits = image.bitsPerComponent
+        guard width > 0, height > 0,
+              (bits == 8 || bits == 16),
+              image.bitsPerPixel == bits * 4,
+              image.alphaInfo == .last,
+              let provider = image.dataProvider,
+              let providerData = provider.data,
+              let raw = providerData as Data?,
+              raw.count >= image.bytesPerRow * height else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the submitted PNG is not a supported straight RGBA image")
+        }
+        let bigEndian16: Bool
+        if bits == 16 {
+            if image.bitmapInfo.contains(.byteOrder16Big) {
+                bigEndian16 = true
+            } else if image.bitmapInfo.contains(.byteOrder16Little) {
+                bigEndian16 = false
+            } else {
+                throw AIWorkerFailure(code: -32603,
+                                      message: "the submitted RGBA16 PNG has no known byte order")
+            }
+        } else {
+            bigEndian16 = false
+        }
+
+        // Pillow drops alpha and keeps the high byte of each 16-bit channel.
+        // Drawing through an opaque CGContext would instead composite alpha
+        // and rescale 16-bit values, binding the sidecar to different pixels.
+        // Read ImageIO's straight RGBA samples directly. Unsupported layouts
+        // are refused above rather than hashed with guessed semantics.
+        let bytesPerPixel = bits / 8 * 4
+        var row = [UInt8](repeating: 0, count: width * 3)
+        var hasher = SHA256()
+        raw.withUnsafeBytes { buffer in
+            let bytes = buffer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            for y in 0..<height {
+                let rowStart = y * image.bytesPerRow
+                for x in 0..<width {
+                    let pixelStart = rowStart + x * bytesPerPixel
+                    for channel in 0..<3 {
+                        let offset = pixelStart + channel * (bits / 8)
+                        if bits == 8 {
+                            row[x * 3 + channel] = bytes[offset]
+                        } else {
+                            let value = bigEndian16
+                                ? (UInt16(bytes[offset]) << 8) | UInt16(bytes[offset + 1])
+                                : UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+                            row[x * 3 + channel] = UInt8(value >> 8)
+                        }
+                    }
+                }
+                hasher.update(data: row)
+            }
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Verifies the helper's output bytes and binds every identity-bearing
+    /// sidecar field to facts the host measured or sealed into the app.
+    static func verifyUpscaleProvenance(path: String, sidecarPath: String,
+                                        jobID: String, inputSHA256: String,
+                                        model: ModelCatalogEntry) throws -> URL {
+        guard model.id == "swin2sr-x4", model.version == "1.0.0",
+              model.format == "pytorch",
+              model.capabilities.contains(AICapabilityReport.upscale4x),
+              model.sha256 == "e0da6778bbcffbb26d61fda450648998e22f66d5867924706fee6d929aa50cdf",
+              model.isVerifiable else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the upscale provenance has no trusted model context")
+        }
+        guard !jobID.isEmpty, inputSHA256.count == 64,
+              inputSHA256.allSatisfy(\.isHexDigit) else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the upscale provenance has no trusted submission context")
+        }
+        let requiredFiles = Set(["config.json", "preprocessor_config.json", "pytorch_model.bin"])
+        guard model.files.count == requiredFiles.count,
+              Set(model.files.map(\.path)) == requiredFiles else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the upscale provenance has incomplete model pins")
+        }
+        let artifact = URL(fileURLWithPath: path)
+        let sidecar = URL(fileURLWithPath: sidecarPath)
+        guard sidecar.lastPathComponent == artifact.lastPathComponent + AIProvenance.sidecarSuffix,
+              sidecar.deletingLastPathComponent().path == artifact.deletingLastPathComponent().path else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the provenance is not the sidecar of this artifact")
+        }
+        let parent = try SecureFileIO.openDirectory(artifact.deletingLastPathComponent())
+        defer { close(parent) }
+        let artifactFile = try SecureFileIO.openRegularFile(in: parent, name: artifact.lastPathComponent)
+        defer { close(artifactFile.descriptor) }
+        let sidecarFile = try SecureFileIO.openRegularFile(in: parent, name: sidecar.lastPathComponent)
+        defer { close(sidecarFile.descriptor) }
+        let data = try SecureFileIO.readAll(sidecarFile.descriptor)
+        let actualDigest = try SecureFileIO.sha256(of: artifactFile.descriptor)
+        guard let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              (record["output"] as? [String: Any])?["sha256"] as? String == actualDigest,
+              record["schema"] as? String == AIProvenance.schema,
+              record["capabilityId"] as? String == AICapabilityReport.upscale4x,
+              record["jobId"] as? String == jobID,
+              record["state"] as? String == "succeeded",
+              (record["input"] as? [String: Any])?["sha256"] as? String == inputSHA256,
+              (record["parameters"] as? [String: Any])?["scale"] as? Int == 4,
+              let recordedModel = record["model"] as? [String: Any],
+              recordedModel["id"] as? String == model.id,
+              recordedModel["version"] as? String == model.version,
+              recordedModel["format"] as? String == model.format,
+              let recordedFiles = recordedModel["files"] as? [[String: Any]],
+              recordedFiles.count == model.files.count else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the upscale provenance is not bound to this submission")
+        }
+        let expected = Dictionary(uniqueKeysWithValues: model.files.map {
+            ($0.path, $0.sha256 ?? "")
+        })
+        var seen = Set<String>()
+        for file in recordedFiles {
+            guard Set(file.keys) == Set(["path", "sha256"]),
+                  let path = file["path"] as? String,
+                  let digest = file["sha256"] as? String,
+                  let trusted = expected[path], digest == trusted,
+                  seen.insert(path).inserted else {
+                throw AIWorkerFailure(code: -32603,
+                                      message: "the upscale provenance does not name the trusted model files")
+            }
+        }
+        guard seen == Set(expected.keys) else {
+            throw AIWorkerFailure(code: -32603,
+                                  message: "the upscale provenance omits a trusted model file")
+        }
+        return artifact
+    }
+
     /// Runs one upscale job through the local helper and reads the result back
     /// into memory. The working copy is deleted; the helper trims its own job
     /// folders. Cancelling the surrounding task cancels the job as well. The
@@ -206,12 +618,21 @@ enum ExportService {
     /// so the helper applies its own verdict before it loads a model.
     private static func upscale(_ image: CIImage,
                                 progress: ((Int, Int) -> Void)?) throws -> CIImage {
+        try upscaleArtifact(image, progress: progress).image
+    }
+
+    /// The same production path, with the adopted file pair retained for the
+    /// explicit packaged-runtime diagnostic. Export itself uses only `image`.
+    static func upscaleArtifact(_ image: CIImage,
+                                progress: ((Int, Int) -> Void)?) throws -> UpscaleArtifact {
         guard RenderUpscale.canHandle(StudioSize(image.extent.size)) else {
             throw AIWorkerFailure(code: -32602, message: L10n.current.exportUpscaleTooLarge)
         }
+        let model = try trustedUpscaleEntry()
         try AIWorker.ensureRunning()
         let copy = try AIWorker.writeUpscaleSource(image)
         defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+        let inputSHA256 = try rgb8SHA256(of: copy)
 
         var used = false
         ModelActivity.shared.begin(.swin)
@@ -238,7 +659,8 @@ enum ExportService {
             throw error
         }
         guard let payload = reply["result"] as? [String: Any],
-              let path = payload["output"] as? String else {
+              let path = payload["output"] as? String,
+              let provenancePath = payload["provenance"] as? String else {
             throw AIWorkerFailure(code: -32603, message: L10n.current.exportUpscaleFailed)
         }
         // §3.6: the file is adoptable only together with the sidecar that names
@@ -251,8 +673,9 @@ enum ExportService {
         // provenance contract, not the wording, is what refused the artifact.
         let artifact: URL
         do {
-            artifact = try AIProvenance.verifiedArtifact(
-                path: path, sidecarPath: payload["provenance"] as? String)
+            artifact = try verifyUpscaleProvenance(
+                path: path, sidecarPath: provenancePath, jobID: id,
+                inputSHA256: inputSHA256, model: model)
         } catch {
             throw AIWorkerFailure(code: -32603,
                                   message: L10n.current.exportUpscaleFailed)
@@ -261,7 +684,10 @@ enum ExportService {
               let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw AIWorkerFailure(code: -32603, message: L10n.current.exportUpscaleFailed)
         }
-        return CIImage(cgImage: decoded)
+        return UpscaleArtifact(image: CIImage(cgImage: decoded), artifact: artifact,
+                               provenance: URL(fileURLWithPath: provenancePath),
+                               jobID: id, inputSHA256: inputSHA256, model: model,
+                               provider: PackagedUpscaleSelfTest.inferenceProvider(from: payload))
     }
 
     /// Writes through a temporary file in the destination folder and moves it
