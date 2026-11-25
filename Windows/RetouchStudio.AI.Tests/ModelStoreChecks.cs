@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using RetouchStudio.AI.Models;
 
 namespace RetouchStudio.AI.Tests;
