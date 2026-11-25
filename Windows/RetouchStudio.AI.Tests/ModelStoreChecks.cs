@@ -1808,7 +1808,7 @@ public static class ModelStoreChecks
         {
             ["schema"] = document.GetProperty("schema").GetString(),
             ["catalogVersion"] = document.GetProperty("catalogVersion").GetString(),
-            ["entries"] = new JsonArray(entries.Select(JsonNode.Parse).ToArray()),
+            ["entries"] = new JsonArray(entries.Select(text => JsonNode.Parse(text)).ToArray()),
         };
         if (rules is not null)
         {
