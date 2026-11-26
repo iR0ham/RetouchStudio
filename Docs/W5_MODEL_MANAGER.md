@@ -281,6 +281,53 @@ The following required cases are exercised by both suites unless noted:
 | Worker lease timeout is `BUSY` -32012 with typed data, not `MODEL_MISSING` | 18 | n/a (no Windows worker model loading yet) |
 | Shared catalog / DR-5 / platform facts | 1 | M17 |
 | Worker reads `active.json`, flat installs and waits on either lease | 17, 18 | W5-3 (not yet loading models) |
+| Redirect hop follows the catalog host-and-path-class allow-list only | **none on `main`** — `[M19]`, tracked on PR #139, **not merged** |
+| Redirect `Location` is gated on the raw wire text, not a canonicalised copy | **none on `main`** — `[M19b]`, tracked on PR #139, **not merged** |
+
+**Redirect rows: tracked, not yet on `main` (2026-11-26).** The last two rows
+must not be read as part of the M1–M18 set that the paragraphs below cite. They
+are Windows-only checks that exist exclusively on the unmerged draft branch
+`w5-r1-redirect-cancel` at head `3bb8e69606074cfe5086ce0cbdaa74ea44b059d7`
+(PR #139, open and marked draft): `[M19]` is
+`Windows/RetouchStudio.AI.Tests/ModelStoreChecks.cs:863`
+(`"[M19] redirects follow the catalog's host-and-path-class allow-list only"`) and
+`[M19b]` is the same file at `:1791`
+(`"[M19b] the Location gate reads the wire text, not a canonicalised copy"`). At
+`main` `5aac9c3a` the mechanism they test is absent: `ModelCatalog.cs` defines no
+`RedirectAllowList` and no `ModelRedirectRule`, the Windows download's entire
+redirect posture is `Windows/RetouchStudio.AI/Models/ModelStore.cs:276`
+`AllowAutoRedirect = false`, and `grep -c M19` over main's copy of that test file
+returns 0 (its highest labels are `[M18]` and `[M17]`). So no `[M19]`/`[M19b]`
+verdict may be cited against `main`, and because those case names do not exist
+there, no Windows CI run at `main` can even print such a line.
+**NOT VERIFIED on `main`.**
+
+**Security properties of that branch's redirect gate (2026-11-26, read from the
+branch sources; NOT VERIFIED on `main`).** Two of them are worth stating now,
+because they are the reason the relaxation is acceptable and both are code-visible
+rather than asserted only by a test name:
+
+- The raw `Location` text is validated **before** normalisation can erase
+  anything. The hop loop reads the unparsed header copy first
+  (`ModelStore.cs:719-729`, `response.Headers.NonValidated`), rejects anything
+  unsafe with `ModelCatalogRules.IsSafeRawRedirectLocation(raw)` at `:694`, and
+  only then builds the absolute `Uri` at `:706`. A second verbatim cross-check runs
+  at `:703-704` against `ParsedLocationText`, which returns
+  `response.Headers.Location?.OriginalString` (`:738-748`), and the helper's own
+  contract is stated verbatim at `:683-685`: "The raw path is checked before Uri
+  can erase literal dot segments; absent, repeated, unreadable or unsafe values all
+  fail closed". Absent, repeated or unreadable values yield `null`, which
+  `RefuseRedirect` turns into a refusal (`:765-767`), never into permission.
+- A signed query never reaches a refusal or audit path. Hugging Face's XET
+  `Location` carries a signed query string, so the only type that leaves the
+  redirect logic — `ModelRedirectHop` (`:83-97`) — stores `StatusCode`, `Host` and
+  `Path`, where `Path` is filled from `uri.AbsolutePath` (`:95`) and no field
+  carries `Query` or `OriginalString`; its `Display` is `Host + Path` (`:89`).
+  Every refusal message interpolates `HopDisplay(target)` (`:770`, `:774`) and the
+  audit line does the same (`:782-786`), so no query component is printable from
+  the redirect code. The recorded over-budget behaviour is also deliberate: once
+  the 3-hop budget is exhausted the code stops resolving a new `Location` rather
+  than resolve it just to refuse it (`:614-618`, `MaxRedirectHops = 3` at `:572`).
 
 macOS local evidence: `RETOUCH_ARCH=arm64 ./Tests/run.sh` passes the model-store
 suite (157 checks, 18 sections) and the existing engine/model/runtime-process
