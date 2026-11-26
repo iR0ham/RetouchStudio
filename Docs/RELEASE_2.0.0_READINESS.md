@@ -799,7 +799,9 @@ as permanent seedings in both tools' test files, and a deliberate decision on
 ### I.3 Environment state change to disclose
 
 To run the suite at all, the reviewer installed `numpy 2.5.5` and `pillow 13.0.0`
-into the shared scratch interpreter `/private/tmp/rs-worker-venv` (it arrived with
+into the shared scratch venv interpreter — a private scratch directory under the
+system temp volume, its path redacted 2026-11-26 under the docs-path policy with
+no change to this record's substance — (it arrived with
 only pip/wheel). That venv now satisfies `requirements-test.lock` **approximately**
 (numpy 2.5.5 vs the pinned 2.5.4). Consequence for this release record: any suite
 result quoted from it is real but not lock-exact, and from now on every reported
@@ -914,7 +916,9 @@ merely unproven: it could not have been run here.
 
 ### J.4 Runner note
 
-The shared scratch interpreter `/private/tmp/rs-worker-venv` has only pip/wheel, so
+The shared scratch venv interpreter — a private scratch directory under the
+system temp volume, its path redacted 2026-11-26 under the docs-path policy with
+no change to this record's substance — has only pip/wheel, so
 six worker test modules fail there with `ModuleNotFoundError` and the suite
 misreports it as a count mismatch. A lock-exact runner now exists at
 `/private/tmp/rs-rev-gates-venv` (built with `requirements-test.lock
@@ -1007,7 +1011,7 @@ Head `cc1d9f6`, verified by test merge and direct read rather than by claim:
 | CI green at this head | run `44948957776`, `headSha cc1d9f6`, `conclusion success`, **all seven jobs** success (I read the run object, not the badge) |
 | independent review exists | `gh pr view 110` → `reviews = 0`, `reviewDecision` empty — **the §7 gate is still unmet** |
 
-The contested point from Addendum I is now **adjudicated in the implementer's favour, on evidence**. Re-running the real tool at `cc1d9f6` under the lock-exact interpreter (Python **3.13.15**, `/private/tmp/rs-worker-venv2`), after clearing `__pycache__`:
+The contested point from Addendum I is now **adjudicated in the implementer's favour, on evidence**. Re-running the real tool at `cc1d9f6` under the lock-exact interpreter (Python **3.13.15**, a second private scratch venv under the system temp volume — path redacted 2026-11-26, evidence unchanged), after clearing `__pycache__`:
 
 ```
 ['google','google.protobuf']              -> protobuf     (legitimate alias use)
