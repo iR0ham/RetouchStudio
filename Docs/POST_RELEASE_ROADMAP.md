@@ -270,8 +270,12 @@ in §2.
   **Deferred by decision, not oversight — 2.1, not 2.0.0.** Under ad-hoc signing
   this is a tamper-*consistency* check, not a security boundary: the same
   single-user writer who can modify a bundle can delete the check, and one
-  re-signature with any identity defeats it (the probe's informational case produced
-  a different CDHash that passed its own seal). Adopting it also invalidates the
+  re-signature defeats it — measured for the ad-hoc case only: `codesign --force
+  --sign -` on the tampered copy produced a new CDHash `cd300858d44e23900cd8b2e49f860ea6300c6b4b`
+  while the tampered payload stayed on disk at `85b7cc84c46b7d51a13d6983c52dacdfc7edbad162a2a156c76bc7ab4ce6a295`,
+  and the copy then passed its own seal. Re-signing with a real Apple identity was
+  NOT MEASURED and is out of reach under this project's ad-hoc-only policy, so that
+  stronger claim is not made here. Adopting it also invalidates the
   current packaged acceptance identity and forces a full artefact re-run, which is
   why it cannot ride into 2.0.0. Scope as recorded: ~30–45 lines before
   `PackagedUpscaleSelfTest.swift:436`. `--deep` is unnecessary and the probe says
