@@ -499,6 +499,38 @@ signed, still never clean-installed, and no CI job has run. The record:
   decision), no CPU-branch, x86_64-slice, Windows, GUI or clean-install
   evidence, and does not unlock gate rows 4, 6 or 7.
 
+### 6.1b The accepted bundle is diagnostic-stamped — release-shape identity NOT VERIFIED (recorded 2026-11-26)
+
+This is a release-gate requirement, not a cosmetic note, and §6.1a's head
+binding does not satisfy it.
+
+- **The accepted artefact carries non-release stamps.** `plutil -p` on the
+  retained acceptance bundle's `Contents/Info.plist` reads
+  `CFBundleShortVersionString = 0.0.0-m3-acceptance` and
+  `CFBundleVersion = m3-acc-1`. `build.sh:110-115` (at `d4ada2ac`) writes exactly
+  those two keys via `PlistBuddy` from `RETOUCH_VERSION`/`RETOUCH_BUILD`, and
+  `Contents/Info.plist` is one of the 29,178 entries inside both the tree digest
+  `df2649a904aaf3cc29e4222a061840c7f4bd7ae6c00a5f925ba3c9916c647b30` and the code
+  seal. A release-stamped build therefore differs in at least one digest input by
+  construction: the recorded digest **cannot** be shared with a `2.0.0`/`2` bundle
+  under any build order. Every byte-identity claim in §6.1/§6.1a is the identity of
+  a *diagnostic-stamped* artefact and must not be quoted as the identity of a
+  shippable package.
+- **A release-shaped image exists but predates both candidates.** The unmerged
+  acceptance worktree also carries `RetouchStudio-2.0.0-arm64.dmg`
+  (577,588,100 bytes, mtime 2026-11-24 22:44:42 +0330, sidecar
+  `RetouchStudio-2.0.0-arm64.dmg.sha256` recording
+  `f65444789e0ef784d18ab8b54ecd7fc764ba2d73f1a4f566c2b86402a5acb475`). Its
+  timestamp is before `fd7a956` (2026-11-25 22:01:11 +0330) and before
+  `d4ada2ac` (2026-11-26 17:27:24 +0330), and at the time of writing its payload
+  had **never** been compared, file by file, against a head build.
+- **Status of the requirement "the packaged acceptance holds for a
+  release-stamped build": NOT VERIFIED — measurement IN PROGRESS** as of
+  2026-11-26. A release-stamped (`2.0.0`) packaged measurement is being run
+  separately; its result does not exist in this repository's records yet and
+  belongs in a LATER dated addendum to this section. Nothing in §6.1/§6.1a may be
+  read as pre-approving it.
+
 ### 6.2 Packaged-acceptance follow-ups registered 2026-11-26 (not implemented)
 
 Both items need changes under `.github/`, which the documentation pass that added
