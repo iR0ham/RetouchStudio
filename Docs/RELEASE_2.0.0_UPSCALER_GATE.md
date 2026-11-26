@@ -562,6 +562,80 @@ binding does not satisfy it.
   separately; its result does not exist in this repository's records yet and
   belongs in a LATER dated addendum to this section. Nothing in §6.1/§6.1a may be
   read as pre-approving it.
+  **(Dated resolution, same evening, 2026-11-26: the release-shaped measurement
+  completed — see §6.1c. It resolves as a PASS at `d4ada2ac` for the
+  release-stamped bundle, a NOT-VALID verdict for the pre-existing `2.0.0`/`1`
+  container that predates the head commit, and a pending re-verification for the
+  post-`d4ada2ac` M3 head.)**
+
+### 6.1c Release-shaped acceptance measurement — dated addendum (2026-11-26, night)
+
+This resolves §6.1b's in-progress requirement. The status labels below are scoped
+to exactly what was measured; nothing here is inferred.
+
+- **(i) VERIFIED — the packaged self-test passes on a release-stamped bundle
+  built at `d4ada2ac`.** The Test Engineer built
+  `RETOUCH_ARCH=arm64 RETOUCH_VERSION=2.0.0 RETOUCH_BUILD=1 ./build.sh release`
+  at `w5-m3-packaged-acceptance` head `d4ada2ac` (exit 0). The bundle digests to
+  tree `4705068c0ce98ef46ac2f4fc84269eb3808cd6302d7ef7b6ab3d857ceece1be0` with
+  29,178 entries and zero bytecode residue; `Contents/Info.plist` hashes
+  `ab32913e…`, `Contents/MacOS/RetouchStudio` `4592d7f3…`,
+  `Contents/_CodeSignature/CodeResources` `af5eef45…`, and
+  `codesign --verify --strict` exits 0. The packaged self-test printed
+  `submitting 64×48 real 4× job`, `tile 1/1`,
+  `independent mps RGB8 reference matched exactly`, then `PASS`, exit 0. The
+  emitted PNG is `7c64bb81ad39a7f8a4c8f9a4a0e56305b16dbbfe8c3259c15c7614d1e52c9ffd`
+  and the emitted RGB8 is byte-identical to the fixture `reference.mps.rgb`
+  (`095bd862…`); the CPU-reference negative control (`reference.cpu.rgb`)
+  mismatches deliberately, so the match is fixture-specific and not a vacuous
+  comparison. The same commit built diagnostic-stamped digests to
+  `df2649a9…`; the two trees differ in **exactly two entries** (the bundle's own
+  plist and executable), the executable difference is only the 32-byte
+  CodeDirectory field storing `sha256(Info.plist)`, and the Mach-O program bytes
+  `[0:9988448)` are `6b5752772b31be78be1a71637afe73942f3080597a44889b166af0a630eaf901`
+  on both sides — compilation is deterministic; the stamp changes the payload
+  digest by construction (mechanism stated in `RELEASING.md` §2).
+- **(ii) NOT VALID AS RELEASE EVIDENCE — the pre-existing
+  `RetouchStudio-2.0.0-arm64.dmg` (bullet 2 of §6.1b) is not bound to any
+  accepted head.** Its payload digests to
+  `e21e4d3a0978e0971dbe82f92a3d6af09b298ca59a973cc82d914c1f60388694` with 29,172
+  entries; the six entries separating it from the accepted head bundle are
+  exactly the six M3 fixtures under
+  `Contents/Resources/Tests/Fixtures/upscale-m3/`. Its executable is the older
+  9,950,400-byte binary (`50fc897a…`; program bytes
+  `cabfdbdae50104ffb9528a44cc4894082038d08916185ab6ce4527ce71201f0f`, not
+  `6b575277…`), i.e. an earlier source state. Its documented self-test exits 0
+  and prints `UPSCALE SELFTEST: PASS` but prints **neither**
+  `independent M3 reference fixture verified` **nor**
+  `independent mps RGB8 reference matched exactly` — a PASS from a binary that
+  predates the fixture gate. **Any shipped artifact must be rebuilt from an
+  accepted head.** This is not a production-policy problem: the head code already
+  fails closed — `PackagedUpscaleSelfTest.swift:120-126` throws
+  "the app bundle does not contain the independent M3 reference fixture" from
+  `resolvePackagedReferenceDirectory(in:)`, `:400-415` makes `run(_:)` call it
+  unconditionally before any `PASS` print, and `:531` throws on any RGB8 byte
+  mismatch. The vacuous PASS belongs to the older binary. To keep it that way,
+  RuntimeProcessTests now pins refusal of a fixture-less bundle (new
+  `no-fixture` layout, commit `3267174` on the M3 branch): a synthetic bundle
+  whose `Contents/Resources` exists but carries neither the canonical fixture
+  directory nor a legacy top-level manifest must be refused with the shipped
+  message.
+- **(iii) The UDZO container is NOT reproducible; container hashes are never
+  acceptance values.** Two container creations over the same accepted payload
+  produced different digests during the acceptance rounds (`3ad2b862…`, then
+  `82e26e82…`). Re-measured independently the same night over a minimal staged
+  payload while hardening `Tools/make-dmg.sh` (the hardened script also refuses
+  to overwrite an existing image, so a re-run can no longer destroy a previous
+  artifact): first build `2493c2257c92b28b33651eff87adc20b1867fbab77846c5101dc47a40897507b`,
+  forced replacement build `78f5cd409c2d99c1fabde5d33670c6c3f7e5fcf29e3c61963bf0266f618ed8c3`,
+  same inputs. The acceptance value remains the **mounted payload** digest
+  (`4705068c…` / 29,178 entries for the release-shaped head build), never the
+  container hash.
+- **Still open after this addendum:** packaged acceptance for the M3 head
+  advanced beyond `d4ada2ac` (commits `3267174` and `9d20ec4` change only
+  `Tests/RuntimeProcessTests.swift` and `Tools/make-dmg.sh`, no app sources),
+  which is a Test Engineer re-verification step, and the two §6.2 follow-ups
+  (G-ACCI-1, G-ACCI-2), which need `.github/` changes.
 
 ### 6.2 Packaged-acceptance follow-ups registered 2026-11-26 (not implemented)
 
