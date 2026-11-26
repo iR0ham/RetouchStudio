@@ -298,11 +298,14 @@ group).
   changed, 2 insertions, 2 deletions), so no bundle input changed. But the
   packaged bundle was **not** rebuilt at `d4ada2a` and **no evidence record binds
   the diagnostic to that SHA**: the claim is "the tested bundle is made from the
-  sources `d4ada2a` also contains", not "the tested bundle is `d4ada2a`". (That
-  limitation was closed the same evening — a later step rebuilt the bundle and
-  re-measured the diagnostic at `d4ada2ac`, binding the acceptance identity to that
-  SHA by execution; see §6.1a. The sentence above was true when recorded and is
-  kept as written.) An
+  sources `d4ada2a` also contains", not "the tested bundle is `d4ada2a`". (Dated
+  follow-up the same evening: a later step ran the release build again at
+  `d4ada2ac` and re-measured the bundle and the diagnostic there, binding the
+  acceptance identity to that SHA by execution — with the Worker payload
+  content-carried from the stamp-verified cache rather than fully re-derived, so
+  the binding is by source-hash plus re-measurement, not by regeneration of every
+  entry; see §6.1a. The sentence above was true when recorded and is kept as
+  written.) An
   earlier briefing cited a digest `8f392256…` over 64,832 entries; that citation
   is wrong and the manifest value above supersedes it.
 - **Signature truth.** The shipped bundle is signed ad-hoc. Recorded
@@ -440,12 +443,18 @@ signed, still never clean-installed, and no CI job has run. The record:
   Those stamps are required to reproduce the recorded `Info.plist`; without them
   the build produces the `2.0.0`/`2` plist and no digest can match. Disclosed as
   a deviation from "no extra flags", not a hidden input.
-- **Byte-identity of the rebuilt bundle.** Content digest
+- **Byte-identity of the head-round bundle — content-carried, not fully
+  regenerated.** Content digest
   `df2649a904aaf3cc29e4222a061840c7f4bd7ae6c00a5f925ba3c9916c647b30` over 29,178
   files+symlinks — the §6.1 value — with a per-entry comparison against the
   retained `fd7a956` clone of only-in-ref 0, only-in-new 0, changed-hash 0:
   zero divergence, so the two-line `Tests/RuntimeProcessTests.swift` difference
-  between `fd7a956` and `d4ada2ac` reaches no bundle input. Main Mach-O
+  between `fd7a956` and `d4ada2ac` reaches no bundle input. Part of that identity
+  is by construction rather than by re-derivation: 29,159 of the 29,178 entries
+  live under `Contents/Resources/Worker/` and were content-carried from the
+  stamp-verified cache (see the cache bullet below); the app-side entries —
+  `Contents/Info.plist`, the main Mach-O and the rest — are what the head build
+  itself wrote. Main Mach-O
   `5a34eb6db532b4db988a05e74766f0c26d69997801e595f28371708fc03b4`, equal to the
   §6.1 value; the outer seal re-signed to the same bytes (CDHash
   `840a69fc960784395b161e3a7e246cbcd737f6ab`, same identity fields as §6.1).
@@ -467,12 +476,24 @@ signed, still never clean-installed, and no CI job has run. The record:
   ad-hoc is not distribution trust, unchanged by this record. Bytecode residue
   (`__pycache__`/`*.pyc`/`*.pyo`) find returned zero lines before and after both
   inference runs, and the final tree digest was still `df2649a9…`/29,178.
-- **Worker cache path exercised.** This build hit the documented
-  `build.sh` park/restore short-circuit for `Contents/Resources/Worker`, so its
-  log prints "helper runtime unchanged" / "worker integrity verified: 32133
-  entries" instead of the §6.1 run's full re-bundle block. Both paths converge
-  on the same 32,133-entry integrity manifest and the same bundle digest, so the
-  cache reuse is a measured deviation recorded, not an unaccounted input.
+- **Worker cache path exercised — the honest verb is "re-assembled", not
+  "re-derived".** This build hit the documented `build.sh` park/restore
+  short-circuit for `Contents/Resources/Worker`: its `build.log` is 29,560 lines
+  against the frozen §6.1 run's 29,570, prints `· helper runtime unchanged` once
+  (the string `Tools/bundle-worker.sh:103` emits on cache acceptance) and never
+  prints the full re-bundle block. The head binding for the carried bytes was
+  recovered by a different, valid route, so "not regenerated" is not "unbound":
+  all 14 shipped `Contents/Resources/Worker/retouch_ai_worker/*` files hash
+  sha256-equal to `git cat-file blob d4ada2ac:worker/retouch_ai_worker/<name>`
+  (matched 14, differed 0 — re-measured during this documentation pass), and
+  `Tools/bundle-worker.sh` keys its reuse stamp on exactly those 14 sources plus
+  `requirements.lock` (`:77-89`), refuses the cache unless the original integrity
+  seal still verifies (`:99`, acceptance printed at `:103`), and rewrites the
+  stamp only after relinking and nested signing (`:188`). Both build paths
+  converge on the same 32,133-entry integrity manifest and the same bundle
+  digest, so the cache reuse is a recorded, bounded deviation — but no sentence
+  in this section may be read as claiming every entry was regenerated at
+  `d4ada2ac`.
 - **The DMG, stated narrowly.** The image was **not** re-created by this step:
   its container sha256 `04a90aa7799447f8c7f237d1d904e5acabe3390354da5a0caaa04fd0e18ef651`
   equals the §6.1 value, and its container mtime (15:27:18) predates the
@@ -493,8 +514,10 @@ signed, still never clean-installed, and no CI job has run. The record:
   because the build removes and reassembles it on every run; its Mach-O mtime
   (20:16:22) postdates the head commit.
 - **What this binds and what it does not.** The §6.1 acceptance *identity* —
-  bundle, digest, inference verdict — is now bound to `d4ada2ac` by execution
-  rather than by the file-overlap argument. It adds no tamper detection (the
+  bundle, digest, inference verdict — is now bound to `d4ada2ac` by execution:
+  directly for the app-side entries, and for the cache-carried Worker entries via
+  the 14/14 source-hash equality plus the stamp-and-verify mechanism above — no
+  longer by the file-overlap argument alone. It adds no tamper detection (the
   shipped binary still has no in-process signature preflight; that stays a 2.1
   decision), no CPU-branch, x86_64-slice, Windows, GUI or clean-install
   evidence, and does not unlock gate rows 4, 6 or 7.
