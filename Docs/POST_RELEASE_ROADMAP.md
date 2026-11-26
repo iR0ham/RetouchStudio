@@ -284,6 +284,14 @@ in §2.
   the Worker payload — was caught by the plain non-deep check at exit 1 with
   "a sealed resource is missing or invalid", so the outer resource seal already
   covers the Worker tree.
+  **Seal anatomy that makes a plain verify cheap and correct (measured 2026-11-26,
+  read-only, from the retained head-built clone's `Contents/_CodeSignature/CodeResources`).**
+  The resource rules include a required `^Resources/` rule; the `files2` table seals
+  29,174 entries — 29,158 whole-file `hash2` SHA-256 records plus 16 `symlink`
+  records — and there are zero `cdhash` entries. `Resources/Worker/**`, including the
+  32,133-entry Python payload, is therefore sealed as ordinary resources of the outer
+  signature, not as nested code, so a single non-deep `codesign --verify --strict`
+  pass already covers the whole tree and Apple's deprecated `--deep` adds nothing.
   **Coverage this adds over the offline gates:** on the two copies whose tree the
   Worker manifest cannot see — a file added outside the `Resources` seal rule and a
   4-byte non-Mach-O stub added to `Contents/MacOS/` — the recorded
