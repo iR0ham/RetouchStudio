@@ -53,7 +53,7 @@ Check the bundle contents:
 ```bash
 du -sh "Retouch Studio.app"                                # ~16 MB light universal; ~1.3–1.6 GB with the helper
 ls "Retouch Studio.app/Contents/Resources/Worker"          # only if the helper was bundled; Apple-silicon runtime
-find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only
+find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only. Manual, offline-only check: no shipped code path performs this scan at runtime (see the dated addendum in `PRIVACY_AUDIT.md` §3.4).
 cat "Retouch Studio.app/Contents/Resources/LICENSE"        # MIT notice travels with the app
 cat "Retouch Studio.app/Contents/Resources/THIRD_PARTY_NOTICES.txt"
 plutil -extract NSHumanReadableCopyright raw "Retouch Studio.app/Contents/Info.plist"

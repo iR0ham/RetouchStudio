@@ -743,7 +743,7 @@ was taken and the cause was in the harness, not in Rosetta.**
   product code changed.
 - Measured on this head, this machine (MacBook Air M3), one variable at a time,
   same command in both runs
-  (`RETOUCH_WORKER_PYTHON=/private/tmp/rs-worker-venv/bin/python3 RETOUCH_ARCH=x86_64 Tests/run.sh`):
+  (`RETOUCH_WORKER_PYTHON=<a project-local virtual-environment interpreter> RETOUCH_ARCH=x86_64 Tests/run.sh`):
   at `36dd06d` without the constant, `MODEL STORE TESTS: FAIL (11)` — the ten
   child-process checks named in finding 5 plus their summary line; with the
   constant, the full x86_64 matrix is green: `StudioCore: 288 checks passed`,
