@@ -329,7 +329,7 @@ in §2.
   the first `log show` variant, which recorded 0 events in both windows including
   the positive control, was inconclusive and was replaced by the `log stream` run.
   Cost was ~1.1–2.2 s warm (median ~1.27 s), ~5.0 s cold from a freshly attached
-  mount, ~2.7 s warm from the mount, maxRSS ~47 MB, on one 16 GB Apple-silicon
+  mount, ~2.7 s warm from the mount, maxRSS ~48 MB, on one 16 GB Apple-silicon
   machine; the same records confirm the shipped bundle is `Signature=adhoc` /
   `TeamIdentifier=not set` and carries no entitlements plist, so it is unsandboxed
   and spawning the tool is unrestricted — including from a child process whose
@@ -346,11 +346,26 @@ in §2.
   preflight would guard the diagnostic path only — whether to extend it to real
   export paths, and what a ~1.3 s per-export tax would then mean, is an open design
   question rather than part of this item. And the check must run before anything can
-  create in-bundle residue: the acceptance workflow already treats `__pycache__` or
-  `*.pyc` under `Contents/Resources/Worker/` as a failure
-  (`m3-packaged-acceptance.yml:184-192`, with `PYTHONDONTWRITEBYTECODE=1` at `:132`),
-  which is exactly the file churn a seal check placed after a worker start would
-  report as tampering on a legitimate first run.
+  create in-bundle residue. That suppression is enforced by shipped code, not by the
+  acceptance workflow's environment: at `d4ada2ac` the workflow prefixes only its venv
+  preflight heredoc with `PYTHONDONTWRITEBYTECODE=1` (`m3-packaged-acceptance.yml:132`),
+  the app exec at `:140-141` carries no such prefix, and yet the post-run verdict grep
+  (`:143-144`) and the residue gate (`:184-192`) report zero `__pycache__`/`*.pyc` under
+  `Contents/Resources/Worker/` — which is exactly the file churn a seal check placed
+  after a worker start would report as tampering on a legitimate first run. The two
+  shipped sites that set the variable are
+  `Sources/RetouchStudio/Core/AIRuntimeValidation.swift:210` (unconditional, inside
+  `environment(for root:)` at `:202-221`) and
+  `Sources/RetouchStudio/Core/AIWorker.swift:585-588` (the bundled-root branch, applied
+  after the inherited environment is copied at `:578`). Two structural reasons keep the
+  before-any-worker-start ordering load-bearing even with those sites in place. R-15a:
+  the installed-root branch at `AIWorker.swift:589-593` sets no suppression; it is
+  latent only because `AIRuntime.swift:40` still returns `package: nil`, so an approved
+  runtime package would open a bytecode-creating path the shipped suppression does not
+  cover. R-15c: `AIRuntimeValidation.swift:223-235` builds the shell
+  `environmentScript` without ever echoing `sys.dont_write_bytecode`, so nothing in the
+  workflow output demonstrates the flag reached the app-launched interpreter — the
+  clean residue gate is consistent with, but not proof of, the shipped suppression.
 
 ### 8.5 Risks that shape the plan
 
