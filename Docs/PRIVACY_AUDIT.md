@@ -178,6 +178,20 @@ That is not a network leak, but it breaks the integrity guarantee the signature 
 
 After the fix, the signature verified cleanly **after** an idle launch, **after** the upscale job, and **after** the download, with zero `__pycache__` directories in the bundle.
 
+> **Dated addendum, 2026-11-26 (append-only; the record above is kept as written).** Two
+> qualifications to the first bullet. (1) The tree now sets `PYTHONDONTWRITEBYTECODE=1` at
+> two shipped sites, not one: besides the `AIWorker.swift` bundled-root branch (`:585-588`
+> at `d4ada2ac`, applied after the inherited environment is copied at `:578`),
+> `Sources/RetouchStudio/Core/AIRuntimeValidation.swift:210` sets it unconditionally inside
+> `environment(for root:)` (`:202-221` at the same revision), so a validation-driven launch
+> cannot start a Worker without it. (2) Both sites are environment configuration only. A
+> `git grep -E 'codesign|SecCode|SecStaticCode|CSFlag'` restricted to `Sources/` at
+> `d4ada2ac` returns no matches, so no shipped code path verifies the bundle seal or detects
+> tampering at runtime: this fix prevents the 2026-11-07 residue class from recurring, and
+> seal verification against other in-bundle writes remains an offline-gate responsibility
+> (see `CI_GATES.md` and the signature-probe records cited in `POST_RELEASE_ROADMAP.md`
+> item I10), not app behaviour.
+
 ---
 
 ## 4. Limitations of this audit
