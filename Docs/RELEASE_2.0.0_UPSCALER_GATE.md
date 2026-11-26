@@ -298,7 +298,11 @@ group).
   changed, 2 insertions, 2 deletions), so no bundle input changed. But the
   packaged bundle was **not** rebuilt at `d4ada2a` and **no evidence record binds
   the diagnostic to that SHA**: the claim is "the tested bundle is made from the
-  sources `d4ada2a` also contains", not "the tested bundle is `d4ada2a`". An
+  sources `d4ada2a` also contains", not "the tested bundle is `d4ada2a`". (That
+  limitation was closed the same evening — a later step rebuilt the bundle and
+  re-measured the diagnostic at `d4ada2ac`, binding the acceptance identity to that
+  SHA by execution; see §6.1a. The sentence above was true when recorded and is
+  kept as written.) An
   earlier briefing cited a digest `8f392256…` over 64,832 entries; that citation
   is wrong and the manifest value above supersedes it.
 - **Signature truth.** The shipped bundle is signed ad-hoc. Recorded
@@ -412,6 +416,80 @@ group).
   that a hosted runner may expose no Metal device. A locally passed diagnostic is
   therefore not CI evidence, and G-ACCI-1/G-ACCI-2 below are open before any run
   can be trusted as an acceptance record.
+
+### 6.1a Head-bound re-measurement at `d4ada2ac` (same day, recorded 2026-11-26 evening)
+
+This subsection supersedes exactly one sentence of §6.1 — "the packaged bundle
+was **not** rebuilt at `d4ada2a` and **no evidence record binds the diagnostic
+to that SHA**" — and nothing else. Every other §6.1 statement stands, and the
+gate rows above are unchanged: the artefact is still unmerged, still ad-hoc
+signed, still never clean-installed, and no CI job has run. The record:
+`EVIDENCE-MANIFEST-HEAD-15.txt` (165 lines, 19,949 bytes, sha256
+`77ccc2c213c25a2f0f30c564000fad501983030463db0c081a6ccab71c5f87fc`).
+
+- **Identity.** Branch head `d4ada2ac6337e4bc07fdc99442410852174a6bcc` before and
+  after the build; `git diff --stat` against that head produced zero bytes of
+  output and `git status --porcelain` zero lines (build outputs are gitignored,
+  no repository file was written); the newest reflog entry is the `d4ada2a`
+  commit itself at 17:27:24 local, predating the 20:16 build, and no git
+  operation occurred during the run. No commit, push, branch, tag, merge,
+  release or publish. The only execution of the app binary was the CLI
+  `--upscale-selftest` invocation; the GUI was never launched.
+- **Release build.** Exit 0, wall 89.69 s, with the documented acceptance stamps
+  `RETOUCH_ARCH=arm64 RETOUCH_VERSION=0.0.0-m3-acceptance RETOUCH_BUILD=m3-acc-1`.
+  Those stamps are required to reproduce the recorded `Info.plist`; without them
+  the build produces the `2.0.0`/`2` plist and no digest can match. Disclosed as
+  a deviation from "no extra flags", not a hidden input.
+- **Byte-identity of the rebuilt bundle.** Content digest
+  `df2649a904aaf3cc29e4222a061840c7f4bd7ae6c00a5f925ba3c9916c647b30` over 29,178
+  files+symlinks — the §6.1 value — with a per-entry comparison against the
+  retained `fd7a956` clone of only-in-ref 0, only-in-new 0, changed-hash 0:
+  zero divergence, so the two-line `Tests/RuntimeProcessTests.swift` difference
+  between `fd7a956` and `d4ada2ac` reaches no bundle input. Main Mach-O
+  `5a34eb6db532b4db988a05e74766f0c26d69997801e595f28371708fc03b4`, equal to the
+  §6.1 value; the outer seal re-signed to the same bytes (CDHash
+  `840a69fc960784395b161e3a7e246cbcd737f6ab`, same identity fields as §6.1).
+- **Packaged MPS inference on the head-built bundle.** Exit 0, wall 10.9 s,
+  verdict `UPSCALE SELFTEST: PASS`; output PNG
+  `7c64bb81ad39a7f8a4c8f9a4a0e56305b16dbbfe8c3259c15c7614d1e52c9ffd` and decoded
+  RGB8 `095bd862b7bf7ec14bb65e853cda5f5330bbdf56dfe7b3eea86b01956066fdc6` both
+  equal to the §6.1 record values, the RGB8 matching `reference.mps.rgb` with
+  zero differing bytes; provenance `model.provider == "mps"`, which the
+  self-test requires to equal the device and throws otherwise. An isolated
+  `HOME`/`TMPDIR` re-run (exit 0, wall 11.6 s) reproduced the same PNG hash; the
+  provenance sidecar differs only in `createdAt`, `elapsedSeconds` and `jobId`,
+  with every content field identical. The primary AI-state tree's entry listing
+  hashed identically before and after the packaged run.
+- **Offline gates on the head-built bundle.** `validate-bundle` exit 0;
+  `worker-integrity` exit 0 with 32,133 entries; `audit-bundle-notices` exit 0
+  with 29,162 files accounted; `codesign --verify --strict --verbose=2` exit 0
+  ("valid on disk", "satisfies its Designated Requirement"); `spctl -a` exit 3 —
+  ad-hoc is not distribution trust, unchanged by this record. Bytecode residue
+  (`__pycache__`/`*.pyc`/`*.pyo`) find returned zero lines before and after both
+  inference runs, and the final tree digest was still `df2649a9…`/29,178.
+- **Worker cache path exercised.** This build hit the documented
+  `build.sh` park/restore short-circuit for `Contents/Resources/Worker`, so its
+  log prints "helper runtime unchanged" / "worker integrity verified: 32133
+  entries" instead of the §6.1 run's full re-bundle block. Both paths converge
+  on the same 32,133-entry integrity manifest and the same bundle digest, so the
+  cache reuse is a measured deviation recorded, not an unaccounted input.
+- **The DMG, stated narrowly.** The image was **not** re-created by this step:
+  its container sha256 `04a90aa7799447f8c7f237d1d904e5acabe3390354da5a0caaa04fd0e18ef651`
+  equals the §6.1 value, and its container mtime (15:27:18) predates the
+  existence of the `d4ada2a` commit (17:27:24); `build.sh` never invokes
+  `hdiutil` — only `Tools/make-dmg.sh` does. What was measured is this: the
+  distribution image's payload was measured read-only and is byte-identical to
+  the head-built bundle (mounted read-only, payload digest `df2649a9…`/29,178,
+  Mach-O `5a34eb6d…`, detached cleanly with no stale mount left). **Container-level
+  provenance at `d4ada2ac` is NOT VERIFIED.** The app bundle itself is head-fresh
+  because the build removes and reassembles it on every run; its Mach-O mtime
+  (20:16:22) postdates the head commit.
+- **What this binds and what it does not.** The §6.1 acceptance *identity* —
+  bundle, digest, inference verdict — is now bound to `d4ada2ac` by execution
+  rather than by the file-overlap argument. It adds no tamper detection (the
+  shipped binary still has no in-process signature preflight; that stays a 2.1
+  decision), no CPU-branch, x86_64-slice, Windows, GUI or clean-install
+  evidence, and does not unlock gate rows 4, 6 or 7.
 
 ### 6.2 Packaged-acceptance follow-ups registered 2026-11-26 (not implemented)
 
