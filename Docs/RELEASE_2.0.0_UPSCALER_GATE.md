@@ -463,7 +463,16 @@ signed, still never clean-installed, and no CI job has run. The record:
   `7c64bb81ad39a7f8a4c8f9a4a0e56305b16dbbfe8c3259c15c7614d1e52c9ffd` and decoded
   RGB8 `095bd862b7bf7ec14bb65e853cda5f5330bbdf56dfe7b3eea86b01956066fdc6` both
   equal to the §6.1 record values, the RGB8 matching `reference.mps.rgb` with
-  zero differing bytes; provenance `model.provider == "mps"`, which the
+  zero differing bytes — a discriminating, not vacuous, equality: decoding the
+  same shipped PNG against `reference.cpu.rgb` was measured to produce 4 differing
+  sample bytes with max absolute delta 1 (MISMATCH, exit 1), and this
+  documentation pass reconfirmed that margin by comparing the two retained
+  reference fixtures directly (both 147,456 bytes; 4 differing bytes across 4
+  pixel samples, every one ±1 LSB). So the byte-identity gate demonstrably
+  catches drift of that size, and the corollary binds the other way: MPS and CPU
+  references differ by only 4 samples at ±1 LSB, so the fixtures are fragile and
+  must never be auto-refreshed;
+  provenance `model.provider == "mps"`, which the
   self-test requires to equal the device and throws otherwise. An isolated
   `HOME`/`TMPDIR` re-run (exit 0, wall 11.6 s) reproduced the same PNG hash; the
   provenance sidecar differs only in `createdAt`, `elapsedSeconds` and `jobId`,
