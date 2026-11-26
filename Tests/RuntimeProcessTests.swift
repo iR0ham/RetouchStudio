@@ -1398,6 +1398,12 @@ func testPackagedUpscaleDiagnosticContract() {
         ]
         try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: root.appendingPathComponent("Contents/Info.plist"))
+        if layout == "no-fixture" {
+            // A release-shaped bundle whose resource directory exists but
+            // carries no fixture at all: no Tests/Fixtures/upscale-m3
+            // directory and no legacy top-level manifest file anywhere.
+            return Bundle(path: root.path)!
+        }
         let directory: URL
         let fileName: String
         switch layout {
@@ -1436,6 +1442,22 @@ func testPackagedUpscaleDiagnosticContract() {
         }
         check(refused, "M: production refuses the noncanonical \(layout) fixture fallback")
     }
+
+    // The packaged policy must fail closed on a bundle that carries no
+    // independent fixture at all, not only on misplaced ones.
+    let noFixtureBundle = packagedReferenceBundle("no-fixture.app", layout: "no-fixture")
+    var noFixtureRefused = false
+    var noFixtureMessage = ""
+    do {
+        _ = try PackagedUpscaleSelfTest.resolvePackagedReferenceDirectory(in: noFixtureBundle)
+    } catch {
+        noFixtureRefused = true
+        noFixtureMessage = error.localizedDescription
+    }
+    check(noFixtureRefused
+            && noFixtureMessage.contains("does not contain the independent M3 reference fixture"),
+          "M: production refuses a bundle with no independent M3 fixture",
+          noFixtureMessage)
 
     let realParent = rootDirectory.appendingPathComponent("real-parent", isDirectory: true)
     let realModel = realParent.appendingPathComponent("swin2sr-x4", isDirectory: true)
