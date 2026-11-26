@@ -480,8 +480,16 @@ signed, still never clean-installed, and no CI job has run. The record:
   `hdiutil` — only `Tools/make-dmg.sh` does. What was measured is this: the
   distribution image's payload was measured read-only and is byte-identical to
   the head-built bundle (mounted read-only, payload digest `df2649a9…`/29,178,
-  Mach-O `5a34eb6d…`, detached cleanly with no stale mount left). **Container-level
-  provenance at `d4ada2ac` is NOT VERIFIED.** The app bundle itself is head-fresh
+  Mach-O `5a34eb6d…`, detached cleanly with no stale mount left). **The image
+  container itself predates the head commit:** the earlier acceptance round's own
+  `make-dmg.sh` log (exit 0, with its recorded creation line and its files
+  listing) records this container — 588,477,130 bytes — as created 2026-11-26
+  15:27:18 +0330, almost two hours before `d4ada2a` existed (17:27:24 +0330), so
+  the container is content-equivalent to the head-built bundle but demonstrably
+  **not head-built**. (Dated tightening the same evening: this measurement
+  replaces this section's earlier framing "container-level provenance at
+  `d4ada2ac` is NOT VERIFIED", written before the creation log was consulted;
+  the payload statement above stands unchanged.) The app bundle itself is head-fresh
   because the build removes and reassembles it on every run; its Mach-O mtime
   (20:16:22) postdates the head commit.
 - **What this binds and what it does not.** The §6.1 acceptance *identity* —
