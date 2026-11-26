@@ -281,8 +281,8 @@ The following required cases are exercised by both suites unless noted:
 | Worker lease timeout is `BUSY` -32012 with typed data, not `MODEL_MISSING` | 18 | n/a (no Windows worker model loading yet) |
 | Shared catalog / DR-5 / platform facts | 1 | M17 |
 | Worker reads `active.json`, flat installs and waits on either lease | 17, 18 | W5-3 (not yet loading models) |
-| Redirect hop follows the catalog host-and-path-class allow-list only | **none on `main`** — `[M19]`, tracked on PR #139, **not merged** |
-| Redirect `Location` is gated on the raw wire text, not a canonicalised copy | **none on `main`** — `[M19b]`, tracked on PR #139, **not merged** |
+| Redirect hop follows the catalog host-and-path-class allow-list only | none — no macOS redirect regression check exists | **none on `main`** — `[M19]`, tracked on PR #139, **not merged** |
+| Redirect `Location` is gated on the raw wire text, not a canonicalised copy | none — no macOS redirect regression check exists | **none on `main`** — `[M19b]`, tracked on PR #139, **not merged** |
 
 **Redirect rows: tracked, not yet on `main` (2026-11-26).** The last two rows
 must not be read as part of the M1–M18 set that the paragraphs below cite. They
