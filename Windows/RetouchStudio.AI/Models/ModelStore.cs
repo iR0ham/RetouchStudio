@@ -686,15 +686,65 @@ public sealed class ModelStore
     /// </summary>
     internal static Uri? ResolveRedirectLocation(HttpResponseMessage response)
     {
-        if (!response.Headers.TryGetValues("Location", out var values)) return null;
-        var locations = values.ToArray();
+        // Read the unparsed view first, and only ever first: parsing a header drops
+        // its raw copy for the lifetime of the response object.
+        if (!TryReadRawLocations(response, out var locations)) return null;
         if (locations.Length != 1) return null;
         var raw = locations[0].Trim();
         if (raw.Length == 0 || !ModelCatalogRules.IsSafeRawRedirectLocation(raw)) return null;
+        // A header that something else parsed before this point no longer has a raw
+        // string view: HttpResponseHeaders hands back the parser's rendering, which
+        // for Location is Uri.AbsoluteUri with RFC 3986 dot segments removed, so
+        // /allowed-dest/a/../payload.bin would arrive here looking like an ordinary
+        // path inside the admitted prefix. Uri.OriginalString is the untouched text
+        // the parser was given, so it is consulted as a second copy of the wire
+        // value. It can only add a refusal — it never admits a destination the raw
+        // text disqualifies.
+        if (ParsedLocationText(response) is { } verbatim &&
+            !ModelCatalogRules.IsSafeRawRedirectLocation(verbatim.Trim())) return null;
         if (response.RequestMessage?.RequestUri is not { IsAbsoluteUri: true } from) return null;
         return Uri.TryCreate(from, raw, out var absolute) && absolute.IsAbsoluteUri
             ? absolute
             : null;
+    }
+
+    /// <summary>
+    /// Every <c>Location</c> value exactly as it was stored, without asking the
+    /// header layer to parse it. The HTTP/1 and HTTP/2 connection paths add response
+    /// headers with <c>TryAddWithoutValidation</c>, so this is the byte-for-byte wire
+    /// text; the parsing views would instead surface a canonicalised
+    /// <see cref="Uri"/>. Should a transport ever hand back only a parsed value, the
+    /// verbatim cross-check in <see cref="ResolveRedirectLocation"/> still refuses.
+    /// </summary>
+    private static bool TryReadRawLocations(HttpResponseMessage response,
+        out string[] locations)
+    {
+        if (!response.Headers.NonValidated.TryGetValues("Location", out var values))
+        {
+            locations = Array.Empty<string>();
+            return false;
+        }
+        locations = values.ToArray();
+        return locations.Length > 0;
+    }
+
+    /// <summary>
+    /// The verbatim text behind the typed <c>Location</c>, when the framework has
+    /// already parsed one and is willing to show it. A value the header parser
+    /// rejected has no typed view at all — and the raw view above still carries that
+    /// text — so an unusable typed read is treated as absent evidence, never as
+    /// permission.
+    /// </summary>
+    private static string? ParsedLocationText(HttpResponseMessage response)
+    {
+        try
+        {
+            return response.Headers.Location?.OriginalString;
+        }
+        catch (Exception error) when (error is FormatException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
