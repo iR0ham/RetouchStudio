@@ -253,8 +253,10 @@ This section changes **none** of the rows above, and it cuts both ways. It exist
 so a later reader cannot read gate row 4's "NOT VERIFIED on any artefact" as "no
 packaged artefact was ever run" — one was, and it is documented below — and cannot
 read that local diagnostic as a release gate pass either. Row 4 still cannot be
-marked verified: the artefact is unmerged, self-produced and unreviewed, so gate 7
-stays `NOT VERIFIED` and row 6's clean-install condition was never met. The
+marked verified: the artefact is unmerged, was independently reviewed only at
+`fd7a956`, was never rebuilt at the frozen head before that head moved, and was
+never clean-installed — so gate 7's conclusion is unchanged and row 6's
+clean-install condition was never met. The
 historical table is left byte-for-byte intact; this dated section is where the
 record is corrected. Everything below was observed on one developer machine
 against the unmerged branch
@@ -375,7 +377,8 @@ group).
   `git grep -n "audited artefact"` at `5aac9c3a` returns only row 3 itself. Row 3
   therefore stays exactly as written and is neither confirmed nor refuted by this
   section; it asks about *the distributable*, and what is documented here is a
-  locally built, unmerged, unreviewed acceptance bundle.
+  locally built, unmerged acceptance bundle whose independent review covered the
+  `fd7a956` artefact only (see the dated note at the head of this section).
 - **Provider and platform boundaries.** Only the Metal/MPS provider branch was
   exercised by the packaged diagnostic. The bundle also carries
   `reference.cpu.rgb`, but no packaged CPU-provider run is recorded, so the CPU
