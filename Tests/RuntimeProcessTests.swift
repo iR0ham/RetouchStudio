@@ -1230,8 +1230,8 @@ func nearestNeighbour4x(_ image: CIImage) -> CIImage? {
     guard let context = CGContext(data: nil, width: width, height: height,
                                   bitsPerComponent: 8, bytesPerRow: width * 4,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                  bitmapInfo: [.byteOrder32Big,
-                                               CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)]) else {
+                                  bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                                      CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)).rawValue) else {
         return nil
     }
     context.interpolationQuality = .none
