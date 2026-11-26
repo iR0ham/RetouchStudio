@@ -173,6 +173,7 @@ public static class ModelStoreChecks
         RunLegacyLeases();
         RunProductionCatalog();
         RunRedirects();
+        RunRawLocationSeam();
         Console.WriteLine(_failures == 0
             ? "MODEL STORE CHECKS: PASS"
             : $"MODEL STORE CHECKS: FAIL ({_failures})");
@@ -1006,6 +1007,11 @@ public static class ModelStoreChecks
             // A prefix match is not enough when a client or server may normalize
             // the path. Refuse traversal and encoded separators before requesting
             // the destination; SHA-256 is a byte gate, not a destination policy.
+            // The last three entries are the shapes a canonicalising reader rewrites:
+            // `/./` and `a/../` both normalize back inside the admitted prefix, so
+            // only the wire text can refuse them, and `a/b/../../../` walks out to a
+            // root path the prefix rule then names as an ordinary miss. The encoded
+            // separator survives normalization and stays as a guard.
             var unsafeDestinations = new[]
             {
                 "/allowed-dest/../unlisted/payload.bin",
@@ -1016,6 +1022,9 @@ public static class ModelStoreChecks
                 "/allowed-dest/%252e%252e/unlisted/payload.bin",
                 "/allowed-dest/a%2f..%2funlisted/payload.bin",
                 "/allowed-dest/a%5c..%5cunlisted/payload.bin",
+                "/allowed-dest/./payload.bin",
+                "/allowed-dest/a/b/../../../payload.bin",
+                "/allowed-dest/..%2funlisted/payload.bin",
             };
             for (var index = 0; index < unsafeDestinations.Length; index++)
             {
@@ -1024,8 +1033,9 @@ public static class ModelStoreChecks
                 server.Redirect(origin, $"{server.Base}{destination}?{SignedQueryMarker}",
                     status: 302);
                 var before = server.Count;
+                var unsafeHops = new List<ModelRedirectHop>();
                 var unsafeError = Capture(() => RunDownload(store, $"{server.Base}{origin}",
-                    RedirectDestination(store), RedirectFile(store)));
+                    RedirectDestination(store), RedirectFile(store), unsafeHops));
                 C(unsafeError?.Message.Contains("refused a redirect") == true,
                     $"an unsafe redirect path is refused: {destination}", unsafeError?.Message);
                 C(server.Count == before + 1 && server.Paths[^1] == origin,
@@ -1034,6 +1044,41 @@ public static class ModelStoreChecks
                 C(unsafeError is not null && !unsafeError.Message.Contains(SignedQueryMarker),
                     $"the unsafe-path refusal carries no signed query: {destination}",
                     unsafeError?.Message);
+                C(unsafeHops.Count == 1 && unsafeHops[0].Path == origin &&
+                  !unsafeHops.Any(hop => hop.Display.Contains(SignedQueryMarker,
+                      StringComparison.Ordinal)),
+                    $"the refused unsafe path leaves only the origin in the trail: {destination}",
+                    string.Join(" -> ", unsafeHops.Select(hop => hop.Display)));
+            }
+
+            // Refusing the shapes above must not cost the ordinary one: a Location
+            // with no dot segment is what Hugging Face actually sends, and the gate
+            // may only ever narrow, never widen or break, an admitted hop.
+            server.Serve("/allowed-dest/sibling.bin", "fixture-one\n");
+            server.Serve("/allowed-dest/a/b.bin", "fixture-one\n");
+            foreach (var (relative, expected) in new[]
+                     {
+                         ($"sibling.bin?{SignedQueryMarker}", "/allowed-dest/sibling.bin"),
+                         ($"a/b.bin?{SignedQueryMarker}", "/allowed-dest/a/b.bin"),
+                     })
+            {
+                const string relativeOrigin = "/allowed-dest/start.json";
+                server.Redirect(relativeOrigin, relative, status: 307);
+                var safeBefore = server.Count;
+                var safeDestination = RedirectDestination(store);
+                var safeHops = new List<ModelRedirectHop>();
+                RunDownload(store, $"{server.Base}{relativeOrigin}", safeDestination,
+                    RedirectFile(store), safeHops);
+                C(File.Exists(safeDestination) &&
+                  File.ReadAllText(safeDestination) == "fixture-one\n" &&
+                  server.Count == safeBefore + 2 && server.Paths[^1] == expected,
+                  $"a dot-segment-free relative Location is still admitted: {relative}",
+                  string.Join(" ", server.Paths));
+                C(safeHops.Count == 2 && safeHops[^1].Path == expected &&
+                  safeHops.All(hop => !hop.Display.Contains(SignedQueryMarker,
+                      StringComparison.Ordinal)),
+                  $"the admitted relative hop is audited by path only: {relative}",
+                  string.Join(" -> ", safeHops.Select(hop => hop.Display)));
             }
         }
 
@@ -1731,6 +1776,113 @@ public static class ModelStoreChecks
                     "no unmeasured host was added on assumption");
             }
         }
+    }
+
+    /// <summary>
+    /// The redirect gate is only as strong as the text it is handed. .NET renders a
+    /// parsed <c>Location</c> through <c>UriHeaderParser.ToString</c>, which is
+    /// <c>Uri.AbsoluteUri</c> for an absolute value — the canonical form with RFC
+    /// 3986 dot segments already removed. So the seam itself is pinned here, with no
+    /// server in the way, for both states a response can arrive in: still raw, and
+    /// already parsed by something else.
+    /// </summary>
+    private static void RunRawLocationSeam()
+    {
+        Console.WriteLine("[M19b] the Location gate reads the wire text, not a canonicalised copy");
+        const string originBase = "http://127.0.0.1:8080";
+        const string originUrl = originBase + "/allowed-dest/start.json";
+
+        // Added without validation, the header is still the stored wire string, so
+        // the unparsed view hands the gate exactly what the server sent.
+        Uri? ResolveRaw(string location)
+        {
+            using var response = new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, originUrl),
+            };
+            response.Headers.TryAddWithoutValidation("Location", location);
+            return ModelStore.ResolveRedirectLocation(response);
+        }
+
+        // Set through the typed property, the header is a parsed Uri and every
+        // string view of it is canonical. Only Uri.OriginalString still holds the
+        // text the server actually sent.
+        Uri? ResolveParsed(string location)
+        {
+            using var response = new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, originUrl),
+            };
+            response.Headers.Location = new Uri(location);
+            return ModelStore.ResolveRedirectLocation(response);
+        }
+
+        var absoluteTraversal = new[]
+        {
+            $"{originBase}/allowed-dest/a/../payload.bin?{SignedQueryMarker}",
+            $"{originBase}/allowed-dest/./payload.bin?{SignedQueryMarker}",
+            $"{originBase}/allowed-dest/a/b/../../../payload.bin?{SignedQueryMarker}",
+            $"{originBase}/allowed-dest/%2e%2e/unlisted/payload.bin?{SignedQueryMarker}",
+            $"{originBase}/allowed-dest/..%2funlisted/payload.bin?{SignedQueryMarker}",
+            $"{originBase}/allowed-dest/%252e%252e/unlisted/payload.bin?{SignedQueryMarker}",
+        };
+        foreach (var value in absoluteTraversal)
+        {
+            C(ResolveRaw(value) is null,
+                $"the raw Location refuses traversal before resolution: {value}");
+            C(ResolveParsed(value) is null,
+                $"an already-parsed Location still refuses traversal: {value}");
+        }
+        foreach (var value in new[]
+                 {
+                     $"{originBase}/allowed-dest/a\\..\\unlisted\\payload.bin?{SignedQueryMarker}",
+                     $"{originBase}/allowed-dest/../payload.bin",
+                     "../allowed-dest/payload.bin",
+                     "a/../../x",
+                 })
+            C(ResolveRaw(value) is null,
+                $"a raw separator, dot segment or parent walk is refused: {value}");
+
+        // The same seam must keep admitting what the CDN really sends.
+        C(ResolveRaw($"/allowed-dest/payload.bin?{SignedQueryMarker}")?.AbsolutePath ==
+              "/allowed-dest/payload.bin",
+            "an absolute Location with no dot segment resolves to its wire path");
+        C(ResolveRaw("sibling.bin?sig=x")?.AbsolutePath == "/allowed-dest/sibling.bin",
+            "a dot-free relative Location resolves against the request URL");
+        C(ResolveRaw("a/b.bin?sig=x")?.AbsolutePath == "/allowed-dest/a/b.bin",
+            "a nested dot-free relative Location resolves against the request URL");
+        C(ResolveRaw($"{originBase}/allowed-dest/payload.bin?token=a@b")?.AbsolutePath ==
+              "/allowed-dest/payload.bin",
+            "an at sign in a raw query is not authority userinfo");
+        C(ResolveParsed($"{originBase}/allowed-dest/payload.bin?token=a@b")?.AbsolutePath ==
+              "/allowed-dest/payload.bin",
+            "the parsed view admits the same dot-free destination");
+        C(ResolveRaw("") is null && ResolveRaw("   ") is null,
+            "an empty or whitespace-only Location is not a destination");
+
+        // What the fix depends on, asserted instead of assumed: the framework's
+        // parsed view erases the dot segment while OriginalString keeps it. If .NET
+        // ever changes that, this fails first and the gate above is re-examined.
+        var canonical = new Uri($"{originBase}/allowed-dest/a/../payload.bin");
+        C(canonical.AbsolutePath == "/allowed-dest/payload.bin" &&
+          canonical.OriginalString.Contains("/a/../payload.bin", StringComparison.Ordinal),
+            "a parsed Uri erases the dot segment its original text still carries");
+        using (var lossy = new HttpResponseMessage(HttpStatusCode.Found))
+        {
+            lossy.Headers.Location = canonical;
+            C(string.Join("", lossy.Headers.GetValues("Location")) == canonical.AbsoluteUri,
+                "the parsing header view is the canonical form, so it cannot be the gate",
+                string.Join("", lossy.Headers.GetValues("Location")));
+        }
+
+        // Source contract: the parsing view may never be the gate's input again. No
+        // Windows machine here can tell the two renderings apart without an actual
+        // response, so the text that chooses between them is pinned.
+        var storeSource = File.ReadAllText(Path.Combine(RepositoryRoot, "Windows",
+            "RetouchStudio.AI", "Models", "ModelStore.cs")).ReplaceLineEndings("\n");
+        C(storeSource.Contains("NonValidated.TryGetValues(\"Location\"", StringComparison.Ordinal) &&
+          !storeSource.Contains("Headers.TryGetValues(\"Location\"", StringComparison.Ordinal),
+            "the redirect seam reads the unparsed Location view, never the parsing view");
     }
 
     // MARK: - Helpers
