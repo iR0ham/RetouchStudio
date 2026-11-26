@@ -394,11 +394,19 @@ group).
   it was never installed from the DMG onto a fresh account and driven through the
   product UI, which is exactly what gate 6 asks for and why gate 6 stays
   `NOT VERIFIED`.
-- **The automated packaged gate has never run.**
+- **The automated packaged gate has never run a job.**
   `.github/workflows/m3-packaged-acceptance.yml` exists only on the same unmerged
-  head, and the workflow named "M3 Packaged Real Inference" has no runs on the
-  remote as of 2026-11-26 (observed: `gh run list --workflow` returned "could not
-  find any workflows named M3 Packaged Real Inference"). Its inputs are
+  head, and the workflow named "M3 Packaged Real Inference" was never registered as
+  a name-keyed workflow on the remote (observed 2026-11-26: `gh run list --workflow`
+  still returns "could not find any workflows named M3 Packaged Real Inference", and
+  the workflow's remote display name is the bare path
+  `.github/workflows/m3-packaged-acceptance.yml`). What exists instead are three
+  zero-duration push records: run `45834212705` at `d4ada2ac`, `45676097412` at
+  `fd7a956`, and `45655364200` at `ad9ea48` — each `event: push`, `status: completed`,
+  `conclusion: failure`, with `gh run view --json jobs` returning an empty list and
+  the log fetch returning "log not found", so no job ever executed a step. The
+  measured conclusion is therefore "no packaged CI step has ever run", not "no
+  workflow record exists". Its inputs are
   `model_run_id`, `model_artifact`, `runner_label` (`:1-23`); it takes no `ref` or
   `sha` input, and `runner_label` defaults to `macos-15` with the file's own note
   that a hosted runner may expose no Metal device. A locally passed diagnostic is
