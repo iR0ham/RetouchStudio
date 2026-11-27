@@ -31,7 +31,7 @@ Hard rules for this document:
 
 | # | Decision | Effect on the plan |
 |---|---|---|
-| D1 | First post-rewrite release is **2.0.0** | Version bump needed in the two version sources (§3 G-VER) |
+| D1 | First post-rewrite release is **2.0.0** | Version bump needed in the two version sources (§3 G-VER) *(Updated 2026-11-26: the bump is already on `origin/main` — `2.0.0` / build `2` in `Resources/Info.plist`, `2.0.0` in `Windows/Directory.Build.props`; see the G-VER supersession marker in §3. Nothing remains to bump.)* |
 | D2 | macOS **and** Windows are first-class; Linux is not a product target | Windows evidence is a release gate, not an aspiration (§8) |
 | D3 | **MIT** stays; no GPL migration | opencv-python/x264-x265 licence pressure must be resolved by dropping the dependency, not by relicensing |
 | D4 | **No** Apple Developer Program, Developer ID or notarization | Ad-hoc signing is permanent; quarantine handling becomes load-bearing (§7) |
@@ -73,7 +73,7 @@ Source of the per-model evidence: `/private/tmp/rs-model-licences/MODEL_LICENSES
 | G-NOC | No NC-licensed model or weight is selectable | **VERIFIED** | Measured today: `grep -rniE 'gfpgan\|codeformer\|restoreformer\|lama\|modnet\|birefnet\|realesrgan\|swinir' Resources Sources worker/retouch_ai_worker Windows` → **no matches**. The shipped catalogue contains exactly four entries: `flux2-klein-4b-q4`, `sam2.1-hiera-tiny`, `swin2sr-x4`, `migan` (`Resources/model-catalog.json`). |
 | G-PKG | The app bundle ships MIT licence + third-party notices, validated by checks that can actually fail | **PARTIALLY VERIFIED** | PR #111 (`407c6fd`, `w5-license-notices`, CI green) puts `LICENSE` + `THIRD_PARTY_NOTICES.txt` into `Contents/Resources`; a hand-assembled 13-file bundle passes `Tools/validate-bundle.sh` (exit 0) and the missing/empty negatives fail (exit 1). **Independent adversarial evidence** (`/private/tmp/rs-111-evidence/REPORT.md`) also proves three checks that **cannot fail**: an un-attributed pinned distribution (N3), an empty helper notice (N4), 3-of-4 fonts removed (N5) and uppercase `ALL RIGHTS RESERVED` (N6) all exit 0. Closing those is a follow-up on the same workstream. |
 | G-BLD | A release bundle is built and validated end-to-end from the final head | **BLOCKED (D11)** | `build.sh` executes the built binary: `build.sh:229` (`--selftest`) and `:244` (Rosetta slice); `RETOUCH_SKIP_WORKER=1` does not skip it (measured `build.sh:170-176`). Until the owner grants one bounded exec of `Contents/MacOS/RetouchStudio --selftest`, no bundle-level claim can be made by anyone on this team. |
-| G-VER | Version stamping says **2.0.0** in both sources | **NOT VERIFIED — currently 1.0.0** | Measured: `Resources/Info.plist:22` = `1.0.0`, `:24` = `1`; `Tools/check-versions.sh` asserts `Info.plist` == `Windows/Directory.Build.props` == the tag, and `release.yml:174-175` runs it before publishing. Mechanism **VERIFIED**; the bump is a two-line change to be made on the RC branch. |
+| G-VER | Version stamping says **2.0.0** in both sources | **NOT VERIFIED — currently 1.0.0** | Measured: `Resources/Info.plist:22` = `1.0.0`, `:24` = `1`; `Tools/check-versions.sh` asserts `Info.plist` == `Windows/Directory.Build.props` == the tag, and `release.yml:174-175` runs it before publishing. Mechanism **VERIFIED**; the bump is a two-line change to be made on the RC branch. **(Superseded, dated 2026-11-26: the bump has happened.** Measured at `origin/main` (`5aac9c3a`): `Resources/Info.plist:22` = `2.0.0`, `:24` = `2`; `Windows/Directory.Build.props:13` = `2.0.0`; `Tools/check-versions.sh` exits 0 with "version check: Info.plist and Directory.Build.props agree on 2.0.0 (no tag to compare)" (re-verified 2026-11-26 on a clean clone). The row's original measurement is retained above as the pre-bump historical record only. Note also the tag clause: the equality against a `v*` tag is exercised only when one exists — with no tag the script itself reports "(no tag to compare)".**)** |
 | G-QA | Core editing/export behaviour verified on the release artefact | **BLOCKED (D11)** | Regression baseline exists (24 core flows PASSed in the 2026-11-21 Wave-1 live audit) but was measured on an *older* build, not on a 2.0.0 artefact. Re-measurement needs the owner's session. |
 | G-UPD | The updater is provably disabled in the shipping build | **VERIFIED at the configuration level; NOT VERIFIED in the UI** | Measured today: no feed URL is compiled in — `UpdateController.feedURLs` (`UpdateController.swift:159-162`) reads only the Info.plist keys `RSUpdateFeedURLs` / `RSUpdateFeedURL`, and `Resources/Info.plist` defines **neither** (grep for feed/update keys → no match). So `performCheck()` takes the empty branch and reports `updateFeedMissing` = "This build has no update feed configured." (`:66-69`, `Localization.swift:884`, `PersianL10n.swift:857`). A user therefore cannot install an update from a 2.0.0 build. The rendered About panel is **NOT VERIFIED** (D11), and this inertness depends on the plist staying empty — it is a configuration guarantee, not a code flag, so it must be re-checked on the RC bundle. |
 | G-WIN | Windows release evidence | **AUDITED — see Addendum D for the current status of each sub-gate** | The earlier row here was wrong in both directions and is superseded. Windows CI does install/upgrade/uninstall the MSI and drive the app through 14 UIA passes (`ci.yml:531-545`, run `44936922862`), but **all four catalogue models are `macos-arm64` and every Windows `job.submit` is refused `-32020`: there is no AI on Windows**, and no Windows evidence exists from a real desktop. The 2.0.0 claim is therefore scoped to a first-class **light editor** with AI explicitly absent. Open sub-gates: G-WIN-1 look guard (fix in flight), G-WIN-2 package attribution, G-WIN-3 `README.md:47` false "not a shipping target", G-WIN-4 no Windows bundle validator, G-WIN-6 ONNX licence not independently read. |
@@ -799,7 +799,9 @@ as permanent seedings in both tools' test files, and a deliberate decision on
 ### I.3 Environment state change to disclose
 
 To run the suite at all, the reviewer installed `numpy 2.5.5` and `pillow 13.0.0`
-into the shared scratch interpreter `/private/tmp/rs-worker-venv` (it arrived with
+into the shared scratch venv interpreter — a private scratch directory under the
+system temp volume, its path redacted 2026-11-26 under the docs-path policy with
+no change to this record's substance — (it arrived with
 only pip/wheel). That venv now satisfies `requirements-test.lock` **approximately**
 (numpy 2.5.5 vs the pinned 2.5.4). Consequence for this release record: any suite
 result quoted from it is real but not lock-exact, and from now on every reported
@@ -914,7 +916,9 @@ merely unproven: it could not have been run here.
 
 ### J.4 Runner note
 
-The shared scratch interpreter `/private/tmp/rs-worker-venv` has only pip/wheel, so
+The shared scratch venv interpreter — a private scratch directory under the
+system temp volume, its path redacted 2026-11-26 under the docs-path policy with
+no change to this record's substance — has only pip/wheel, so
 six worker test modules fail there with `ModuleNotFoundError` and the suite
 misreports it as a count mismatch. A lock-exact runner now exists at
 `/private/tmp/rs-rev-gates-venv` (built with `requirements-test.lock
@@ -1007,7 +1011,7 @@ Head `cc1d9f6`, verified by test merge and direct read rather than by claim:
 | CI green at this head | run `44948957776`, `headSha cc1d9f6`, `conclusion success`, **all seven jobs** success (I read the run object, not the badge) |
 | independent review exists | `gh pr view 110` → `reviews = 0`, `reviewDecision` empty — **the §7 gate is still unmet** |
 
-The contested point from Addendum I is now **adjudicated in the implementer's favour, on evidence**. Re-running the real tool at `cc1d9f6` under the lock-exact interpreter (Python **3.13.15**, `/private/tmp/rs-worker-venv2`), after clearing `__pycache__`:
+The contested point from Addendum I is now **adjudicated in the implementer's favour, on evidence**. Re-running the real tool at `cc1d9f6` under the lock-exact interpreter (Python **3.13.15**, a second private scratch venv under the system temp volume — path redacted 2026-11-26, evidence unchanged), after clearing `__pycache__`:
 
 ```
 ['google','google.protobuf']              -> protobuf     (legitimate alias use)
@@ -1767,6 +1771,7 @@ Reading the workflow instead of the row separates two facts the ledger had merge
   the same `<hash>  <path>` form the verifier reads), and the
   `Release` workflow has run three times by `workflow_dispatch` (latest success 2026-11-15 against `main`), in
   which the macOS packaging jobs — the ones that produce the sidecars — completed.
+- **Dated correction 2026-11-28 (the bullet above stands as the 2026-11-23 record).** `Tools/make-dmg.sh:30` and the `<hash>  <path>` form describe the pre-fix script: at `fd2ce021` (PR #140 merged) the sidecar is written at `Tools/make-dmg.sh:71` and records the portable basename-only line `<64hex>  <basename>`, with the absolute-path line preserved only in the `*.sha256.abs` companion at `:72`, which the `*.sha256` glob below does not read. The re-check status sentence ("implemented, CI-enforced at publish time, never performed") is unchanged — still no `v*` tag exists — but the pre-fix absolute-path sidecar could never have passed that gate after the artifact actions dropped the builder's directory, which is the defect #140 removed.
 - **The independent re-check is encoded but has never executed.** `release.yml:181-187` re-verifies every
   `*.sha256` inside the `release` job — a different job from the ones that produced them, on a different runner,
   from artifacts it downloaded rather than wrote — and the loop is non-vacuous because an unmatched glob leaves
@@ -1791,7 +1796,7 @@ project has to stand behind.
 | **S-WIN-2** | Windows package attribution. `Tools/package-windows-msi.ps1` and `Windows/installer/Product.wxs` contain no licence/notice handling at all (case-insensitive grep: empty), so an MSI carries no MIT text and no third-party notices. Caveat against overstatement: `build-windows.ps1:226` *does* copy ONNX Runtime's own `LICENSE`/`ThirdPartyNotices.txt` into `AI/`, so "nothing" is too strong. |**Measured statically; no MSI was built here (`dotnet` absent).** |
 | **S-WIN-4** | No Windows counterpart to `Tools/validate-bundle.sh` exists in `Tools/`. | `git ls-tree` at `ac18c1a`. |
 | **S-WIN-6** | The ONNX Runtime MIT grant has never been read from the nupkg's own `LICENSE` by anyone in this project; every row asserting it cites an upstream claim. | No in-tree record of the read. **NOT VERIFIED.** |
-| **S-VER** | Version identity is still 1.0.0: `Resources/Info.plist:22-24` and `Windows/Directory.Build.props:13`. `Docs/RELEASE_NOTES_2.0.0.md` does not exist; only `RELEASE_NOTES_1.0.0.md`. | Measured. |
+| **S-VER** | Version identity is still 1.0.0: `Resources/Info.plist:22-24` and `Windows/Directory.Build.props:13`. `Docs/RELEASE_NOTES_2.0.0.md` does not exist; only `RELEASE_NOTES_1.0.0.md`. | Measured. **Dated correction 2026-11-28 (row kept as the `ac18c1a` record):** at `fd2ce021` `Resources/Info.plist:22` = `2.0.0` and `:24` = `2` (matching `Windows/Directory.Build.props:13`), and `Docs/RELEASE_NOTES_2.0.0.md` exists in the tree. Both falsified halves of this row are closed on `main`; see also the dated supersession on the §3 G-VER row. |
 | **S-ADVERSARIAL** | The §4 adversarial matrix still has no committed seed→test→exit table; `WORKER_CI_VALIDATION_PLAN` lists seeds with nothing pinning them. | `git grep` at `ac18c1a`. |
 | **S-DISK** | The disk probe still conflates "capacity unknown" with "volume full" at five sites, and `Tests/ModelStoreTests.swift` pins `freeBytes: 0` assertions that encode the conflation. | Carried forward from §Phase-1; **re-confirmed open, not re-measured this pass.** |
 
@@ -3161,6 +3166,8 @@ server that answers 200 and never redirects — so W5-2's exit criterion, which 
 met while the feature was broken. Filed as **R1** here rather than as a GitHub issue: this order authorises research
 and a remediation plan, not tracker writes.
 
+**Dated correction 2026-11-28 (this paragraph stands as the R1 filing record).** The defect described above was fixed and merged: PR #139 (`11d05952`, merged 2026-11-27T22:46:13+03:30) made both hosts validate the raw wire `Location` before any canonicalised copy can erase information, with `[M19]`/`[M19b]` now present on `main` at `fd2ce021` (re-verified in `Docs/W5_MODEL_MANAGER.md`'s dated correction). "No catalogue entry is obtainable through the app on either platform" therefore no longer describes `main`'s code; it remains an accurate description of the measured pre-fix binaries. What the merge does not prove: an end-to-end download of a real catalogue file through the shipped app on either platform — that stays NOT VERIFIED.
+
 **The fifth symptom is the same cause as the first.** The owner's report was accurate on all five points; nothing in
 it was a misobservation.
 
@@ -3179,6 +3186,10 @@ work and nothing proves it survives a bump. **There is no SHIPPED-WORKING AI cel
   `CFBundleVersion` is `5`, which is the fifth `release.yml` run's `GITHUB_RUN_NUMBER` (a per-workflow counter, run
   `45197302277`) and not the repository-wide run id; `Resources/Info.plist` defaults are `2.0.0` plus build `2`. A
   `v*` tag stamps from the tag name, so an RC reporting `0.0.0-ci` is correct behaviour. §3 G-VER stands.
+  *(Amended 2026-11-26: this bullet's own statement that "`Resources/Info.plist` defaults are `2.0.0` plus build `2`"
+  was already at odds with §3 G-VER's then-current measurement text; G-VER now carries a dated supersession marker,
+  so "stands" applies only to this bullet's conclusion that tag-derived RC stamping is correct behaviour, not to the
+  pre-bump `1.0.0`/`1` measurement quoted in §3.)*
 - Mounting the DMG for inspection left a second read-only mount of the same image, which was ejected after the
   listing. The pre-existing mount of the same file was left in place: it may be the owner's own from the session, and
   nothing of his was unmounted without asking.

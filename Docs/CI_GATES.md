@@ -54,6 +54,49 @@ Engine, Model, Runtime Process and Runtime V2, through `Tests/run.sh`. The job
 asserts that each suite printed its own `PASS` line, so a suite silently
 dropped from `run.sh` fails the check instead of shrinking coverage.
 
+**Correction (2026-11-26) to the paragraph above, measured at `5aac9c3a`.** The
+historical claim is kept visible; it is only partly true, and it under-names the
+suite list. Verified line by line:
+
+- The job runs three steps into one log: the worker regressions
+  (`ci.yml:162-165`, `tee`, which creates the log), the StudioCore gate
+  (`ci.yml:167-170`, `tee -a`) and `Tests/run.sh` (`ci.yml:172-177`, `tee -a`).
+- `Tests/run.sh` runs two gates plus ten suites, not four suites:
+  `Tests/run-studiocore.sh` and `Tests/run-abi.sh` at `Tests/run.sh:41-42`, then
+  `run_suite` at `Tests/run.sh:61-70` for Engine, Model, Model Store, Runtime
+  Process, Runtime V2, Mask Quality, AI Disclosure, AI Failure Taxonomy, Runtime
+  Install and Runtime Transfer.
+- The `Assert every suite reported a verdict` step (`ci.yml:179-207`) greps
+  twelve patterns in `$RUNNER_TEMP/macos-integration.log`. **One** of them is
+  derived from a file — `Ran ${expected_worker_tests} tests` at `ci.yml:184`,
+  from `Tests/expected-worker-tests.txt`, which holds `286` at this commit. The
+  other **eleven** (`ci.yml:185-195`) are hardcoded literals. So the single-source
+  rule holds for the worker count only; the suite verdict list has no source of
+  truth in the repository.
+- Two verdict lines are produced into that log and never asserted:
+  `MASK QUALITY TESTS: PASS` (`Tests/MaskQualityTests.swift:853`, suite 6 of 10)
+  and `ABI TESTS: PASS (104 checks)` (`Tests/ABI/abi_tests.c:578`, executed at
+  `Tests/run-abi.sh:68`). `grep -qE 'MASK QUALITY|ABI TESTS'` over
+  `.github/workflows/ci.yml` finds nothing (exit 1).
+- Both enforcement directions, stated exactly: removing, renaming or rewording
+  one of the twelve asserted literals fails the job, because the `grep -qE` at
+  `ci.yml:196` exits 1 under the `set -euo pipefail` set at `ci.yml:181`; removing
+  `Tests/run.sh:66` (Mask Quality) or the `Tests/run-abi.sh` call at
+  `Tests/run.sh:42` keeps the job green, because no assertion asks for either
+  line. A new suite added to `Tests/run.sh` is likewise unenforced until someone
+  hand-adds its literal. This is the defect recorded as **A4** in
+  `Docs/RELEASE_2.0.0_READINESS.md:881-883`; that ticket's own citation
+  "`ci.yml:164-175`" is stale — the assertion step is `ci.yml:179-207`.
+- What *is* still caught, so this is not a claim that the gate is hollow: a
+  **failing** suite fails the run. `Tests/run.sh:8` is `set -euo pipefail`,
+  `Tests/MaskQualityTests.swift:858` exits 1 on failure and
+  `Tests/ABI/abi_tests.c:576` returns 1, so `ci.yml:177` aborts before the
+  assertion loop. The step also turns self-skipping into failure: any line
+  matching `NOT run` in the same log aborts the job with the offenders echoed
+  (`ci.yml:199-206`). The exposure is therefore silent *omission* of a suite or of
+  a verdict word — not suppression of a failure, and not a skipped suite passing
+  unseen.
+
 ## Local equivalents
 
 ```bash
@@ -700,7 +743,7 @@ was taken and the cause was in the harness, not in Rosetta.**
   product code changed.
 - Measured on this head, this machine (MacBook Air M3), one variable at a time,
   same command in both runs
-  (`RETOUCH_WORKER_PYTHON=/private/tmp/rs-worker-venv/bin/python3 RETOUCH_ARCH=x86_64 Tests/run.sh`):
+  (`RETOUCH_WORKER_PYTHON=<a project-local virtual-environment interpreter> RETOUCH_ARCH=x86_64 Tests/run.sh`):
   at `36dd06d` without the constant, `MODEL STORE TESTS: FAIL (11)` — the ten
   child-process checks named in finding 5 plus their summary line; with the
   constant, the full x86_64 matrix is green: `StudioCore: 288 checks passed`,
@@ -761,3 +804,44 @@ flaky on the hosted runners. Only then should the two names be added to the
 required contexts, and `continue-on-error` removed from `Worker Payload
 Bundle`. This addendum records the state; it does not change branch
 protection.
+
+## CI follow-ups registered 2026-11-26 (not implemented in this document)
+
+Two gaps were confirmed while making the macOS Integration record above
+truthful. **Neither is fixed**: both need edits under `.github/`, and the
+single-source item additionally needs a file the workflow can read, so they are
+separate engineering follow-ups rather than part of the documentation pass that
+produced this section.
+
+**CI-LOG-PERSIST-1 — a green run archives no log.** Every log-uploading step in
+`ci.yml` is gated on failure, so when a job passes there is no archived artifact to
+audit afterwards and the claim "CI was green on this head" cannot be re-checked line
+by line: `ci.yml:56-57` (`studioscore-boundary`, `Upload gate log`),
+`ci.yml:120-121` (`platform-conformance`, `Upload gate log`), `ci.yml:209-210`
+(`macos-integration`, `Upload suite log`), `ci.yml:286-287`
+(`worker-lock-closure`, `Upload the closure log`), `ci.yml:491-492`
+(`windows-core`, `Upload gate logs`) and `ci.yml:572-573` (`windows-app`,
+`Upload the published host on failure`) all carry `if: failure()`, and each of
+those six sets `if-no-files-found: ignore` (`:62`, `:126`, `:219`, `:294`,
+`:500`, `:580`). The counter-example already in the file is `ci.yml:565-570`
+(`Upload the packaged zip and MSI`): no `if:` and `if-no-files-found: error`.
+The one-line change that closes the gap is `if: failure()` → `if: always()` on
+the log steps. The scope of the gap is storage, not visibility: each run step
+`tee`s to the console as well, so a green run's verdict lines remain readable in the
+Actions job page for as long as GitHub keeps that run's log — what is missing is the
+downloadable artifact a reviewer can diff or re-grep. Until this
+lands, "the archived macOS log proves X" is only available for a **failed**
+attempt.
+
+**CI-VERDICT-SINGLE-SOURCE-2 — the assertion list has no source of truth.**
+`ci.yml:179-207` hardcodes eleven verdict literals while only the worker count
+is derived from a file (`Tests/expected-worker-tests.txt`, used at
+`ci.yml:184`). The list this needs already exists in prose form —
+`Tests/run.sh:41-42` and `Tests/run.sh:61-70` enumerate exactly the gates and
+suites that run — what is missing is a machine-readable file the workflow can
+iterate, so the fix is to drive the loop from one authoritative suite/verdict list
+and have `Tests/run.sh` consume the same source. That closes the mechanism behind
+**A4** (`Docs/RELEASE_2.0.0_READINESS.md:881-883`) rather than patching one suite
+name at a time, and it needs a `Tests/` file besides the workflow, which is why it
+is a follow-up and not a documentation edit. Naming the two currently-unasserted
+verdicts by hand would leave the same hole for the next suite.

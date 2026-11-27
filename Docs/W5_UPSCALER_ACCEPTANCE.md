@@ -833,8 +833,10 @@ of the recorded two-decimal values (for example L1 31.785 recomputed against
 31.79 recorded) — and the harness stores PSNR already rounded to two
 decimals, so no unrounded cross-check is possible.
 
-Environment fact worth recording: the test venv pinned for the worker suite,
-`/private/tmp/rs-worker-venv`, has CPython 3.13.15, numpy 2.5.4 and Pillow
+Environment fact worth recording: the test venv pinned for the worker suite —
+a private scratch directory under the system temp volume, its path redacted
+2026-11-26 under the docs-path policy with no change to this record's substance —
+has CPython 3.13.15, numpy 2.5.4 and Pillow
 13.0.0 but **no torch**, so it runs the 163-test suite and cannot run this
 tool. The rerun used
 `~/Library/Application Support/RetouchStudio/AI/runtime/bin/python3` — the

@@ -247,6 +247,428 @@ requested with a written pack (see D6).
 
 Passing CI changes none of these rows by itself.
 
+### 6.1 Packaged-application evidence recorded 2026-11-26 (unmerged branch, developer runtime)
+
+**Dated state note 2026-11-28:** the branch named throughout §6.1–§6.1c has since been merged: `main` is `fd2ce021` (PR #140 merged 2026-11-28T00:02:16+03:30; its head `2084a64d` was a forward-merge of `origin/main`). "Unmerged" above is the 2026-11-26 record and stays as written; after the merge that qualifier concerns provenance time, not availability on `main`. The verification labels are unchanged: the acceptance bundle remains ad-hoc-signed, never clean-installed, and the packaged inference has still never run in CI (see the dated correction under the zero-job bullet below).
+
+This section changes **none** of the rows above, and it cuts both ways. It exists
+so a later reader cannot read gate row 4's "NOT VERIFIED on any artefact" as "no
+packaged artefact was ever run" — one was, and it is documented below — and cannot
+read that local diagnostic as a release gate pass either. Row 4 still cannot be
+marked verified: the artefact is unmerged, was independently reviewed only at
+`fd7a956`, was never rebuilt at the frozen head before that head moved, and was
+never clean-installed — so gate 7's conclusion is unchanged and row 6's
+clean-install condition was never met. The
+historical table is left byte-for-byte intact; this dated section is where the
+record is corrected. Everything below was observed on one developer machine
+against the unmerged branch
+`w5-m3-packaged-acceptance`; `main` at `5aac9c3a` contains neither
+`Sources/RetouchStudio/Core/PackagedUpscaleSelfTest.swift` nor
+`Tools/worker-integrity.py` nor `Tools/validate-m3-fixture.py`
+(`git ls-tree 5aac9c3a Tools/` lists only `Tools/validate-bundle.sh` of that
+group).
+
+- **What ran.** A packaged arm64 `Retouch Studio.app` and its DMG were built
+  locally and the app's own diagnostic (`--upscale-selftest`, dispatched at
+  `Sources/RetouchStudio/Core/SelfCheck.swift:32-35` on that branch) was executed
+  against the bundle. The recorded verdict is `UPSCALE SELFTEST: PASS` on a real
+  4× job: 64×48 source, `tile 1/1`, `nearest-neighbour mean pixel delta 17.6382`
+  (the statement that defeats "it was just a resize"), `independent mps RGB8
+  reference matched exactly`, provenance `upscale.4x, swin2sr-x4 1.0.0, scale 4`,
+  output SHA-256
+  `7c64bb81ad39a7f8a4c8f9a4a0e56305b16dbbfe8c3259c15c7614d1e52c9ffd`. The run used
+  an isolated `HOME`/`TMPDIR` (both trees are listed in the evidence) and was
+  reproduced after relocating the bundle and from a read-only DMG mount.
+  **"Performed zero downloads" is an inference here, not a direct measurement of
+  the primary run:** the evidence set's environment dump
+  (`evidence/ambient-env.txt`) is a 0-byte file, so the offline claim rests on the
+  negative-case runner, whose recorded command line does strip
+  `RETOUCH_AI_PYTHON`, `RETOUCH_AI_WORKER_ROOT`, `RETOUCH_AI_MODELS` and sets
+  `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `PYTHONDONTWRITEBYTECODE=1`, and on
+  the owner AI-root snapshots hashing identically before and after. Treat "no
+  network was needed" as supported and "no network traffic was possible" as
+  **NOT VERIFIED** for the primary run.
+- **Which commit the identity belongs to — and which it does not.** The evidence
+  manifest names head `fd7a956e8d0500bce5e21f41e9d8d98a5276a622`, bundle content
+  digest `df2649a904aaf3cc29e4222a061840c7f4bd7ae6c00a5f925ba3c9916c647b30` over
+  29,178 files+symlinks, main executable
+  `5a34eb6db532b4db988a05e74766f0c26d69997801e91e595f28371708fc03b4`, DMG
+  `04a90aa7799447f8c7f237d1d904e5acabe3390354da5a0caaa04fd0e18ef651`. The branch
+  head later became `d4ada2ac6337e4bc07fdc99442410852174a6bcc`, whose entire
+  difference from `fd7a956` is a two-line edit inside
+  `Tests/RuntimeProcessTests.swift` (`git diff --stat fd7a956 d4ada2a` → 1 file
+  changed, 2 insertions, 2 deletions), so no bundle input changed. But the
+  packaged bundle was **not** rebuilt at `d4ada2a` and **no evidence record binds
+  the diagnostic to that SHA**: the claim is "the tested bundle is made from the
+  sources `d4ada2a` also contains", not "the tested bundle is `d4ada2a`". (Dated
+  follow-up the same evening: a later step ran the release build again at
+  `d4ada2ac` and re-measured the bundle and the diagnostic there, binding the
+  acceptance identity to that SHA by execution — with the Worker payload
+  content-carried from the stamp-verified cache rather than fully re-derived, so
+  the binding is by source-hash plus re-measurement, not by regeneration of every
+  entry; see §6.1a. The sentence above was true when recorded and is kept as
+  written.) An
+  earlier briefing cited a digest `8f392256…` over 64,832 entries; that citation
+  is wrong and the manifest value above supersedes it.
+- **Signature truth.** The shipped bundle is signed ad-hoc. Recorded
+  `codesign -dvv` output: `Identifier=app.retouchstudio.mac`,
+  `Format=app bundle with Mach-O thin (arm64)`, `flags=0x2(adhoc)`,
+  `Signature=adhoc`, `TeamIdentifier=not set`, CDHash
+  `840a69fc960784395b161e3a7e246cbcd737f6ab`. Ad-hoc means "this machine accepts
+  its own build": there is no Apple-issued certificate and no notarization ticket
+  behind it. The Apple Developer Program was declined by the owner on 2026-11-21, so
+  Developer ID signing and notarization are out of scope and stay **NOT VERIFIED**;
+  no distribution, Gatekeeper or first-launch promise may be built on this signature
+  class.
+- **Tamper detection: OFFLINE ONLY — NOT VERIFIED at runtime.** Ten scenario
+  directories were run against disposable copies of that bundle, eight of them
+  attacks on bundle integrity. The application refused
+  01-fixture-missing, 02-fixture-modified and 03-fixture-symlink
+  (`UPSCALE SELFTEST: FAIL`, recorded exit 1). 04-unsigned produced no application
+  output at all (recorded exit 137 with an empty diagnostic log) — consistent with
+  the launch-time kill macOS applies to an unsigned arm64 binary, and in any case no
+  application check ran. Cases 05-invalid-signature, 05b-macho-text-tamper,
+  06a-worker-payload and 06b-integrity-manifest each printed
+  `UPSCALE SELFTEST: PASS` with recorded exit 0 **while the same bundle copies'
+  offline gate records show exit 1**. The names of those cases describe the
+  attack applied, not an outcome. The two remaining scenario directories,
+  07-oversized-out and 08-multibyte-out, are not tamper cases at all: they probe
+  `--out` and socket-path boundaries. Inside them `7a-boundary-accepted` printed
+  `UPSCALE SELFTEST: PASS` at exit 0, while `7b-probe-sock-104`,
+  `7c-worker-sock-104`, `8a-utf8-sock` and `8c-existing-out` each printed
+  `UPSCALE SELFTEST: FAIL` at exit 1, and `8b-nested-trees` holds two refusal
+  records (`model-in-out.log`, `out-in-model.log`) without exit files. Their
+  top-level `offline-gates.txt` reports every gate at exit 0 because those bundles
+  were never modified, so those two directories carry no tamper evidence in either
+  direction. The refusals for the tamper cases therefore came from
+  `Tools/validate-bundle.sh`, `Tools/worker-integrity.py` and
+  `Tools/validate-m3-fixture.py` — scripts run outside the shipped binary, of which
+  only `Tools/validate-bundle.sh` exists on `main` — and from
+  `build.sh:221` (`codesign --verify --deep --strict`) plus `build.sh:224`
+  (`./Tools/validate-bundle.sh … || exit 1`), the same two calls appearing on the
+  acceptance branch at `:241` and `:249`, all of which run while the bundle is
+  being built, before anyone launches it. Inside the product,
+  `PackagedUpscaleSelfTest.swift:436-441` gates the loaded model only through
+  `AIRuntimeValidation.functional(...)`; that file contains no `codesign`,
+  `SecCode` or `csops` reference, so the integrity gap is specifically at
+  launch time on the user's copy. Until `M3-RUNTIME-INTEGRITY-PREFLIGHT`
+  (`Docs/POST_RELEASE_ROADMAP.md` §8.4, item **I10**) is built and observed, **no
+  artefact in this repository may state that the application verifies its own
+  bundle.**
+- **What the packaged application *did* enforce, which is not nothing.** The
+  canonical fixture has to be a real file inside the bundle: removing it, editing
+  it or replacing it with a symlink each produced `UPSCALE SELFTEST: FAIL` at
+  exit 1. Output-path guards refuse before any work starts, with exact numbers in
+  the message: `--out` must name a new directory (and a sentinel planted in the
+  target survived), `--out` and `--model` must be separate directory trees in both
+  nesting directions, and the AF_UNIX capacity limits were reported as
+  "the runtime probe socket path is too long for AF_UNIX (104 UTF-8 bytes; maximum
+  103)" and "the worker socket path is too long for AF_UNIX (123 UTF-8 bytes;
+  maximum 103)". Refusals left nothing behind: every case directory pairs a
+  `digest-before.json` with a `digest-after.json` (spot-checked byte-identical for
+  `8c-existing-out`, both `832ff45e876846e4db07c3f8e800dc942c768b3ad3a40526dbf8379e3a607847`),
+  and the owner AI-root snapshots taken before and after the primary run hash
+  identically (`64d61da86fc386e88c71af2bec6e9bfdf487e1df64671bfd21ed415900a163d6`),
+  so no model was staged into the user's directory. The byte-identity claim was
+  re-verified during this documentation pass rather than copied: the recorded raw
+  output is 147,456 bytes hashing
+  `095bd862b7bf7ec14bb65e853cda5f5330bbdf56dfe7b3eea86b01956066fdc6`, which equals
+  the SHA-256 of the bundle's own `reference.mps.rgb` fixture in the same manifest,
+  so a 256×192×3 packaged MPS result really did match the independent reference
+  exactly.
+- **What these runs say about weights, and what row 3 of the table above means.**
+  The diagnostic's `--model` pointed at an installed checkpoint outside the bundle,
+  so these runs prove the packaged app can *use* an installed model, not that
+  weights ship inside the DMG. The same records do show the bundle carries a Worker
+  payload (`Contents/Resources/Worker/…`, 32,133 entries reported verified by
+  `Tools/worker-integrity.py`), so gate row 3's phrase "absent from the audited
+  artefact" cannot describe this artefact — and that phrase is defined nowhere:
+  `git grep -n "audited artefact"` at `5aac9c3a` returns only row 3 itself. Row 3
+  therefore stays exactly as written and is neither confirmed nor refuted by this
+  section; it asks about *the distributable*, and what is documented here is a
+  locally built, unmerged acceptance bundle whose independent review covered the
+  `fd7a956` artefact only (see the dated note at the head of this section).
+- **Provider and platform boundaries.** Only the Metal/MPS provider branch was
+  exercised by the packaged diagnostic. The bundle also carries
+  `reference.cpu.rgb`, but no packaged CPU-provider run is recorded, so the CPU
+  path is **NOT VERIFIED on the packaged artefact** even though the in-repo
+  harness compares both references. The Intel `x86_64` slice and every Windows
+  real-inference path remain **NOT VERIFIED**. The 64×48 canonical fixture is a
+  synthetic acceptance image, not a portrait, so nothing here measures perceived
+  quality on user photographs; quality thresholds stay exactly where gate row 5
+  of the table above puts them (`macOS MEASURED on dev runtime`, Windows
+  thresholds not yet declared).
+- **Evidence class.** Developer runtime, not clean install. The bundle was built
+  and tested in the same working copy by the same pass that produced the hashes;
+  it was never installed from the DMG onto a fresh account and driven through the
+  product UI, which is exactly what gate 6 asks for and why gate 6 stays
+  `NOT VERIFIED`.
+- **The automated packaged gate has never run a job.**
+  `.github/workflows/m3-packaged-acceptance.yml` exists only on the same unmerged
+  head, and the workflow named "M3 Packaged Real Inference" was never registered as
+  a name-keyed workflow on the remote (observed 2026-11-26: `gh run list --workflow`
+  still returns "could not find any workflows named M3 Packaged Real Inference", and
+  the workflow's remote display name is the bare path
+  `.github/workflows/m3-packaged-acceptance.yml`). What exists instead are three
+  zero-duration push records: run `45834212705` at `d4ada2ac`, `45676097412` at
+  `fd7a956`, and `45655364200` at `ad9ea48` — each `event: push`, `status: completed`,
+  `conclusion: failure`, with `gh run view --json jobs` returning an empty list and
+  the log fetch returning "log not found", so no job ever executed a step. The
+  measured conclusion is therefore "no packaged CI step has ever run", not "no
+  workflow record exists". Its inputs are
+  `model_run_id`, `model_artifact`, `runner_label` (`:1-23`); it takes no `ref` or
+  `sha` input, and `runner_label` defaults to `macos-15` with the file's own note
+  that a hosted runner may expose no Metal device. A locally passed diagnostic is
+  therefore not CI evidence, and G-ACCI-1/G-ACCI-2 below are open before any run
+  can be trusted as an acceptance record.
+
+**Dated correction 2026-11-28 (the bullet above stands as the 2026-11-26 record).** The workflow-load defect behind those zero-duration push records — `${{ runner.temp }}` referenced in `jobs.<job_id>.env`, a context GitHub's context-availability table does not allow at that key — was fixed on the branch (`8154a142`) and reached `main` with PR #140. Measured today: two further zero-duration push records exist in total (`45882778568` at `9d20ec4`, `46030752693` at `67c9da9`), and no push at or after `8154a142` created another; the workflow is registered under its declared name (`gh api` reports `name = M3 Packaged Real Inference`, state `active`). It was then dispatched once against `fd2ce021` (run `46064851852`, 2026-11-27T20:37:03Z): setup, checkout and the ephemeral-root export step succeeded; step 4 ("Record the exact run and artifact identity") failed because the dispatched inputs named no artifact-bearing run; steps 5–13 — including "Run packaged real MPS inference" — were skipped. The honest sentence is therefore no longer "no CI step of the packaged workflow has ever run": it is **the packaged workflow now loads, registers and can start, no inference step in it has ever executed, and that dispatch is not acceptance evidence.**
+
+### 6.1a Head-bound re-measurement at `d4ada2ac` (same day, recorded 2026-11-26 evening)
+
+This subsection supersedes exactly one sentence of §6.1 — "the packaged bundle
+was **not** rebuilt at `d4ada2a` and **no evidence record binds the diagnostic
+to that SHA**" — and nothing else. Every other §6.1 statement stands, and the
+gate rows above are unchanged: the artefact is still unmerged, still ad-hoc
+signed, still never clean-installed, and no CI job has run. The record:
+`EVIDENCE-MANIFEST-HEAD-15.txt` (165 lines, 19,949 bytes, sha256
+`77ccc2c213c25a2f0f30c564000fad501983030463db0c081a6ccab71c5f87fc`).
+
+- **Identity.** Branch head `d4ada2ac6337e4bc07fdc99442410852174a6bcc` before and
+  after the build; `git diff --stat` against that head produced zero bytes of
+  output and `git status --porcelain` zero lines (build outputs are gitignored,
+  no repository file was written); the newest reflog entry is the `d4ada2a`
+  commit itself at 17:27:24 local, predating the 20:16 build, and no git
+  operation occurred during the run. No commit, push, branch, tag, merge,
+  release or publish. The only execution of the app binary was the CLI
+  `--upscale-selftest` invocation; the GUI was never launched.
+- **Release build.** Exit 0, wall 89.69 s, with the documented acceptance stamps
+  `RETOUCH_ARCH=arm64 RETOUCH_VERSION=0.0.0-m3-acceptance RETOUCH_BUILD=m3-acc-1`.
+  Those stamps are required to reproduce the recorded `Info.plist`; without them
+  the build produces the `2.0.0`/`2` plist and no digest can match. Disclosed as
+  a deviation from "no extra flags", not a hidden input.
+- **Byte-identity of the head-round bundle — content-carried, not fully
+  regenerated.** Content digest
+  `df2649a904aaf3cc29e4222a061840c7f4bd7ae6c00a5f925ba3c9916c647b30` over 29,178
+  files+symlinks — the §6.1 value — with a per-entry comparison against the
+  retained `fd7a956` clone of only-in-ref 0, only-in-new 0, changed-hash 0:
+  zero divergence, so the two-line `Tests/RuntimeProcessTests.swift` difference
+  between `fd7a956` and `d4ada2ac` reaches no bundle input. Part of that identity
+  is by construction rather than by re-derivation: 29,159 of the 29,178 entries
+  live under `Contents/Resources/Worker/` and were content-carried from the
+  stamp-verified cache (see the cache bullet below); the app-side entries —
+  `Contents/Info.plist`, the main Mach-O and the rest — are what the head build
+  itself wrote. Main Mach-O
+  `5a34eb6db532b4db988a05e74766f0c26d69997801e595f28371708fc03b4`, equal to the
+  §6.1 value; the outer seal re-signed to the same bytes (CDHash
+  `840a69fc960784395b161e3a7e246cbcd737f6ab`, same identity fields as §6.1).
+- **Packaged MPS inference on the head-built bundle.** Exit 0, wall 10.9 s,
+  verdict `UPSCALE SELFTEST: PASS`; output PNG
+  `7c64bb81ad39a7f8a4c8f9a4a0e56305b16dbbfe8c3259c15c7614d1e52c9ffd` and decoded
+  RGB8 `095bd862b7bf7ec14bb65e853cda5f5330bbdf56dfe7b3eea86b01956066fdc6` both
+  equal to the §6.1 record values, the RGB8 matching `reference.mps.rgb` with
+  zero differing bytes — a discriminating, not vacuous, equality: decoding the
+  same shipped PNG against `reference.cpu.rgb` was measured to produce 4 differing
+  sample bytes with max absolute delta 1 (MISMATCH, exit 1), and this
+  documentation pass reconfirmed that margin by comparing the two retained
+  reference fixtures directly (both 147,456 bytes; 4 differing bytes across 4
+  pixel samples, every one ±1 LSB). So the byte-identity gate demonstrably
+  catches drift of that size, and the corollary binds the other way: MPS and CPU
+  references differ by only 4 samples at ±1 LSB, so the fixtures are fragile and
+  must never be auto-refreshed;
+  provenance `model.provider == "mps"`, which the
+  self-test requires to equal the device and throws otherwise. An isolated
+  `HOME`/`TMPDIR` re-run (exit 0, wall 11.6 s) reproduced the same PNG hash; the
+  provenance sidecar differs only in `createdAt`, `elapsedSeconds` and `jobId`,
+  with every content field identical. The primary AI-state tree's entry listing
+  hashed identically before and after the packaged run.
+- **Offline gates on the head-built bundle.** `validate-bundle` exit 0;
+  `worker-integrity` exit 0 with 32,133 entries; `audit-bundle-notices` exit 0
+  with 29,162 files accounted; `codesign --verify --strict --verbose=2` exit 0
+  ("valid on disk", "satisfies its Designated Requirement"); `spctl -a` exit 3 —
+  ad-hoc is not distribution trust, unchanged by this record. Bytecode residue
+  (`__pycache__`/`*.pyc`/`*.pyo`) find returned zero lines before and after both
+  inference runs, and the final tree digest was still `df2649a9…`/29,178.
+- **Worker cache path exercised — the honest verb is "re-assembled", not
+  "re-derived".** This build hit the documented `build.sh` park/restore
+  short-circuit for `Contents/Resources/Worker`: its `build.log` is 29,560 lines
+  against the frozen §6.1 run's 29,570, prints `· helper runtime unchanged` once
+  (the string `Tools/bundle-worker.sh:103` emits on cache acceptance) and never
+  prints the full re-bundle block. The head binding for the carried bytes was
+  recovered by a different, valid route, so "not regenerated" is not "unbound":
+  all 14 shipped `Contents/Resources/Worker/retouch_ai_worker/*` files hash
+  sha256-equal to `git cat-file blob d4ada2ac:worker/retouch_ai_worker/<name>`
+  (matched 14, differed 0 — re-measured during this documentation pass), and
+  `Tools/bundle-worker.sh` keys its reuse stamp on exactly those 14 sources plus
+  `requirements.lock` (`:77-89`), refuses the cache unless the original integrity
+  seal still verifies (`:99`, acceptance printed at `:103`), and rewrites the
+  stamp only after relinking and nested signing (`:188`). Both build paths
+  converge on the same 32,133-entry integrity manifest and the same bundle
+  digest, so the cache reuse is a recorded, bounded deviation — but no sentence
+  in this section may be read as claiming every entry was regenerated at
+  `d4ada2ac`.
+- **The DMG, stated narrowly.** The image was **not** re-created by this step:
+  its container sha256 `04a90aa7799447f8c7f237d1d904e5acabe3390354da5a0caaa04fd0e18ef651`
+  equals the §6.1 value, and its container mtime (15:27:18) predates the
+  existence of the `d4ada2a` commit (17:27:24); `build.sh` never invokes
+  `hdiutil` — only `Tools/make-dmg.sh` does. What was measured is this: the
+  distribution image's payload was measured read-only and is byte-identical to
+  the head-built bundle (mounted read-only, payload digest `df2649a9…`/29,178,
+  Mach-O `5a34eb6d…`, detached cleanly with no stale mount left). **The image
+  container itself predates the head commit:** the earlier acceptance round's own
+  `make-dmg.sh` log (exit 0, with its recorded creation line and its files
+  listing) records this container — 588,477,130 bytes — as created 2026-11-26
+  15:27:18 +0330, almost two hours before `d4ada2a` existed (17:27:24 +0330), so
+  the container is content-equivalent to the head-built bundle but demonstrably
+  **not head-built**. (Dated tightening the same evening: this measurement
+  replaces this section's earlier framing "container-level provenance at
+  `d4ada2ac` is NOT VERIFIED", written before the creation log was consulted;
+  the payload statement above stands unchanged.) The app bundle itself is head-fresh
+  because the build removes and reassembles it on every run; its Mach-O mtime
+  (20:16:22) postdates the head commit.
+- **What this binds and what it does not.** The §6.1 acceptance *identity* —
+  bundle, digest, inference verdict — is now bound to `d4ada2ac` by execution:
+  directly for the app-side entries, and for the cache-carried Worker entries via
+  the 14/14 source-hash equality plus the stamp-and-verify mechanism above — no
+  longer by the file-overlap argument alone. It adds no tamper detection (the
+  shipped binary still has no in-process signature preflight; that stays a 2.1
+  decision), no CPU-branch, x86_64-slice, Windows, GUI or clean-install
+  evidence, and does not unlock gate rows 4, 6 or 7.
+
+### 6.1b The accepted bundle is diagnostic-stamped — release-shape identity NOT VERIFIED (recorded 2026-11-26)
+
+This is a release-gate requirement, not a cosmetic note, and §6.1a's head
+binding does not satisfy it.
+
+- **The accepted artefact carries non-release stamps.** `plutil -p` on the
+  retained acceptance bundle's `Contents/Info.plist` reads
+  `CFBundleShortVersionString = 0.0.0-m3-acceptance` and
+  `CFBundleVersion = m3-acc-1`. `build.sh:110-115` (at `d4ada2ac`) writes exactly
+  those two keys via `PlistBuddy` from `RETOUCH_VERSION`/`RETOUCH_BUILD`, and
+  `Contents/Info.plist` is one of the 29,178 entries inside both the tree digest
+  `df2649a904aaf3cc29e4222a061840c7f4bd7ae6c00a5f925ba3c9916c647b30` and the code
+  seal. A release-stamped build therefore differs in at least one digest input by
+  construction: the recorded digest **cannot** be shared with a `2.0.0`/`2` bundle
+  under any build order. Every byte-identity claim in §6.1/§6.1a is the identity of
+  a *diagnostic-stamped* artefact and must not be quoted as the identity of a
+  shippable package.
+- **A release-shaped image exists but predates both candidates.** The unmerged
+  acceptance worktree also carries `RetouchStudio-2.0.0-arm64.dmg`
+  (577,588,100 bytes, mtime 2026-11-24 22:44:42 +0330, sidecar
+  `RetouchStudio-2.0.0-arm64.dmg.sha256` recording
+  `f65444789e0ef784d18ab8b54ecd7fc764ba2d73f1a4f566c2b86402a5acb475`). Its
+  timestamp is before `fd7a956` (2026-11-25 22:01:11 +0330) and before
+  `d4ada2ac` (2026-11-26 17:27:24 +0330), and at the time of writing its payload
+  had **never** been compared, file by file, against a head build.
+- **Status of the requirement "the packaged acceptance holds for a
+  release-stamped build": NOT VERIFIED — measurement IN PROGRESS** as of
+  2026-11-26. A release-stamped (`2.0.0`) packaged measurement is being run
+  separately; its result does not exist in this repository's records yet and
+  belongs in a LATER dated addendum to this section. Nothing in §6.1/§6.1a may be
+  read as pre-approving it.
+  **(Dated resolution, same evening, 2026-11-26: the release-shaped measurement
+  completed — see §6.1c. It resolves as a PASS at `d4ada2ac` for the
+  release-stamped bundle, a NOT-VALID verdict for the pre-existing `2.0.0`/`1`
+  container that predates the head commit, and a pending re-verification for the
+  post-`d4ada2ac` M3 head.)**
+
+### 6.1c Release-shaped acceptance measurement — dated addendum (2026-11-26, night)
+
+This resolves §6.1b's in-progress requirement. The status labels below are scoped
+to exactly what was measured; nothing here is inferred.
+
+- **(i) VERIFIED — the packaged self-test passes on a release-stamped bundle
+  built at `d4ada2ac`.** The Test Engineer built
+  `RETOUCH_ARCH=arm64 RETOUCH_VERSION=2.0.0 RETOUCH_BUILD=1 ./build.sh release`
+  at `w5-m3-packaged-acceptance` head `d4ada2ac` (exit 0). The bundle digests to
+  tree `4705068c0ce98ef46ac2f4fc84269eb3808cd6302d7ef7b6ab3d857ceece1be0` with
+  29,178 entries and zero bytecode residue; `Contents/Info.plist` hashes
+  `ab32913e…`, `Contents/MacOS/RetouchStudio` `4592d7f3…`,
+  `Contents/_CodeSignature/CodeResources` `af5eef45…`, and
+  `codesign --verify --strict` exits 0. The packaged self-test printed
+  `submitting 64×48 real 4× job`, `tile 1/1`,
+  `independent mps RGB8 reference matched exactly`, then `PASS`, exit 0. The
+  emitted PNG is `7c64bb81ad39a7f8a4c8f9a4a0e56305b16dbbfe8c3259c15c7614d1e52c9ffd`
+  and the emitted RGB8 is byte-identical to the fixture `reference.mps.rgb`
+  (`095bd862…`); the CPU-reference negative control (`reference.cpu.rgb`)
+  mismatches deliberately, so the match is fixture-specific and not a vacuous
+  comparison. The same commit built diagnostic-stamped digests to
+  `df2649a9…`; the two trees differ in **exactly two entries** (the bundle's own
+  plist and executable), the executable difference is only the 32-byte
+  CodeDirectory field storing `sha256(Info.plist)`, and the Mach-O program bytes
+  `[0:9988448)` are `6b5752772b31be78be1a71637afe73942f3080597a44889b166af0a630eaf901`
+  on both sides — compilation is deterministic; the stamp changes the payload
+  digest by construction (mechanism stated in `RELEASING.md` §2).
+- **(ii) NOT VALID AS RELEASE EVIDENCE — the pre-existing
+  `RetouchStudio-2.0.0-arm64.dmg` (bullet 2 of §6.1b) is not bound to any
+  accepted head.** Its payload digests to
+  `e21e4d3a0978e0971dbe82f92a3d6af09b298ca59a973cc82d914c1f60388694` with 29,172
+  entries; the six entries separating it from the accepted head bundle are
+  exactly the six M3 fixtures under
+  `Contents/Resources/Tests/Fixtures/upscale-m3/`. Its executable is the older
+  9,950,400-byte binary (`50fc897a…`; program bytes
+  `cabfdbdae50104ffb9528a44cc4894082038d08916185ab6ce4527ce71201f0f`, not
+  `6b575277…`), i.e. an earlier source state. Its documented self-test exits 0
+  and prints `UPSCALE SELFTEST: PASS` but prints **neither**
+  `independent M3 reference fixture verified` **nor**
+  `independent mps RGB8 reference matched exactly` — a PASS from a binary that
+  predates the fixture gate. **Any shipped artifact must be rebuilt from an
+  accepted head.** This is not a production-policy problem: the head code already
+  fails closed — `PackagedUpscaleSelfTest.swift:120-126` throws
+  "the app bundle does not contain the independent M3 reference fixture" from
+  `resolvePackagedReferenceDirectory(in:)`, `:400-415` makes `run(_:)` call it
+  unconditionally before any `PASS` print, and `:531` throws on any RGB8 byte
+  mismatch. The vacuous PASS belongs to the older binary. To keep it that way,
+  RuntimeProcessTests now pins refusal of a fixture-less bundle (new
+  `no-fixture` layout, commit `3267174` on the M3 branch): a synthetic bundle
+  whose `Contents/Resources` exists but carries neither the canonical fixture
+  directory nor a legacy top-level manifest must be refused with the shipped
+  message.
+- **(iii) The UDZO container is NOT reproducible; container hashes are never
+  acceptance values.** Two container creations over the same accepted payload
+  produced different digests during the acceptance rounds (`3ad2b862…`, then
+  `82e26e82…`). Re-measured independently the same night over a minimal staged
+  payload while hardening `Tools/make-dmg.sh` (the hardened script also refuses
+  to overwrite an existing image, so a re-run can no longer destroy a previous
+  artifact): first build `2493c2257c92b28b33651eff87adc20b1867fbab77846c5101dc47a40897507b`,
+  forced replacement build `78f5cd409c2d99c1fabde5d33670c6c3f7e5fcf29e3c61963bf0266f618ed8c3`,
+  same inputs. The acceptance value remains the **mounted payload** digest
+  (`4705068c…` / 29,178 entries for the release-shaped head build), never the
+  container hash.
+- **Still open after this addendum:** packaged acceptance for the M3 head
+  advanced beyond `d4ada2ac` (commits `3267174` and `9d20ec4` change only
+  `Tests/RuntimeProcessTests.swift` and `Tools/make-dmg.sh`, no app sources),
+  which is a Test Engineer re-verification step, and the two §6.2 follow-ups
+  (G-ACCI-1, G-ACCI-2), which need `.github/` changes.
+
+### 6.2 Packaged-acceptance follow-ups registered 2026-11-26 (not implemented)
+
+Both items need changes under `.github/`, which the documentation pass that added
+this section is not allowed to touch. They are recorded so the first real run of
+the workflow is interpreted correctly, not optimistically.
+
+**G-ACCI-1 — the evidence set does not name the candidate commit.** The identity
+step writes `gh run view "$MODEL_RUN_ID" --json
+databaseId,headSha,headBranch,workflowName,conclusion,createdAt` to
+`model-source-run.json` (`m3-packaged-acceptance.yml:51-53`). That binds the
+evidence to the **model source** run's head, not to the revision whose bundle ran
+inference: `grep -nE "GITHUB_SHA|github.sha"` over that workflow finds no match,
+and the artifact is named only from `github.run_id`/`github.run_attempt`
+(`:201`). The checked-out revision (`:42-43`, `actions/checkout@v7` with no `ref`
+input) is recoverable from the Actions run record, but nothing inside the
+downloaded evidence carries it, so an artifact cannot self-attest which candidate
+it tested. Minimal fix: write `git rev-parse HEAD` (or `github.sha`) into
+`$EVIDENCE_ROOT` next to `SHA256SUMS.txt` (`:193-195`).
+
+**G-ACCI-2 — an empty evidence set uploads as a success.** The upload step
+`Upload identifiable packaged acceptance evidence` is `if: always()` with
+`if-no-files-found: warn` (`:197-202`), so a run whose evidence directory is empty
+leaves only a step warning, and a job with no artifact can still be read as a
+completed acceptance run. The Windows job in `ci.yml:565-570` already uses
+`if-no-files-found: error`, which is the pattern this step should follow. Minimal
+fix: `warn` → `error`. Until then, "the acceptance run has an artifact" is not
+evidence that the acceptance run recorded anything.
+
 ## 7. Effort estimate by workstream
 
 | Milestone | Engineer-hours | Calendar, single track | Variance |

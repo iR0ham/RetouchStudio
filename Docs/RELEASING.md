@@ -10,22 +10,31 @@ These are the values for the first public release:
 |---|---|---|
 | Bundle identifier | `app.retouchstudio.mac` | `Resources/Info.plist` |
 | Project UTI | `app.retouchstudio.project` | `Resources/Info.plist`, `Project.swift` |
-| Version / build | `1.0.0` / `1` | `Resources/Info.plist` |
+| Version / build | `2.0.0` / `2` | `Resources/Info.plist` |
 | Developer | iRoham — Design and development (localized) | `Sources/RetouchStudio/Models/DeveloperProfile.swift` |
 | Contact, website | blank (rows stay hidden) | `DeveloperProfile.swift` |
 | Licence | MIT, alongside the bundled third-party notice | `LICENSE`, `Resources/THIRD_PARTY_NOTICES.txt` → `Contents/Resources/` |
 
 The bundle identifier appears in `Info.plist`, the UTI appears in both `Info.plist` and `Project.swift`, and the recovery path falls back to the identifier in `Recovery.swift`. Change all of them together; changing the identifier after a release changes the app's identity for macOS, saved state and the recovery file. The version in `Info.plist` is what the About window, Settings and export dialogs display at runtime.
 
+*(Dated correction 2026-11-26: this table row previously read `1.0.0` / `1`, which contradicted the tree. Measured at `origin/main` (`5aac9c3a`): `Resources/Info.plist:22` = `2.0.0`, `:24` = `2`; `Windows/Directory.Build.props:13` = `<Version>2.0.0</Version>`; `Tools/check-versions.sh` exits 0 printing "version check: Info.plist and Directory.Build.props agree on 2.0.0 (no tag to compare)" (re-verified 2026-11-26 on a clean clone). The canonical release identity from the tracked sources is therefore **`2.0.0` / `2`** — build number `2` is the committed `CFBundleVersion` and the value a build without overrides stamps. The M3 acceptance round deliberately stamped its release-shaped test bundle `2.0.0` / `1` via environment overrides; that is a recorded test-time choice (see `RELEASE_2.0.0_UPSCALER_GATE.md` §6.1b/§6.1c), not the canonical build number. The historical `v1.0.0` release was legitimately stamped `1.0.0` / `1`; the pre-existing published assets keep that identity.)*
+
 ## 2. Version stamping
 
 The bundle version is stamped at build time, so nothing has to be committed for each release:
 
 ```bash
-RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=42 ./build.sh release
+RETOUCH_VERSION=2.0.0 RETOUCH_BUILD=2 ./build.sh release
 ```
 
 Without the overrides the values in `Resources/Info.plist` are used. Bump `CFBundleShortVersionString` for a release and `CFBundleVersion` for every uploaded build.
+
+The stamping mechanism, measured at `d4ada2ac` (M3 branch) with byte-identical line numbers at `origin/main` `5aac9c3a`: `build.sh:110-115` rewrites **only** the two plist keys — `CFBundleShortVersionString` via `/usr/libexec/PlistBuddy … Set` when `RETOUCH_VERSION` is non-empty, `CFBundleVersion` likewise when `RETOUCH_BUILD` is non-empty — and `:116-117` reads both values back for later echo and naming. Nothing else in the binary is stamped: `build.sh` never validates `LC_BUILD_VERSION` against the stamp, and that string appears nowhere in `build.sh` or `Tools/` (grep measured 2026-11-26, zero hits; the same negative is recorded in `RELEASE_2.0.0_READINESS.md` §S.2.5).
+
+Two consequences that no earlier version of this checklist stated:
+
+- `build.sh:99` runs `rm -rf "$APP_BUNDLE"` before assembling — a re-stamped build **destroys the previous bundle** in place. Any evidence that depends on an already-built bundle (digests, mounted DMG inputs, acceptance artefacts) must be captured before re-running the build.
+- The built bundle's payload digest is a function of the stamp, not only of the code: `Contents/Info.plist` is a digest input, and it is also a sealed resource whose SHA-256 is recorded inside the executable's code directory, so the Mach-O changes too. Measured at commit `d4ada2ac`: the same commit built `2.0.0`/`1` digests to tree `4705068c0ce98ef46ac2f4fc84269eb3808cd6302d7ef7b6ab3d857ceece1be0` and built diagnostic-stamped to `df2649a9…`, differing in **exactly two entries** (`Contents/Info.plist` and `Contents/MacOS/RetouchStudio`), and the executable difference is only the 32-byte CodeDirectory field storing `sha256(Info.plist)` — the Mach-O program bytes `[0:9988448)` hash identically on both sides: `6b5752772b31be78be1a71637afe73942f3080597a44889b166af0a630eaf901`. The stable cross-stamp invariants for acceptance are therefore the executable's **program-bytes hash**, the M3 fixture pins, and the worker-bundle stamp — **not** the tree digest and **not** the DMG container hash (the UDZO container is not reproducible across runs at all; see `RELEASE_2.0.0_UPSCALER_GATE.md` §6.1c).
 
 ## 3. Pre-flight
 
@@ -40,7 +49,7 @@ The build itself runs the engine self-test (`--selftest`) and stops if it fails;
 ## 4. Build and verify
 
 ```bash
-RETOUCH_VERSION=1.0.0 RETOUCH_BUILD=42 RETOUCH_SKIP_WORKER=1 ./build.sh release   # light universal app
+RETOUCH_VERSION=2.0.0 RETOUCH_BUILD=2 RETOUCH_SKIP_WORKER=1 ./build.sh release   # light universal app
 codesign --verify --deep --strict "Retouch Studio.app"
 lipo -archs "Retouch Studio.app/Contents/MacOS/RetouchStudio"   # arm64 x86_64
 "Retouch Studio.app/Contents/MacOS/RetouchStudio" --selftest --out /tmp/rs-selftest
@@ -53,7 +62,7 @@ Check the bundle contents:
 ```bash
 du -sh "Retouch Studio.app"                                # ~16 MB light universal; ~1.3–1.6 GB with the helper
 ls "Retouch Studio.app/Contents/Resources/Worker"          # only if the helper was bundled; Apple-silicon runtime
-find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only
+find "Retouch Studio.app/Contents" -name '*.pyc'           # must be empty; bytecode is memory-only. Manual, offline-only check: no shipped code path performs this scan at runtime (see the dated addendum in `PRIVACY_AUDIT.md` §3.4).
 cat "Retouch Studio.app/Contents/Resources/LICENSE"        # MIT notice travels with the app
 cat "Retouch Studio.app/Contents/Resources/THIRD_PARTY_NOTICES.txt"
 plutil -extract NSHumanReadableCopyright raw "Retouch Studio.app/Contents/Info.plist"
@@ -86,7 +95,7 @@ It submits with `notarytool ... --wait`, staples and validates the result, and r
 
 ## 6. Package and publish
 
-The two disk images are light builds. The current build offers no runtime download (`AIRuntime.package` is nil); packaging a future runtime is a separate step, enabled only when an official protocol-v2 package is approved. That archive is cut from a helper build first:
+The two disk images are light builds. The current build offers no runtime download (`AIRuntime.package` is nil); packaging a future runtime is a separate step, enabled only when an official protocol-v2 package is approved. *(Dated note 2026-11-26: the example filenames below preserve the historical `1.0.0` identity because that block is the procedure that produced the published `v1.0.0` assets; a fresh run from a head with the tracked plist names its artifacts `RetouchStudio-2.0.0-<arch>.dmg`. On the M3 branch (`w5-m3-packaged-acceptance`, commits after `d4ada2ac`) `Tools/make-dmg.sh` additionally refuses to overwrite an existing image or sidecar unless `RETOUCH_DMG_FORCE=1` is set, accepts `RETOUCH_DMG_DIR` for out-of-tree output (default: repository root), and records an absolute image path in the sidecar; those behaviours are not yet on `main`.)* *(Dated correction 2026-11-28: superseded by merge, and the sidecar format itself changed before that merge. `main` is now `fd2ce021` (PR #140 merged 2026-11-28T00:02:16+03:30, on top of PR #139's `11d05952`), and at `fd2ce021` `Tools/make-dmg.sh` writes the portable basename-only sidecar line — `( cd "$OUT_ABS" && shasum -a 256 "$NAME.dmg" ) > "$SIDECAR"` at `:71`, so the record is `<64hex>  <basename>` and verifies next to the image anywhere — while the absolute-path line survives only in the separate `<name>.dmg.sha256.abs` companion (`:72`), whose suffix deliberately falls outside the `release.yml` `*.sha256` glob; the overwrite guard also refuses any of the three output paths that is a symlink even under `RETOUCH_DMG_FORCE=1` (`:42-49`). The "records an absolute image path" wording above was true only of the branch's intermediate commits (`3267174`/`9d20ec4`) and is kept as the 2026-11-26 record.)* That archive is cut from a helper build first:
 
 ```bash
 RETOUCH_ARCH=arm64 ./build.sh release                 # helper build, source available

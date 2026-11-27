@@ -253,6 +253,125 @@ in §2.
   ship as an explicit opt-in tier with declared limits.
 - **I9** Making `Model Manager` states and capability availability machine-assertable, so
   "Installed/Active" can never again be shown for something that cannot run.
+- **I10** `M3-RUNTIME-INTEGRITY-PREFLIGHT` — an in-process `/usr/bin/codesign
+  --verify --strict` check placed before the packaged upscale self-test is allowed
+  to admit its model, so a tampered bundle stops failing open. Registered here on
+  2026-11-26 by the documentation-truth pass; §9 makes this file PM-maintained, so
+  the PM may renumber or relocate the entry. The defect it closes is recorded in
+  `Docs/RELEASE_2.0.0_UPSCALER_GATE.md` §6.1: four tampered copies of the same
+  bundle each printed `UPSCALE SELFTEST: PASS` with exit 0. Note that CLI
+  verification is *not* absent today — `build.sh:221` runs
+  `codesign --verify --deep --strict` on the built bundle and the acceptance
+  workflow on the unmerged M3 head runs it before and after inference
+  (`m3-packaged-acceptance.yml:124-125` and `:182-183`, both inside
+  `set -euo pipefail` steps). *(Dated correction 2026-11-28: the M3 branch has
+  since merged into `main` (`fd2ce021`) and the workflow-load fix (`8154a142`)
+  shifted those anchors — the before/after `codesign --verify --deep --strict`
+  steps are `m3-packaged-acceptance.yml:138-139` and `:196-197` at `fd2ce021`
+  (re-measured); the file has meanwhile run exactly once, as the dispatch that
+  stopped before inference, so its codesign steps have themselves never
+  executed.)* What is absent is any check inside the launched
+  application, which is the only place that can see a bundle modified after it left
+  the build machine.
+  **Deferred by decision, not oversight — 2.1, not 2.0.0.** Under ad-hoc signing
+  this is a tamper-*consistency* check, not a security boundary: the same
+  single-user writer who can modify a bundle can delete the check, and one
+  re-signature defeats it — measured for the ad-hoc case only: `codesign --force
+  --sign -` on the tampered copy produced a new CDHash `cd300858d44e23900cd8b2e49f860ea6300c6b4b`
+  while the tampered payload stayed on disk at `85b7cc84c46b7d51a13d6983c52dacdfc7edbad162a2a156c76bc7ab4ce6a295`,
+  and the copy then passed its own seal. Re-signing with a real Apple identity was
+  NOT MEASURED and is out of reach under this project's ad-hoc-only policy, so that
+  stronger claim is not made here. Adopting it also invalidates the
+  current packaged acceptance identity and forces a full artefact re-run, which is
+  why it cannot ride into 2.0.0. Scope as recorded: ~30–45 lines before
+  `PackagedUpscaleSelfTest.swift:436`. `--deep` is unnecessary and the probe says
+  so directly: a never-sealed file injected at
+  `Contents/Resources/Worker/retouch_ai_worker/_evil_extra.py` — i.e. deep inside
+  the Worker payload — was caught by the plain non-deep check at exit 1 with
+  "a sealed resource is missing or invalid", so the outer resource seal already
+  covers the Worker tree.
+  **Seal anatomy that makes a plain verify cheap and correct (measured 2026-11-26,
+  read-only, from the retained head-built clone's `Contents/_CodeSignature/CodeResources`).**
+  The resource rules include a required `^Resources/` rule; the `files2` table seals
+  29,174 entries — 29,158 whole-file `hash2` SHA-256 records plus 16 `symlink`
+  records — and there are zero `cdhash` entries. `Resources/Worker/**`, including the
+  32,133-entry Python payload, is therefore sealed as ordinary resources of the outer
+  signature, not as nested code, so a single non-deep `codesign --verify --strict`
+  pass already covers the whole tree and Apple's deprecated `--deep` adds nothing.
+  **Coverage this adds over the offline gates:** on the two copies whose tree the
+  Worker manifest cannot see — a file added outside the `Resources` seal rule and a
+  4-byte non-Mach-O stub added to `Contents/MacOS/` — the recorded
+  `Tools/worker-integrity.py` run reported `worker integrity verified: 32133
+  entries` at exit 0 while `codesign --verify --strict` on the same copies returned
+  exit 1. The two gates are therefore complementary, not redundant.
+  **What the 2026-11-26 signature-probe records report — read from those records,
+  not re-run by this documentation pass, therefore NOT VERIFIED here:** a pristine
+  bundle verifies at exit 0 with empty stderr; a one-byte change to
+  `Contents/Resources/Worker/retouch_ai_worker/engine.py` or
+  `Contents/Resources/Worker/.integrity.json`, an added file outside the
+  `Resources` seal rule, an added non-Mach-O stub in `Contents/MacOS/`, a deleted
+  worker file and a repointed internal symlink each verify at exit 1 (the first five
+  with "a sealed resource is missing or invalid", the symlink case with
+  "No such file or directory"); a byte flip in a bundled `.so` under
+  `Contents/Resources/Worker/Python.framework/…` behaves the same way, while a byte
+  flip in the main `Contents/MacOS/RetouchStudio` binary returns exit 1 earlier
+  (~0.08 s) with "invalid signature (code or signature have been modified)";
+  causality is controlled on the same copy (injected
+  item present → 1, removed → 0, re-added → 1); the tool succeeds with isolated
+  `HOME`/`TMPDIR` (both directory digests unchanged before and after, and no
+  signature-shaped file newer than the marker in the real `HOME`), with a
+  non-existent `HOME`, with `HOME` made read-only (`chmod 500`), under `env -i` with
+  an absolute binary path, from a read-only DMG mount (the detached DMG hash
+  unchanged, no stale mount left), and after relocation. An early `env -i` attempt
+  recorded exit 127, which was the probe script's own missing-binary bug and was
+  superseded by the fixed run. On the trust path the records are more nuanced than
+  "no contact": no `trustd`/`securityd` line named the bundle in any window (0
+  naming lines in the 30–31 seen during the check and the 128–129 seen during the
+  control), yet the ambient traffic was 54–55 lines in an idle window against 30–31
+  during `codesign --verify --strict` and 128–129 during the `spctl --assess`
+  positive control, which also emitted 42 OCSP lines and answered exit 3
+  "rejected". So the claim the records support is "the check produces no
+  attributable trust evaluation for this bundle", not "the system performs none";
+  the first `log show` variant, which recorded 0 events in both windows including
+  the positive control, was inconclusive and was replaced by the `log stream` run.
+  Cost was ~1.1–2.2 s warm (median ~1.27 s), ~5.0 s cold from a freshly attached
+  mount, ~2.7 s warm from the mount, maxRSS ~48 MB, on one 16 GB Apple-silicon
+  machine; the same records confirm the shipped bundle is `Signature=adhoc` /
+  `TeamIdentifier=not set` and carries no entitlements plist, so it is unsandboxed
+  and spawning the tool is unrestricted — including from a child process whose
+  bundle path contains a space (argv-list spawn, returncode 0, ~1.27–1.28 s) — and
+  that the source bundle's tree digest
+  (`df2649a904aaf3cc29e4222a061840c7f4bd7ae6c00a5f925ba3c9916c647b30`) was unchanged
+  by the whole probe series.
+  **What still has to be investigated before this can be scheduled:** every timing
+  above comes from an external process spawning the CLI, never from the application
+  process, so in-app spawn cost is unmeasured. The seam itself is narrower than it
+  looks: at `d4ada2ac` the only production caller of `PackagedUpscaleSelfTest.run`
+  is the `--upscale-selftest` dispatch in `Sources/RetouchStudio/Core/SelfCheck.swift:32-35`
+  (`ExportService.swift:690` reuses `inferenceProvider(from:)`, not `run`), so this
+  preflight would guard the diagnostic path only — whether to extend it to real
+  export paths, and what a ~1.3 s per-export tax would then mean, is an open design
+  question rather than part of this item. And the check must run before anything can
+  create in-bundle residue. That suppression is enforced by shipped code, not by the
+  acceptance workflow's environment: at `d4ada2ac` the workflow prefixes only its venv
+  preflight heredoc with `PYTHONDONTWRITEBYTECODE=1` (`m3-packaged-acceptance.yml:132`),
+  the app exec at `:140-141` carries no such prefix, and yet the post-run verdict grep
+  (`:143-144`) and the residue gate (`:184-192`) report zero `__pycache__`/`*.pyc` under
+  `Contents/Resources/Worker/` — which is exactly the file churn a seal check placed
+  after a worker start would report as tampering on a legitimate first run. The two
+  shipped sites that set the variable are
+  `Sources/RetouchStudio/Core/AIRuntimeValidation.swift:210` (unconditional, inside
+  `environment(for root:)` at `:202-221`) and
+  `Sources/RetouchStudio/Core/AIWorker.swift:585-588` (the bundled-root branch, applied
+  after the inherited environment is copied at `:578`). Two structural reasons keep the
+  before-any-worker-start ordering load-bearing even with those sites in place. R-15a:
+  the installed-root branch at `AIWorker.swift:589-593` sets no suppression; it is
+  latent only because `AIRuntime.swift:40` still returns `package: nil`, so an approved
+  runtime package would open a bytecode-creating path the shipped suppression does not
+  cover. R-15c: `AIRuntimeValidation.swift:223-235` builds the shell
+  `environmentScript` without ever echoing `sys.dont_write_bytecode`, so nothing in the
+  workflow output demonstrates the flag reached the app-launched interpreter — the
+  clean residue gate is consistent with, but not proof of, the shipped suppression.
 
 ### 8.5 Risks that shape the plan
 
