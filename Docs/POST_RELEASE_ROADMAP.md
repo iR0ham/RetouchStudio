@@ -264,7 +264,13 @@ in §2.
   `codesign --verify --deep --strict` on the built bundle and the acceptance
   workflow on the unmerged M3 head runs it before and after inference
   (`m3-packaged-acceptance.yml:124-125` and `:182-183`, both inside
-  `set -euo pipefail` steps). What is absent is any check inside the launched
+  `set -euo pipefail` steps). *(Dated correction 2026-11-28: the M3 branch has
+  since merged into `main` (`fd2ce021`) and the workflow-load fix (`8154a142`)
+  shifted those anchors — the before/after `codesign --verify --deep --strict`
+  steps are `m3-packaged-acceptance.yml:138-139` and `:196-197` at `fd2ce021`
+  (re-measured); the file has meanwhile run exactly once, as the dispatch that
+  stopped before inference, so its codesign steps have themselves never
+  executed.)* What is absent is any check inside the launched
   application, which is the only place that can see a bundle modified after it left
   the build machine.
   **Deferred by decision, not oversight — 2.1, not 2.0.0.** Under ad-hoc signing

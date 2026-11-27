@@ -249,6 +249,8 @@ Passing CI changes none of these rows by itself.
 
 ### 6.1 Packaged-application evidence recorded 2026-11-26 (unmerged branch, developer runtime)
 
+**Dated state note 2026-11-28:** the branch named throughout §6.1–§6.1c has since been merged: `main` is `fd2ce021` (PR #140 merged 2026-11-28T00:02:16+03:30; its head `2084a64d` was a forward-merge of `origin/main`). "Unmerged" above is the 2026-11-26 record and stays as written; after the merge that qualifier concerns provenance time, not availability on `main`. The verification labels are unchanged: the acceptance bundle remains ad-hoc-signed, never clean-installed, and the packaged inference has still never run in CI (see the dated correction under the zero-job bullet below).
+
 This section changes **none** of the rows above, and it cuts both ways. It exists
 so a later reader cannot read gate row 4's "NOT VERIFIED on any artefact" as "no
 packaged artefact was ever run" — one was, and it is documented below — and cannot
@@ -419,6 +421,8 @@ group).
   that a hosted runner may expose no Metal device. A locally passed diagnostic is
   therefore not CI evidence, and G-ACCI-1/G-ACCI-2 below are open before any run
   can be trusted as an acceptance record.
+
+**Dated correction 2026-11-28 (the bullet above stands as the 2026-11-26 record).** The workflow-load defect behind those zero-duration push records — `${{ runner.temp }}` referenced in `jobs.<job_id>.env`, a context GitHub's context-availability table does not allow at that key — was fixed on the branch (`8154a142`) and reached `main` with PR #140. Measured today: two further zero-duration push records exist in total (`45882778568` at `9d20ec4`, `46030752693` at `67c9da9`), and no push at or after `8154a142` created another; the workflow is registered under its declared name (`gh api` reports `name = M3 Packaged Real Inference`, state `active`). It was then dispatched once against `fd2ce021` (run `46064851852`, 2026-11-27T20:37:03Z): setup, checkout and the ephemeral-root export step succeeded; step 4 ("Record the exact run and artifact identity") failed because the dispatched inputs named no artifact-bearing run; steps 5–13 — including "Run packaged real MPS inference" — were skipped. The honest sentence is therefore no longer "no CI step of the packaged workflow has ever run": it is **the packaged workflow now loads, registers and can start, no inference step in it has ever executed, and that dispatch is not acceptance evidence.**
 
 ### 6.1a Head-bound re-measurement at `d4ada2ac` (same day, recorded 2026-11-26 evening)
 

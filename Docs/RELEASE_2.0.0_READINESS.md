@@ -1771,6 +1771,7 @@ Reading the workflow instead of the row separates two facts the ledger had merge
   the same `<hash>  <path>` form the verifier reads), and the
   `Release` workflow has run three times by `workflow_dispatch` (latest success 2026-11-15 against `main`), in
   which the macOS packaging jobs — the ones that produce the sidecars — completed.
+- **Dated correction 2026-11-28 (the bullet above stands as the 2026-11-23 record).** `Tools/make-dmg.sh:30` and the `<hash>  <path>` form describe the pre-fix script: at `fd2ce021` (PR #140 merged) the sidecar is written at `Tools/make-dmg.sh:71` and records the portable basename-only line `<64hex>  <basename>`, with the absolute-path line preserved only in the `*.sha256.abs` companion at `:72`, which the `*.sha256` glob below does not read. The re-check status sentence ("implemented, CI-enforced at publish time, never performed") is unchanged — still no `v*` tag exists — but the pre-fix absolute-path sidecar could never have passed that gate after the artifact actions dropped the builder's directory, which is the defect #140 removed.
 - **The independent re-check is encoded but has never executed.** `release.yml:181-187` re-verifies every
   `*.sha256` inside the `release` job — a different job from the ones that produced them, on a different runner,
   from artifacts it downloaded rather than wrote — and the loop is non-vacuous because an unmatched glob leaves
@@ -1795,7 +1796,7 @@ project has to stand behind.
 | **S-WIN-2** | Windows package attribution. `Tools/package-windows-msi.ps1` and `Windows/installer/Product.wxs` contain no licence/notice handling at all (case-insensitive grep: empty), so an MSI carries no MIT text and no third-party notices. Caveat against overstatement: `build-windows.ps1:226` *does* copy ONNX Runtime's own `LICENSE`/`ThirdPartyNotices.txt` into `AI/`, so "nothing" is too strong. |**Measured statically; no MSI was built here (`dotnet` absent).** |
 | **S-WIN-4** | No Windows counterpart to `Tools/validate-bundle.sh` exists in `Tools/`. | `git ls-tree` at `ac18c1a`. |
 | **S-WIN-6** | The ONNX Runtime MIT grant has never been read from the nupkg's own `LICENSE` by anyone in this project; every row asserting it cites an upstream claim. | No in-tree record of the read. **NOT VERIFIED.** |
-| **S-VER** | Version identity is still 1.0.0: `Resources/Info.plist:22-24` and `Windows/Directory.Build.props:13`. `Docs/RELEASE_NOTES_2.0.0.md` does not exist; only `RELEASE_NOTES_1.0.0.md`. | Measured. |
+| **S-VER** | Version identity is still 1.0.0: `Resources/Info.plist:22-24` and `Windows/Directory.Build.props:13`. `Docs/RELEASE_NOTES_2.0.0.md` does not exist; only `RELEASE_NOTES_1.0.0.md`. | Measured. **Dated correction 2026-11-28 (row kept as the `ac18c1a` record):** at `fd2ce021` `Resources/Info.plist:22` = `2.0.0` and `:24` = `2` (matching `Windows/Directory.Build.props:13`), and `Docs/RELEASE_NOTES_2.0.0.md` exists in the tree. Both falsified halves of this row are closed on `main`; see also the dated supersession on the §3 G-VER row. |
 | **S-ADVERSARIAL** | The §4 adversarial matrix still has no committed seed→test→exit table; `WORKER_CI_VALIDATION_PLAN` lists seeds with nothing pinning them. | `git grep` at `ac18c1a`. |
 | **S-DISK** | The disk probe still conflates "capacity unknown" with "volume full" at five sites, and `Tests/ModelStoreTests.swift` pins `freeBytes: 0` assertions that encode the conflation. | Carried forward from §Phase-1; **re-confirmed open, not re-measured this pass.** |
 
@@ -3164,6 +3165,8 @@ manual placement plus the adopt path, and `Tests/ModelStoreTests.swift` drives t
 server that answers 200 and never redirects — so W5-2's exit criterion, which names no real-host condition, was truly
 met while the feature was broken. Filed as **R1** here rather than as a GitHub issue: this order authorises research
 and a remediation plan, not tracker writes.
+
+**Dated correction 2026-11-28 (this paragraph stands as the R1 filing record).** The defect described above was fixed and merged: PR #139 (`11d05952`, merged 2026-11-27T22:46:13+03:30) made both hosts validate the raw wire `Location` before any canonicalised copy can erase information, with `[M19]`/`[M19b]` now present on `main` at `fd2ce021` (re-verified in `Docs/W5_MODEL_MANAGER.md`'s dated correction). "No catalogue entry is obtainable through the app on either platform" therefore no longer describes `main`'s code; it remains an accurate description of the measured pre-fix binaries. What the merge does not prove: an end-to-end download of a real catalogue file through the shipped app on either platform — that stays NOT VERIFIED.
 
 **The fifth symptom is the same cause as the first.** The owner's report was accurate on all five points; nothing in
 it was a misobservation.

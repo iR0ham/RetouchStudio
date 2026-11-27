@@ -306,6 +306,8 @@ verdict may be cited against `main`, and because those case names do not exist
 there, no Windows CI run at `main` can even print such a line.
 **NOT VERIFIED on `main`.**
 
+**Dated correction 2026-11-28 (the record above stands as of 2026-11-26).** PR #139 was merged into `main` the next day (`11d05952`, 2026-11-27T22:46:13+03:30), and `main` has since advanced to `fd2ce021` (PR #140 merged). Every "not merged"/"not yet on `main`" statement above — including the two table rows' status cells — is superseded by measurement at `fd2ce021`: `ModelStoreChecks.cs` contains `[M19]` at `:863` and `[M19b]` at `:1791` (`git show fd2ce021:Windows/RetouchStudio.AI.Tests/ModelStoreChecks.cs | grep -n M19`), `ModelCatalog.cs` defines `ModelRedirectRule` (`:37`) and `RedirectAllowList` (`:106`), and the three cited Windows files are byte-identical to the reviewed branch head (`git diff 3bb8e696 fd2ce021 --` over those paths is empty). The security-properties block below keeps its 2026-11-26 wording; its line anchors were re-verified verbatim against `fd2ce021` (`ModelStore.cs:572`, `:694`, `:703-704`, `:738`, `:765-767`, and `ModelRedirectHop` at `ModelStore.cs:83`), so it now describes `main`, not only the branch. Still true after the merge: no macOS redirect regression check exists (both rows' macOS columns), and no real-host model download through the shipped app has been executed — CI coverage is the M19-family checks plus the macOS suite, not live Hugging Face behaviour.
+
 **Security properties of that branch's redirect gate (2026-11-26, read from the
 branch sources; NOT VERIFIED on `main`).** Two of them are worth stating now,
 because they are the reason the relaxation is acceptable and both are code-visible
