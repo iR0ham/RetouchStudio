@@ -35,10 +35,24 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: '1'
       MODEL_RUN_ID: ${{ inputs.model_run_id }}
       MODEL_ARTIFACT: ${{ inputs.model_artifact }}
-      MODEL_ROOT: ${{ runner.temp }}/m3-model-artifact/swin2sr-x4
-      OUTPUT_ROOT: ${{ runner.temp }}/m3-output
-      EVIDENCE_ROOT: ${{ runner.temp }}/m3-evidence
     steps:
+      # The `runner` context is not available in jobs.<job_id>.env (GitHub's
+      # context-availability table lists github, needs, strategy, matrix,
+      # vars, secrets, inputs for that key; `runner` is only listed for the
+      # jobs.<job_id>.steps.* keys). Referencing it there made the whole
+      # file an invalid workflow that failed every push in 0 seconds with
+      # zero jobs. Export the ephemeral roots from the RUNNER_TEMP default
+      # environment variable instead so every later step sees the identical
+      # values, including when this job is cancelled mid-run.
+      - name: Export the ephemeral evidence roots
+        run: |
+          set -euo pipefail
+          {
+            printf 'MODEL_ROOT=%s\n' "$RUNNER_TEMP/m3-model-artifact/swin2sr-x4"
+            printf 'OUTPUT_ROOT=%s\n' "$RUNNER_TEMP/m3-output"
+            printf 'EVIDENCE_ROOT=%s\n' "$RUNNER_TEMP/m3-evidence"
+          } >> "$GITHUB_ENV"
+
       - name: Check out the reviewed M3 revision
         uses: actions/checkout@v7
 
