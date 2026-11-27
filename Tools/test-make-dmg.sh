@@ -29,7 +29,9 @@
 #      exactly one *.sha256 manifest to the release gate — asserted against
 #      the real upload pattern and the real `for manifest in *.sha256` loop,
 #      with a planted second manifest as the negative control that proves the
-#      assertion can fail;
+#      assertion can fail, and verified to fail in every glob collation the host
+#      can produce (the gate mirror counts failures instead of reading the loop's
+#      last status, so bash's strcoll ordering of the glob cannot hide it);
 #   6. every sidecar file a successful build produces is non-empty and
 #      single-line (the success-path half of the residue property);
 #   7. when the digest tool itself fails, make-dmg.sh writes NO manifest at all
@@ -50,6 +52,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 WORK=$(mktemp -d)
+# The cleanup trap is deliberately simple. Measured on /bin/bash 3.2.57 (the
+# shell a GitHub macOS runner step uses): when a script that sets `set -e` and
+# installs an EXIT trap dies from a PARSE error, the step's exit status is 0,
+# and the status cannot be recovered inside the trap (`trap 'rc=$?; ...; exit
+# $rc'` still yields 0). So a broken revision of this file can exit green while
+# printing no checks at all. That is why the CI gate is not this script's exit
+# code alone: .github/workflows/ci.yml:200 requires the literal
+# 'dmg sidecar fixtures: all cases behaved as expected', which only the final
+# line below can print, and ci.yml:213 fails the step if it is absent. Removing
+# that grep would silently turn this fixture into a no-op.
 trap 'rm -rf "$WORK"' EXIT
 failures=0
 skips=0
@@ -115,6 +127,65 @@ run_make_dmg() {
 SHA256SUM=""
 if command -v sha256sum >/dev/null 2>&1; then SHA256SUM="sha256sum"
 elif [ -x /sbin/sha256sum ]; then SHA256SUM="/sbin/sha256sum"; fi
+
+# gate_loop <dir> [LC_ALL-value] — mirror of the release.yml publish gate: for
+# every *.sha256 in one merged artifact directory, verify it. Exit status is
+# non-zero iff at least one manifest failed.
+#
+# This helper exists because an earlier revision ended its subshell with the
+# `for` loop itself, which reports only the LAST manifest's status. That is not
+# the same thing: release.yml runs the loop under `bash -e` (GitHub's default
+# shell for a run step), so ONE failing manifest aborts the step. It is also
+# host-dependent, because bash orders a glob with strcoll and therefore with
+# LC_COLLATE. Measured on this host with one good and one dead manifest:
+#   LC_ALL=C          -> RetouchStudio-<v>.dmg.sha256 injected.sha256
+#   LC_ALL=en_US.UTF-8 -> injected.sha256 RetouchStudio-<v>.dmg.sha256
+# In the second order the dead line runs first, the loop's status comes from the
+# good manifest, and a planted-manifest control silently loses its teeth. That
+# is why CI on macos-15 (LANG=en_US.UTF-8) reported
+# "✗ negative control passed: the publish loop would not notice an extra absolute
+# manifest" at 2026-11-27T23:38:46Z on the same SHA that was green here.
+# Counting failures removes the dependence on glob order entirely.
+gate_loop() {
+  local dir="$1"
+  local loc="${2:-}"
+  local manifest fails=0
+  (
+    if [ -n "$loc" ]; then export LC_ALL="$loc"; fi
+    cd "$dir" || exit 9
+    for manifest in *.sha256; do
+      if [ -n "$SHA256SUM" ]; then
+        $SHA256SUM -c "$manifest" >/dev/null 2>&1 || fails=$((fails + 1))
+      else
+        /usr/bin/shasum -a 256 -c "$manifest" >/dev/null 2>&1 || fails=$((fails + 1))
+      fi
+    done
+    exit "$fails"
+  )
+}
+
+# verify_one <dir> <manifest> [LC_ALL-value] — run the gate verifier on exactly
+# one manifest, so a result can never be attributed to the wrong file.
+verify_one() {
+  local dir="$1" manifest="$2"
+  local loc="${3:-}"
+  (
+    if [ -n "$loc" ]; then export LC_ALL="$loc"; fi
+    cd "$dir" || exit 9
+    if [ -n "$SHA256SUM" ]; then
+      $SHA256SUM -c "$manifest" >/dev/null 2>&1
+    else
+      /usr/bin/shasum -a 256 -c "$manifest" >/dev/null 2>&1
+    fi
+  )
+}
+
+# glob_order <dir> <LC_ALL-value> — the space-separated order bash gives
+# *.sha256 in that collation. Used only to prove the collation probe below is
+# not vacuous (an unavailable locale collapses to C and is then reported SKIP).
+glob_order() {
+  LC_ALL="$2" /bin/bash -c 'cd "$1" && set -- *.sha256 && printf "%s" "$*"' _ "$1"
+}
 
 # ---------------------------------------------------------------- scenario A
 OUT1="$WORK/out1"
@@ -202,14 +273,9 @@ GATE="$WORK/gate-sim"
 mkdir -p "$GATE"
 cp "$OUT1/"* "$GATE/"
 GATE_RC=0
-(
-  cd "$GATE"
-  for manifest in *.sha256; do
-    if [ -n "$SHA256SUM" ]; then $SHA256SUM -c "$manifest"; else /usr/bin/shasum -a 256 -c "$manifest"; fi
-  done
-) >/dev/null 2>&1 || GATE_RC=$?
+gate_loop "$GATE" || GATE_RC=$?
 GATE_TOOL="shasum -a 256 (release.yml uses sha256sum on Linux)"
-[ -n "$SHA256SUM" ] && GATE_TOOL="$SHA256SUM, the release.yml tool"
+if [ -n "$SHA256SUM" ]; then GATE_TOOL="$SHA256SUM, the release.yml tool"; fi
 if [ "$GATE_RC" -eq 0 ]; then
   pass "publish-loop mirror over the full output directory verifies (via $GATE_TOOL)"
 else
@@ -227,20 +293,46 @@ fi
 # succeeded and the control had no teeth; it correctly reported RED. That
 # failure is the reason the injection now names a directory the script never
 # creates.
+#
+# A SECOND way this control was inert is recorded in gate_loop's comment: the
+# loop reported only its last manifest's status, so under an en_US.UTF-8
+# collation the dead line ran first and the control went green->red on a runner
+# while staying green at home. The three checks below separate the two failure
+# modes: the planted line really is unverifiable, the whole-loop mirror notices
+# it, and the whole-loop mirror notices it in every glob order the host can
+# produce.
 printf '%s  %s\n' "$HASH" "$WORK/gone-builder-dir/$IMG" > "$GATE/injected.sha256"
+ONLY_RC=0
+verify_one "$GATE" injected.sha256 || ONLY_RC=$?
+if [ "$ONLY_RC" -ne 0 ]; then
+  pass "negative control is live: the planted absolute line alone is unverifiable (rc=$ONLY_RC)"
+else
+  fail "the planted absolute line verifies on its own — the control tests nothing"
+fi
 INJECT_RC=0
-(
-  cd "$GATE"
-  for manifest in *.sha256; do
-    if [ -n "$SHA256SUM" ]; then $SHA256SUM -c "$manifest"; else /usr/bin/shasum -a 256 -c "$manifest"; fi
-  done
-) >/dev/null 2>&1 || INJECT_RC=$?
-rm -f "$GATE/injected.sha256"
+gate_loop "$GATE" || INJECT_RC=$?
+GATE_ORDER=$(glob_order "$GATE" C)
+GATE_ORDER_U=$(glob_order "$GATE" en_US.UTF-8)
 if [ "$INJECT_RC" -ne 0 ]; then
   pass "negative control: a second absolute-path manifest breaks the same loop (rc=$INJECT_RC)"
 else
-  fail "negative control passed: the publish loop would not notice an extra absolute manifest"
+  fail "negative control passed: the publish loop would not notice an extra absolute manifest (LC_ALL=C glob order: $GATE_ORDER)"
 fi
+# Collation independence. If the host gives one order in both locales — because
+# en_US.UTF-8 is unavailable and collapsed to C — the probe cannot distinguish a
+# real fix from luck, so it is announced as SKIP rather than ✓.
+if [ "$GATE_ORDER" = "$GATE_ORDER_U" ]; then
+  skip "glob collation probe needs two distinct orders (host LC_ALL=C order: $GATE_ORDER)"
+else
+  RC_C=0; gate_loop "$GATE" C || RC_C=$?
+  RC_U=0; gate_loop "$GATE" en_US.UTF-8 || RC_U=$?
+  if [ "$RC_C" -ne 0 ] && [ "$RC_U" -ne 0 ]; then
+    pass "gate mirror rejects the planted manifest in both collations (C rc=$RC_C, en_US.UTF-8 rc=$RC_U)"
+  else
+    fail "gate mirror outcome depends on glob order (C rc=$RC_C, en_US.UTF-8 rc=$RC_U)"
+  fi
+fi
+rm -f "$GATE/injected.sha256"
 
 # ---------------------------------------------------------------- scenario B
 # Mirror the publish gate: image + portable sidecar alone, fresh absolute
@@ -383,12 +475,7 @@ GATE2="$WORK/gate sim/nested path"
 mkdir -p "$GATE2"
 cp "$SPACE_DIR/"* "$GATE2/"
 GATE2_RC=0
-(
-  cd "$GATE2"
-  for manifest in *.sha256; do
-    if [ -n "$SHA256SUM" ]; then $SHA256SUM -c "$manifest"; else /usr/bin/shasum -a 256 -c "$manifest"; fi
-  done
-) >/dev/null 2>&1 || GATE2_RC=$?
+gate_loop "$GATE2" || GATE2_RC=$?
 if [ "$GATE2_RC" -eq 0 ]; then pass "publish-loop mirror verifies from a nested path containing spaces"; else
   fail "publish-loop mirror failed from a spaced path (rc=$GATE2_RC)"
 fi
