@@ -148,6 +148,11 @@ jobs:
           ./Tools/test-m3-fixture.py 2>&1 | tee -a "$RUNNER_TEMP/macos-integration.log"
           printf '%s\n' 'M3 fixture regressions: OK' | tee -a "$RUNNER_TEMP/macos-integration.log"
 
+      - name: Run DMG sidecar regressions
+        run: |
+          set -euo pipefail
+          ./Tools/test-make-dmg.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-integration.log"
+
       # The handshake suite must run on the interpreter the app ships, not on
       # the runner's Python. Build the pinned source runtime, then create the
       # hashed test environment from that exact interpreter.
@@ -192,6 +197,7 @@ jobs:
             "Ran ${expected_worker_tests} tests" \
             'notice audit fixtures: all cases behaved as expected' \
             'bundle runtime fixtures: all cases behaved as expected' \
+            'dmg sidecar fixtures: all cases behaved as expected' \
             'M3 fixture regressions: OK' \
             'StudioCore: [0-9]+ checks passed' \
             'Upscale ETA: [0-9]+ checks passed' \
