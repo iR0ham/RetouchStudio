@@ -29,5 +29,9 @@ Tests/Fixtures/portraits/
 # Release packages
 *.dmg
 *.dmg.sha256
+# make-dmg.sh also writes an absolute-path provenance companion next to the
+# portable sidecar. It is deliberately not named *.sha256, and it is still a
+# build artefact, so it must not surface as an untracked file either.
+*.dmg.sha256.abs
 *.zip
 *.zip.sha256

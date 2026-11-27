@@ -20,7 +20,9 @@ NAME="RetouchStudio-${VERSION}-${SUFFIX}"
 # Where the image lands. The default is the repository root, which is the
 # historical behaviour and keeps the documented filename
 # RetouchStudio-<version>-<arch>.dmg. Release-evidence builds set
-# RETOUCH_DMG_DIR to write the image and its sidecar outside the source tree.
+# RETOUCH_DMG_DIR to write the image and BOTH of its checksum records
+# (the portable <name>.dmg.sha256 and the absolute <name>.dmg.sha256.abs
+# companion) outside the source tree.
 OUT_DIR="${RETOUCH_DMG_DIR:-.}"
 mkdir -p "$OUT_DIR"
 OUT_ABS=$(cd "$OUT_DIR" && pwd)
@@ -54,6 +56,11 @@ done
 STAGE=$(mktemp -d /tmp/retouch-dmg.XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
 
+# Staging copies a bundle this machine just built, so no com.apple.quarantine
+# attribute is involved and `ditto` correctly needs no --noqtn here. Quarantine
+# suppression belongs to the unpack side, where it is applied:
+# AIRuntime.swift:146 and UpdateVerification.swift:129 both pass
+# `ditto -x -k --noqtn`. Nothing in this script downloads an archive.
 ditto "$APP" "$STAGE/Retouch Studio.app"
 ln -s /Applications "$STAGE/Applications"
 
@@ -62,14 +69,26 @@ hdiutil create -volname "Retouch Studio $VERSION" \
 
 # The published sidecar must be portable: the release workflow downloads
 # every artifact into one merged directory on a different runner, then runs
-# `cd artifacts && sha256sum -c *.sha256`, and the artifact actions keep only
+# `for manifest in *.sha256; do sha256sum -c "$manifest"; done`
+# (.github/workflows/release.yml), and the artifact actions keep only
 # basenames. An absolute builder path can never resolve there. So the
 # .sha256 line is generated inside the output directory and records only the
 # image basename; verify it with `shasum -a 256 -c` (or `sha256sum -c`) run
 # next to the image. The .abs companion still records the absolute line for
 # local evidence and is excluded from the *.sha256 glob by its suffix.
-( cd "$OUT_ABS" && shasum -a 256 "$NAME.dmg" ) > "$SIDECAR"
-shasum -a 256 "$DMG" > "$SIDECAR_ABS"
+#
+# Both records are computed into shell variables first and only then written.
+# A shell redirect creates its target before the producer runs, so the earlier
+# `( … shasum … ) > "$SIDECAR"` form left a 0-byte manifest behind whenever
+# shasum itself failed — and an empty manifest is worse than a missing one,
+# because `sha256sum -c` reports a malformed checksum line instead of "no
+# evidence here". Under `set -e` a failed substitution now aborts the script
+# before either path exists. Tools/test-make-dmg.sh asserts both the residue
+# behaviour and the glob shape.
+PORTABLE_LINE=$( cd "$OUT_ABS" && shasum -a 256 "$NAME.dmg" )
+ABSOLUTE_LINE=$( shasum -a 256 "$DMG" )
+printf '%s\n' "$PORTABLE_LINE" > "$SIDECAR"
+printf '%s\n' "$ABSOLUTE_LINE" > "$SIDECAR_ABS"
 
 echo "✓ ساخته شد: $DMG  ($ARCHS)"
 echo "  checksum (قابل‌حمل، برای بررسی کنار خود تصویر): $SIDECAR"
