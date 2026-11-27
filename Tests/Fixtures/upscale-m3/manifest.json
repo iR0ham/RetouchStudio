@@ -1,0 +1,72 @@
+{
+  "schema": "retouchstudio.m3-reference-fixture/1",
+  "status": "COMPLETE",
+  "evidence_class": "developer-runtime; not packaged-app or clean-install evidence",
+  "model": {
+    "id": "swin2sr-x4",
+    "version": "1.0.0",
+    "format": "pytorch",
+    "capability": "upscale.4x"
+  },
+  "catalog_aggregate_sha256": "e0da6778bbcffbb26d61fda450648998e22f66d5867924706fee6d929aa50cdf",
+  "checkpoint": [
+    {
+      "path": "config.json",
+      "sha256": "1e986fb6d0b6de32bae01a6ccd756e5d8ae1525dcb52f7ee5b2dc7f6132d6365",
+      "sizeBytes": 772
+    },
+    {
+      "path": "preprocessor_config.json",
+      "sha256": "cbc36266fcc93d5bc1e9ca69bcc648ae9d268918ad14cd3507216740f129cc4d",
+      "sizeBytes": 152
+    },
+    {
+      "path": "pytorch_model.bin",
+      "sha256": "4a5f52a20932085557ed115f87c0ee8385e12f2719108c0dfd38c64aedea4710",
+      "sizeBytes": 48460141
+    }
+  ],
+  "fixture": {
+    "source_rgb": {
+      "path": "source.rgb",
+      "sha256": "ee2b9d831fe93d75e157f9507861c4b8dc6ec4ec85a75dac300cf0e00cbde75f",
+      "bytes": 9216
+    },
+    "input_f32": {
+      "path": "input.f32",
+      "sha256": "6e3f7701f7d5425238491d405cc25421577c5580525f1598fa7bde28a395f116",
+      "bytes": 36864
+    }
+  },
+  "fixture_contract": {
+    "source_rgb_shape": [48, 64, 3],
+    "input_f32_shape": [1, 3, 48, 64],
+    "expected_output_shape": [192, 256, 3]
+  },
+  "outputs": {
+    "mps": {
+      "provider": "mps",
+      "path": "reference.mps.rgb",
+      "sha256": "095bd862b7bf7ec14bb65e853cda5f5330bbdf56dfe7b3eea86b01956066fdc6",
+      "bytes": 147456
+    },
+    "cpu": {
+      "provider": "cpu",
+      "path": "reference.cpu.rgb",
+      "sha256": "ee516854965d2c5daea15b64ceb0f19fbb212509f4eeb5dc91eb7b91b7603a80",
+      "bytes": 147456
+    }
+  },
+  "bicubic": {
+    "path": "bicubic.rgb",
+    "sha256": "d5a850c1a860a2632c3869eea08825ca2f505f36365e20ab2f6ab73f4692b10c",
+    "bytes": 147456,
+    "resampling": "Pillow BICUBIC"
+  },
+  "final_tolerance": "NOT SET",
+  "upstream_evidence": {
+    "reference_manifest_sha256": "f7f1eb4edef5045ad6e05d0b544faf77920b6ba5b1d16f594a6e31b7dbf9ee94",
+    "metrics_sha256": "4ec96ac8ea91b1ad33760dbc7d3e56516545d3563a06ddcfec6d443e9dafa27b",
+    "generator_sha256": "9ff87693ede641475badb844c8673dc68bbd47bd5e74dc69819b3d73611a92f6"
+  }
+}

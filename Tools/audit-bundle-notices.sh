@@ -13,7 +13,9 @@
 # non-empty LICENSE and THIRD_PARTY_NOTICES.md, plus a requirements.lock whose
 # every pinned distribution the helper notice names by its exact name (the
 # per-file content of the installed packages is not verified here). The
-# checker only reads the bundle; it never modifies or signs it.
+# canonical M3 fixture is project-owned; validate-m3-fixture.py separately
+# enforces its exact six-file inventory and trust pins. The checker only reads
+# the bundle; it never modifies or signs it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -56,6 +58,8 @@ while IFS= read -r -d '' file; do
          || ! grep -Fq "$(basename "$file")" "$NOTICES"; then
         fail "Contents/Resources/THIRD_PARTY_NOTICES.txt does not name $rel"
       fi ;;
+    Contents/Resources/Tests/Fixtures/upscale-m3/*)
+      owner="own (independent M3 reference fixture)" ;;
     Contents/Resources/Worker/*)
       owner="AI helper runtime (its own notices)" ;;
     *)

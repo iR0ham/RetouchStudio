@@ -1,0 +1,220 @@
+name: M3 Packaged Real Inference
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_run_id:
+        description: >-
+          Existing Actions run containing the approved swin2sr-x4 artifact.
+          The artifact must preserve swin2sr-x4/active.json and the exact
+          swin2sr-x4/1.0.0 checkpoint directory.
+        required: true
+        type: string
+      model_artifact:
+        description: Name of that existing model artifact (never a model-registry URL).
+        required: true
+        type: string
+      runner_label:
+        description: >-
+          Apple-silicon runner label. Use an MPS-capable self-hosted label when
+          the hosted runner does not expose a Metal device.
+        required: false
+        default: macos-15
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  packaged-real-inference:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 120
+    env:
+      RETOUCH_ARCH: arm64
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      MODEL_RUN_ID: ${{ inputs.model_run_id }}
+      MODEL_ARTIFACT: ${{ inputs.model_artifact }}
+    steps:
+      # The `runner` context is not available in jobs.<job_id>.env (GitHub's
+      # context-availability table lists github, needs, strategy, matrix,
+      # vars, secrets, inputs for that key; `runner` is only listed for the
+      # jobs.<job_id>.steps.* keys). Referencing it there made the whole
+      # file an invalid workflow that failed every push in 0 seconds with
+      # zero jobs. Export the ephemeral roots from the RUNNER_TEMP default
+      # environment variable instead so every later step sees the identical
+      # values, including when this job is cancelled mid-run.
+      - name: Export the ephemeral evidence roots
+        run: |
+          set -euo pipefail
+          {
+            printf 'MODEL_ROOT=%s\n' "$RUNNER_TEMP/m3-model-artifact/swin2sr-x4"
+            printf 'OUTPUT_ROOT=%s\n' "$RUNNER_TEMP/m3-output"
+            printf 'EVIDENCE_ROOT=%s\n' "$RUNNER_TEMP/m3-evidence"
+          } >> "$GITHUB_ENV"
+
+      - name: Check out the reviewed M3 revision
+        uses: actions/checkout@v7
+
+      - name: Record the exact run and artifact identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          gh run view "$MODEL_RUN_ID" \
+            --json databaseId,headSha,headBranch,workflowName,conclusion,createdAt \
+            > "$EVIDENCE_ROOT/model-source-run.json"
+          printf '%s\n' "$MODEL_ARTIFACT" \
+            > "$EVIDENCE_ROOT/model-artifact-name.txt"
+          test "$(uname -m)" = arm64
+          uname -m
+          swiftc --version
+          xcode-select -p
+
+      - name: Retrieve only the supplied pinned model artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$MODEL_RUN_ID" \
+            --name "$MODEL_ARTIFACT" \
+            --dir "$RUNNER_TEMP/m3-model-artifact"
+          test -f "$MODEL_ROOT/active.json"
+          test -f "$MODEL_ROOT/1.0.0/manifest.json"
+          test -f "$MODEL_ROOT/1.0.0/config.json"
+          test -f "$MODEL_ROOT/1.0.0/preprocessor_config.json"
+          test -f "$MODEL_ROOT/1.0.0/pytorch_model.bin"
+          /usr/bin/shasum -a 256 "$MODEL_ROOT/active.json" \
+            "$MODEL_ROOT/1.0.0/manifest.json" "$MODEL_ROOT/1.0.0/config.json" \
+            "$MODEL_ROOT/1.0.0/preprocessor_config.json" "$MODEL_ROOT/1.0.0/pytorch_model.bin" \
+            > "$EVIDENCE_ROOT/model-input-hashes.txt"
+
+      - name: Require preinstalled runtime build dependencies
+        run: |
+          set -euo pipefail
+          for formula in openssl@3 xz sqlite; do
+            if ! brew list --versions "$formula" >/dev/null 2>&1; then
+              printf 'Required preinstalled Homebrew dependency is missing: %s\n' "$formula" >&2
+              exit 1
+            fi
+          done
+
+      - name: Build pinned Python and the full worker environment
+        run: |
+          set -euo pipefail
+          runtime="$(./Tools/build-python-runtime.sh)"
+          RETOUCH_PYTHON="$runtime" ./Tools/setup-worker-venv.sh --full
+
+      - name: Build the ordinary signed ARM64 app
+        run: |
+          set -euo pipefail
+          RETOUCH_VERSION="0.0.0-m3-acceptance" \
+            RETOUCH_BUILD="$GITHUB_RUN_NUMBER" ./build.sh release \
+            2>&1 | tee "$EVIDENCE_ROOT/build.log"
+
+      - name: Prove nested signing preceded the final Worker seal
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 - "$EVIDENCE_ROOT/build.log" <<'PY'
+          from pathlib import Path
+          import sys
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+          nested = [i for i, line in enumerate(lines) if "nested Mach-O signed:" in line]
+          seals = [i for i, line in enumerate(lines) if "worker integrity manifest:" in line]
+          if not nested or not seals or max(seals) <= nested[-1]:
+              raise SystemExit("no final Worker integrity seal follows the final nested signing")
+          print("SIGNING ORDER: final nested Mach-O signing -> Worker integrity seal")
+          PY
+
+      - name: Validate signature, Worker integrity, notices and canonical M3 fixture
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 Tools/validate-m3-fixture.py verify-bundle \
+            "Retouch Studio.app" 2>&1 | tee "$EVIDENCE_ROOT/m3-fixture.log"
+          python3 "Tools/worker-integrity.py" verify "Retouch Studio.app/Contents/Resources/Worker" \
+            2>&1 | tee "$EVIDENCE_ROOT/worker-integrity-before.log"
+          /usr/bin/codesign --verify --deep --strict "Retouch Studio.app" \
+            2>&1 | tee "$EVIDENCE_ROOT/codesign-before.log"
+          ./Tools/audit-bundle-notices.sh "Retouch Studio.app" \
+            2>&1 | tee "$EVIDENCE_ROOT/notices.log"
+
+      - name: Run packaged real MPS inference
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 worker/.venv/bin/python3 - <<'PY' 2>&1 \
+            | tee "$EVIDENCE_ROOT/mps-preflight.log"
+          import torch
+
+          if not torch.backends.mps.is_available():
+              raise SystemExit("the selected runner has no MPS device; choose an MPS-capable runner_label")
+          print("MPS PREFLIGHT: PASS", torch.__version__)
+          PY
+          "Retouch Studio.app/Contents/MacOS/RetouchStudio" \
+            --upscale-selftest --model "$MODEL_ROOT" --out "$OUTPUT_ROOT" \
+            2>&1 | tee "$EVIDENCE_ROOT/packed-selftest.log"
+          /usr/bin/grep -Fqx "UPSCALE SELFTEST: PASS" \
+            "$EVIDENCE_ROOT/packed-selftest.log"
+
+      - name: Record the observed provider, job and byte identities
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 - "$OUTPUT_ROOT/upscaled.png.provenance.json" <<'PY' \
+            | tee "$EVIDENCE_ROOT/inference-identity.txt"
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              record = json.load(source)
+          model = record["model"]
+          if record["jobId"] == "" or model["provider"] != "mps":
+              raise SystemExit("the packaged run lacks a job identity or observed MPS provider")
+          if (record["input"]["width"], record["input"]["height"]) != (64, 48):
+              raise SystemExit("the input is not the independent 64x48 fixture")
+          if (record["output"]["width"], record["output"]["height"]) != (256, 192):
+              raise SystemExit("the output is not exact 4x geometry")
+          print("provider/device:", model["provider"])
+          print("job_id:", record["jobId"])
+          print("input_sha256:", record["input"]["sha256"])
+          print("output_sha256:", record["output"]["sha256"])
+          print("model:", model["id"], model["version"])
+          for item in model["files"]:
+              print("model_file:", item["path"], item["sha256"])
+          PY
+          /usr/bin/shasum -a 256 "$OUTPUT_ROOT/upscaled.png" \
+            "$OUTPUT_ROOT/upscaled.png.provenance.json" \
+            > "$EVIDENCE_ROOT/output-hashes.txt"
+
+      - name: Recheck the sealed Worker and bytecode residue
+        run: |
+          set -euo pipefail
+          python3 "Tools/worker-integrity.py" verify "Retouch Studio.app/Contents/Resources/Worker" \
+            2>&1 | tee "$EVIDENCE_ROOT/worker-integrity-after.log"
+          /usr/bin/python3 Tools/validate-m3-fixture.py verify-bundle \
+            "Retouch Studio.app" 2>&1 | tee "$EVIDENCE_ROOT/m3-fixture-after.log"
+          /usr/bin/codesign --verify --deep --strict "Retouch Studio.app" \
+            2>&1 | tee "$EVIDENCE_ROOT/codesign-after.log"
+          if /usr/bin/find "Retouch Studio.app/Contents/Resources/Worker" \
+              \( \( -type d -name '__pycache__' \) \
+                 -o \( -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \) \
+              -print -quit | /usr/bin/grep -q .; then
+            /usr/bin/echo "packaged Worker contains launch bytecode" >&2
+            exit 1
+          fi
+          /usr/bin/echo "BYTECODE RESIDUE: none" \
+            | tee "$EVIDENCE_ROOT/bytecode-residue.txt"
+          /usr/bin/find "$EVIDENCE_ROOT" -maxdepth 1 -type f \
+            ! -name SHA256SUMS.txt -exec /usr/bin/shasum -a 256 {} + \
+            > "$EVIDENCE_ROOT/SHA256SUMS.txt"
+
+      - name: Upload identifiable packaged acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m3-packaged-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/m3-evidence/
+            ${{ runner.temp }}/m3-output/upscaled.png
+            ${{ runner.temp }}/m3-output/upscaled.png.provenance.json

@@ -20,11 +20,25 @@ jobs:
   macos-arm64:
     name: macOS arm64
     runs-on: macos-15
-    timeout-minutes: 60
-    env:
-      RETOUCH_SKIP_WORKER: '1'
+    # CPython is built from source and the complete hashed runtime lock is
+    # installed before the app is compiled, signed and validated.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+      - name: Require preinstalled runtime build dependencies
+        run: |
+          set -euo pipefail
+          for formula in openssl@3 xz sqlite; do
+            if ! brew list --versions "$formula" >/dev/null 2>&1; then
+              printf 'Required preinstalled Homebrew dependency is missing: %s\n' "$formula" >&2
+              exit 1
+            fi
+          done
+      - name: Build pinned Python and the full worker environment
+        run: |
+          set -euo pipefail
+          runtime="$(./Tools/build-python-runtime.sh)"
+          RETOUCH_PYTHON="$runtime" ./Tools/setup-worker-venv.sh --full
       - name: Build the app
         env:
           RETOUCH_ARCH: arm64

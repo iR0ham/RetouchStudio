@@ -71,13 +71,20 @@ fi
   echo "the worker runtime must be Python 3.13, found $VERSION" >&2
   exit 1
 }
-STAMP_CONTENT="$("$VENV/bin/python3" -c 'import sys; print(sys.version.split()[0])')"
+PYTHON_VERSION="$("$VENV/bin/python3" -c 'import sys; print(sys.version.split()[0])')"
 # The capability ledger ships inside the package and decides which features the
 # app may claim as supported, so it belongs to the source identity too.
 SOURCE_HASH="$(cd "$WORKER_ROOT" && { find retouch_ai_worker -type f \( -name '*.py' -o -name 'capability-evidence.json' \) -print0 | xargs -0 shasum -a 256; shasum -a 256 requirements.lock; } | shasum -a 256 | awk '{print $1}')"
 PACKAGES_HASH="$("$VENV/bin/python3" -m pip freeze 2>/dev/null | shasum -a 256 | awk '{print $1}')"
-STAMP_CONTENT="$(printf '%s\n%s\n%s\n' "$STAMP_CONTENT" "$SOURCE_HASH" "$PACKAGES_HASH" \
-    | shasum -a 256 | awk '{print $1}')"
+RUNTIME_SOURCE_HASH="$(cat "$FRAMEWORK/../../.source-stamp" 2>/dev/null || printf 'external-python')"
+# Version the derivation so a cache made before manifest verification (or before
+# a later packaging-contract change) is rebuilt from the trusted inputs instead
+# of being accepted merely because its older stamp still matches itself. v3
+# seals a bytecode-free framework; v2 accidentally sealed CPython's test caches.
+STAMP_FORMAT="retouchstudio.worker-bundle/v3"
+STAMP_CONTENT="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$STAMP_FORMAT" "$(uname -m)" "$PYTHON_VERSION" "$RUNTIME_SOURCE_HASH" \
+    "$SOURCE_HASH" "$PACKAGES_HASH" | shasum -a 256 | awk '{print $1}')"
 
 if [ -f "$DEST/.stamp" ] && [ "$(cat "$DEST/.stamp")" = "$STAMP_CONTENT" ] && [ "$FORCE" != "--force" ]; then
   # A previous launch may have cached bytecode inside the runtime. Those files
@@ -86,6 +93,12 @@ if [ -f "$DEST/.stamp" ] && [ "$(cat "$DEST/.stamp")" = "$STAMP_CONTENT" ] && [ 
   if [ -d "$DEST" ]; then
     find "$DEST" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
     find "$DEST" -name '*.pyc' -delete 2>/dev/null || true
+  fi
+  # A cache is reusable only while its original seal still verifies. Writing a
+  # fresh manifest here would legitimize bytes changed after the previous build.
+  if ! /usr/bin/python3 "$REPO_ROOT/Tools/worker-integrity.py" verify "$DEST"; then
+    echo "cached helper integrity verification failed; rebuild with --force" >&2
+    exit 1
   fi
   echo "  · helper runtime unchanged"
   exit 0
@@ -96,6 +109,11 @@ rm -rf "$DEST"
 mkdir -p "$DEST/bin" "$DEST/site-packages"
 
 cp -R "$FRAMEWORK" "$DEST/Python.framework"
+# The source-built framework carries CPython's own __phello__ bytecode caches.
+# They are runtime residue, not runtime inputs: seal a bytecode-free tree so a
+# later launch can never make the integrity inventory diverge.
+find "$DEST/Python.framework" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$DEST/Python.framework" -type f -name '*.pyc' -delete
 # Homebrew's bin/python3 is a stub that re-executes the framework app, so the
 # app wrapper has to stay even though the helper never shows a window.
 ln -s "../Python.framework/Versions/$VERSION/bin/python3.13" "$DEST/bin/python3"
@@ -168,4 +186,7 @@ codesign --force --sign - "$PYBIN" >/dev/null
 codesign --force --sign - "$LIBPY" >/dev/null
 
 printf '%s' "$STAMP_CONTENT" > "$DEST/.stamp"
+# Seal only after relinking and nested signing: both change Mach-O bytes. The
+# manifest is data, so build.sh can include it in the outer app signature.
+/usr/bin/python3 "$REPO_ROOT/Tools/worker-integrity.py" write "$DEST"
 echo "  · helper runtime ready ($(du -sh "$DEST" | awk '{print $1}'))"

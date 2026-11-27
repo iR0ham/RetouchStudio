@@ -47,11 +47,19 @@ struct ProcessIdentity: Codable, Equatable, CustomStringConvertible {
     var isAlive: Bool { ProcessIdentity.capture(pid) == self }
 
     func isContained(in root: URL) -> Bool {
-        let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let rootPath = ProcessIdentity.canonical(root.path)
         return executable == rootPath || executable.hasPrefix(rootPath + "/")
     }
 
     static func canonical(_ path: String) -> String {
-        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        // Python's registry uses os.path.realpath. Foundation can canonicalize
+        // a temporary-directory alias differently, so using it here made the
+        // same live helper fail the cross-language identity check. Darwin
+        // resolves the same physical path both languages record.
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        guard let resolved = realpath(path, &buffer) else {
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        return String(cString: resolved)
     }
 }

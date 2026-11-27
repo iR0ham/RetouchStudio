@@ -1,5 +1,8 @@
+import CoreGraphics
+import CoreImage
 import Darwin
 import Foundation
+import UniformTypeIdentifiers
 
 // Cross-process regressions for the runtime hardening:
 //
@@ -1090,6 +1093,1202 @@ func testStaleJobFoldersAreSweptAndLiveOnesAreNot() {
           "K: the second pass keeps what the first pass kept")
 }
 
+// MARK: - L. Runtime environment containment
+
+func testRuntimeEnvironmentRejectsExternalPaths() {
+    print("\n[L] functional validation checks paths, not inert path text")
+    let runtime: URL
+    do {
+        runtime = try fixture(version: "environment")
+    } catch {
+        check(false, "L: fixture runtime written", "\(error)")
+        return
+    }
+
+    func report(path: [Any], sysconfig: [String: String],
+                root: URL? = nil, basePrefix: String? = nil) -> RuntimeValidationReport {
+        let reportedRoot = root ?? runtime
+        let info: [String: Any] = [
+            "implementation": "CPython",
+            "version": [3, 13, 15],
+            "machine": AIRuntimeValidation.expectedMachine,
+            "prefix": reportedRoot.path,
+            "base_prefix": basePrefix ?? reportedRoot.path,
+            "executable": reportedRoot.appendingPathComponent("bin/python3").path,
+            "path": path,
+            "sysconfig_paths": sysconfig,
+        ]
+        let encoded = (try? JSONSerialization.data(withJSONObject: info))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let core = #"{"numpy":null,"PIL":null}"#
+        let script = """
+        #!/bin/sh
+        if [ "${1:-}" = "-c" ]; then
+          case "${2:-}" in
+            *'"implementation"'*) printf '%s\\n' '\(encoded)' ;;
+            *'for name in ["numpy", "PIL"]'*) printf '%s\\n' '\(core)' ;;
+            *) exit 1 ;;
+          esac
+        else
+          exit 1
+        fi
+        """
+        try? Data(script.utf8).write(to: runtime.appendingPathComponent("bin/python3"))
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: runtime.appendingPathComponent("bin/python3").path)
+        return AIRuntimeValidation.functional(root: root ?? runtime, timeout: 10)
+    }
+
+    let contained = [
+        runtime.path,
+        runtime.appendingPathComponent("site-packages").path,
+        runtime.appendingPathComponent("Python.framework/Versions/3.13/lib/python3.13").path,
+    ]
+    let containedConfig = [
+        "stdlib": runtime.appendingPathComponent("Python.framework/Versions/3.13/lib/python3.13").path,
+        "platstdlib": runtime.appendingPathComponent("Python.framework/Versions/3.13/lib/python3.13").path,
+    ]
+    let clean = report(path: contained, sysconfig: containedConfig)
+    check(clean.issues.first?.code == "startup",
+          "L: contained paths pass the environment stage",
+          clean.issues.first?.detail ?? "no environment issue")
+
+    let alias = rootDirectory.appendingPathComponent(
+        "environment-alias-\(UUID().uuidString)", isDirectory: true)
+    do {
+        // The runtime itself is a real directory. Only an ancestor is a link,
+        // matching macOS temporary-directory alias canonicalization and
+        // preserving the rule that the runtime root must not itself be a link.
+        try FileManager.default.createSymbolicLink(
+            at: alias, withDestinationURL: rootDirectory)
+    } catch {
+        check(false, "L: symlinked runtime ancestor created", "\(error)")
+        return
+    }
+    let aliasRoot = alias.appendingPathComponent(runtime.lastPathComponent,
+                                                  isDirectory: true)
+    let absentStdlibZip = aliasRoot.appendingPathComponent(
+        "Python.framework/Versions/3.13/lib/python313.zip").path
+    let aliased = report(
+        path: [aliasRoot.path, absentStdlibZip],
+        sysconfig: [
+            "stdlib": runtime.appendingPathComponent("site-packages").path,
+            "platstdlib": runtime.appendingPathComponent("site-packages").path,
+        ],
+        root: aliasRoot)
+    check(aliased.issues.first?.code == "startup",
+          "L: a symlinked runtime ancestor accepts its absent stdlib zip",
+          aliased.issues.first?.detail ?? "no environment issue")
+
+    let outside = rootDirectory.appendingPathComponent(
+        "environment-outside-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let escape = runtime.appendingPathComponent("external-link", isDirectory: true)
+    try? FileManager.default.createSymbolicLink(at: escape, withDestinationURL: outside)
+    let linkedPath = report(path: contained + [escape.path], sysconfig: containedConfig)
+    check(linkedPath.issues.first?.code == "environment"
+          && linkedPath.issues.first?.detail.contains("module search path") == true,
+          "L: an existing symlink inside the runtime cannot escape it",
+          linkedPath.issues.first?.detail ?? "no issue")
+    let linkedMissingPath = report(
+        path: contained + [escape.appendingPathComponent("python313.zip").path],
+        sysconfig: containedConfig)
+    check(linkedMissingPath.issues.first?.code == "environment"
+          && linkedMissingPath.issues.first?.detail.contains("module search path") == true,
+          "L: an absent child of an escaping symlink is still refused",
+          linkedMissingPath.issues.first?.detail ?? "no issue")
+
+    let externalPath = report(
+        path: contained + ["/opt/homebrew/lib/python3.13/site-packages"],
+        sysconfig: containedConfig)
+    check(externalPath.issues.first?.code == "environment"
+          && externalPath.issues.first?.detail.contains("module search path") == true,
+          "L: an external sys.path entry is refused before imports",
+          externalPath.issues.first?.detail ?? "no issue")
+
+    var leakingConfig = containedConfig
+    leakingConfig["include"] = "/usr/local/Cellar/python/include"
+    let externalConfig = report(path: contained, sysconfig: leakingConfig)
+    check(externalConfig.issues.first?.code == "environment"
+          && externalConfig.issues.first?.detail.contains("configuration path") == true,
+          "L: an external sysconfig path is refused before imports",
+          externalConfig.issues.first?.detail ?? "no issue")
+
+    let relativePath = report(path: contained + [""], sysconfig: containedConfig)
+    check(relativePath.issues.first?.code == "environment"
+          && relativePath.issues.first?.detail.contains("relative") == true,
+          "L: the current-directory import entry is refused",
+          relativePath.issues.first?.detail ?? "no issue")
+}
+
+// MARK: - M. Optional packaged real-upscale diagnostic
+
+func nearestNeighbour4x(_ image: CIImage) -> CIImage? {
+    guard let source = CIContext().createCGImage(image, from: image.extent) else { return nil }
+    let width = Int(image.extent.width * 4), height = Int(image.extent.height * 4)
+    guard let context = CGContext(data: nil, width: width, height: height,
+                                  bitsPerComponent: 8, bytesPerRow: width * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                                      CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)).rawValue) else {
+        return nil
+    }
+    context.interpolationQuality = .none
+    context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+    guard let output = context.makeImage() else { return nil }
+    return CIImage(cgImage: output)
+}
+
+func testPackagedUpscaleDiagnosticContract() {
+    print("\n[M] packaged real-upscale diagnostic validates its bounded inputs")
+    check(try! PackagedUpscaleSelfTest.parse([]) == nil,
+          "M: ordinary app launches do not request inference")
+
+    var missingModel = false
+    do {
+        _ = try PackagedUpscaleSelfTest.parse(["--upscale-selftest", "--out", "/tmp/rs-out"])
+    } catch {
+        missingModel = true
+    }
+    check(missingModel, "M: an upscale self-test without a model is refused")
+
+    var duplicateOutput = false
+    do {
+        _ = try PackagedUpscaleSelfTest.parse([
+            "--upscale-selftest", "--model", "/tmp/swin2sr-x4",
+            "--out", "/tmp/rs-out", "--out", "/tmp/other",
+        ])
+    } catch {
+        duplicateOutput = true
+    }
+    check(duplicateOutput, "M: duplicate output arguments cannot redirect the artifact")
+
+    let workerSocketSuffix = "/ai-worker-state/worker.sock"
+    let probeSocketSuffix = "/ai-worker-state/probe/worker.sock"
+    let socketCapacity = MemoryLayout.size(ofValue: sockaddr_un().sun_path)
+    let workerOutputByteLimit = socketCapacity - 1 - workerSocketSuffix.utf8.count
+    let probeOutputByteLimit = socketCapacity - 1 - probeSocketSuffix.utf8.count
+    let outputByteLimit = min(workerOutputByteLimit, probeOutputByteLimit)
+    // Measure the canonical temporary root, not its shorter symlink spelling.
+    let temporaryRoot = ProcessIdentity.canonical("/tmp")
+    func socketOutputPath(bytes: Int, multibyte: Bool) -> String {
+        let prefix = temporaryRoot + "/m3-\(UUID().uuidString)-"
+        // Foundation file URLs normalize this combining sequence exactly as
+        // written. A precomposed é would expand from two UTF-8 bytes to three
+        // when converted to a file URL, invalidating a raw-string byte count.
+        let multibyteCharacter = "e\u{301}"
+        var suffix = ""
+        var remaining = bytes - prefix.utf8.count
+        if multibyte {
+            while remaining >= multibyteCharacter.utf8.count {
+                suffix += multibyteCharacter
+                remaining -= multibyteCharacter.utf8.count
+            }
+        }
+        suffix += String(repeating: "o", count: remaining)
+        return prefix + suffix
+    }
+    let modelPath = temporaryRoot + "/m3-model-\(UUID().uuidString)"
+    var boundaryAccepted = false
+    do {
+        let options = try PackagedUpscaleSelfTest.parse([
+            "--upscale-selftest", "--model", modelPath,
+            "--out", socketOutputPath(bytes: outputByteLimit, multibyte: false),
+        ])
+        boundaryAccepted = options != nil
+            && (options!.output.path + probeSocketSuffix).utf8.count == socketCapacity - 1
+    } catch {
+        boundaryAccepted = false
+    }
+    check(boundaryAccepted, "M: the longest valid UTF-8 worker socket path is accepted")
+
+    var multibyteBoundaryAccepted = false
+    do {
+        multibyteBoundaryAccepted = try PackagedUpscaleSelfTest.parse([
+            "--upscale-selftest", "--model", modelPath,
+            "--out", socketOutputPath(bytes: outputByteLimit, multibyte: true),
+        ]) != nil
+    } catch {
+        multibyteBoundaryAccepted = false
+    }
+    check(multibyteBoundaryAccepted, "M: socket admission measures UTF-8 bytes rather than characters")
+
+    let probeOnlyTooLongPath = socketOutputPath(bytes: workerOutputByteLimit, multibyte: false)
+    var probeLongPathRefused = false
+    var probeLongPathMessage = ""
+    do {
+        _ = try PackagedUpscaleSelfTest.parse([
+            "--upscale-selftest", "--model", modelPath, "--out", probeOnlyTooLongPath,
+        ])
+    } catch {
+        probeLongPathRefused = true
+        probeLongPathMessage = error.localizedDescription
+    }
+    check(probeLongPathRefused && probeLongPathMessage.contains("runtime probe socket path is too long"),
+          "M: a valid final worker socket cannot hide an overlong runtime-probe socket",
+          probeLongPathMessage)
+
+    let tooLongPath = socketOutputPath(bytes: outputByteLimit + 1, multibyte: false)
+    var longPathRefused = false
+    var longPathMessage = ""
+    do {
+        _ = try PackagedUpscaleSelfTest.parse([
+            "--upscale-selftest", "--model", modelPath, "--out", tooLongPath,
+        ])
+    } catch {
+        longPathRefused = true
+        longPathMessage = error.localizedDescription
+    }
+    check(longPathRefused && longPathMessage.contains("socket path is too long"),
+          "M: an overlong UTF-8 worker socket path is refused during argument parsing",
+          longPathMessage)
+
+    let multibyteTooLongPath = socketOutputPath(bytes: outputByteLimit + 1, multibyte: true)
+    var multibyteLongPathRefused = false
+    do {
+        _ = try PackagedUpscaleSelfTest.parse([
+            "--upscale-selftest", "--model", modelPath, "--out", multibyteTooLongPath,
+        ])
+    } catch {
+        multibyteLongPathRefused = true
+    }
+    check(multibyteLongPathRefused, "M: a multibyte path cannot hide an overlong socket in its character count")
+
+    let tooLongOutput = URL(fileURLWithPath: tooLongPath)
+    defer { try? FileManager.default.removeItem(at: tooLongOutput) }
+    var runRefused = false
+    var runMessage = ""
+    do {
+        try PackagedUpscaleSelfTest.run(.init(
+            model: URL(fileURLWithPath: modelPath), output: tooLongOutput))
+    } catch {
+        runRefused = true
+        runMessage = error.localizedDescription
+    }
+    check(runRefused && runMessage.contains("socket path is too long")
+            && !FileManager.default.fileExists(atPath: tooLongPath),
+          "M: socket preflight happens before output, source or model artifacts are created",
+          runMessage)
+
+    let probeOnlyTooLongOutput = URL(fileURLWithPath: probeOnlyTooLongPath)
+    defer { try? FileManager.default.removeItem(at: probeOnlyTooLongOutput) }
+    var probeRunRefused = false
+    var probeRunMessage = ""
+    do {
+        try PackagedUpscaleSelfTest.run(.init(model: URL(fileURLWithPath: modelPath),
+                                             output: probeOnlyTooLongOutput))
+    } catch {
+        probeRunRefused = true
+        probeRunMessage = error.localizedDescription
+    }
+    check(probeRunRefused && probeRunMessage.contains("runtime probe socket path is too long")
+            && !FileManager.default.fileExists(atPath: probeOnlyTooLongPath),
+          "M: runtime-probe preflight also happens before any persistent artifact",
+          probeRunMessage)
+
+    func packagedReferenceBundle(_ name: String, layout: String) -> Bundle {
+        let root = rootDirectory.appendingPathComponent(name, isDirectory: true)
+        let resources = root.appendingPathComponent("Contents/Resources", isDirectory: true)
+        try! FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "app.retouchstudio.m3-resolver-test",
+            "CFBundleExecutable": "RetouchStudio",
+            "CFBundlePackageType": "APPL",
+        ]
+        try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: root.appendingPathComponent("Contents/Info.plist"))
+        if layout == "no-fixture" {
+            // A release-shaped bundle whose resource directory exists but
+            // carries no fixture at all: no Tests/Fixtures/upscale-m3
+            // directory and no legacy top-level manifest file anywhere.
+            return Bundle(path: root.path)!
+        }
+        let directory: URL
+        let fileName: String
+        switch layout {
+        case "canonical":
+            directory = resources.appendingPathComponent("Tests/Fixtures/upscale-m3", isDirectory: true)
+            fileName = "manifest.json"
+        case "legacy-directory":
+            directory = resources.appendingPathComponent("upscale-m3", isDirectory: true)
+            fileName = "manifest.json"
+        default:
+            directory = resources
+            fileName = "upscale-m3-manifest.json"
+        }
+        try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try! Data("{}".utf8).write(to: directory.appendingPathComponent(fileName))
+        return Bundle(path: root.path)!
+    }
+
+    let canonicalBundle = packagedReferenceBundle("canonical-reference.app", layout: "canonical")
+    let canonicalReference = try! PackagedUpscaleSelfTest.resolvePackagedReferenceDirectory(in: canonicalBundle)
+    if let resourceURL = canonicalBundle.resourceURL {
+        check(canonicalReference.standardizedFileURL
+                == resourceURL.appendingPathComponent("Tests/Fixtures/upscale-m3").standardizedFileURL,
+              "M: production resolves only the canonical bundle fixture")
+    } else {
+        check(false, "M: the canonical bundle fixture has a resource directory")
+    }
+
+    for layout in ["legacy-directory", "legacy-manifest"] {
+        let bundle = packagedReferenceBundle("\(layout).app", layout: layout)
+        var refused = false
+        do {
+            _ = try PackagedUpscaleSelfTest.resolvePackagedReferenceDirectory(in: bundle)
+        } catch {
+            refused = true
+        }
+        check(refused, "M: production refuses the noncanonical \(layout) fixture fallback")
+    }
+
+    // The packaged policy must fail closed on a bundle that carries no
+    // independent fixture at all, not only on misplaced ones.
+    let noFixtureBundle = packagedReferenceBundle("no-fixture.app", layout: "no-fixture")
+    var noFixtureRefused = false
+    var noFixtureMessage = ""
+    do {
+        _ = try PackagedUpscaleSelfTest.resolvePackagedReferenceDirectory(in: noFixtureBundle)
+    } catch {
+        noFixtureRefused = true
+        noFixtureMessage = error.localizedDescription
+    }
+    check(noFixtureRefused
+            && noFixtureMessage.contains("does not contain the independent M3 reference fixture"),
+          "M: production refuses a bundle with no independent M3 fixture",
+          noFixtureMessage)
+
+    let realParent = rootDirectory.appendingPathComponent("real-parent", isDirectory: true)
+    let realModel = realParent.appendingPathComponent("swin2sr-x4", isDirectory: true)
+    try! FileManager.default.createDirectory(at: realModel, withIntermediateDirectories: true)
+    let aliasParent = rootDirectory.appendingPathComponent("alias-parent", isDirectory: true)
+    try! FileManager.default.createSymbolicLink(at: aliasParent, withDestinationURL: realParent)
+    var aliasedOverlapRefused = false
+    do {
+        _ = try PackagedUpscaleSelfTest.parse([
+            "--upscale-selftest",
+            "--model", aliasParent.appendingPathComponent("swin2sr-x4").path,
+            "--out", realModel.appendingPathComponent("output").path,
+        ])
+    } catch {
+        aliasedOverlapRefused = true
+    }
+    check(aliasedOverlapRefused, "M: a symlink alias cannot bypass model/output separation")
+
+    let testsRoot = ProcessInfo.processInfo.environment["RETOUCH_TESTS_ROOT"]
+        ?? FileManager.default.currentDirectoryPath
+    let catalog = try! ModelCatalog.load(url: URL(fileURLWithPath: testsRoot)
+        .appendingPathComponent("Resources/model-catalog.json"))
+    guard let entry = catalog.entry(id: "swin2sr-x4") else {
+        check(false, "M: the bundled catalog contains the exact Swin2SR entry")
+        return
+    }
+    check(entry.version == "1.0.0" && entry.format == "pytorch",
+          "M: the trusted Swin2SR entry fixes version and format")
+    check(entry.sha256 == "e0da6778bbcffbb26d61fda450648998e22f66d5867924706fee6d929aa50cdf",
+          "M: the trusted Swin2SR entry fixes the aggregate checkpoint digest")
+    let trustedFiles = Dictionary(uniqueKeysWithValues: entry.files.map { ($0.path, $0) })
+    check(Set(trustedFiles.keys) == Set([
+        "config.json", "preprocessor_config.json", "pytorch_model.bin",
+    ]), "M: the trusted Swin2SR entry fixes the exact three-file checkpoint")
+    check(trustedFiles["config.json"]?.sizeBytes == 772
+          && trustedFiles["config.json"]?.sha256 == "1e986fb6d0b6de32bae01a6ccd756e5d8ae1525dcb52f7ee5b2dc7f6132d6365",
+          "M: the trusted config pin is exact")
+    check(trustedFiles["preprocessor_config.json"]?.sizeBytes == 152
+          && trustedFiles["preprocessor_config.json"]?.sha256 == "cbc36266fcc93d5bc1e9ca69bcc648ae9d268918ad14cd3507216740f129cc4d",
+          "M: the trusted preprocessor pin is exact")
+    check(trustedFiles["pytorch_model.bin"]?.sizeBytes == 48_460_141
+          && trustedFiles["pytorch_model.bin"]?.sha256 == "4a5f52a20932085557ed115f87c0ee8385e12f2719108c0dfd38c64aedea4710",
+          "M: the trusted weights pin is exact")
+
+    let modelRoot = rootDirectory.appendingPathComponent("swin2sr-x4", isDirectory: true)
+    let version = modelRoot.appendingPathComponent("1.0.0", isDirectory: true)
+    try? FileManager.default.createDirectory(at: version, withIntermediateDirectories: true)
+    let weights = Data(repeating: 0x5a, count: 128)
+    try? weights.write(to: version.appendingPathComponent("pytorch_model.bin"))
+    try? Data("{}".utf8).write(to: version.appendingPathComponent("config.json"))
+    try? Data("{}".utf8).write(to: version.appendingPathComponent("preprocessor_config.json"))
+    let catalogDigest = String(repeating: "a", count: 64)
+    let manifest: [String: Any] = [
+        "schema": "retouchstudio.model-manifest/1",
+        "modelId": "swin2sr-x4", "version": "1.0.0",
+        "manifestSha256": catalogDigest,
+        "files": [
+            ["path": "pytorch_model.bin", "sizeBytes": weights.count,
+             "sha256": try! AIRuntime.sha256(of: version.appendingPathComponent("pytorch_model.bin"))],
+            ["path": "config.json", "sizeBytes": 2,
+             "sha256": try! AIRuntime.sha256(of: version.appendingPathComponent("config.json"))],
+            ["path": "preprocessor_config.json", "sizeBytes": 2,
+             "sha256": try! AIRuntime.sha256(of: version.appendingPathComponent("preprocessor_config.json"))],
+        ],
+    ]
+    let manifestData = try! JSONSerialization.data(withJSONObject: manifest)
+    try! manifestData.write(to: version.appendingPathComponent("manifest.json"))
+    let active: [String: Any] = [
+        "schema": "retouchstudio.model-active/1", "modelId": "swin2sr-x4",
+        "version": "1.0.0", "manifestSha256": catalogDigest,
+    ]
+    let activeData = try! JSONSerialization.data(withJSONObject: active)
+    try! activeData.write(to: modelRoot.appendingPathComponent("active.json"))
+
+    func checkpointRefused(_ label: String, manifest: [String: Any],
+                           active: [String: Any], destination: String) {
+        let manifestBytes = try! JSONSerialization.data(withJSONObject: manifest)
+        let activeBytes = try! JSONSerialization.data(withJSONObject: active)
+        try! manifestBytes.write(to: version.appendingPathComponent("manifest.json"))
+        try! activeBytes.write(to: modelRoot.appendingPathComponent("active.json"))
+        var refused = false
+        do {
+            try PackagedUpscaleSelfTest.copyModel(
+                from: modelRoot,
+                to: rootDirectory.appendingPathComponent(destination, isDirectory: true),
+                entry: entry)
+        } catch {
+            refused = true
+        }
+        check(refused, "M: \(label)")
+    }
+
+    checkpointRefused(
+        "a self-consistent fake checkpoint cannot stand in for the trusted catalog",
+        manifest: manifest, active: active, destination: "fake-checkpoint-copy")
+
+    var wrongDigestManifest = manifest
+    wrongDigestManifest["manifestSha256"] = entry.sha256 ?? ""
+    let wrongDigestActive: [String: Any] = [
+        "schema": "retouchstudio.model-active/1", "modelId": "swin2sr-x4",
+        "version": "1.0.0", "manifestSha256": entry.sha256 ?? "",
+    ]
+    var wrongHashFiles = manifest["files"] as! [[String: Any]]
+    wrongHashFiles[0]["sha256"] = String(repeating: "f", count: 64)
+    var wrongHashManifest = wrongDigestManifest
+    wrongHashManifest["files"] = wrongHashFiles
+    checkpointRefused(
+        "a manifest file hash cannot replace the trusted catalog pin",
+        manifest: wrongHashManifest, active: wrongDigestActive,
+        destination: "wrong-file-hash-copy")
+
+    var wrongSizeFiles = manifest["files"] as! [[String: Any]]
+    wrongSizeFiles[0]["sizeBytes"] = weights.count + 1
+    var wrongSizeManifest = wrongDigestManifest
+    wrongSizeManifest["files"] = wrongSizeFiles
+    checkpointRefused(
+        "a manifest file size cannot replace the trusted catalog pin",
+        manifest: wrongSizeManifest, active: wrongDigestActive,
+        destination: "wrong-file-size-copy")
+
+    var duplicateFiles = manifest["files"] as! [[String: Any]]
+    duplicateFiles[2] = duplicateFiles[0]
+    var duplicateManifest = wrongDigestManifest
+    duplicateManifest["files"] = duplicateFiles
+    checkpointRefused(
+        "a duplicate file cannot pad the exact three-file checkpoint",
+        manifest: duplicateManifest, active: wrongDigestActive,
+        destination: "duplicate-file-copy")
+
+    var missingManifest = wrongDigestManifest
+    missingManifest["files"] = Array((manifest["files"] as! [[String: Any]]).prefix(2))
+    checkpointRefused(
+        "a missing file cannot be hidden by a matching aggregate digest",
+        manifest: missingManifest, active: wrongDigestActive,
+        destination: "missing-file-copy")
+
+    try! manifestData.write(to: version.appendingPathComponent("manifest.json"))
+    try! activeData.write(to: modelRoot.appendingPathComponent("active.json"))
+
+    let wrongActive: [String: Any] = [
+        "schema": "retouchstudio.model-active/1", "modelId": "migan",
+        "version": "1.0.0", "manifestSha256": active["manifestSha256"] ?? "",
+    ]
+    try! JSONSerialization.data(withJSONObject: wrongActive).write(
+        to: modelRoot.appendingPathComponent("active.json"))
+    var wrongModelRefused = false
+    do {
+        try PackagedUpscaleSelfTest.copyModel(
+            from: modelRoot,
+            to: rootDirectory.appendingPathComponent("wrong-model-copy", isDirectory: true),
+            entry: entry)
+    } catch {
+        wrongModelRefused = true
+    }
+    check(wrongModelRefused, "M: another active model cannot stand in for Swin2SR")
+
+    let validActiveData = try! JSONSerialization.data(withJSONObject: active)
+    try! validActiveData.write(to: modelRoot.appendingPathComponent("active.json"))
+    let mismatchedActive: [String: Any] = [
+        "schema": "retouchstudio.model-active/1", "modelId": "swin2sr-x4",
+        "version": "1.0.0", "manifestSha256": String(repeating: "b", count: 64),
+    ]
+    try! JSONSerialization.data(withJSONObject: mismatchedActive).write(
+        to: modelRoot.appendingPathComponent("active.json"))
+    var digestMismatchRefused = false
+    do {
+        try PackagedUpscaleSelfTest.copyModel(
+            from: modelRoot,
+            to: rootDirectory.appendingPathComponent("digest-mismatch-copy", isDirectory: true),
+            entry: entry)
+    } catch {
+        digestMismatchRefused = true
+    }
+    check(digestMismatchRefused, "M: an active pointer must match the manifest catalog digest")
+
+    try! validActiveData.write(to: modelRoot.appendingPathComponent("active.json"))
+    let externalActive = rootDirectory.appendingPathComponent("external-active.json")
+    try! validActiveData.write(to: externalActive)
+    try! FileManager.default.removeItem(at: modelRoot.appendingPathComponent("active.json"))
+    try! FileManager.default.createSymbolicLink(
+        at: modelRoot.appendingPathComponent("active.json"), withDestinationURL: externalActive)
+    var linkedActiveRefused = false
+    do {
+        try PackagedUpscaleSelfTest.copyModel(
+            from: modelRoot,
+            to: rootDirectory.appendingPathComponent("linked-active-copy", isDirectory: true),
+            entry: entry)
+    } catch {
+        linkedActiveRefused = true
+    }
+    check(linkedActiveRefused, "M: a symlinked active pointer is refused")
+    try! FileManager.default.removeItem(at: modelRoot.appendingPathComponent("active.json"))
+    try! validActiveData.write(to: modelRoot.appendingPathComponent("active.json"))
+
+    let externalManifest = rootDirectory.appendingPathComponent("external-manifest.json")
+    try! manifestData.write(to: externalManifest)
+    try! FileManager.default.removeItem(at: version.appendingPathComponent("manifest.json"))
+    try! FileManager.default.createSymbolicLink(
+        at: version.appendingPathComponent("manifest.json"), withDestinationURL: externalManifest)
+    var linkedManifestRefused = false
+    do {
+        try PackagedUpscaleSelfTest.copyModel(
+            from: modelRoot,
+            to: rootDirectory.appendingPathComponent("linked-manifest-copy", isDirectory: true),
+            entry: entry)
+    } catch {
+        linkedManifestRefused = true
+    }
+    check(linkedManifestRefused, "M: a symlinked model manifest is refused")
+    try! FileManager.default.removeItem(at: version.appendingPathComponent("manifest.json"))
+    try! manifestData.write(to: version.appendingPathComponent("manifest.json"))
+
+    // Reach the destination-creation branch with a catalog-shaped manifest,
+    // then prove EEXIST cannot turn into deletion of somebody else's tree.
+    let existingDestination = rootDirectory.appendingPathComponent("existing-model-copy",
+                                                                    isDirectory: true)
+    try! FileManager.default.createDirectory(at: existingDestination,
+                                             withIntermediateDirectories: false)
+    let sentinel = existingDestination.appendingPathComponent("keep")
+    try! Data("owner-state".utf8).write(to: sentinel)
+    let trustedManifest: [String: Any] = [
+        "schema": "retouchstudio.model-manifest/1",
+        "modelId": "swin2sr-x4", "version": "1.0.0",
+        "manifestSha256": entry.sha256 ?? "",
+        "files": entry.files.map { file in
+            ["path": file.path, "sizeBytes": file.sizeBytes ?? 0,
+             "sha256": file.sha256 ?? ""]
+        },
+    ]
+    try! JSONSerialization.data(withJSONObject: trustedManifest).write(
+        to: version.appendingPathComponent("manifest.json"))
+    try! JSONSerialization.data(withJSONObject: [
+        "schema": "retouchstudio.model-active/1", "modelId": "swin2sr-x4",
+        "version": "1.0.0", "manifestSha256": entry.sha256 ?? "",
+    ]).write(to: modelRoot.appendingPathComponent("active.json"))
+    var existingRefused = false
+    do {
+        try PackagedUpscaleSelfTest.copyModel(from: modelRoot, to: existingDestination,
+                                              entry: entry)
+    } catch {
+        existingRefused = true
+    }
+    check(existingRefused, "M: an existing model destination is refused")
+    check((try? String(decoding: Data(contentsOf: sentinel), as: UTF8.self)) == "owner-state",
+          "M: refused checkpoint admission never deletes a pre-existing destination")
+
+    let source = PackagedUpscaleSelfTest.syntheticImage()
+    guard let nearest = nearestNeighbour4x(source) else {
+        check(false, "M: the controlled nearest-neighbour fixture can be rendered")
+        return
+    }
+    let output = PackagedUpscaleSelfTest.validateOutput(
+        nearest, inputSize: source.extent.size, source: source)
+    check(output?.contains("nearest-neighbour") == true,
+          "M: a controlled nearest-neighbour 4x output is refused as model proof",
+          output ?? "no problem reported")
+    let solid = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5))
+        .cropped(to: CGRect(x: 0, y: 0, width: 256, height: 192))
+    check(PackagedUpscaleSelfTest.validateOutput(solid, inputSize: source.extent.size) != nil,
+          "M: a constant output cannot stand in for model inference")
+}
+
+func writePackagedDiagnosticPNG(_ image: CIImage, to url: URL) throws {
+    guard let cgImage = CIContext().createCGImage(image, from: image.extent),
+          let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+        throw NSError(domain: "PackagedDiagnosticTest", code: 1)
+    }
+    CGImageDestinationAddImage(destination, cgImage, nil)
+    guard CGImageDestinationFinalize(destination) else {
+        throw NSError(domain: "PackagedDiagnosticTest", code: 2)
+    }
+}
+
+func testPackagedUpscaleInputDigestIsSubmittedRGB8() throws {
+    print("\n[O] packaged upscale input provenance hashes the submitted RGB8 pixels")
+    let rgba = Data([10, 20, 30, 255, 40, 50, 60, 255])
+    guard let provider = CGDataProvider(data: rgba as CFData),
+          let image = CGImage(width: 2, height: 1, bitsPerComponent: 8,
+                              bitsPerPixel: 32, bytesPerRow: 8,
+                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                              bitmapInfo: [.byteOrder32Big,
+                                           CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)],
+                              provider: provider, decode: nil,
+                              shouldInterpolate: false, intent: .defaultIntent) else {
+        check(false, "O: the literal RGB fixture can be created")
+        return
+    }
+    let url = rootDirectory.appendingPathComponent("literal-rgb.png")
+    guard let destination = CGImageDestinationCreateWithURL(
+        url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+        check(false, "O: the literal RGB fixture can be written")
+        return
+    }
+    CGImageDestinationAddImage(destination, image, nil)
+    check(CGImageDestinationFinalize(destination), "O: the literal RGB fixture can be written")
+    let digest = try ExportService.rgb8SHA256(of: url)
+    check(digest == "6e6db0c1e9357a0f1543a26d526d8548ae9867a4a64de41c2752e13f77bcfa13",
+          "O: the digest is SHA-256 of row-major RGB8, not PNG bytes",
+          digest)
+
+    let previousWorkingRoot = AIWorker.workingDirectoryOverride
+    AIWorker.workingDirectoryOverride = rootDirectory.appendingPathComponent("o-working",
+                                                                             isDirectory: true)
+    defer { AIWorker.workingDirectoryOverride = previousWorkingRoot }
+    let submitted = try AIWorker.writeUpscaleSource(CIImage(cgImage: image))
+    let submittedDigest = try ExportService.rgb8SHA256(of: submitted)
+    check(submittedDigest == "6e6db0c1e9357a0f1543a26d526d8548ae9867a4a64de41c2752e13f77bcfa13",
+          "O: the real production submission serializer preserves the literal RGB8 identity",
+          submittedDigest)
+
+    func writeFixture(_ name: String, bits: Int, bytes: [UInt8],
+                      alpha: CGImageAlphaInfo) throws -> URL {
+        let url = rootDirectory.appendingPathComponent(name)
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let image = CGImage(width: 2, height: 1,
+                                  bitsPerComponent: bits, bitsPerPixel: bits * 4,
+                                  bytesPerRow: 2 * (bits / 8) * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: [bits == 16 ? .byteOrder16Big : .byteOrder32Big,
+                                               CGBitmapInfo(rawValue: alpha.rawValue)],
+                                  provider: provider, decode: nil,
+                                  shouldInterpolate: false, intent: .defaultIntent),
+              let destination = CGImageDestinationCreateWithURL(
+                url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw NSError(domain: "PackagedDiagnosticTest", code: 3)
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw NSError(domain: "PackagedDiagnosticTest", code: 4)
+        }
+        return url
+    }
+
+    // Pillow's `convert("RGB")` drops alpha; it does not composite it. These
+    // literal digests were measured independently from the resulting RGB rows.
+    let alphaURL = try writeFixture(
+        "literal-alpha8.png", bits: 8,
+        bytes: [10, 20, 30, 0, 40, 50, 60, 128], alpha: .last)
+    let alphaDigest = try ExportService.rgb8SHA256(of: alphaURL)
+    check(alphaDigest == "6e6db0c1e9357a0f1543a26d526d8548ae9867a4a64de41c2752e13f77bcfa13",
+          "O: transparent and partial-alpha samples are dropped, never composited",
+          alphaDigest)
+
+    let deepURL = try writeFixture(
+        "literal-alpha16.png", bits: 16,
+        bytes: [0x12, 0xff, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde,
+                0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x12,
+                0x12, 0x00, 0x34, 0x00, 0x78, 0x00, 0xbc, 0x00,
+                0x23, 0xff, 0x67, 0xff, 0xab, 0xff, 0xef, 0xff],
+        alpha: .last)
+    let deepDigest = try ExportService.rgb8SHA256(of: deepURL)
+    check(deepDigest == "d0e848b9e26d4e49846b3a8e30688d39399419181dfa0aa0bec5c0bb5c4e59cf",
+          "O: RGBA16 input keeps Pillow's high-byte RGB8 conversion exactly",
+          deepDigest)
+}
+
+func testPackagedUpscaleTrustedProvenanceAndFinalArtifact() throws {
+    print("\n[N] packaged upscale adoption trusts submission context and final bytes")
+    let testsRoot = ProcessInfo.processInfo.environment["RETOUCH_TESTS_ROOT"]
+        ?? FileManager.default.currentDirectoryPath
+    let catalog = try! ModelCatalog.load(url: URL(fileURLWithPath: testsRoot)
+        .appendingPathComponent("Resources/model-catalog.json"))
+    let entry = catalog.entry(id: "swin2sr-x4")!
+    let source = PackagedUpscaleSelfTest.syntheticImage()
+    let sourceSize = source.extent.size
+    let blurred = source.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.5])
+        .cropped(to: source.extent)
+    guard let artifactImage = nearestNeighbour4x(blurred) else {
+        check(false, "N: the controlled non-nearest artifact can be rendered")
+        return
+    }
+    let submittedJob = "submitted-job"
+    let submittedInput = String(repeating: "1", count: 64)
+
+    func makePair(_ name: String, image: CIImage,
+                  mutate: (inout [String: Any]) -> Void = { _ in }) throws
+        -> (image: CIImage, artifact: URL, provenance: URL) {
+        let folder = rootDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let artifact = folder.appendingPathComponent("result.png")
+        try writePackagedDiagnosticPNG(image, to: artifact)
+        var record: [String: Any] = [
+            "schema": AIProvenance.schema,
+            "capabilityId": AICapabilityReport.upscale4x,
+            "jobId": submittedJob,
+            "state": "succeeded",
+            "model": [
+                "id": entry.id, "version": entry.version, "format": entry.format,
+                "provider": "mps",
+                "files": entry.files.map { file in
+                    ["path": file.path, "sha256": file.sha256 ?? ""]
+                },
+            ],
+            "parameters": ["scale": 4],
+            "input": [
+                "sha256": submittedInput,
+                "width": Int(sourceSize.width), "height": Int(sourceSize.height),
+                "bitDepth": 8, "channels": 3,
+            ],
+            "output": [
+                "sha256": try AIRuntime.sha256(of: artifact),
+                "width": Int(image.extent.width), "height": Int(image.extent.height),
+                "bitDepth": 8, "channels": 3,
+            ],
+        ]
+        mutate(&record)
+        let provenance = artifact.deletingLastPathComponent()
+            .appendingPathComponent(artifact.lastPathComponent + AIProvenance.sidecarSuffix)
+        try JSONSerialization.data(withJSONObject: record).write(to: provenance)
+        return (image, artifact, provenance)
+    }
+
+    func expectRefused(_ label: String,
+                       mutate: (inout [String: Any]) -> Void) throws {
+        let pair = try makePair("refused-\(UUID().uuidString)", image: artifactImage,
+                                mutate: mutate)
+        let output = rootDirectory.appendingPathComponent("adopt-\(UUID().uuidString)",
+                                                          isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+        let result = ExportService.UpscaleArtifact(
+            image: pair.image, artifact: pair.artifact, provenance: pair.provenance,
+            jobID: submittedJob, inputSHA256: submittedInput, model: entry)
+        var refused = false
+        do {
+            try PackagedUpscaleSelfTest.adopt(result, sourceSize: sourceSize,
+                                              outputDirectory: output)
+        } catch {
+            refused = true
+        }
+        check(refused, "N: \(label)")
+    }
+
+    do {
+        let pair = try makePair("accepted", image: artifactImage)
+        let output = rootDirectory.appendingPathComponent("adopt-accepted", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+        let result = ExportService.UpscaleArtifact(
+            image: pair.image, artifact: pair.artifact, provenance: pair.provenance,
+            jobID: submittedJob, inputSHA256: submittedInput, model: entry)
+        try PackagedUpscaleSelfTest.adopt(result, sourceSize: sourceSize,
+                                          outputDirectory: output)
+        check(FileManager.default.fileExists(
+                atPath: output.appendingPathComponent("upscaled.png").path),
+              "N: a bound artifact and sidecar are adopted together")
+    } catch {
+        check(false, "N: a bound artifact and sidecar are adopted together", "\(error)")
+    }
+
+    try expectRefused("a forged job id cannot redirect the submitted result") { record in
+        record["jobId"] = "forged-job"
+    }
+    try expectRefused("a forged input digest cannot redirect the submitted pixels") { record in
+        var input = record["input"] as! [String: Any]
+        input["sha256"] = String(repeating: "2", count: 64)
+        record["input"] = input
+    }
+    try expectRefused("a forged model file pin cannot stand in for the catalog") { record in
+        var model = record["model"] as! [String: Any]
+        var files = model["files"] as! [[String: Any]]
+        files[0]["sha256"] = String(repeating: "3", count: 64)
+        model["files"] = files
+        record["model"] = model
+    }
+    try expectRefused("a missing model file list cannot borrow catalog trust") { record in
+        var model = record["model"] as! [String: Any]
+        model.removeValue(forKey: "files")
+        record["model"] = model
+    }
+    try expectRefused("a forged scale cannot redirect the 4x capability") { record in
+        record["parameters"] = ["scale": 3]
+    }
+
+    do {
+        let expected = CGRect(x: 0, y: 0, width: sourceSize.width * 4, height: sourceSize.height * 4)
+        let bicubic = source.applyingFilter(
+            "CIBicubicScaleTransform",
+            parameters: [kCIInputScaleKey: 4, kCIInputAspectRatioKey: 1])
+            .cropped(to: expected)
+        let pair = try makePair("final-bicubic-substitution", image: bicubic)
+        let output = rootDirectory.appendingPathComponent("adopt-final-bicubic-substitution",
+                                                          isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+        let result = ExportService.UpscaleArtifact(
+            image: artifactImage, artifact: pair.artifact, provenance: pair.provenance,
+            jobID: submittedJob, inputSHA256: submittedInput, model: entry)
+        var refused = false
+        do {
+            try PackagedUpscaleSelfTest.adopt(result, sourceSize: sourceSize,
+                                              outputDirectory: output)
+        } catch {
+            refused = true
+        }
+        check(refused, "N: a bicubic final copy with a self-consistent sidecar is still refused")
+    } catch {
+        check(false, "N: a bicubic final copy with a self-consistent sidecar is still refused", "\(error)")
+    }
+}
+
+func testPackagedDiagnosticStateStaysUnderOutput() throws {
+    print("\n[P] packaged diagnostic working, cleanup and probe state stay under --out")
+    let manager = FileManager.default
+    let state = rootDirectory.appendingPathComponent("diagnostic/ai-worker-state", isDirectory: true)
+    let working = state.appendingPathComponent("working", isDirectory: true)
+    let globalRoot = manager.temporaryDirectory
+        .appendingPathComponent("RetouchStudioAI", isDirectory: true)
+    let globalMarker = globalRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try manager.createDirectory(at: globalMarker, withIntermediateDirectories: true)
+    try Data("owner-state".utf8).write(to: globalMarker.appendingPathComponent("keep"))
+    try manager.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -200_000)],
+                              ofItemAtPath: globalMarker.path)
+    let globalBefore = Set((try? manager.contentsOfDirectory(atPath: globalRoot.path)) ?? [])
+    defer {
+        AIWorker.workingDirectoryOverride = nil
+        try? manager.removeItem(at: globalMarker)
+        try? manager.removeItem(at: rootDirectory.appendingPathComponent("diagnostic", isDirectory: true))
+    }
+
+    AIWorker.workingDirectoryOverride = working
+    check(AIWorker.workingDirectory.standardizedFileURL == working.standardizedFileURL,
+          "P: the diagnostic worker uses its output-owned working root")
+    let source = try AIWorker.writeUpscaleSource(PackagedUpscaleSelfTest.syntheticImage())
+    check(source.path.hasPrefix(state.path + "/"),
+          "P: the real upscale submission source is written under --out/ai-worker-state")
+
+    let stale = working.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try manager.createDirectory(at: stale, withIntermediateDirectories: false)
+    try manager.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -200_000)],
+                              ofItemAtPath: stale.path)
+    AIWorker.cleanStaleWorkingCopies()
+    check(!manager.fileExists(atPath: stale.path),
+          "P: cleanup is scoped to the diagnostic working root")
+    check(manager.fileExists(atPath: globalMarker.path),
+          "P: diagnostic cleanup never sweeps the normal global temporary root")
+    let globalAfter = Set((try? manager.contentsOfDirectory(atPath: globalRoot.path)) ?? [])
+    check(globalAfter == globalBefore,
+          "P: diagnostic execution creates no sibling state in the global root",
+          globalAfter.sorted().joined(separator: ","))
+
+    let probe = AIRuntimeValidation.scratchDirectory(stateRoot: state, prefix: "probe")
+    check(probe.deletingLastPathComponent().standardizedFileURL == state.standardizedFileURL,
+          "P: validation probe and command scratch directories stay under --out/ai-worker-state")
+}
+
+func testPackagedAdoptionRefusesLinkedInputs() throws {
+    print("\n[Q] packaged adoption refuses linked artifact and sidecar inputs")
+    let manager = FileManager.default
+    let testsRoot = ProcessInfo.processInfo.environment["RETOUCH_TESTS_ROOT"]
+        ?? FileManager.default.currentDirectoryPath
+    let catalog = try! ModelCatalog.load(url: URL(fileURLWithPath: testsRoot)
+        .appendingPathComponent("Resources/model-catalog.json"))
+    let entry = catalog.entry(id: "swin2sr-x4")!
+    let source = PackagedUpscaleSelfTest.syntheticImage()
+    let image = nearestNeighbour4x(source.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.5]).cropped(to: source.extent))!
+    let real = rootDirectory.appendingPathComponent("q-real", isDirectory: true)
+    try manager.createDirectory(at: real, withIntermediateDirectories: false)
+    let artifact = real.appendingPathComponent("result.png")
+    try writePackagedDiagnosticPNG(image, to: artifact)
+    let record: [String: Any] = [
+        "schema": AIProvenance.schema,
+        "capabilityId": AICapabilityReport.upscale4x,
+        "jobId": "q-job", "state": "succeeded",
+        "model": ["id": entry.id, "version": entry.version, "format": entry.format,
+                  "files": entry.files.map { ["path": $0.path, "sha256": $0.sha256 ?? ""] }],
+        "parameters": ["scale": 4],
+        "input": ["sha256": String(repeating: "1", count: 64)],
+        "output": ["sha256": try AIRuntime.sha256(of: artifact),
+                   "width": Int(image.extent.width), "height": Int(image.extent.height)],
+    ]
+    let sidecarData = try JSONSerialization.data(withJSONObject: record)
+    let sidecar = real.appendingPathComponent("result.png" + AIProvenance.sidecarSuffix)
+    try sidecarData.write(to: sidecar)
+
+    func expectRefused(_ label: String, artifact: URL, provenance: URL,
+                       outputName: String, prepare: (URL) throws -> Void = { _ in }) throws {
+        let output = rootDirectory.appendingPathComponent(outputName, isDirectory: true)
+        try manager.createDirectory(at: output, withIntermediateDirectories: false)
+        try prepare(output)
+        let result = ExportService.UpscaleArtifact(
+            image: image, artifact: artifact, provenance: provenance,
+            jobID: "q-job", inputSHA256: String(repeating: "1", count: 64), model: entry)
+        var refused = false
+        do {
+            try PackagedUpscaleSelfTest.adopt(result, sourceSize: source.extent.size,
+                                              outputDirectory: output)
+        } catch {
+            refused = true
+        }
+        check(refused, "Q: \(label)")
+    }
+
+    let artifactLinkFolder = rootDirectory.appendingPathComponent("q-artifact-link", isDirectory: true)
+    try manager.createDirectory(at: artifactLinkFolder, withIntermediateDirectories: false)
+    let artifactLink = artifactLinkFolder.appendingPathComponent("result.png")
+    try manager.createSymbolicLink(at: artifactLink, withDestinationURL: artifact)
+    let artifactLinkSidecar = artifactLinkFolder.appendingPathComponent("result.png" + AIProvenance.sidecarSuffix)
+    try sidecarData.write(to: artifactLinkSidecar)
+    try expectRefused("a symlinked source artifact is not adopted", artifact: artifactLink,
+                      provenance: artifactLinkSidecar, outputName: "q-out-artifact-link")
+
+    let sidecarLinkFolder = rootDirectory.appendingPathComponent("q-sidecar-link", isDirectory: true)
+    try manager.createDirectory(at: sidecarLinkFolder, withIntermediateDirectories: false)
+    let sidecarLinkArtifact = sidecarLinkFolder.appendingPathComponent("result.png")
+    try manager.copyItem(at: artifact, to: sidecarLinkArtifact)
+    let sidecarLink = sidecarLinkFolder.appendingPathComponent("result.png" + AIProvenance.sidecarSuffix)
+    try manager.createSymbolicLink(at: sidecarLink, withDestinationURL: sidecar)
+    try expectRefused("a symlinked source sidecar is not adopted", artifact: sidecarLinkArtifact,
+                      provenance: sidecarLink, outputName: "q-out-sidecar-link")
+
+    let sentinel = rootDirectory.appendingPathComponent("q-sentinel", isDirectory: true)
+    try Data("untouched".utf8).write(to: sentinel)
+    try expectRefused("an existing output symlink cannot redirect adoption", artifact: artifact,
+                      provenance: sidecar, outputName: "q-out-linked-destination") { output in
+        try manager.createSymbolicLink(at: output.appendingPathComponent("upscaled.png"),
+                                       withDestinationURL: sentinel)
+    }
+    check(try String(decoding: Data(contentsOf: sentinel), as: UTF8.self) == "untouched",
+          "Q: a refused output link leaves its target untouched")
+}
+
+// MARK: - R. Independent provider-specific M3 reference
+
+func m3FixtureDirectory() -> URL {
+    let testsRoot = ProcessInfo.processInfo.environment["RETOUCH_TESTS_ROOT"]
+        ?? FileManager.default.currentDirectoryPath
+    return URL(fileURLWithPath: testsRoot)
+        .appendingPathComponent("Tests/Fixtures/upscale-m3", isDirectory: true)
+}
+
+func m3Image(rgb: Data, width: Int = 256, height: Int = 192) throws -> CIImage {
+    guard rgb.count == width * height * 3 else {
+        throw NSError(domain: "M3ReferenceTest", code: 1)
+    }
+    var rgba = [UInt8](repeating: 255, count: width * height * 4)
+    rgb.withUnsafeBytes { raw in
+        let bytes = raw.baseAddress!.assumingMemoryBound(to: UInt8.self)
+        for pixel in 0..<(width * height) {
+            rgba[pixel * 4] = bytes[pixel * 3]
+            rgba[pixel * 4 + 1] = bytes[pixel * 3 + 1]
+            rgba[pixel * 4 + 2] = bytes[pixel * 3 + 2]
+        }
+    }
+    guard let provider = CGDataProvider(data: Data(rgba) as CFData),
+          let image = CGImage(width: width, height: height, bitsPerComponent: 8,
+                              bitsPerPixel: 32, bytesPerRow: width * 4,
+                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                              bitmapInfo: [.byteOrder32Big,
+                                           CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)],
+                              provider: provider, decode: nil,
+                              shouldInterpolate: false, intent: .defaultIntent) else {
+        throw NSError(domain: "M3ReferenceTest", code: 2)
+    }
+    return CIImage(cgImage: image)
+}
+
+func testPackagedUpscaleIndependentReference() throws {
+    print("\n[R] packaged upscale adoption matches the independent provider-specific RGB8 reference")
+    let testsRoot = ProcessInfo.processInfo.environment["RETOUCH_TESTS_ROOT"]
+        ?? FileManager.default.currentDirectoryPath
+    let catalog = try! ModelCatalog.load(url: URL(fileURLWithPath: testsRoot)
+        .appendingPathComponent("Resources/model-catalog.json"))
+    let entry = catalog.entry(id: "swin2sr-x4")!
+    let fixtures = m3FixtureDirectory()
+    let source = PackagedUpscaleSelfTest.syntheticImage()
+    let sourceSize = source.extent.size
+    let sourceDigest = "ee2b9d831fe93d75e157f9507861c4b8dc6ec4ec85a75dac300cf0e00cbde75f"
+    let submittedJob = "m3-reference-job"
+    let mpsBytes = try Data(contentsOf: fixtures.appendingPathComponent("reference.mps.rgb"))
+    let cpuBytes = try Data(contentsOf: fixtures.appendingPathComponent("reference.cpu.rgb"))
+    let bicubicBytes = try Data(contentsOf: fixtures.appendingPathComponent("bicubic.rgb"))
+    let mpsImage = try m3Image(rgb: mpsBytes)
+    let cpuImage = try m3Image(rgb: cpuBytes)
+    let bicubicImage = try m3Image(rgb: bicubicBytes)
+
+    check(PackagedUpscaleSelfTest.inferenceProvider(from: ["provider": "mps", "device": "mps"]) == "mps",
+          "R: the worker result's agreeing MPS provider is observed")
+    check(PackagedUpscaleSelfTest.inferenceProvider(from: ["provider": "cpu", "device": "cpu"]) == "cpu",
+          "R: the worker result's agreeing CPU provider is observed")
+    check(PackagedUpscaleSelfTest.inferenceProvider(from: ["provider": "mps"]) == nil,
+          "R: a missing device cannot establish the inference provider")
+    check(PackagedUpscaleSelfTest.inferenceProvider(from: ["provider": "mps", "device": "cpu"]) == nil,
+          "R: disagreeing provider fields fail closed")
+    check(PackagedUpscaleSelfTest.inferenceProvider(from: ["provider": "metal", "device": "metal"]) == nil,
+          "R: an unknown provider cannot borrow a reference")
+
+    func makePair(_ name: String, image: CIImage, sidecarProvider: String?,
+                  mutate: (inout [String: Any]) -> Void = { _ in }) throws
+        -> (image: CIImage, artifact: URL, provenance: URL) {
+        let folder = rootDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let artifact = folder.appendingPathComponent("result.png")
+        try writePackagedDiagnosticPNG(image, to: artifact)
+        var model: [String: Any] = [
+            "id": entry.id, "version": entry.version, "format": entry.format,
+            "files": entry.files.map { ["path": $0.path, "sha256": $0.sha256 ?? ""] },
+        ]
+        if let sidecarProvider { model["provider"] = sidecarProvider }
+        var record: [String: Any] = [
+            "schema": AIProvenance.schema,
+            "capabilityId": AICapabilityReport.upscale4x,
+            "jobId": submittedJob,
+            "state": "succeeded",
+            "model": model,
+            "parameters": ["scale": 4],
+            "input": [
+                "sha256": sourceDigest,
+                "width": Int(sourceSize.width), "height": Int(sourceSize.height),
+                "bitDepth": 8, "channels": 3,
+            ],
+            "output": [
+                "sha256": try AIRuntime.sha256(of: artifact),
+                "width": Int(image.extent.width), "height": Int(image.extent.height),
+                "bitDepth": 8, "channels": 3,
+            ],
+        ]
+        mutate(&record)
+        let provenance = folder.appendingPathComponent("result.png" + AIProvenance.sidecarSuffix)
+        try JSONSerialization.data(withJSONObject: record).write(to: provenance)
+        return (image, artifact, provenance)
+    }
+
+    func adoptPair(_ name: String, image: CIImage, provider: String?,
+                   sidecarProvider: String?, referenceDirectory: URL? = nil) throws -> Bool {
+        let pair = try makePair(name, image: image, sidecarProvider: sidecarProvider)
+        let output = rootDirectory.appendingPathComponent("adopt-\(name)", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+        let result = ExportService.UpscaleArtifact(
+            image: pair.image, artifact: pair.artifact, provenance: pair.provenance,
+            jobID: submittedJob, inputSHA256: sourceDigest, model: entry,
+            provider: provider)
+        do {
+            try PackagedUpscaleSelfTest.adopt(result, sourceSize: sourceSize,
+                                              outputDirectory: output,
+                                              referenceDirectory: referenceDirectory ?? fixtures)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func copyReferences(_ name: String) throws -> URL {
+        let destination = rootDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        for item in try FileManager.default.contentsOfDirectory(at: fixtures,
+                                                                includingPropertiesForKeys: nil) {
+            try FileManager.default.copyItem(at: item,
+                                             to: destination.appendingPathComponent(item.lastPathComponent))
+        }
+        return destination
+    }
+
+    func mutateManifest(in directory: URL,
+                        _ mutate: (inout [String: Any]) -> Void) throws {
+        let url = directory.appendingPathComponent("manifest.json")
+        var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        mutate(&manifest)
+        try JSONSerialization.data(withJSONObject: manifest).write(to: url)
+    }
+
+    check(try adoptPair("r-mps", image: mpsImage, provider: "mps", sidecarProvider: "mps"),
+          "R: the exact MPS reference is adopted for an MPS result")
+    check(try adoptPair("r-cpu", image: cpuImage, provider: "cpu", sidecarProvider: "cpu"),
+          "R: the exact CPU reference is adopted for a CPU result")
+    check(!(try adoptPair("r-wrong-provider", image: cpuImage, provider: "mps", sidecarProvider: "mps")),
+          "R: the CPU reference cannot stand in for an MPS result")
+    check(!(try adoptPair("r-bicubic", image: bicubicImage, provider: "mps", sidecarProvider: "mps")),
+          "R: the independent bicubic control cannot stand in for model inference")
+    check(!(try adoptPair("r-forged-sidecar", image: mpsImage, provider: "mps", sidecarProvider: "cpu")),
+          "R: a self-consistent sidecar cannot forge the inference provider")
+    check(!(try adoptPair("r-unknown-provider", image: mpsImage, provider: nil, sidecarProvider: "mps")),
+          "R: an unobservable inference provider fails closed")
+
+    let blurred = source.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.5])
+        .cropped(to: source.extent)
+    let wrongReference = nearestNeighbour4x(blurred)!
+    check(!(try adoptPair("r-wrong-reference", image: wrongReference, provider: "mps", sidecarProvider: "mps")),
+          "R: an unrelated non-model reference is rejected")
+
+    var modified = mpsBytes
+    modified[0] = modified[0] == 0 ? 1 : 0
+    let modifiedImage = try m3Image(rgb: modified)
+    check(!(try adoptPair("r-modified-final", image: modifiedImage, provider: "mps", sidecarProvider: "mps")),
+          "R: a modified final RGB8 output is rejected even with a self-consistent sidecar")
+
+    func adoptsTamperedManifest(_ name: String,
+                                _ mutate: (inout [String: Any]) -> Void) throws -> Bool {
+        let directory = try copyReferences("fixtures-\(name)")
+        try mutateManifest(in: directory, mutate)
+        return try adoptPair(name, image: mpsImage, provider: "mps", sidecarProvider: "mps",
+                             referenceDirectory: directory)
+    }
+
+    check(!(try adoptsTamperedManifest("r-wrong-aggregate") {
+        $0["catalog_aggregate_sha256"] = String(repeating: "0", count: 64)
+    }), "R: a reference manifest cannot substitute another catalog aggregate")
+    check(!(try adoptsTamperedManifest("r-wrong-checkpoint") {
+        var checkpoint = $0["checkpoint"] as! [[String: Any]]
+        checkpoint[0]["sha256"] = String(repeating: "0", count: 64)
+        $0["checkpoint"] = checkpoint
+    }), "R: a reference manifest cannot substitute a checkpoint file pin")
+    check(!(try adoptsTamperedManifest("r-wrong-source-hash") {
+        var fixture = $0["fixture"] as! [String: Any]
+        var source = fixture["source_rgb"] as! [String: Any]
+        source["sha256"] = String(repeating: "0", count: 64)
+        fixture["source_rgb"] = source
+        $0["fixture"] = fixture
+    }), "R: a reference manifest cannot change the submitted source binding")
+    check(!(try adoptsTamperedManifest("r-wrong-input-hash") {
+        var fixture = $0["fixture"] as! [String: Any]
+        var input = fixture["input_f32"] as! [String: Any]
+        input["sha256"] = String(repeating: "0", count: 64)
+        fixture["input_f32"] = input
+        $0["fixture"] = fixture
+    }), "R: a reference manifest cannot change the float input binding")
+    check(!(try adoptsTamperedManifest("r-wrong-output-shape") {
+        var contract = $0["fixture_contract"] as! [String: Any]
+        contract["expected_output_shape"] = [191, 256, 3]
+        $0["fixture_contract"] = contract
+    }), "R: a reference manifest cannot change the final RGB8 shape")
+    check(!(try adoptsTamperedManifest("r-wrong-reference-hash") {
+        var outputs = $0["outputs"] as! [String: Any]
+        var mps = outputs["mps"] as! [String: Any]
+        mps["sha256"] = String(repeating: "0", count: 64)
+        outputs["mps"] = mps
+        $0["outputs"] = outputs
+    }), "R: a reference manifest cannot change the provider output hash")
+    check(!(try adoptsTamperedManifest("r-introduced-tolerance") {
+        $0["final_tolerance"] = "1 LSB"
+    }), "R: an undeclared comparator tolerance is refused")
+}
+
 // MARK: - Run
 
 testCLILaunchCannotRaceSwap()
@@ -1103,6 +2302,13 @@ testCancellationKeepsLeaseUntilExit()
 testProductionDefaultUsesInstallerSupport()
 testStaleWorkingCopiesAreSweptAndLiveOnesAreNot()
 testStaleJobFoldersAreSweptAndLiveOnesAreNot()
+testRuntimeEnvironmentRejectsExternalPaths()
+testPackagedUpscaleDiagnosticContract()
+try testPackagedUpscaleInputDigestIsSubmittedRGB8()
+try testPackagedUpscaleTrustedProvenanceAndFinalArtifact()
+try testPackagedDiagnosticStateStaysUnderOutput()
+try testPackagedAdoptionRefusesLinkedInputs()
+try testPackagedUpscaleIndependentReference()
 
 try? FileManager.default.removeItem(at: rootDirectory)
 
