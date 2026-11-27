@@ -1,17 +1,25 @@
 #!/bin/bash
 # Checks the packaged application bundle itself, not a loose executable.
 #
-#   Tools/validate-bundle.sh "Retouch Studio.app" [arm64|x86_64|universal]
+#   Tools/validate-bundle.sh "Retouch Studio.app" [arm64|x86_64|universal] \
+#       [--require-worker|--forbid-worker]
 #
 # Exits non-zero on a missing identity key, a wrong executable, an invalid
-# signature, a Homebrew path leaking into the bundled helper, or a bundle that
-# does not carry the MIT licence, the third-party notice, and honest copyright
-# wording. It never modifies the bundle.
+# signature, a missing or unsealed helper, or a bundle that does not carry the
+# MIT licence, the third-party notice, and honest copyright wording. Runtime
+# path containment is proved by executing the packaged interpreter in the
+# functional worker self-test; inert upstream text is not a runtime-path leak.
+# It never modifies the bundle.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP="${1:?usage: Tools/validate-bundle.sh <bundle> [expected-archs]}"
+APP="${1:?usage: Tools/validate-bundle.sh <bundle> [expected-archs] [--require-worker|--forbid-worker]}"
 EXPECTED="${2:-}"
+WORKER_MODE="${3:-}"
+case "$WORKER_MODE" in
+  ""|--require-worker|--forbid-worker) ;;
+  *) echo "✗ unknown worker policy: $WORKER_MODE" >&2; exit 1 ;;
+esac
 failures=0
 fail() { echo "  ✗ $*" >&2; failures=$((failures + 1)); }
 
@@ -66,6 +74,41 @@ if [ -f "$BUNDLE_NOTICES" ]; then
     || fail "Contents/Resources/THIRD_PARTY_NOTICES.txt does not attribute Vazirmatn"
 fi
 
+# The packaged diagnostic may consume only the canonical independent reference.
+# This rejects missing, altered, symlinked, alternate and ambiguous layouts while
+# leaving the existing signature, Worker, catalogue and notice checks intact.
+if ! /usr/bin/python3 "$PWD/Tools/validate-m3-fixture.py" verify-bundle "$APP"; then
+  fail "M3 reference fixture validation failed"
+fi
+
+RESOURCES="$APP/Contents/Resources"
+WORKER="$RESOURCES/Worker"
+WORKER_READY=0
+# Reject unsafe topology before signing diagnostics can obscure the actionable
+# error. A dangling link is still a forbidden Worker even though `test -e`
+# follows the link and reports it absent.
+if [ -L "$WORKER" ]; then
+  if [ "$WORKER_MODE" = "--forbid-worker" ]; then
+    fail "helper runtime is forbidden in this build"
+  else
+    fail "worker runtime root must not be a symbolic link"
+  fi
+elif [ "$WORKER_MODE" = "--forbid-worker" ] && [ -e "$WORKER" ]; then
+  fail "helper runtime is forbidden in this build"
+elif [ -e "$WORKER" ] && [ ! -d "$WORKER" ]; then
+  fail "worker runtime root is not a directory"
+elif [ -d "$WORKER" ]; then
+  APP_REAL=$(/usr/bin/python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$APP")
+  WORKER_REAL=$(/usr/bin/python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$WORKER")
+  case "$WORKER_REAL" in
+    "$APP_REAL"/*) WORKER_READY=1 ;;
+    *) fail "worker runtime root must resolve inside the app bundle" ;;
+  esac
+fi
+if [ "$WORKER_MODE" = "--require-worker" ] && [ ! -e "$WORKER" ] && [ ! -L "$WORKER" ]; then
+  fail "helper runtime is required but Contents/Resources/Worker is missing"
+fi
+
 BINARY="$APP/Contents/MacOS/$EXECUTABLE"
 if [ -x "$BINARY" ]; then
   ARCHS=$(lipo -archs "$BINARY" 2>/dev/null || true)
@@ -95,8 +138,7 @@ if ! codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
   fail "codesign --verify --deep --strict failed"
 fi
 
-WORKER="$APP/Contents/Resources/Worker"
-CATALOG="$APP/Contents/Resources/model-catalog.json"
+CATALOG="$RESOURCES/model-catalog.json"
 if [ -f "$CATALOG" ]; then
   grep -q '"schema": "retouchstudio.model-catalog/1"' "$CATALOG" \
     || fail "model catalog has an unknown schema"
@@ -106,15 +148,36 @@ if [ -f "$CATALOG" ]; then
 else
   fail "Contents/Resources/model-catalog.json is missing"
 fi
-if [ -d "$WORKER" ]; then
+if [ "$WORKER_MODE" != "--forbid-worker" ] && [ "$WORKER_READY" -eq 1 ]; then
   [ -x "$WORKER/bin/python3" ] || fail "worker interpreter bin/python3 is missing"
-  [ -d "$WORKER/retouch_ai_worker" ] || fail "worker package retouch_ai_worker is missing"
-  HOMEBREW_HITS=$(grep -RIl -e "/opt/homebrew" -e "/usr/local/Cellar" "$WORKER" 2>/dev/null | head -5 || true)
-  if [ -n "$HOMEBREW_HITS" ]; then
-    fail "Homebrew paths leaked into the bundle:"
-    printf '%s\n' "$HOMEBREW_HITS" >&2
+  LINK_TARGET=$(readlink "$WORKER/bin/python3" 2>/dev/null || true)
+  [ "$LINK_TARGET" = "../Python.framework/Versions/3.13/bin/python3.13" ] \
+    || fail "worker interpreter bin/python3 is not the expected relative symlink"
+  PYTHON="$WORKER/Python.framework/Versions/3.13/bin/python3.13"
+  if [ -x "$PYTHON" ]; then
+    PYTHON_ARCHS=$(lipo -archs "$PYTHON" 2>/dev/null || true)
+    echo "  · helper interpreter: Python 3.13 ($PYTHON_ARCHS)"
+    [ "$PYTHON_ARCHS" = "arm64" ] \
+      || fail "the Apple-silicon helper interpreter must be arm64, found: $PYTHON_ARCHS"
+  else
+    fail "worker framework interpreter Python.framework/Versions/3.13/bin/python3.13 is missing"
   fi
-else
+  [ -d "$WORKER/retouch_ai_worker" ] || fail "worker package retouch_ai_worker is missing"
+  [ -f "$WORKER/.stamp" ] && grep -Eq '^[0-9a-f]{64}$' "$WORKER/.stamp" \
+    || fail "worker source/runtime stamp is missing or malformed"
+  if ! /usr/bin/python3 "$PWD/Tools/worker-integrity.py" verify "$WORKER"; then
+    fail "worker integrity verification failed"
+  fi
+  BROKEN_LINKS=$(find "$WORKER" -type l ! -exec test -e {} \; -print)
+  if [ -n "$BROKEN_LINKS" ]; then
+    fail "the worker runtime contains broken symlinks:"
+    printf '%s\n' "$BROKEN_LINKS" >&2
+  fi
+  # Do not grep the payload for /opt/homebrew or /usr/local/Cellar: upstream
+  # comments, optional shell-completion destinations and CPython's generated
+  # Makefile legitimately contain those strings. The functional self-test
+  # executes this interpreter and rejects external sys.path/sysconfig entries.
+elif [ "$WORKER_MODE" != "--forbid-worker" ]; then
   echo "  · helper runtime not bundled (AI tools unavailable)"
 fi
 

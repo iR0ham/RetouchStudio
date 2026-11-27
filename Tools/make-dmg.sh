@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the drag-to-Applications disk image from the packaged app.
+# Builds the drag-to-applications disk image from the packaged app.
 # Run ./build.sh release first; the app must already be signed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,17 +17,61 @@ case "$ARCHS" in
 esac
 NAME="RetouchStudio-${VERSION}-${SUFFIX}"
 
+# Where the image lands. The default is the repository root, which is the
+# historical behaviour and keeps the documented filename
+# RetouchStudio-<version>-<arch>.dmg. Release-evidence builds set
+# RETOUCH_DMG_DIR to write the image and its sidecar outside the source tree.
+OUT_DIR="${RETOUCH_DMG_DIR:-.}"
+mkdir -p "$OUT_DIR"
+OUT_ABS=$(cd "$OUT_DIR" && pwd)
+DMG="$OUT_ABS/$NAME.dmg"
+SIDECAR="$DMG.sha256"
+# The absolute-path line is kept as a separate companion so the portable
+# .sha256 manifest stays verifiable anywhere. It deliberately does not end
+# in .sha256, so the release workflow's `*.sha256` glob never consumes it.
+SIDECAR_ABS="$SIDECAR.abs"
+
+# Never destroy a previous image of the same version: once published or
+# accepted, a release artifact is evidence, and a re-run must not silently
+# replace it. RETOUCH_DMG_FORCE=1 is the explicit opt-in to overwrite.
+# A symlink counts as existing even when its target does not ([ -e ] is
+# blind to dangling links), and the script never writes through a symlink:
+# a shell redirect or hdiutil -ov aimed at a link would land outside
+# OUT_DIR, so even FORCE refuses to replace the three output paths when any
+# of them is a link.
+for existing in "$DMG" "$SIDECAR" "$SIDECAR_ABS"; do
+  if [ "${RETOUCH_DMG_FORCE:-0}" != "1" ]; then
+    if [ -e "$existing" ] || [ -L "$existing" ]; then
+      echo "✗ از قبل وجود دارد: $existing — برای جلوگیری از حذف تصویر قبلی، متوقف شد. برای بازنویسی RETOUCH_DMG_FORCE=1 تنظیم کنید." >&2
+      exit 1
+    fi
+  elif [ -L "$existing" ]; then
+    echo "✗ $existing یک پیوند نمادین است — هرگز داخل پیوند نوشته نمی‌شود، حتی با RETOUCH_DMG_FORCE=1." >&2
+    exit 1
+  fi
+done
+
 STAGE=$(mktemp -d /tmp/retouch-dmg.XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
 
 ditto "$APP" "$STAGE/Retouch Studio.app"
 ln -s /Applications "$STAGE/Applications"
 
-rm -f "$NAME.dmg" "$NAME.dmg.sha256"
 hdiutil create -volname "Retouch Studio $VERSION" \
-  -srcfolder "$STAGE" -ov -format UDZO "$NAME.dmg" >/dev/null
+  -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 
-shasum -a 256 "$NAME.dmg" > "$NAME.dmg.sha256"
+# The published sidecar must be portable: the release workflow downloads
+# every artifact into one merged directory on a different runner, then runs
+# `cd artifacts && sha256sum -c *.sha256`, and the artifact actions keep only
+# basenames. An absolute builder path can never resolve there. So the
+# .sha256 line is generated inside the output directory and records only the
+# image basename; verify it with `shasum -a 256 -c` (or `sha256sum -c`) run
+# next to the image. The .abs companion still records the absolute line for
+# local evidence and is excluded from the *.sha256 glob by its suffix.
+( cd "$OUT_ABS" && shasum -a 256 "$NAME.dmg" ) > "$SIDECAR"
+shasum -a 256 "$DMG" > "$SIDECAR_ABS"
 
-echo "✓ ساخته شد: $NAME.dmg  ($ARCHS)"
-echo "  checksum: $NAME.dmg.sha256"
+echo "✓ ساخته شد: $DMG  ($ARCHS)"
+echo "  checksum (قابل‌حمل، برای بررسی کنار خود تصویر): $SIDECAR"
+echo "    مثال: cd \"\$(dirname \"$SIDECAR\")\" && shasum -a 256 -c \"$NAME.dmg.sha256\""
+echo "  checksum با مسیر مطلق (فقط شواهد بومی، در گلوب CI نیست): $SIDECAR_ABS"

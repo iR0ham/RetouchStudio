@@ -1,6 +1,10 @@
 {
   "schema": "retouchstudio.model-catalog/1",
   "catalogVersion": "fixture-1",
+  "redirectAllowList": [
+    { "host": "huggingface.co", "pathPrefix": "/api/resolve-cache/" },
+    { "host": "us.aws.cdn.hf.co", "pathPrefix": "/xet-bridge-us/" }
+  ],
   "entries": [
     {
       "id": "fixture-good",

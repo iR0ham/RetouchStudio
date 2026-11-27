@@ -54,6 +54,11 @@ enum AIWorker {
     /// exercise the real defaults without reading or writing the owner's data.
     static var supportDirectoryOverride: URL?
 
+    /// The packaged diagnostic supplies an output-owned working root. Normal
+    /// exports continue to use the shared temporary tree; no diagnostic launch
+    /// may sweep or write that tree merely because it started a helper.
+    static var workingDirectoryOverride: URL?
+
     static var supportDirectory: URL {
         if let supportDirectoryOverride { return supportDirectoryOverride.standardizedFileURL }
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
@@ -588,6 +593,9 @@ enum AIWorker {
             environment["PYTHONNOUSERSITE"] = "1"
         }
         environment["PYTHONPATH"] = paths.joined(separator: ":")
+        // The explicit PYTHONPATH above is the only source-tree import root.
+        // Safe path mode keeps the launch/current directory off sys.path.
+        environment["PYTHONSAFEPATH"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
         // The research switch that lets the worker load a model its catalog has
         // not cleared for commercial use. `AIRuntimeValidation.environment` has
@@ -1693,6 +1701,7 @@ enum AIWorker {
     /// Where the helper may read. One folder per job; the ones a crash left
     /// behind are swept by `cleanStaleWorkingCopies` when a helper starts.
     static var workingDirectory: URL {
+        if let workingDirectoryOverride { return workingDirectoryOverride.standardizedFileURL }
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("RetouchStudioAI", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)

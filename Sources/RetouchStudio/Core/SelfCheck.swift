@@ -8,11 +8,14 @@ import StudioCore
 ///
 /// نمونه:
 ///   .build/release/RetouchStudio --selftest --face /path/to/portrait.jpg --out /tmp/rt
+///   "Retouch Studio.app/Contents/MacOS/RetouchStudio" --worker-selftest --out /tmp/rt
 enum SelfCheck {
 
     static func runIfRequested() {
         let arguments = CommandLine.arguments
-        guard arguments.contains("--selftest") || arguments.contains("--memcheck") else { return }
+        guard arguments.contains("--selftest") || arguments.contains("--memcheck")
+                || arguments.contains("--worker-selftest")
+                || arguments.contains("--upscale-selftest") else { return }
 
         var facePath: String?
         if let index = arguments.firstIndex(of: "--face"), index + 1 < arguments.count {
@@ -23,13 +26,36 @@ enum SelfCheck {
             outDirectory = arguments[index + 1]
         }
 
+        if arguments.contains("--upscale-selftest") {
+            let ok: Bool
+            do {
+                guard let options = try PackagedUpscaleSelfTest.parse(arguments) else {
+                    throw PackagedUpscaleSelfTest.Failure(message: "missing upscale self-test request")
+                }
+                try PackagedUpscaleSelfTest.run(options)
+                ok = true
+            } catch {
+                print("  ✗ \(error.localizedDescription)")
+                ok = false
+            }
+            print(ok ? "UPSCALE SELFTEST: PASS" : "UPSCALE SELFTEST: FAIL")
+            exit(ok ? 0 : 1)
+        }
+
+        if arguments.contains("--worker-selftest") {
+            let ok = checkBundledWorker(outDirectory: outDirectory, required: true)
+            print(ok ? "WORKER SELFTEST: PASS" : "WORKER SELFTEST: FAIL")
+            exit(ok ? 0 : 1)
+        }
+
         if arguments.contains("--memcheck") {
             let ok = runMemoryCheck(facePath: facePath)
             print(ok ? "MEMCHECK: done" : "MEMCHECK: needs --face /path/to/photo")
             exit(ok ? 0 : 1)
         }
 
-        let passed = run(facePath: facePath, outDirectory: outDirectory)
+        let passed = run(facePath: facePath, outDirectory: outDirectory,
+                         requireWorker: arguments.contains("--require-worker"))
         print(passed ? "SELFTEST: PASS" : "SELFTEST: FAIL")
         exit(passed ? 0 : 1)
     }
@@ -99,7 +125,8 @@ enum SelfCheck {
         return true
     }
 
-    static func run(facePath: String?, outDirectory: String) -> Bool {
+    static func run(facePath: String?, outDirectory: String,
+                    requireWorker: Bool = false) -> Bool {
         var passed = true
         print("-- mask orientation --")
         passed = checkMaskOrientation() && passed
@@ -187,7 +214,65 @@ enum SelfCheck {
             print("-- analysis overlay follows weight, ink and moved dots --")
             passed = checkAnalysisOverlay(path: facePath, outDirectory: outDirectory) && passed
         }
+        print("-- bundled AI worker --")
+        passed = checkBundledWorker(outDirectory: outDirectory,
+                                    required: requireWorker) && passed
         return passed
+    }
+
+    /// Exercises the runtime from the signed app, not from the checkout: validate
+    /// the packaged interpreter/imports, then let the real host discover it, launch
+    /// it and answer ping/health over the host's own socket path. All state is kept
+    /// in the build's self-test directory; the owner's AI support tree is untouched.
+    private static func checkBundledWorker(outDirectory: String, required: Bool) -> Bool {
+        guard let root = AIWorker.bundledRoot else {
+            if required {
+                print("  ✗ the app did not discover its required bundled Worker")
+                return false
+            }
+            print("  · BUNDLED WORKER: NOT BUNDLED")
+            return true
+        }
+
+        let support = URL(fileURLWithPath: outDirectory)
+            .appendingPathComponent("ai-worker-selftest", isDirectory: true)
+        try? FileManager.default.removeItem(at: support)
+        do {
+            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        } catch {
+            print("  ✗ could not create the worker self-test directory: \(error.localizedDescription)")
+            return false
+        }
+        unsetenv("RETOUCH_AI_PYTHON")
+        unsetenv("RETOUCH_AI_WORKER_ROOT")
+        setenv("RETOUCH_AI_MODELS", support.appendingPathComponent("models").path, 1)
+        AIWorker.supportDirectoryOverride = support
+        WorkerClient.selectSocket(support.appendingPathComponent("worker.sock").path)
+        defer {
+            AIWorker.terminate()
+            WorkerClient.selectSocket(nil)
+            AIWorker.supportDirectoryOverride = nil
+        }
+
+        let validation = AIRuntimeValidation.functional(root: root, timeout: 120)
+        guard validation.ok else {
+            print("  ✗ packaged runtime validation: \(validation.logLine)")
+            return false
+        }
+        do {
+            try AIWorker.ensureRunning()
+            let ping = try WorkerClient.shared.call("ping", timeout: 20) as? [String: Any]
+            let health = try WorkerClient.shared.call("health", timeout: 20) as? [String: Any]
+            guard ping?["pong"] as? Bool == true, health?["ok"] as? Bool == true else {
+                print("  ✗ packaged helper handshake returned an invalid reply")
+                return false
+            }
+            print("  ✓ BUNDLED WORKER: PASS (\(root.path))")
+            return true
+        } catch {
+            print("  ✗ BUNDLED WORKER: FAIL — \(error.localizedDescription)")
+            return false
+        }
     }
 
     // MARK: - ۱) جهت ماسک

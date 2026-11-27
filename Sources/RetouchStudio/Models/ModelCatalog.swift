@@ -1,5 +1,58 @@
 import Foundation
 
+/// The path as it appeared on the wire. `URL.path` percent-decodes, so an
+/// encoded slash could make one path class look like another; redirect policy
+/// and its redacted audit text must use the encoded form instead.
+extension URL {
+    var modelRedirectPath: String {
+        let path = URLComponents(url: self, resolvingAgainstBaseURL: false)?
+            .percentEncodedPath ?? ""
+        return path.isEmpty ? "/" : path
+    }
+
+    /// A path prefix is a destination policy, not a traversal defence. Refuse
+    /// dot segments and encoded separators before any client or server can
+    /// normalize them. Decode repeatedly so double-encoded traversal cannot
+    /// hide behind a prefix, but stop at a stable value (a literal `%25` is
+    /// valid) and fail closed if escaping keeps changing.
+    var hasSafeModelRedirectPath: Bool {
+        isSafeModelRedirectPath(modelRedirectPath)
+    }
+}
+
+/// Validates a wire path before URL resolution can normalize dot segments away.
+/// `URLComponents(string:)` preserves the escaped relative or absolute path,
+/// unlike `URL(string:relativeTo:)`, which may erase literal `..` components.
+extension String {
+    var hasSafeRawModelRedirectPath: Bool {
+        guard !contains("\\"),
+              let path = URLComponents(string: self)?.percentEncodedPath else { return false }
+        return isSafeModelRedirectPath(path)
+    }
+}
+
+func isSafeModelRedirectPath(_ path: String) -> Bool {
+    func unsafe(_ value: String) -> Bool {
+        value == "." || value == ".." || value.contains("/") || value.contains("\\")
+    }
+    for segment in path.split(separator: "/", omittingEmptySubsequences: false) {
+        var value = String(segment)
+        var stable = false
+        for _ in 0..<8 {
+            if unsafe(value) { return false }
+            guard value.contains("%"),
+                  let decoded = value.removingPercentEncoding,
+                  decoded != value else {
+                stable = true
+                break
+            }
+            value = decoded
+        }
+        guard stable, !unsafe(value) else { return false }
+    }
+    return true
+}
+
 /// The bundled model catalog: data, never a remote feed.
 ///
 /// An entry is installable only when every file records an exact size and
@@ -10,8 +63,36 @@ struct ModelCatalog: Decodable, Equatable {
     let schema: String
     let catalogVersion: String
     let entries: [ModelCatalogEntry]
+    /// Host-and-path-class destinations a download may be redirected to. An
+    /// absent key is an empty list, which reproduces the historical
+    /// refuse-every-redirect behaviour: the safe default is no redirects.
+    let redirectAllowList: [ModelRedirectRule]
 
     static let schemaName = "retouchstudio.model-catalog/1"
+
+    private enum CodingKeys: String, CodingKey {
+        case schema
+        case catalogVersion
+        case entries
+        case redirectAllowList
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try container.decode(String.self, forKey: .schema)
+        catalogVersion = try container.decode(String.self, forKey: .catalogVersion)
+        entries = try container.decode([ModelCatalogEntry].self, forKey: .entries)
+        redirectAllowList = try container.decodeIfPresent([ModelRedirectRule].self,
+                                                          forKey: .redirectAllowList) ?? []
+    }
+
+    init(schema: String, catalogVersion: String, entries: [ModelCatalogEntry],
+         redirectAllowList: [ModelRedirectRule] = []) {
+        self.schema = schema
+        self.catalogVersion = catalogVersion
+        self.entries = entries
+        self.redirectAllowList = redirectAllowList
+    }
 
     enum LoadError: Error, CustomStringConvertible, Equatable {
         case missing
@@ -42,6 +123,9 @@ struct ModelCatalog: Decodable, Equatable {
             throw LoadError.unsupportedSchema(catalog.schema)
         }
         var seen = Set<String>()
+        for rule in catalog.redirectAllowList {
+            try rule.validate()
+        }
         for entry in catalog.entries {
             guard seen.insert(entry.id).inserted else {
                 throw LoadError.duplicateID(entry.id)
@@ -73,6 +157,76 @@ struct ModelCatalog: Decodable, Equatable {
 
     func entry(id: String) -> ModelCatalogEntry? {
         entries.first { $0.id == id }
+    }
+
+    /// The redirect rule that admits `url`, if any. Hosts compare as full,
+    /// case-insensitive strings — never as a suffix, a substring or a wildcard —
+    /// and the path must sit inside the rule's prefix. An empty allow-list
+    /// therefore admits nothing, which is the behaviour the catalog had before
+    /// this key existed.
+    func redirectRule(matching url: URL) -> ModelRedirectRule? {
+        guard let host = url.host, !host.isEmpty,
+              url.hasSafeModelRedirectPath else { return nil }
+        let path = url.modelRedirectPath
+        return redirectAllowList.first { rule in
+            rule.host.caseInsensitiveCompare(host) == .orderedSame
+                && path.hasPrefix(rule.pathPrefix)
+        }
+    }
+}
+
+/// One redirect destination the catalog admits: a host plus the path class on
+/// that host. Both halves are required, because Hugging Face answers a binary
+/// file with `302` to `us.aws.cdn.hf.co/xet-bridge-us/…` and a config file with
+/// a *relative* `307` to `huggingface.co/api/resolve-cache/…`. A host-only list
+/// would still refuse the second one, and a path-only list would admit any path
+/// on an allowed host.
+///
+/// This is data, not code: adding a destination is a catalog change, and the
+/// consent sheet names every entry before a byte is requested.
+struct ModelRedirectRule: Codable, Equatable {
+    /// Lowercase host, no scheme, no port, no wildcard.
+    let host: String
+    /// Path prefix beginning with `/`; never carries a query or fragment.
+    let pathPrefix: String
+
+    /// Refuses a rule that cannot be honoured rather than dropping it silently,
+    /// so an edited resource can never widen the policy by accident. The error
+    /// class is the same `unsafe` one every other catalog defect uses.
+    func validate() throws {
+        guard !host.isEmpty else {
+            throw ModelCatalog.LoadError.unsafe("a redirect rule has an empty host")
+        }
+        guard host == host.lowercased() else {
+            throw ModelCatalog.LoadError.unsafe(
+                "redirect rule host \(host.debugDescription) is not lowercase")
+        }
+        guard host.allSatisfy(Self.isHostChar), !host.contains("*") else {
+            throw ModelCatalog.LoadError.unsafe(
+                "redirect rule host \(host.debugDescription) is not a plain host name")
+        }
+        guard !pathPrefix.isEmpty else {
+            throw ModelCatalog.LoadError.unsafe(
+                "redirect rule for \(host) has an empty path prefix")
+        }
+        guard pathPrefix.hasPrefix("/") else {
+            throw ModelCatalog.LoadError.unsafe(
+                "redirect rule for \(host) has a path prefix that does not start with /")
+        }
+        for bad in ["?", "#", "..", "\\"] where pathPrefix.contains(bad) {
+            throw ModelCatalog.LoadError.unsafe(
+                "redirect rule for \(host) has \(bad.debugDescription) in its path prefix")
+        }
+        guard pathPrefix.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.contains($0) })
+        else {
+            throw ModelCatalog.LoadError.unsafe(
+                "redirect rule for \(host) has whitespace in its path prefix")
+        }
+    }
+
+    static func isHostChar(_ char: Character) -> Bool {
+        char.isASCII && (char.isLetter || char.isNumber || char == "-" || char == "."
+                            || char == "_")
     }
 }
 
@@ -492,7 +646,8 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
     /// production, even on loopback.
     static func isAllowedSource(_ url: String, allowLocalHTTP: Bool) -> Bool {
         guard let parsed = URL(string: url), let host = parsed.host, !host.isEmpty,
-              parsed.user == nil, parsed.password == nil, parsed.fragment == nil else {
+              parsed.user == nil, parsed.password == nil, parsed.fragment == nil,
+              !authorityContainsAt(parsed) else {
             return false
         }
         switch parsed.scheme?.lowercased() {
@@ -506,11 +661,13 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
     static func isAllowedPort(_ url: URL, allowLocalHTTP: Bool) -> Bool {
         guard let port = url.port else { return true }
         if url.scheme?.lowercased() == "https" && port == 443 { return true }
-        return allowLocalHTTP && isLoopback(url)
+        return url.scheme?.lowercased() == "http" && allowLocalHTTP && isLoopback(url)
     }
 
     /// A file must come from the entry's recorded source: same scheme, same
-    /// host, and the same port rules. A redirect cannot change any of these.
+    /// host, and the same port rules. A redirect never changes this: the first
+    /// URL of every file is still the recorded `sourceUrl`, and a redirect only
+    /// continues from it.
     static func isRecordedFileSource(_ url: String, entrySource: String,
                                      allowLocalHTTP: Bool) -> Bool {
         guard isAllowedSource(url, allowLocalHTTP: allowLocalHTTP),
@@ -526,6 +683,34 @@ struct ModelCatalogEntry: Codable, Equatable, Identifiable {
     static func isLoopback(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
         return host == "127.0.0.1" || host == "localhost"
+    }
+
+    /// The shape a redirect destination must have, independent of the allow-list.
+    /// It is exactly the rule the request URL already passed — HTTPS (or loopback
+    /// HTTP under the test opt-in), no credentials, no fragment, port 443 or the
+    /// test port, non-empty host — so a redirect cannot smuggle in a URL the
+    /// catalog would never have recorded. A `file:` or `ftp:` Location fails here.
+    ///
+    /// `URL` does not report an omitted userinfo as nil for every malformed input,
+    /// so the raw authority is checked too: an empty `user=` must not read as absent.
+    /// At signs in the path or query are ordinary data and do not imply credentials.
+    static func isAllowedRedirectTarget(_ url: URL, allowLocalHTTP: Bool) -> Bool {
+        guard let host = url.host, !host.isEmpty, url.user == nil, url.password == nil,
+              url.fragment == nil, !authorityContainsAt(url),
+              url.hasSafeModelRedirectPath else { return false }
+        switch url.scheme?.lowercased() {
+        case "https": break
+        case "http" where allowLocalHTTP && isLoopback(url): break
+        default: return false
+        }
+        return isAllowedPort(url, allowLocalHTTP: allowLocalHTTP)
+    }
+
+    private static func authorityContainsAt(_ url: URL) -> Bool {
+        let absolute = url.absoluteString
+        guard let separator = absolute.range(of: "://") else { return true }
+        let authority = absolute[separator.upperBound...].prefix { !"/?#".contains($0) }
+        return authority.contains("@")
     }
 
     /// Model ids and versions become path components; anything outside a

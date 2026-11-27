@@ -67,6 +67,25 @@ struct ModelTransferProgress: Equatable {
     let fileCount: Int
 }
 
+/// Where one downloaded file actually ended up after redirects.
+///
+/// Only the host and path are ever carried, because Hugging Face's XET
+/// `Location` contains a signed query string. Anything that prints a hop — the
+/// audit trail or a refusal message — gets a value that cannot leak credentials.
+struct ModelRedirectHop: Equatable {
+    let statusCode: Int
+    let host: String
+    let path: String
+
+    var display: String { "\(host)\(path)" }
+
+    init(statusCode: Int, url: URL) {
+        self.statusCode = statusCode
+        self.host = url.host ?? ""
+        self.path = url.modelRedirectPath
+    }
+}
+
 struct ModelVerifyReport: Equatable {
     struct Problem: Equatable {
         let file: String
@@ -761,15 +780,63 @@ final class ModelStore: @unchecked Sendable {
     private func download(_ url: String, to destination: URL,
                           entry: ModelCatalogEntry, expectedBytes: Int,
                           onProgress: @escaping (Int64, Int64?) -> Void) async throws {
+        try await download(url, to: destination, entry: entry, expectedBytes: expectedBytes,
+                           redirectAllowList: catalog.redirectAllowList,
+                           onProgress: onProgress, redirectHops: nil)
+    }
+
+    /// Same as `download`, with the two hooks the tests use: an explicit
+    /// allow-list (so a refusal can be exercised without rewriting the shipped
+    /// catalog) and a hop recorder (the audit trail).
+    func download(_ url: String, to destination: URL,
+                  entry: ModelCatalogEntry, expectedBytes: Int,
+                  redirectAllowList: [ModelRedirectRule],
+                  onProgress: @escaping (Int64, Int64?) -> Void,
+                  redirectHops: (@Sendable (ModelRedirectHop) -> Void)?) async throws {
+        guard let parsed = URL(string: url),
+              Self.isAllowedSource(url, entry: entry, allowLocalHTTP: allowLocalHTTP) else {
+            throw ModelStoreError.invalid("refusing an unrecorded source")
+        }
+        let origin = ModelRedirectHop(statusCode: 0, url: parsed)
+        redirectHops?(origin)
+        let transfer = ModelDownloadTransfer(destination: destination,
+                                             expectedBytes: expectedBytes,
+                                             onProgress: onProgress,
+                                             allowLocalHTTP: allowLocalHTTP,
+                                             rules: redirectAllowList,
+                                             onRedirect: redirectHops)
+        try await transfer.run(url: parsed, configuration: sessionConfiguration)
+    }
+
+    #if RETOUCH_TESTING
+    /// Test-only access to the transfer boundary. Install has earlier cancellation
+    /// checks; this exercises cancellation before the transfer installs its
+    /// continuation without changing production behavior.
+    func downloadForTesting(_ url: String, to destination: URL,
+                            entry: ModelCatalogEntry, expectedBytes: Int,
+                            afterContinuationInstall: (() -> Void)? = nil,
+                            beforeTaskResume: (() -> Void)? = nil,
+                            onProgress: @escaping (Int64, Int64?) -> Void = { _, _ in },
+                            progressGate: (() -> Void)? = nil,
+                            afterProgress: (() -> Void)? = nil) async throws {
         guard let parsed = URL(string: url),
               Self.isAllowedSource(url, entry: entry, allowLocalHTTP: allowLocalHTTP) else {
             throw ModelStoreError.invalid("refusing an unrecorded source")
         }
         let transfer = ModelDownloadTransfer(destination: destination,
                                              expectedBytes: expectedBytes,
-                                             onProgress: onProgress)
+                                             onProgress: onProgress,
+                                             allowLocalHTTP: allowLocalHTTP,
+                                             rules: [])
+        #if RETOUCH_TESTING
+        transfer.afterContinuationInstall = afterContinuationInstall
+        transfer.beforeTaskResume = beforeTaskResume
+        transfer.progressGate = progressGate
+        transfer.afterProgress = afterProgress
+        #endif
         try await transfer.run(url: parsed, configuration: sessionConfiguration)
     }
+    #endif
 
     private func verifyFile(_ url: URL, path: String, size: Int, sha256: String) throws {
         let actualSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
@@ -891,40 +958,92 @@ final class ModelStore: @unchecked Sendable {
 /// continuation exactly once.
 private final class ModelDownloadTransfer: NSObject, URLSessionDownloadDelegate,
                                           @unchecked Sendable {
+    /// Redirects a single file may follow. Each hop is re-checked against the
+    /// allow-list, so a longer chain cannot launder a disallowed destination.
+    static let maxRedirectHops = 3
+
     private let destination: URL
     private let expectedBytes: Int
     private let onProgress: (Int64, Int64?) -> Void
+    private let allowLocalHTTP: Bool
+    private let rules: [ModelRedirectRule]
+    private let onRedirect: ((@Sendable (ModelRedirectHop) -> Void)?)
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Void, Error>?
     private var session: URLSession?
     private var task: URLSessionDownloadTask?
+    private var cancelled = false
     private var finished = false
+    private var hops = 0
+    /// Set by `refuse` for the single hop the delegate is answering; cleared when
+    /// a redirect is admitted or a refusal is delivered.
+    private var pendingRefusal: ModelStoreError?
+    /// The scratch file this transfer was handed, while it still occupies the name.
+    ///
+    /// `URLSessionDownloadTask` reuses one temporary name for every hop of a
+    /// redirect, and this path moves that file to its destination inside
+    /// `didFinishDownloadingTo`. URLSession only removes the name itself when the task
+    /// is cancelled or fails, so after a *successful* download — redirected or not —
+    /// the name survives in the shared temporary directory, and the next download task
+    /// in the process is handed that same occupied path and fails its move with "file
+    /// exists". So the name is recorded as soon as the delegate sees it, dropped once
+    /// the move has happened, and `finish` clears the name from disk before
+    /// invalidating the session. A refusal before any body leaves the scratch file
+    /// under the session's own control, which is why nothing else deletes it.
+    private var unreleasedTempFile: URL?
+
+    /// Set once the scratch file has been moved to its destination: from then on the
+    /// name belongs to this transfer, not to URLSession.
+    private var tempFileMoved = false
+    #if RETOUCH_TESTING
+    fileprivate var afterContinuationInstall: (() -> Void)?
+    fileprivate var beforeTaskResume: (() -> Void)?
+    fileprivate var progressGate: (() -> Void)?
+    fileprivate var afterProgress: (() -> Void)?
+    #endif
 
     init(destination: URL, expectedBytes: Int,
-         onProgress: @escaping (Int64, Int64?) -> Void) {
+         onProgress: @escaping (Int64, Int64?) -> Void,
+         allowLocalHTTP: Bool, rules: [ModelRedirectRule],
+         onRedirect: ((@Sendable (ModelRedirectHop) -> Void)?) = nil) {
         self.destination = destination
         self.expectedBytes = expectedBytes
         self.onProgress = onProgress
+        self.allowLocalHTTP = allowLocalHTTP
+        self.rules = rules
+        self.onRedirect = onRedirect
     }
 
     func run(url: URL, configuration: URLSessionConfiguration) async throws {
         try await withTaskCancellationHandler(operation: {
-            try await withCheckedThrowingContinuation { continuation in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 lock.lock()
-                self.continuation = continuation
-                let cancelled = finished
-                lock.unlock()
                 if cancelled {
-                    finish(.failure(CancellationError()))
+                    lock.unlock()
+                    continuation.resume(throwing: CancellationError())
                     return
                 }
+                self.continuation = continuation
+                lock.unlock()
+                #if RETOUCH_TESTING
+                afterContinuationInstall?()
+                #endif
                 let session = URLSession(configuration: configuration, delegate: self,
                                          delegateQueue: nil)
                 let task = session.downloadTask(with: url)
                 lock.lock()
+                if cancelled || finished {
+                    lock.unlock()
+                    task.cancel()
+                    session.invalidateAndCancel()
+                    return
+                }
                 self.session = session
                 self.task = task
                 lock.unlock()
+                #if RETOUCH_TESTING
+                beforeTaskResume?()
+                #endif
                 task.resume()
             }
         }, onCancel: {
@@ -934,6 +1053,7 @@ private final class ModelDownloadTransfer: NSObject, URLSessionDownloadDelegate,
 
     private func cancel() {
         lock.lock()
+        cancelled = true
         let session = self.session
         let task = self.task
         lock.unlock()
@@ -945,28 +1065,165 @@ private final class ModelDownloadTransfer: NSObject, URLSessionDownloadDelegate,
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
-        onProgress(totalBytesWritten,
-                   totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil)
+        #if RETOUCH_TESTING
+        progressGate?()
+        #endif
+        // A delegate may already be on its callback stack when cancellation or a
+        // later transfer wins. Only the active session and task may publish bytes.
+        lock.lock()
+        let isActive = !cancelled && !finished
+            && session === self.session && task === self.task
+        lock.unlock()
+        if isActive {
+            onProgress(totalBytesWritten,
+                       totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil)
+        }
+        #if RETOUCH_TESTING
+        afterProgress?()
+        #endif
     }
 
-    /// A redirect is a different source than the one the owner approved.
+    /// Follow a redirect only when the catalog admits its destination.
+    ///
+    /// The owner approved one recorded source per file; Hugging Face's XET CDN
+    /// answers that source with a redirect, so refusing every redirect refuses
+    /// the whole catalog. The allow-list is the reconciling object: it is data in
+    /// the same catalog, it names host *and* path class, and the consent sheet
+    /// prints it before the download starts. Everything this method rejects stays
+    /// rejected — fail-closed, as before — and a refusal never quotes the full
+    /// `Location`, because its query string is signed.
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
+        guard let target = redirectDecision(statusCode: response.statusCode,
+                                            location: response.value(
+                                                forHTTPHeaderField: "Location"),
+                                            from: response.url) else {
+            lock.lock()
+            let refused = pendingRefusal
+            pendingRefusal = nil
+            lock.unlock()
+            completionHandler(nil)
+            finish(.failure(refused ?? ModelStoreError.invalid(
+                "the download refused a redirect")))
+            return
+        }
+        lock.lock()
+        hops += 1
+        let hop = ModelRedirectHop(statusCode: response.statusCode, url: target)
+        pendingRefusal = nil
+        lock.unlock()
+        onRedirect?(hop)
+        NSLog("[RetouchStudio] model download redirect %d -> %@",
+              response.statusCode, hop.display)
+        var follow = request
+        follow.url = target
+        completionHandler(follow)
+    }
+
+    /// The rule, kept apart from the delegate so a test can drive every clause
+    /// without a network. Returns the URL to follow, or nil after recording why
+    /// the redirect was refused.
+    private func redirectDecision(statusCode: Int, location: String?,
+                                  from responseURL: URL?) -> URL? {
+        // 1. Only a real redirect status is a redirect.
+        guard [301, 302, 303, 307, 308].contains(statusCode) else {
+            return refuse(statusCode: statusCode, url: nil,
+                          reason: "is not a redirect this client follows")
+        }
+        // 6. Hop budget, checked before anything else is parsed.
+        lock.lock()
+        let used = hops
+        lock.unlock()
+        guard used < Self.maxRedirectHops else {
+            return refuse(statusCode: statusCode, url: nil,
+                          reason: "exceeds the \(Self.maxRedirectHops)-redirect budget")
+        }
+        // 2. A Location must exist and resolve against the URL that produced this
+        //    response. HF sends relative Locations (the same-host 307 to
+        //    /api/resolve-cache/), so resolution is part of the rule.
+        guard let raw = location?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return refuse(statusCode: statusCode, url: nil,
+                          reason: "carried no Location")
+        }
+        guard let base = responseURL else {
+            return refuse(statusCode: statusCode, url: nil,
+                          reason: "has no request URL to resolve against")
+        }
+        guard let target = URL(string: raw, relativeTo: base)?.absoluteURL else {
+            return refuse(statusCode: statusCode, url: nil,
+                          reason: "has a Location that does not resolve")
+        }
+        guard raw.hasSafeRawModelRedirectPath else {
+            return refuse(statusCode: statusCode, url: target,
+                          reason: "has an unsafe Location path")
+        }
+        // 3. The destination must satisfy the rules the request URL had to pass.
+        guard ModelCatalogEntry.isAllowedRedirectTarget(target, allowLocalHTTP: allowLocalHTTP)
+        else {
+            return refuse(statusCode: statusCode, url: target,
+                          reason: "leaves the recorded source scheme, port or shape")
+        }
+        // 4 + 5. Host AND path class, from the catalog's allow-list. An empty
+        //        list — the absent-key default — admits nothing.
+        guard let host = target.host, !host.isEmpty else {
+            return refuse(statusCode: statusCode, url: target,
+                          reason: "names no host")
+        }
+        let path = target.modelRedirectPath
+        guard rules.contains(where: {
+            $0.host.caseInsensitiveCompare(host) == .orderedSame && path.hasPrefix($0.pathPrefix)
+        }) else {
+            return refuse(statusCode: statusCode, url: target,
+                          reason: "is not an allowed redirect host and path")
+        }
+        return target
+    }
+
+    /// Records a refusal whose text names host and path only. Never the query:
+    /// the XET `Location` carries a signed URL, and a fragment or userinfo could
+    /// carry credentials too, so only the re-parsed host and path are quoted.
+    private func refuse(statusCode: Int, url: URL?,
+                        reason: String) -> URL? {
+        // A raw Location may contain signed queries or userinfo. Quote only a
+        // successfully parsed host and wire path; otherwise disclose no value.
+        let subject: String
+        if let url, let host = url.host, !host.isEmpty {
+            subject = "\(host)\(url.modelRedirectPath)"
+        } else {
+            subject = "an unreadable Location"
+        }
+        lock.lock()
+        pendingRefusal = ModelStoreError.invalid(
+            "the download refused a redirect (\(reason)): HTTP \(statusCode) to \(subject)")
+        lock.unlock()
+        return nil
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
+        lock.lock()
+        let refusal = pendingRefusal
+        pendingRefusal = nil
+        // Whatever happens to these bytes, this transfer now owns the name until the
+        // session is torn down.
+        unreleasedTempFile = location
+        lock.unlock()
         if let response = downloadTask.response as? HTTPURLResponse,
            response.statusCode != 200 {
-            finish(.failure(ModelStoreError.invalid(
+            // A refused redirect leaves the 3xx as the final response. Say it was
+            // our policy that refused, and why, instead of blaming the host.
+            finish(.failure(refusal ?? ModelStoreError.invalid(
                 "the model source answered HTTP \(response.statusCode)")))
             return
         }
         do {
             try FileManager.default.moveItem(at: location, to: destination)
+            lock.lock()
+            tempFileMoved = true
+            lock.unlock()
             finish(.success(()))
         } catch {
             finish(.failure(error))
@@ -975,14 +1232,35 @@ private final class ModelDownloadTransfer: NSObject, URLSessionDownloadDelegate,
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
+        lock.lock()
+        let refusal = pendingRefusal
+        pendingRefusal = nil
+        lock.unlock()
         if let error {
+            // A cancelled delegate error is still a cancellation; the refusal only
+            // explains a failure the session itself reported.
             if (error as? URLError)?.code == .cancelled || error is CancellationError {
                 finish(.failure(CancellationError()))
+            } else if let refusal {
+                finish(.failure(refusal))
             } else {
-                finish(.failure(ModelStoreError.invalid("the download failed: \(error.localizedDescription)")))
+                // URL errors can quote the complete request URL, including signed
+                // query credentials. Keep the typed transport failure, not the
+                // exception's arbitrary user-visible text.
+                finish(.failure(ModelStoreError.invalid(
+                    "the download failed while contacting the recorded source")))
             }
+        } else if let refusal {
+            finish(.failure(refusal))
+        } else if let response = task.response as? HTTPURLResponse,
+                  response.statusCode != 200 {
+            // A bodyless non-200 (notably 404) may complete without invoking
+            // didFinishDownloadingTo. Nil transport error is not proof of a file.
+            finish(.failure(ModelStoreError.invalid(
+                "the model source answered HTTP \(response.statusCode)")))
         } else {
-            finish(.success(()))
+            finish(.failure(ModelStoreError.invalid(
+                "the download completed without a usable file")))
         }
     }
 
@@ -993,7 +1271,16 @@ private final class ModelDownloadTransfer: NSObject, URLSessionDownloadDelegate,
         let continuation = self.continuation
         self.continuation = nil
         let session = self.session
+        // Only a name this transfer moved away needs clearing: URLSession still owns
+        // the scratch file when the body was never placed, and deleting it behind the
+        // task's back is not this code's business.
+        let tempFile = tempFileMoved ? unreleasedTempFile : nil
+        unreleasedTempFile = nil
+        tempFileMoved = false
         lock.unlock()
+        if let tempFile {
+            try? FileManager.default.removeItem(at: tempFile)
+        }
         session?.finishTasksAndInvalidate()
         switch result {
         case .success: continuation?.resume()
