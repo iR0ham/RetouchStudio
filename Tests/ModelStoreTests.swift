@@ -45,6 +45,84 @@ final class ResultBox<T>: @unchecked Sendable {
     var result: Result<T, Error>?
 }
 
+final class LockedResultBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Result<T, Error>?
+
+    func set(_ result: Result<T, Error>) {
+        lock.lock()
+        stored = result
+        lock.unlock()
+    }
+
+    func get() -> Result<T, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+}
+
+final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+
+    func increment() {
+        lock.lock()
+        stored += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+}
+
+/// Holds real main-actor progress callbacks so a test can release an old one
+/// after a retry has started. No store or transfer behaviour is mocked.
+final class HeldProgressScheduler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [@MainActor () -> Void] = []
+
+    func schedule(_ callback: @escaping @MainActor () -> Void) {
+        lock.lock()
+        pending.append(callback)
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pending.count
+    }
+
+    func take() -> (@MainActor () -> Void)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !pending.isEmpty else { return nil }
+        return pending.removeFirst()
+    }
+}
+
+func waitForCondition(_ condition: () -> Bool, timeout: TimeInterval = 5) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() { return true }
+        await Task.yield()
+    }
+    return condition()
+}
+
+func waitForSemaphore(_ semaphore: DispatchSemaphore,
+                      timeout: TimeInterval = 5) async -> Bool {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async {
+            continuation.resume(returning: semaphore.wait(timeout: .now() + timeout) == .success)
+        }
+    }
+}
+
 /// Runs a main-actor async body on this thread while pumping the main run
 /// loop, so the actor can make progress between awaits.
 ///
@@ -158,15 +236,121 @@ func loadFixtureCatalog(path: String, base: String) throws -> ModelCatalog {
     return try ModelCatalog.load(data: Data(expanded.utf8), allowLocalHTTP: true)
 }
 
-func catalogData(containing ids: Set<String>, base: String) throws -> Data {
+func catalogData(containing ids: Set<String>, base: String,
+                 without key: String? = nil) throws -> Data {
     let full = try Data(contentsOf: URL(fileURLWithPath: fixturePath("catalog-fixture.json")))
     var object = try JSONSerialization.jsonObject(with: full) as! [String: Any]
     let entries = object["entries"] as! [[String: Any]]
     object["entries"] = entries.filter { ids.contains($0["id"] as? String ?? "") }
+    if let key { object.removeValue(forKey: key) }
     let filtered = try JSONSerialization.data(withJSONObject: object)
     let text = String(data: filtered, encoding: .utf8)!
     return Data(text.replacingOccurrences(of: "{base}", with: base).utf8)
 }
+
+/// The shipped catalog, decoded once. Its allow-list is the source of truth for
+/// both hosts' fixtures, so a rule added on one side shows up on the other.
+func shippedCatalog() -> ModelCatalog {
+    if let cached = shippedCatalogCache { return cached }
+    let loaded = try! ModelCatalog.load(
+        url: testsRoot.appendingPathComponent("Resources/model-catalog.json"))
+    shippedCatalogCache = loaded
+    return loaded
+}
+
+var shippedCatalogCache: ModelCatalog?
+
+/// The shared fixture's allow-list, taken from the shipped catalog plus a loopback
+/// stand-in for each measured destination. Nothing here contacts a real host.
+func redirectRules() -> [[String: Any]] {
+    shippedCatalog().redirectAllowList.map {
+        ["host": $0.host, "pathPrefix": $0.pathPrefix]
+    } + [
+        ["host": "127.0.0.1", "pathPrefix": "/allowed-dest/"],
+        ["host": "localhost", "pathPrefix": "/allowed-relative/"],
+    ]
+}
+
+/// Builds catalog bytes for `entryId` whose file lives at `{base}/good/payload.bin`,
+/// with the allow-list set exactly as asked. `nil` rules drop the key entirely,
+/// which is the default that must reproduce today's refuse-everything behaviour.
+/// `path` retargets the single recorded file URL (`{base}` + path) so an install-level
+/// case can aim a redirect at its own route instead of mutating `/good/payload.bin`
+/// and making an earlier download in the same server fail; the entry source stays on
+/// the recorded host either way.
+func redirectCatalog(entryId: String, base: String, rules: [[String: Any]?]?,
+                     path: String = "/good/payload.bin") throws -> Data {
+    let full = try Data(contentsOf: URL(fileURLWithPath: fixturePath("catalog-fixture.json")))
+    var object = try JSONSerialization.jsonObject(with: full) as! [String: Any]
+    var entries = (object["entries"] as! [[String: Any]])
+        .filter { ($0["id"] as? String) == entryId }
+    // Rewrite the decoded value before serialization. JSONSerialization escapes
+    // `/` as `\/`, so replacing the serialized URL text silently left the fixture
+    // on `/good/payload.bin` and made the install-level case test the wrong route.
+    for entryIndex in entries.indices {
+        var files = entries[entryIndex]["files"] as! [[String: Any]]
+        for fileIndex in files.indices {
+            files[fileIndex]["sourceUrl"] = "{base}" + path
+        }
+        entries[entryIndex]["files"] = files
+    }
+    object["entries"] = entries
+    if let rules {
+        object["redirectAllowList"] = rules.compactMap { $0 }
+    } else {
+        object.removeValue(forKey: "redirectAllowList")
+    }
+    let text = String(data: try JSONSerialization.data(withJSONObject: object),
+                      encoding: .utf8)!
+    return Data(text.replacingOccurrences(of: "{base}", with: base).utf8)
+}
+
+/// A store over one redirect fixture entry, with the allow-list given explicitly
+/// so no test has to rewrite the shared catalog to exercise a refusal.
+func redirectStore(_ server: FixtureServer, rules: [ModelRedirectRule],
+                   rootName: String = "redirect",
+                   entryId: String = "fixture-good",
+                   path: String = "/good/payload.bin",
+                   sessionConfiguration: URLSessionConfiguration = .ephemeral) -> StorePaths {
+    let catalog = try! ModelCatalog.load(
+        data: redirectCatalog(entryId: entryId, base: server.base,
+                              rules: rules.map { ["host": $0.host, "pathPrefix": $0.pathPrefix] },
+                              path: path),
+        allowLocalHTTP: true)
+    let root = scratchRoot.appendingPathComponent(
+        "\(rootName)-\(UUID().uuidString)", isDirectory: true)
+    try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return StorePaths(root: root,
+                      store: ModelStore(root: root, catalog: catalog, platform: fixturePlatform,
+                                        allowLocalHTTP: true,
+                                        sessionConfiguration: sessionConfiguration),
+                      catalog: catalog)
+}
+
+/// Drives one download through the same private path `install` uses, recording the
+/// hop list the audit trail would carry. Returns the thrown error, if any.
+func runRedirectDownload(_ paths: StorePaths, _ sourceURL: String, expectedBytes: Int,
+                         destination: URL? = nil,
+                         hops: @escaping (ModelRedirectHop) -> Void = { _ in })
+    -> Result<Void, Error> {
+    let destination = destination ?? paths.root.appendingPathComponent(
+        "payload-\(UUID().uuidString).bin")
+    let good = paths.catalog.entry(id: "fixture-good")!
+    return runBlocking {
+        try await paths.store.download(sourceURL, to: destination, entry: good,
+                                       expectedBytes: expectedBytes,
+                                       redirectAllowList: paths.catalog.redirectAllowList,
+                                       onProgress: { _, _ in }, redirectHops: hops)
+    }
+}
+
+func failureDetail(_ result: Result<Void, Error>) -> String {
+    switch result {
+    case .success: return ""
+    case .failure(let error): return error.localizedDescription
+    }
+}
+
 
 /// Drops keys from selected entries of the full fixture catalog. Used to prove a
 /// field is optional on decode: an entry with the key absent must still load.
@@ -341,12 +525,47 @@ func writeManifest(in directory: URL, model: String, version: String) {
 }
 
 /// Loopback HTTP server with per-path body, delay and mid-body disconnect.
+/// A transport seam that deliberately returns a failure message containing the
+/// complete signed request URL. Production must not copy that text to the user.
+final class LeakyTransportProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var message = ""
+
+    static func setFailureMessage(_ value: String) {
+        lock.lock(); defer { lock.unlock() }
+        message = value
+    }
+
+    private static func failureMessage() -> String {
+        lock.lock(); defer { lock.unlock() }
+        return message
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        client?.urlProtocol(self, didFailWithError: NSError(
+            domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost,
+            userInfo: [NSLocalizedDescriptionKey: Self.failureMessage()]))
+    }
+
+    override func stopLoading() {}
+}
+
 final class FixtureServer: @unchecked Sendable {
     private struct Route {
         var body: Data
         var status: Int
         var delayMicroseconds: useconds_t
         var dropAfter: Int?
+        /// Sent as `Location` so a route can answer 302/307. It is written
+        /// verbatim, which is what lets a test serve the relative Location
+        /// Hugging Face sends for its same-host cache redirect. An empty string
+        /// still emits the header; additionalLocations can reproduce the actual
+        /// repeated-header response Foundation rejects before redirect delegation.
+        var location: String?
+        var additionalLocations: [String]
     }
 
     let port: UInt16
@@ -389,11 +608,19 @@ final class FixtureServer: @unchecked Sendable {
     var base: String { "http://127.0.0.1:\(port)" }
 
     func serve(_ path: String, _ body: String, status: Int = 200,
-               delayMicroseconds: useconds_t = 0, dropAfter: Int? = nil) {
+               delayMicroseconds: useconds_t = 0, dropAfter: Int? = nil,
+               location: String? = nil, additionalLocations: [String] = []) {
         lock.lock()
         routes[path] = Route(body: Data(body.utf8), status: status,
-                             delayMicroseconds: delayMicroseconds, dropAfter: dropAfter)
+                             delayMicroseconds: delayMicroseconds, dropAfter: dropAfter,
+                             location: location, additionalLocations: additionalLocations)
         lock.unlock()
+    }
+
+    /// Serves a redirect. The body is empty and `Content-Length: 0` is written, so
+    /// the client has nothing to read but the `Location`.
+    func redirect(_ path: String, to location: String, status: Int = 302) {
+        serve(path, "", status: status, location: location)
     }
 
     func start() {
@@ -456,6 +683,12 @@ final class FixtureServer: @unchecked Sendable {
         }
         var header = "HTTP/1.1 \(route.status) \(route.status == 200 ? "OK" : "Error")\r\n"
         header += "Content-Length: \(route.body.count)\r\n"
+        if let location = route.location {
+            header += "Location: \(location)\r\n"
+        }
+        for location in route.additionalLocations {
+            header += "Location: \(location)\r\n"
+        }
         header += "Connection: close\r\nContent-Type: application/octet-stream\r\n\r\n"
         writeAll(client, Data(header.utf8))
         if let drop = route.dropAfter {
@@ -786,6 +1019,241 @@ do {
         versionDirectory(paths, "fixture-good", "1.0.0").path), "cancellation installed no version")
     check(stagingChildren(paths).isEmpty, "cancellation cleaned staging")
     check((try? paths.store.activePointer("fixture-good")) == nil, "cancellation wrote no pointer")
+}
+
+print("\n[6b] cancellation before transfer startup resumes without a request")
+do {
+    let server = makeServer()
+    defer { server.stop() }
+    let paths = makeStore(server)
+    let good = entry(paths, "fixture-good")
+    let destination = paths.root.appendingPathComponent("prestart-cancelled.bin")
+    let completed = LockedResultBox<Void>()
+    _ = Task.detached {
+        // Cancellation must win before ModelDownloadTransfer installs its
+        // checked continuation; install() has earlier checks and cannot exercise
+        // this boundary.
+        withUnsafeCurrentTask { $0?.cancel() }
+        do {
+            try await paths.store.downloadForTesting(
+                good.files[0].sourceUrl, to: destination, entry: good,
+                expectedBytes: good.files[0].sizeBytes ?? 0)
+            completed.set(.success(()))
+        } catch {
+            completed.set(.failure(error))
+        }
+    }
+
+    let deadline = Date().addingTimeInterval(3)
+    var result: Result<Void, Error>?
+    while Date() < deadline {
+        if let observed = completed.get() {
+            result = observed
+            break
+        }
+        usleep(20_000)
+    }
+    check(result != nil, "a pre-cancelled transfer resumes instead of hanging",
+          result == nil ? "no completion within 3 seconds" : "")
+    if let result {
+        switch result {
+        case .success:
+            check(false, "pre-start cancellation is reported as cancellation", "unexpected success")
+        case .failure(let error):
+            check(error is CancellationError,
+                  "pre-start cancellation is reported as cancellation", "\(error)")
+        }
+    }
+    check(!FileManager.default.fileExists(atPath: destination.path),
+          "pre-start cancellation wrote no destination")
+    check(server.count() == 0, "pre-start cancellation made no request",
+          "\(server.count()) requests")
+}
+
+print("\n[6c] cancellation after continuation installation cannot start a request")
+do {
+    let server = makeServer()
+    defer { server.stop() }
+    let paths = makeStore(server)
+    let good = entry(paths, "fixture-good")
+    let destination = paths.root.appendingPathComponent("startup-cancelled.bin")
+    let continuationInstalled = DispatchSemaphore(value: 0)
+    let continueStartup = DispatchSemaphore(value: 0)
+    let resumeAttempted = DispatchSemaphore(value: 0)
+    let allowResume = DispatchSemaphore(value: 0)
+    let completed = LockedResultBox<Void>()
+    let transferTask = Task.detached {
+        do {
+            try await paths.store.downloadForTesting(
+                good.files[0].sourceUrl, to: destination, entry: good,
+                expectedBytes: good.files[0].sizeBytes ?? 0,
+                afterContinuationInstall: {
+                    continuationInstalled.signal()
+                    continueStartup.wait()
+                },
+                beforeTaskResume: {
+                    resumeAttempted.signal()
+                    allowResume.wait()
+                })
+            completed.set(.success(()))
+        } catch {
+            completed.set(.failure(error))
+        }
+    }
+
+    check(continuationInstalled.wait(timeout: .now() + 3) == .success,
+          "the transfer reached the post-continuation startup window")
+    transferTask.cancel()
+    continueStartup.signal()
+    let reachedResume = resumeAttempted.wait(timeout: .now() + 1) == .success
+    check(!reachedResume, "cancellation prevents the transfer from reaching task.resume")
+    allowResume.signal()
+
+    let deadline = Date().addingTimeInterval(3)
+    var result: Result<Void, Error>?
+    while Date() < deadline {
+        if let observed = completed.get() {
+            result = observed
+            break
+        }
+        usleep(20_000)
+    }
+    check(result != nil, "startup cancellation resumes instead of hanging",
+          result == nil ? "no completion within 3 seconds" : "")
+    if let result {
+        switch result {
+        case .success:
+            check(false, "startup cancellation is reported as cancellation", "unexpected success")
+        case .failure(let error):
+            check(error is CancellationError,
+                  "startup cancellation is reported as cancellation", "\(error)")
+        }
+    }
+    check(!FileManager.default.fileExists(atPath: destination.path),
+          "startup cancellation wrote no destination")
+    check(server.count() == 0, "startup cancellation made no request",
+          "\(server.count()) requests")
+}
+
+print("\n[6d] a cancelled transfer's held didWriteData cannot report into a retry")
+runOnMain {
+    let server = makeServer()
+    defer { server.stop() }
+    let paths = makeStore(server)
+    let good = entry(paths, "fixture-good")
+    let firstDestination = paths.root.appendingPathComponent("held-cancelled.bin")
+    let retryDestination = paths.root.appendingPathComponent("held-retry.bin")
+    let oldCallbackEntered = DispatchSemaphore(value: 0)
+    let releaseOldCallback = DispatchSemaphore(value: 0)
+    let oldCallbackReturned = DispatchSemaphore(value: 0)
+    let oldProgress = LockedCounter()
+    let retryProgress = LockedCounter()
+
+    let cancelled = Task.detached {
+        try await paths.store.downloadForTesting(
+            good.files[0].sourceUrl, to: firstDestination, entry: good,
+            expectedBytes: good.files[0].sizeBytes ?? 0,
+            onProgress: { _, _ in oldProgress.increment() },
+            progressGate: {
+                oldCallbackEntered.signal()
+                releaseOldCallback.wait()
+            },
+            afterProgress: { oldCallbackReturned.signal() })
+    }
+    check(await waitForSemaphore(oldCallbackEntered),
+          "the first transfer reached its held didWriteData callback")
+    cancelled.cancel()
+    do {
+        try await cancelled.value
+        check(false, "the held transfer still reports cancellation", "unexpected success")
+    } catch {
+        check(error is CancellationError,
+              "the held transfer still reports cancellation", "\(error)")
+    }
+
+    // The retry is a real second URLSession transfer and finishes before the old
+    // delegate callback is released. Any report from the first transfer is stale.
+    let retry = Task.detached {
+        try await paths.store.downloadForTesting(
+            good.files[0].sourceUrl, to: retryDestination, entry: good,
+            expectedBytes: good.files[0].sizeBytes ?? 0,
+            onProgress: { _, _ in retryProgress.increment() })
+    }
+    do {
+        try await retry.value
+        check(true, "the retry completes while the old callback is still held")
+    } catch {
+        check(false, "the retry completes while the old callback is still held", "\(error)")
+    }
+    check(retryProgress.value > 0, "the retry produced its own progress",
+          "\(retryProgress.value) callbacks")
+    releaseOldCallback.signal()
+    check(await waitForSemaphore(oldCallbackReturned),
+          "the cancelled delegate callback returns after the retry")
+    check(oldProgress.value == 0,
+          "the cancelled transfer emits no stale progress after retry",
+          "\(oldProgress.value) stale callbacks")
+    check(!FileManager.default.fileExists(atPath: firstDestination.path),
+          "the cancelled held transfer wrote no destination")
+    check((try? Data(contentsOf: retryDestination)) == Data("fixture-one\n".utf8),
+          "the retry destination contains only its own payload")
+}
+
+print("\n[6e] a held manager callback cannot overwrite a newer retry's progress")
+do {
+    let server = makeServer()
+    defer { server.stop() }
+    server.serve("/good/payload.bin", "fixture-one\n", delayMicroseconds: 120_000)
+    let paths = makeStore(server)
+    let scheduler = HeldProgressScheduler()
+    let unavailable: @Sendable () throws -> AICapabilityReport = {
+        throw NSError(domain: "model-store-fixture", code: 1)
+    }
+    runOnMain {
+        let manager = ModelManager(store: paths.store, capabilityLoader: unavailable,
+                                   progressScheduler: { scheduler.schedule($0) })
+        await manager.refresh()
+        manager.install(entry(paths, "fixture-good"))
+        guard await waitForCondition({ scheduler.count >= 1 }) else {
+            check(false, "the first install queues a real progress callback")
+            return
+        }
+        check(manager.install != nil, "the first install is active when its callback is held")
+
+        manager.cancelInstall()
+        guard await waitForCondition({ !manager.isDownloading && !manager.loading }) else {
+            check(false, "the cancelled install settles before retry")
+            return
+        }
+        manager.install(entry(paths, "fixture-good"))
+        guard await waitForCondition({ scheduler.count >= 2 }) else {
+            check(false, "the retry queues its own progress callback")
+            return
+        }
+        check(manager.install?.receivedBytes == 0,
+              "the retry starts at zero before either held callback runs",
+              "\(manager.install?.receivedBytes ?? -1)")
+        guard let stale = scheduler.take(), let current = scheduler.take() else {
+            check(false, "both held callbacks are available")
+            return
+        }
+
+        stale()
+        check(manager.install?.receivedBytes == 0,
+              "the cancelled install's held callback leaves retry progress at zero",
+              "\(manager.install?.receivedBytes ?? -1)")
+        current()
+        check((manager.install?.receivedBytes ?? 0) > 0,
+              "the retry's own callback still advances progress",
+              "\(manager.install?.receivedBytes ?? -1)")
+        manager.cancelInstall()
+        _ = await waitForCondition({ !manager.isDownloading && !manager.loading })
+    }
+    check(!FileManager.default.fileExists(atPath:
+        versionDirectory(paths, "fixture-good", "1.0.0").path),
+        "the held-callback retry installed no version after cancellation")
+    check(stagingChildren(paths).isEmpty,
+          "the held-callback retry cleaned its staging tree")
 }
 
 // MARK: - [7] Disk space
@@ -2304,6 +2772,805 @@ do {
     check(frozenRecords.allSatisfy {
         $0.entry.permittedUse != nil && !$0.entry.codeLicense.isEmpty
     }, "a store built from the shipped catalog carries licence strings and the record")
+}
+
+// MARK: - [20] Redirect policy (R1)
+
+print("\n[20] redirects follow the catalog's host-and-path-class allow-list only")
+
+/// The signed-query token every refusal test looks for. A message that carried it
+/// would hand out a credential, which is why the text is built from a re-parsed
+/// URL and not from the raw header.
+let signedQueryMarker = "sig=xet-signed-token-must-not-appear"
+
+func rule(_ host: String, _ prefix: String) -> ModelRedirectRule {
+    try! JSONDecoder().decode(ModelRedirectRule.self,
+                              from: Data("{\"host\":\"\(host)\",\"pathPrefix\":\"\(prefix)\"}"
+                                  .utf8))
+}
+
+do {
+    // The load gate: an absent key is an empty list, and an invalid entry makes
+    // the whole catalog fail rather than silently dropping the rule.
+    let server = makeServer()
+    defer { server.stop() }
+    let withRules = try! catalogData(containing: ["fixture-good"], base: server.base)
+    let loadedRules = (try? ModelCatalog.load(data: withRules, allowLocalHTTP: true))?
+        .redirectAllowList ?? []
+    check(loadedRules.count == 2, "the shared fixture carries both measured rules",
+          "\(loadedRules.count)")
+    let without = try! catalogData(containing: ["fixture-good"], base: server.base,
+                                   without: "redirectAllowList")
+    let defaulted = try! ModelCatalog.load(data: without, allowLocalHTTP: true)
+    check(defaulted.redirectAllowList.isEmpty,
+          "an absent redirectAllowList decodes to no rules — the safe default")
+    let badHost = try! JSONSerialization.jsonObject(with: withRules) as! [String: Any]
+    for (label, mutation) in [
+        ("a wildcard host", ["host": "*.hf.co", "pathPrefix": "/xet-bridge-us/"]),
+        ("a host with a scheme", ["host": "https://us.aws.cdn.hf.co",
+                                  "pathPrefix": "/xet-bridge-us/"]),
+        ("a host with a port", ["host": "us.aws.cdn.hf.co:443",
+                                "pathPrefix": "/xet-bridge-us/"]),
+        ("an uppercase host", ["host": "HuggingFace.CO", "pathPrefix": "/api/resolve-cache/"]),
+        ("a path-less prefix", ["host": "huggingface.co", "pathPrefix": "api/resolve-cache/"]),
+        ("a query in the prefix", ["host": "huggingface.co",
+                                   "pathPrefix": "/api/resolve-cache/?token=1"]),
+        ("a fragment in the prefix", ["host": "huggingface.co",
+                                      "pathPrefix": "/api/resolve-cache/#x"]),
+        ("a traversal in the prefix", ["host": "huggingface.co",
+                                       "pathPrefix": "/api/../private/"]),
+        ("a backslash in the prefix", ["host": "huggingface.co",
+                                       "pathPrefix": "/api\\resolve-cache/"]),
+        ("a whitespace in the prefix", ["host": "huggingface.co",
+                                        "pathPrefix": "/api/resolve cache/"]),
+        ("an empty prefix", ["host": "huggingface.co", "pathPrefix": ""]),
+        ("an empty host", ["host": "", "pathPrefix": "/api/resolve-cache/"]),
+    ] {
+        var mutated = badHost
+        mutated["redirectAllowList"] = [mutation]
+        let data = try! JSONSerialization.data(withJSONObject: mutated)
+        var rejected = false
+        var sawUnsafe = false
+        do { _ = try ModelCatalog.load(data: data, allowLocalHTTP: true) }
+        catch {
+            rejected = true
+            sawUnsafe = "\(error)".contains("unsafe")
+        }
+        check(rejected && sawUnsafe, "the catalog refuses \(label)",
+              rejected ? (sawUnsafe ? "unsafe" : "wrong error class") : "accepted")
+    }
+    // The shipped catalog must state exactly the two measured destinations.
+    let shipped = shippedCatalog()
+    check(shipped.redirectAllowList.map(\.host) == ["huggingface.co", "us.aws.cdn.hf.co"]
+            && shipped.redirectAllowList.map(\.pathPrefix)
+                == ["/api/resolve-cache/", "/xet-bridge-us/"],
+          "the shipped catalog lists the two measured host/path-class pairs",
+          shipped.redirectAllowList.map { "\($0.host)\($0.pathPrefix)" }.joined(separator: " "))
+    check(!shipped.redirectAllowList.contains { $0.host == "cdn-lfs.hf.co" },
+          "no unmeasured host was added on assumption")
+}
+
+do {
+    // Rule 4+5, and rule 7: the matcher itself.
+    let rules = [rule("huggingface.co", "/api/resolve-cache/"),
+                 rule("us.aws.cdn.hf.co", "/xet-bridge-us/")]
+    let catalog = ModelCatalog(schema: ModelCatalog.schemaName, catalogVersion: "t",
+                               entries: [], redirectAllowList: rules)
+    func matches(_ url: String) -> Bool {
+        guard let parsed = URL(string: url) else { return false }
+        return catalog.redirectRule(matching: parsed) != nil
+    }
+    check(matches("https://US.AWS.CDN.HF.CO/xet-bridge-us/repo/a"),
+          "the host comparison is case-insensitive")
+    check(!matches("https://evil-us.aws.cdn.hf.co/xet-bridge-us/a"),
+          "a suffix of an allowed host is not the allowed host")
+    check(!matches("https://hf.co/xet-bridge-us/a"),
+          "a prefix of an allowed host is not the allowed host")
+    // "No suffix matching" must mean a real subdomain is refused, not a host that
+    // merely starts with different letters. `evil-us.aws.cdn.hf.co` ends in the
+    // allowed host's characters but is not a subdomain of it, so it proves only
+    // that the comparison is a full string; this proves the stronger property.
+    check(!matches("https://xet-bridge-us.aws.cdn.hf.co.attacker.example/a"),
+          "a label-suffixed lookalike host is refused")
+    check(!matches("https://cdn.hf.co/xet-bridge-us/a"),
+          "a shorter host that shares the tail is refused")
+    check(!matches("https://us.aws.cdn.hf.co/other/a"),
+          "an allowed host with an unlisted path class is refused")
+    check(!matches("https://us.aws.cdn.hf.co/xet-bridge-us"),
+          "the prefix must actually cover the path")
+    check(!matches("https://us.aws.cdn.hf.co/xet-bridge-us%2fapi/resolve-cache/x"),
+          "an encoded slash cannot smuggle another class into an admitted one")
+    for unsafePath in [
+        "/xet-bridge-us/../private/x",
+        "/xet-bridge-us/%2e%2e/x",
+        "/xet-bridge-us/.%2e/x",
+        "/xet-bridge-us/%2e./x",
+        "/xet-bridge-us/%252e%252e/x",
+        "/xet-bridge-us/a%2f..%2fprivate/x",
+        "/xet-bridge-us/a%5c..%5cprivate/x",
+        "/xet-bridge-us/%2fprivate/x"
+    ] {
+        check(!matches("https://us.aws.cdn.hf.co\(unsafePath)"),
+              "a redirect path with traversal or an encoded separator is refused: \(unsafePath)")
+    }
+    check(matches("https://us.aws.cdn.hf.co/xet-bridge-us/repo/a"),
+          "an ordinary path inside the admitted class still matches")
+    check(matches("https://us.aws.cdn.hf.co/xet-bridge-us/repo/100%25/file"),
+          "a stable encoded percent sign remains an ordinary path")
+    let encodedHop = ModelRedirectHop(
+        statusCode: 302,
+        url: URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us%2fapi/resolve-cache/x?token=secret")!)
+    check(encodedHop.path == "/xet-bridge-us%2fapi/resolve-cache/x"
+            && encodedHop.display == "us.aws.cdn.hf.co/xet-bridge-us%2fapi/resolve-cache/x",
+          "the redacted hop display preserves wire encoding and drops the query",
+          encodedHop.display)
+    check(catalog.redirectRule(matching: URL(string: "https://a.example/x")!) == nil,
+          "an unknown host matches no rule")
+    check(ModelCatalog(schema: ModelCatalog.schemaName, catalogVersion: "t", entries: [],
+                       redirectAllowList: [])
+            .redirectRule(matching: URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us/a")!) == nil,
+          "an empty allow-list admits nothing")
+    // Rule 3: the destination keeps the shape rules the request URL had.
+    check(ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us/a")!, allowLocalHTTP: false),
+          "an HTTPS default-port target has an allowed shape")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "http://us.aws.cdn.hf.co/xet-bridge-us/a")!, allowLocalHTTP: false),
+          "plain HTTP is refused outside the test opt-in")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "https://us.aws.cdn.hf.co:8443/xet-bridge-us/a")!, allowLocalHTTP: false),
+          "a non-default port is refused")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "https://paid:secret@us.aws.cdn.hf.co/xet-bridge-us/a")!,
+        allowLocalHTTP: false), "userinfo is refused")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "https://@us.aws.cdn.hf.co/xet-bridge-us/a")!,
+        allowLocalHTTP: false), "an empty userinfo authority is refused")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us/a#")!,
+        allowLocalHTTP: false), "even an empty fragment is refused")
+    check(ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us/repo/@scope/file?token=a@b")!,
+        allowLocalHTTP: false), "an at sign in the path or query is not userinfo")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "file:///etc/passwd")!, allowLocalHTTP: false),
+          "a file: Location is refused")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "ftp://us.aws.cdn.hf.co/xet-bridge-us/a")!, allowLocalHTTP: false),
+          "an ftp: Location is refused")
+    check(ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "http://127.0.0.1:8080/allowed-dest/payload.bin")!, allowLocalHTTP: true),
+          "the loopback-HTTP test allowance is unchanged, nothing more")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "https://127.0.0.1:8443/allowed-dest/payload.bin")!, allowLocalHTTP: true),
+          "the loopback test opt-in does not widen HTTPS ports")
+    check(!ModelCatalogEntry.isAllowedRedirectTarget(
+        URL(string: "http://example.com:8080/x")!, allowLocalHTTP: true),
+          "the test opt-in never widens beyond loopback")
+    // Rule 7 stays: the recorded source gate is untouched by this change.
+    check(ModelCatalogEntry.isRecordedFileSource("https://huggingface.co/a/b",
+                                                 entrySource: "https://huggingface.co/a",
+                                                 allowLocalHTTP: false),
+          "the recorded-source gate still accepts the recorded host")
+    check(!ModelCatalogEntry.isRecordedFileSource("https://us.aws.cdn.hf.co/xet-bridge-us/a",
+                                                  entrySource: "https://huggingface.co/a",
+                                                  allowLocalHTTP: false),
+          "an allow-listed redirect host never becomes a recorded source")
+    check(!ModelCatalogEntry.isRecordedFileSource("https://@huggingface.co/a/b",
+                                                  entrySource: "https://huggingface.co/a",
+                                                  allowLocalHTTP: false),
+          "a malformed empty userinfo cannot become a recorded source")
+}
+
+do {
+    // Allowed 302 to another host, and the hop budget, and the redaction.
+    let server = makeServer()
+    defer { server.stop() }
+    server.serve("/allowed-dest/payload.bin", "fixture-one\n")
+    server.serve("/unlisted/payload.bin", "fixture-one\n")
+    server.serve("/chain2/payload.bin", "", status: 302,
+                 location: "\(server.base)/unlisted/payload.bin")
+    server.serve("/chain1/payload.bin", "", status: 302,
+                 location: "\(server.base)/chain2/payload.bin")
+    server.serve("/cycle-a/payload.bin", "", status: 302,
+                 location: "\(server.base)/cycle-b/payload.bin")
+    server.serve("/cycle-b/payload.bin", "", status: 302,
+                 location: "\(server.base)/cycle-a/payload.bin")
+    let paths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")])
+
+    // The origin is recorded even when the first answer is a plain 200, so the
+    // audit trail always names where the bytes came from.
+    var directHops: [ModelRedirectHop] = []
+    let ok = runRedirectDownload(paths, "\(server.base)/good/payload.bin",
+                                 expectedBytes: 12) { directHops.append($0) }
+    switch ok {
+    case .success: check(true, "a direct 200 still records its origin hop")
+    case .failure(let error): check(false, "a direct 200 still records its origin hop",
+                                    "\(error)")
+    }
+    check(directHops.count == 1 && directHops[0].statusCode == 0
+            && directHops[0].path == "/good/payload.bin",
+          "the origin hop carries no redirect status",
+          directHops.map(\.display).joined(separator: " "))
+
+    var hops: [ModelRedirectHop] = []
+    server.redirect("/redirect-signed/payload.bin",
+                    to: "/allowed-dest/payload.bin?\(signedQueryMarker)", status: 302)
+    hops = []
+    let allowed = runRedirectDownload(paths, "\(server.base)/redirect-signed/payload.bin",
+                                      expectedBytes: 12) { hops.append($0) }
+    switch allowed {
+    case .success: check(true, "an allowed 302 to another host installs")
+    case .failure(let error): check(false, "an allowed 302 to another host installs",
+                                    "\(error)")
+    }
+    check(hops.map(\.path) == ["/redirect-signed/payload.bin", "/allowed-dest/payload.bin"],
+          "the hop list records origin then destination",
+          hops.map(\.display).joined(separator: " -> "))
+    check(!hops.contains(where: { $0.display.contains(signedQueryMarker) }),
+          "no hop carries the signed query", hops.map(\.display).joined(separator: " "))
+    check(server.paths().last == "/allowed-dest/payload.bin",
+          "the client followed the redirect to the second route")
+
+    // The full install path, through the same rule, ending in `installed`.
+    let installPaths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")])
+    server.redirect("/good/payload.bin", to: "/allowed-dest/payload.bin?\(signedQueryMarker)",
+                    status: 302)
+    let installed = runBlocking {
+        _ = try await installPaths.store.install(installPaths.catalog.entry(id: "fixture-good")!)
+    }
+    switch installed {
+    case .success: check(true, "install reaches installed through a redirect")
+    case .failure(let error): check(false, "install reaches installed through a redirect",
+                                    "\(error)")
+    }
+    check(installPaths.catalog.redirectAllowList.map(\.host) == ["127.0.0.1"],
+          "the install fixture's only rule is the loopback destination")
+
+    // Rule 6: each hop is re-checked, so a chain cannot launder a destination. The
+    // first hop is admitted (`/chain2/`), the second is not (`/unlisted/`).
+    let chainPaths = redirectStore(server, rules: [rule("127.0.0.1", "/chain2/"),
+                                                   rule("127.0.0.1", "/allowed-dest/")])
+    let laundered = runRedirectDownload(chainPaths, "\(server.base)/chain1/payload.bin",
+                                        expectedBytes: 12)
+    check(failureDetail(laundered).contains("refused a redirect"),
+          "a second hop to an unlisted path is refused", failureDetail(laundered))
+    check(server.paths().last == "/chain2/payload.bin"
+            && !server.paths().contains("/unlisted/payload.bin"),
+          "the admitted first hop was requested but the refused destination was not",
+          server.paths().joined(separator: " "))
+
+    // Hop budget: three redirects are allowed, a fourth is refused.
+    let budget = redirectStore(server, rules: [rule("127.0.0.1", "/hop"),
+                                               rule("127.0.0.1", "/allowed-dest/")])
+    server.serve("/hop1/payload.bin", "", status: 302, location: "\(server.base)/hop2/payload.bin")
+    server.serve("/hop2/payload.bin", "", status: 302, location: "\(server.base)/hop3/payload.bin")
+    server.serve("/hop3/payload.bin", "", status: 302, location: "\(server.base)/hop4/payload.bin")
+    server.serve("/hop4/payload.bin", "", status: 302,
+                 location: "\(server.base)/allowed-dest/payload.bin")
+    let overBudget = runRedirectDownload(budget, "\(server.base)/hop1/payload.bin",
+                                         expectedBytes: 12)
+    let overText = failureDetail(overBudget)
+    check(overText.contains("refused a redirect") && overText.contains("budget"),
+          "a chain longer than three redirects is refused", overText)
+    check(!overText.contains(signedQueryMarker), "and the refusal leaks nothing")
+    server.serve("/hop4/payload.bin", "fixture-one\n")
+    let atBudget = runRedirectDownload(budget, "\(server.base)/hop1/payload.bin",
+                                       expectedBytes: 12)
+    switch atBudget {
+    case .success: check(true, "exactly three redirects are followed")
+    case .failure(let error): check(false, "exactly three redirects are followed", "\(error)")
+    }
+}
+
+do {
+    // Rule 2: Hugging Face's same-host relative 307 changes path class. This is
+    // the case a host-only allow-list would still fail.
+    let server = makeServer()
+    defer { server.stop() }
+    server.serve("/allowed-relative/payload.bin", "fixture-one\n")
+    server.redirect("/config.json",
+                    to: "/allowed-relative/payload.bin?\(signedQueryMarker)&etag=W/\"abc\"",
+                    status: 307)
+    let paths = redirectStore(server, rules: [rule("localhost", "/allowed-relative/"),
+                                              rule("127.0.0.1", "/allowed-relative/")])
+    var hops: [ModelRedirectHop] = []
+    let followed = runRedirectDownload(paths, "\(server.base)/config.json", expectedBytes: 12) {
+        hops.append($0)
+    }
+    switch followed {
+    case .success: check(true, "a relative 307 that changes path class is followed")
+    case .failure(let error): check(false, "a relative 307 that changes path class is followed",
+                                    "\(error)")
+    }
+    check(hops.last?.path == "/allowed-relative/payload.bin"
+            && hops.last?.host == "127.0.0.1",
+          "the relative Location resolved against the request URL",
+          hops.last?.display ?? "none")
+    check(!hops.contains(where: { $0.display.contains("etag") ||
+                                   $0.display.contains(signedQueryMarker) }),
+          "and neither the etag nor the signed query survives into the trail")
+
+    server.redirect("/at-query.json",
+                    to: "/allowed-relative/payload.bin?token=a@b", status: 302)
+    var atHops: [ModelRedirectHop] = []
+    let atResult = runRedirectDownload(
+        paths, "\(server.base)/at-query.json", expectedBytes: 12) { atHops.append($0) }
+    switch atResult {
+    case .success:
+        check(atHops.last?.path == "/allowed-relative/payload.bin",
+              "an admitted destination may carry an at sign in its query",
+              atHops.last?.display ?? "none")
+    case .failure(let error):
+        check(false, "an admitted destination may carry an at sign in its query", "\(error)")
+    }
+
+    // Dot segments are refused before URL resolution can erase them. A relative
+    // Location is still supported (the simple `/allowed-relative/...` case above),
+    // but `..` cannot be used to walk out of the wire path the catalog admitted.
+    server.serve("/redirected/allowed-relative/payload.bin", "fixture-one\n")
+    server.redirect("/nested/start.json",
+                    to: "../redirected/allowed-relative/payload.bin", status: 307)
+    let parentPaths = redirectStore(
+        server, rules: [rule("127.0.0.1", "/redirected/allowed-relative/")])
+    var parentHops: [ModelRedirectHop] = []
+    let parentBefore = server.count()
+    let parentDetail = failureDetail(runRedirectDownload(
+        parentPaths, "\(server.base)/nested/start.json", expectedBytes: 12) {
+        parentHops.append($0)
+    })
+    check(parentDetail.contains("refused a redirect"),
+          "a parent-relative dot segment is refused before normalization", parentDetail)
+    check(server.count() == parentBefore + 1 && server.paths().last == "/nested/start.json",
+          "the normalized parent destination is never requested",
+          server.paths().joined(separator: " "))
+    check(parentHops.count == 1, "a refused relative hop never reaches the audit trail",
+          parentHops.map(\.display).joined(separator: " "))
+
+    // A Location pointing at a different host must not be resolved as relative.
+    server.redirect("/absolute-offsite", to: "http://elsewhere.example/x", status: 302)
+    let offsite = runRedirectDownload(paths, "\(server.base)/absolute-offsite",
+                                      expectedBytes: 12)
+    let offsiteText = failureDetail(offsite)
+    check(offsiteText.contains("refused a redirect") && offsiteText.contains("elsewhere.example"),
+          "an absolute Location to an unlisted host is refused by host", offsiteText)
+    check(!offsiteText.contains("127.0.0.1/x"),
+          "the Location was not treated as a path on the origin", offsiteText)
+}
+
+do {
+    // Refusals: unlisted host, listed host with an unlisted path, a non-HTTPS
+    // scheme, and the absent-key default that reproduces today's behaviour.
+    let server = makeServer()
+    defer { server.stop() }
+    server.serve("/unlisted/payload.bin", "fixture-one\n")
+    server.serve("/allowed-dest/payload.bin", "fixture-one\n")
+
+    let unlistedHost = redirectStore(server, rules: [])
+    server.redirect("/r/unlisted-host", to: "\(server.base)/unlisted/payload.bin", status: 302)
+    let hostText = failureDetail(runRedirectDownload(unlistedHost, "\(server.base)/r/unlisted-host",
+                                                     expectedBytes: 12))
+    check(hostText.contains("refused a redirect") && hostText.contains("/unlisted/"),
+          "a redirect to a host not listed is refused", hostText)
+
+    server.redirect("/r/wrong-path", to: "\(server.base)/unlisted/payload.bin", status: 302)
+    let pathOnly = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")])
+    let pathText = failureDetail(runRedirectDownload(pathOnly, "\(server.base)/r/wrong-path",
+                                                     expectedBytes: 12))
+    check(pathText.contains("host and path") && pathText.contains("/unlisted/payload.bin"),
+          "a listed host with an unlisted path class is refused", pathText)
+    check(!pathText.contains("\(server.base)/r/wrong-path"),
+          "the refusal names the destination, not the origin")
+
+    // A prefix match is not enough when a client or server may normalize the
+    // path. Literal, encoded, mixed and double-encoded traversal — plus encoded
+    // separators — must be refused before the destination is ever requested.
+    let unsafeDestinations = [
+        "/allowed-dest/a/../payload.bin",
+        "/allowed-dest/../unlisted/payload.bin",
+        "/allowed-dest/%2e%2e/unlisted/payload.bin",
+        "/allowed-dest/.%2e/unlisted/payload.bin",
+        "/allowed-dest/%2e./unlisted/payload.bin",
+        "/allowed-dest/%252e%252e/unlisted/payload.bin",
+        "/allowed-dest/a%2f..%2funlisted/payload.bin",
+        "/allowed-dest/a%5c..%5cunlisted/payload.bin"
+    ]
+    for (index, destination) in unsafeDestinations.enumerated() {
+        let origin = "/r/unsafe-path-\(index)"
+        server.redirect(origin, to: "\(server.base)\(destination)?\(signedQueryMarker)",
+                        status: 302)
+        let before = server.count()
+        let detail = failureDetail(runRedirectDownload(
+            pathOnly, "\(server.base)\(origin)", expectedBytes: 12))
+        check(detail.contains("refused a redirect"),
+              "an unsafe redirect path is refused: \(destination)", detail)
+        check(server.count() == before + 1 && server.paths().last == origin,
+              "the unsafe destination is never requested: \(destination)",
+              server.paths().joined(separator: " "))
+        check(!detail.contains(signedQueryMarker),
+              "the unsafe-path refusal carries no signed query: \(destination)", detail)
+    }
+
+    // A non-HTTPS scheme, and a userinfo-bearing Location, are refused by shape.
+    server.redirect("/r/insecure", to: "ftp://127.0.0.1/allowed-dest/payload.bin?\(signedQueryMarker)",
+                    status: 302)
+    let insecure = failureDetail(runRedirectDownload(
+        redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")]),
+        "\(server.base)/r/insecure", expectedBytes: 12))
+    check(insecure.contains("refused a redirect") && insecure.contains("/allowed-dest/payload.bin"),
+          "a non-HTTPS Location is refused", insecure)
+    server.redirect("/r/userinfo",
+                    to: "http://user:pass@127.0.0.1/allowed-dest/payload.bin", status: 302)
+    let userinfo = failureDetail(runRedirectDownload(
+        redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")]),
+        "\(server.base)/r/userinfo", expectedBytes: 12))
+    check(userinfo.contains("refused a redirect"), "a Location with credentials is refused",
+          userinfo)
+    check(!userinfo.contains("user:pass"), "and its credentials are not quoted", userinfo)
+
+    // Even an unreadable/empty-host authority must not be echoed back as a
+    // best-effort redaction: the raw Location can still carry credentials. Assert
+    // the typed policy refusal, no output, and no destination request too; merely
+    // checking that two strings are absent would also pass on success.
+    server.redirect("/r/empty-host-userinfo", to: "http://redirect-user:redirect-secret@",
+                    status: 302)
+    let emptyHostPaths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")])
+    let emptyHostDestination = emptyHostPaths.root.appendingPathComponent("empty-host.bin")
+    var emptyHostHops: [ModelRedirectHop] = []
+    let emptyHostBefore = server.count()
+    let emptyHostResult = runRedirectDownload(
+        emptyHostPaths, "\(server.base)/r/empty-host-userinfo", expectedBytes: 12,
+        destination: emptyHostDestination) { emptyHostHops.append($0) }
+    expectCode(emptyHostResult, "E_INVALID_INPUT",
+               "an unreadable Location is a typed policy refusal")
+    let emptyHost = failureDetail(emptyHostResult)
+    check(emptyHost.contains("refused a redirect")
+            && !emptyHost.contains("redirect-user") && !emptyHost.contains("redirect-secret"),
+          "an unreadable Location refusal never echoes credentials", emptyHost)
+    check(!FileManager.default.fileExists(atPath: emptyHostDestination.path),
+          "the unreadable Location wrote no destination file", emptyHostDestination.path)
+    check(server.count() == emptyHostBefore + 1
+            && server.paths().last == "/r/empty-host-userinfo",
+          "the unreadable Location caused no destination request",
+          server.paths().joined(separator: " "))
+    check(emptyHostHops.count == 1 && emptyHostHops[0].statusCode == 0
+            && emptyHostHops[0].path == "/r/empty-host-userinfo",
+          "the unreadable Location audit contains only the origin",
+          emptyHostHops.map(\.display).joined(separator: " "))
+
+    // A readable URI with empty userinfo is still credentials on the wire. Raw
+    // authority validation must reject it before Foundation can canonicalize it.
+    server.redirect("/r/empty-valid-userinfo",
+                    to: "http://@127.0.0.1/allowed-dest/payload.bin", status: 302)
+    let emptyValidPaths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")])
+    let emptyValidDestination = emptyValidPaths.root.appendingPathComponent("empty-valid.bin")
+    var emptyValidHops: [ModelRedirectHop] = []
+    let emptyValidBefore = server.count()
+    let emptyValidResult = runRedirectDownload(
+        emptyValidPaths, "\(server.base)/r/empty-valid-userinfo", expectedBytes: 12,
+        destination: emptyValidDestination) { emptyValidHops.append($0) }
+    expectCode(emptyValidResult, "E_INVALID_INPUT",
+               "a valid-host empty userinfo is a typed policy refusal")
+    let emptyValid = failureDetail(emptyValidResult)
+    check(emptyValid.contains("refused a redirect"),
+          "a valid-host empty userinfo is refused before canonicalization", emptyValid)
+    check(!FileManager.default.fileExists(atPath: emptyValidDestination.path),
+          "the empty-userinfo refusal wrote nothing", emptyValidDestination.path)
+    check(server.count() == emptyValidBefore + 1
+            && server.paths().last == "/r/empty-valid-userinfo"
+            && !server.paths().contains("/allowed-dest/payload.bin"),
+          "the empty-userinfo destination was never requested",
+          server.paths().joined(separator: " "))
+    check(emptyValidHops.count == 1 && emptyValidHops[0].statusCode == 0,
+          "the empty-userinfo audit contains only the origin",
+          emptyValidHops.map(\.display).joined(separator: " "))
+
+    // The absent-key default: identical to the historical unconditional refusal.
+    let defaults = makeStore(server)
+    server.redirect("/good/payload.bin", to: "\(server.base)/allowed-dest/payload.bin",
+                    status: 302)
+    check(defaults.catalog.redirectAllowList.isEmpty,
+          "the default fixture catalog has no rules once the key is dropped",
+          "\(defaults.catalog.redirectAllowList.count)")
+    let legacy = runBlocking {
+        _ = try await defaults.store.install(defaults.catalog.entry(id: "fixture-good")!)
+    }
+    let legacyText = failureDetail(legacy)
+    switch legacy {
+    case .success: check(false, "with the key absent a redirect is still refused")
+    case .failure: check(legacyText.contains("refused a redirect"),
+                         "with the key absent a redirect is still refused", legacyText)
+    }
+    check(!FileManager.default.fileExists(atPath:
+        versionDirectory(defaults, "fixture-good", "1.0.0").path),
+          "the refused redirect installed nothing")
+    check(stagingChildren(defaults).isEmpty, "the refused redirect left no staging tree")
+
+    // Every refusal message: host and path present, query never.
+    server.redirect("/leaky", to: "/allowed-dest/payload.bin?\(signedQueryMarker)", status: 302)
+    let leaky = failureDetail(runRedirectDownload(
+        redirectStore(server, rules: []), "\(server.base)/leaky", expectedBytes: 12))
+    check(leaky.contains("127.0.0.1") && leaky.contains("/allowed-dest/payload.bin"),
+          "the refusal names the destination host and path", leaky)
+    check(!leaky.contains(signedQueryMarker) && !leaky.contains("?"),
+          "and never the query string", leaky)
+}
+
+do {
+    // The redirect-status vocabulary is exact. Exercise 301/303/308 over the real
+    // URLSession transport too, because a unit-level enum list alone would not
+    // prove Foundation delegates these responses to the policy.
+    let server = makeServer()
+    defer { server.stop() }
+    let paths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")])
+    for status in [301, 303, 308] {
+        let origin = "/status-\(status)/payload.bin"
+        let target = "/allowed-dest/status-\(status)/payload.bin"
+        server.serve(target, "fixture-one\n")
+        server.redirect(origin, to: "\(target)?\(signedQueryMarker)", status: status)
+        var hops: [ModelRedirectHop] = []
+        let result = runRedirectDownload(paths, "\(server.base)\(origin)", expectedBytes: 12) {
+            hops.append($0)
+        }
+        switch result {
+        case .success:
+            check(hops.count == 2 && hops.last?.statusCode == status
+                    && hops.last?.path == target,
+                  "HTTP \(status) is admitted over the real transport",
+                  hops.map(\.display).joined(separator: " -> "))
+        case .failure(let error):
+            check(false, "HTTP \(status) is admitted over the real transport", "\(error)")
+        }
+    }
+
+    // 300 and 304 are not redirect statuses in this policy. Their bodies must not
+    // be mistaken for model bytes, even when the declared length would match.
+    for status in [300, 304] {
+        let origin = "/not-redirect-\(status)/payload.bin"
+        server.serve(origin, "fixture-one\n", status: status)
+        let destination = paths.root.appendingPathComponent("status-\(status).bin")
+        var hops: [ModelRedirectHop] = []
+        let before = server.count()
+        let result = runRedirectDownload(paths, "\(server.base)\(origin)", expectedBytes: 12,
+                                         destination: destination) { hops.append($0) }
+        expectCode(result, "E_INVALID_INPUT",
+                   "HTTP \(status) is refused as a non-200 answer")
+        check(failureDetail(result).contains("HTTP \(status)"),
+              "the HTTP \(status) refusal names the status", failureDetail(result))
+        check(!FileManager.default.fileExists(atPath: destination.path),
+              "HTTP \(status) wrote no destination file", destination.path)
+        check(server.count() == before + 1 && hops.count == 1 && hops[0].statusCode == 0,
+              "HTTP \(status) caused no redirect follow or admitted hop",
+              server.paths().joined(separator: " "))
+    }
+
+    // Missing and explicitly empty Location values fail closed. Foundation does
+    // not invoke the redirect delegate for either one; it returns the 302 as the
+    // final non-200 response. The empty case proves the header's presence alone is
+    // not treated as a usable destination.
+    for (label, location) in [("missing", Optional<String>.none), ("empty", Optional(""))] {
+        let origin = "/\(label)-location/payload.bin"
+        if let location {
+            server.serve(origin, "", status: 302, location: location)
+        } else {
+            server.serve(origin, "", status: 302)
+        }
+        let destination = paths.root.appendingPathComponent("\(label)-location.bin")
+        var hops: [ModelRedirectHop] = []
+        let before = server.count()
+        let result = runRedirectDownload(paths, "\(server.base)\(origin)", expectedBytes: 12,
+                                         destination: destination) { hops.append($0) }
+        expectCode(result, "E_INVALID_INPUT",
+                   "a \(label) Location is a typed refusal")
+        check(failureDetail(result).contains("HTTP 302"),
+              "a \(label) Location is refused as a final non-200 response",
+              failureDetail(result))
+        check(!FileManager.default.fileExists(atPath: destination.path),
+              "the \(label)-Location response wrote no destination", destination.path)
+        check(server.count() == before + 1 && hops.count == 1 && hops[0].statusCode == 0,
+              "the \(label)-Location refusal audited only the origin",
+              server.paths().joined(separator: " "))
+    }
+
+    // A trailing empty fragment remains a fragment in Foundation. It is not an
+    // ordinary destination and must be rejected before any request is sent.
+    server.redirect("/empty-fragment/payload.bin",
+                    to: "/allowed-dest/payload.bin#", status: 302)
+    let fragmentDestination = paths.root.appendingPathComponent("empty-fragment.bin")
+    var fragmentHops: [ModelRedirectHop] = []
+    let fragmentBefore = server.count()
+    let fragmentResult = runRedirectDownload(
+        paths, "\(server.base)/empty-fragment/payload.bin", expectedBytes: 12,
+        destination: fragmentDestination) { fragmentHops.append($0) }
+    expectCode(fragmentResult, "E_INVALID_INPUT",
+               "an empty redirect fragment is a typed policy refusal")
+    check(failureDetail(fragmentResult).contains("refused a redirect"),
+          "a trailing empty fragment is refused", failureDetail(fragmentResult))
+    check(!FileManager.default.fileExists(atPath: fragmentDestination.path),
+          "the empty-fragment refusal wrote nothing", fragmentDestination.path)
+    check(server.count() == fragmentBefore + 1 && fragmentHops.count == 1
+            && fragmentHops[0].statusCode == 0,
+          "the empty-fragment destination was never requested or audited",
+          server.paths().joined(separator: " "))
+
+    // A stable percent escape is not traversal. Prove it end to end, including
+    // the exact wire path sent to the server and recorded in the redacted hop.
+    let percentTarget = "/allowed-dest/100%25/payload.bin"
+    server.serve(percentTarget, "fixture-one\n")
+    server.redirect("/stable-percent/payload.bin",
+                    to: "\(percentTarget)?\(signedQueryMarker)", status: 302)
+    var percentHops: [ModelRedirectHop] = []
+    let percentResult = runRedirectDownload(paths, "\(server.base)/stable-percent/payload.bin",
+                                            expectedBytes: 12) { percentHops.append($0) }
+    switch percentResult {
+    case .success:
+        check(server.paths().last == percentTarget && percentHops.last?.path == percentTarget,
+              "a stable %25 reaches the wire and the redacted audit unchanged",
+              "\(server.paths().last ?? "none") / \(percentHops.last?.display ?? "none")")
+    case .failure(let error):
+        check(false, "a stable %25 reaches the wire and the redacted audit unchanged", "\(error)")
+    }
+
+    // Foundation rejects actual duplicate Location headers while parsing the
+    // response (NSURLErrorDomain -1017), before the redirect delegate runs. This
+    // is a measured transport limitation, not a fabricated delegate-policy case;
+    // the required security outcome is still typed refusal and zero destination IO.
+    server.serve("/duplicate-location/payload.bin", "", status: 302,
+                 location: "/allowed-dest/one.bin?\(signedQueryMarker)",
+                 additionalLocations: ["/allowed-dest/two.bin?\(signedQueryMarker)"])
+    let duplicateDestination = paths.root.appendingPathComponent("duplicate-location.bin")
+    var duplicateHops: [ModelRedirectHop] = []
+    let duplicateBefore = server.count()
+    let duplicateResult = runRedirectDownload(
+        paths, "\(server.base)/duplicate-location/payload.bin", expectedBytes: 12,
+        destination: duplicateDestination) { duplicateHops.append($0) }
+    expectCode(duplicateResult, "E_INVALID_INPUT",
+               "Foundation's duplicate-Location parse failure is typed")
+    check(!failureDetail(duplicateResult).contains(signedQueryMarker),
+          "the duplicate-Location transport failure echoes no signed query",
+          failureDetail(duplicateResult))
+    check(!FileManager.default.fileExists(atPath: duplicateDestination.path),
+          "the duplicate-Location response wrote nothing", duplicateDestination.path)
+    // URLSession may retry the same unparsable response; pin the security
+    // property, not a transport-specific retry count.
+    check(server.count() > duplicateBefore && duplicateHops.count == 1
+            && duplicateHops[0].statusCode == 0
+            && server.paths().dropFirst(duplicateBefore)
+                .allSatisfy { $0 == "/duplicate-location/payload.bin" }
+            && !server.paths().contains("/allowed-dest/one.bin")
+            && !server.paths().contains("/allowed-dest/two.bin"),
+          "the duplicate-Location response made no destination request",
+          server.paths().joined(separator: " "))
+}
+
+do {
+    // Transport exceptions are outside the redirect policy but can still carry a
+    // complete signed URL. The download error is user-visible, so it must not copy
+    // arbitrary exception text into the typed refusal.
+    let server = makeServer()
+    defer { server.stop() }
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [LeakyTransportProtocol.self]
+    let paths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")],
+                              sessionConfiguration: configuration)
+    let signedURL = "\(server.base)/good/payload.bin?\(signedQueryMarker)"
+    LeakyTransportProtocol.setFailureMessage("transport exploded at \(signedURL)")
+    let destination = paths.root.appendingPathComponent("transport-error.bin")
+    let result = runRedirectDownload(paths, signedURL, expectedBytes: 12,
+                                     destination: destination)
+    expectCode(result, "E_INVALID_INPUT",
+               "a transport exception becomes a typed download failure")
+    let detail = failureDetail(result)
+    check(!detail.contains(signedQueryMarker) && !detail.contains(signedURL) && !detail.contains("?"),
+          "a transport failure never echoes the complete signed source URL", detail)
+    check(!FileManager.default.fileExists(atPath: destination.path),
+          "the transport failure wrote no destination file", destination.path)
+    LeakyTransportProtocol.setFailureMessage("")
+}
+
+do {
+    // Rule 8: integrity is unchanged and still final. A redirect that delivers
+    // other bytes, or fewer bytes, fails exactly as a direct one does. Each case
+    // gets its own recorded route — the entries share `{base}/good/payload.bin` in
+    // the fixture, and rewriting that one route would silently change what an
+    // earlier install in this server downloads.
+    let server = makeServer()
+    defer { server.stop() }
+    server.serve("/allowed-dest/sha.bin", "different!\n")   // 11 bytes, wrong hash
+    server.serve("/allowed-dest/size.bin", "short\n")       // wrong size
+    server.serve("/allowed-dest/missing.bin", "nope", status: 404)
+    server.redirect("/sha/payload.bin", to: "/allowed-dest/sha.bin", status: 302)
+    let shaPaths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")],
+                                 entryId: "fixture-sha", path: "/sha/payload.bin")
+    expectCode(runBlocking {
+        _ = try await shaPaths.store.install(shaPaths.catalog.entry(id: "fixture-sha")!)
+    }, "E_MODEL_UNVERIFIED", "a redirect to mismatched bytes fails the pinned SHA-256")
+    server.redirect("/size/payload.bin", to: "/allowed-dest/size.bin", status: 302)
+    let sizePaths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")],
+                                  entryId: "fixture-size", path: "/size/payload.bin")
+    expectCode(runBlocking {
+        _ = try await sizePaths.store.install(sizePaths.catalog.entry(id: "fixture-size")!)
+    }, "E_MODEL_UNVERIFIED", "a redirect to a different length fails the declared size")
+    check(stagingChildren(sizePaths).isEmpty, "an integrity failure leaves no staging tree")
+    server.serve("/allowed-dest/empty.bin", "", status: 200)
+    server.redirect("/empty/payload.bin", to: "/allowed-dest/empty.bin", status: 302)
+    let emptyPaths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")],
+                                   entryId: "fixture-size", path: "/empty/payload.bin")
+    expectCode(runBlocking {
+        _ = try await emptyPaths.store.install(emptyPaths.catalog.entry(id: "fixture-size")!)
+    }, "E_MODEL_UNVERIFIED", "an empty final 200 fails the declared size")
+    check(!FileManager.default.fileExists(atPath:
+        versionDirectory(emptyPaths, "fixture-size", "1.0.0").path),
+        "an empty final 200 installed no version")
+    check(stagingChildren(emptyPaths).isEmpty, "an empty final 200 left no staging tree")
+    // A redirect that lands on a non-200 answer is still a failure, not a body.
+    server.redirect("/missing/payload.bin", to: "/allowed-dest/missing.bin", status: 302)
+    let statusPaths = redirectStore(server, rules: [rule("127.0.0.1", "/allowed-dest/")],
+                                    path: "/missing/payload.bin")
+    check(statusPaths.catalog.entry(id: "fixture-good")!.files.first!.sourceUrl
+            == "\(server.base)/missing/payload.bin",
+          "the install fixture records the redirecting source URL",
+          statusPaths.catalog.entry(id: "fixture-good")!.files.first!.sourceUrl)
+    let directStatus = failureDetail(runRedirectDownload(
+        statusPaths, "\(server.base)/missing/payload.bin", expectedBytes: 12))
+    check(directStatus.contains("HTTP 404"), "the transfer itself refuses a final non-200",
+          directStatus)
+    let statusResult = runBlocking {
+        _ = try await statusPaths.store.install(statusPaths.catalog.entry(id: "fixture-good")!)
+    }
+    switch statusResult {
+    case .success:
+        check(false, "a redirect ending in a non-200 is refused",
+              "unexpected success; requests: \(server.paths().joined(separator: " "))")
+    case .failure(let error):
+        check(error.localizedDescription.contains("HTTP 404"),
+              "a redirect ending in a non-200 is refused", "\(error)")
+    }
+    check(!FileManager.default.fileExists(atPath:
+        versionDirectory(statusPaths, "fixture-good", "1.0.0").path),
+        "the non-200 redirect installed no version")
+    check(stagingChildren(statusPaths).isEmpty,
+        "the non-200 redirect left no staging tree")
+}
+
+do {
+    // The consent sheet must name the destinations before the download is approved.
+    let en = L10n.shared
+    let fa = PersianL10n.table
+    let hosts = ["huggingface.co/api/resolve-cache/", "us.aws.cdn.hf.co/xet-bridge-us/"]
+    let english = en.modelsConsentBody(files: 3, size: "96700000", codeLicense: "Apache-2.0",
+                                       weightsLicense: "Apache-2.0", host: "huggingface.co",
+                                       sha: "abc123", redirectHosts: hosts)
+    check(english.contains("huggingface.co/api/resolve-cache/")
+            && english.contains("us.aws.cdn.hf.co/xet-bridge-us/"),
+          "the English consent names both redirect destinations", english)
+    check(!english.contains("?"), "and the English consent shows no query", english)
+    let persian = fa.modelsConsentBody(files: 3, size: "96700000", codeLicense: "Apache-2.0",
+                                       weightsLicense: "Apache-2.0", host: "huggingface.co",
+                                       sha: "abc123", redirectHosts: hosts)
+    check(hosts.allSatisfy { persian.contains("\u{2066}\($0)\u{2069}") },
+          "the Persian consent isolates each technical token as one bidi run", persian)
+    let countAndSize = persian.components(separatedBy: "، از").first ?? ""
+    check(countAndSize.contains("۳") && countAndSize.contains("۹۶۷۰۰۰۰۰")
+            && !countAndSize.unicodeScalars.contains { $0.value >= 48 && $0.value <= 57 },
+          "the Persian count and size use Persian digits", countAndSize)
+    check(persian.contains("SHA-256 (مانیفست): abc123…"),
+          "the technical SHA label and token remain exact", persian)
+    check(persian.contains("تغییر مسیر"), "the Persian sentence speaks of a redirect", persian)
+    let noneEn = en.modelsConsentBody(files: 1, size: "12", codeLicense: "MIT",
+                                      weightsLicense: "MIT", host: "example.com", sha: "a",
+                                      redirectHosts: [])
+    let noneFa = fa.modelsConsentBody(files: 1, size: "12", codeLicense: "MIT",
+                                      weightsLicense: "MIT", host: "example.com", sha: "a",
+                                      redirectHosts: [])
+    check(noneEn.contains("No other host may supply these bytes")
+            && noneFa.contains("هیچ میزبان دیگری"),
+          "with no rules both sheets say a redirect is refused")
+    // The old call site keeps working and says the same thing as an empty list.
+    check(en.modelsConsentBody(files: 1, size: "12", codeLicense: "MIT", weightsLicense: "MIT",
+                               host: "example.com", sha: "a")
+            .contains("No other host may supply these bytes"),
+          "the arity kept for existing callers discloses the same default")
 }
 
 print("\n\(failures.isEmpty ? "✓ all model-store checks passed" : "✗ \(failures.count) checks failed")")

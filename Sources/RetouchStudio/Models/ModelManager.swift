@@ -16,6 +16,9 @@ final class ModelManager: ObservableObject {
         let version: String
         let receivedBytes: Int64
         let totalBytes: Int64?
+        /// Identifies the operation that published this snapshot. Progress from
+        /// a cancelled operation must not mutate a later install or adoption.
+        fileprivate let generation: UInt64
 
         var indeterminate: Bool { totalBytes == nil || (totalBytes ?? 0) <= 0 }
         var percent: Int {
@@ -43,17 +46,30 @@ final class ModelManager: ObservableObject {
 
     private var store: ModelStore?
     private var installTask: Task<Void, Never>?
+    private var installGeneration: UInt64 = 0
     private var lastProgressBytes: Int64 = 0
     /// Fetches the helper's report off the main thread. Production uses the
     /// real client; a test hands in a report derived from its own store.
     private let capabilityLoader: @Sendable () throws -> AICapabilityReport
+    /// Progress callbacks cross from URLSession to the main actor. Keeping the
+    /// scheduling boundary injectable lets the regression hold a real callback
+    /// across cancellation and retry without relying on a timing window.
+    private let progressScheduler: @Sendable (@escaping @MainActor () -> Void) -> Void
 
     init(store: ModelStore? = nil,
          capabilityLoader: @escaping @Sendable () throws -> AICapabilityReport
-            = { try AICapabilityClient.fetch() }) {
+            = { try AICapabilityClient.fetch() },
+         progressScheduler: @escaping @Sendable (@escaping @MainActor () -> Void) -> Void
+            = { update in Task { @MainActor in update() } }) {
         self.store = store
         self.capabilityLoader = capabilityLoader
+        self.progressScheduler = progressScheduler
     }
+
+    /// The catalog the manager is showing, when its store has been built. The
+    /// consent sheet reads the redirect allow-list from here so the user approves
+    /// the destinations and not only the recorded source.
+    var catalog: ModelCatalog? { store?.catalog }
 
     var isDownloading: Bool { install != nil }
 
@@ -124,16 +140,20 @@ final class ModelManager: ObservableObject {
             notice = error.localizedDescription
             return
         }
+        installGeneration &+= 1
+        let generation = installGeneration
         lastProgressBytes = 0
         install = InstallState(modelID: entry.id, name: entry.name, version: entry.version,
                                receivedBytes: 0,
-                               totalBytes: entry.sizeBytes.map { Int64($0) })
+                               totalBytes: entry.sizeBytes.map { Int64($0) },
+                               generation: generation)
         notice = nil
+        let scheduleProgress = progressScheduler
         installTask = Task { [weak self] in
             do {
                 _ = try await store.install(entry) { update in
-                    Task { @MainActor [weak self] in
-                        self?.apply(update)
+                    scheduleProgress { [weak self] in
+                        self?.apply(update, generation: generation)
                     }
                 }
                 self?.notice = L10n.current.modelsDownloaded(entry.name)
@@ -150,8 +170,8 @@ final class ModelManager: ObservableObject {
         installTask?.cancel()
     }
 
-    private func apply(_ update: ModelTransferProgress) {
-        guard var current = install else { return }
+    private func apply(_ update: ModelTransferProgress, generation: UInt64) {
+        guard var current = install, current.generation == generation else { return }
         // URLSession reports small chunks; republish at most once per megabyte
         // so the main thread is not woken thousands of times.
         guard update.receivedBytes - lastProgressBytes >= 1 << 20
@@ -162,7 +182,8 @@ final class ModelManager: ObservableObject {
         current = InstallState(modelID: current.modelID, name: current.name,
                                version: current.version,
                                receivedBytes: update.receivedBytes,
-                               totalBytes: update.totalBytes ?? current.totalBytes)
+                               totalBytes: update.totalBytes ?? current.totalBytes,
+                               generation: generation)
         install = current
     }
 
@@ -242,15 +263,19 @@ final class ModelManager: ObservableObject {
             notice = error.localizedDescription
             return nil
         }
+        installGeneration &+= 1
+        let generation = installGeneration
         lastProgressBytes = 0
         install = InstallState(modelID: record.id, name: record.entry.name,
                                version: record.entry.version, receivedBytes: 0,
-                               totalBytes: record.entry.sizeBytes.map { Int64($0) })
+                               totalBytes: record.entry.sizeBytes.map { Int64($0) },
+                               generation: generation)
         notice = nil
+        let scheduleProgress = progressScheduler
         let task = Task { [weak self] in
             do {
                 _ = try await store.migrateLegacy(record.entry) { update in
-                    Task { @MainActor [weak self] in self?.apply(update) }
+                    scheduleProgress { [weak self] in self?.apply(update, generation: generation) }
                 }
                 self?.notice = L10n.current.modelsMigrated(record.entry.name)
             } catch {
