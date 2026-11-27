@@ -96,7 +96,8 @@ struct ModelManagerView: View {
                         codeLicense: entry.codeLicense,
                         weightsLicense: entry.weightsLicense,
                         host: sourceHost(entry) ?? "—",
-                        sha: String((entry.sha256 ?? "").prefix(16)))),
+                        sha: String((entry.sha256 ?? "").prefix(16)),
+                        redirectHosts: redirectDestinations)),
                     primaryButton: .default(Text(editor.s.modelsDownloadAction)) {
                         manager.install(entry)
                     },
@@ -141,6 +142,15 @@ struct ModelManagerView: View {
                     })
             }
         }
+    }
+
+    /// The redirect destinations the catalog admits, written as `host/pathPrefix`
+    /// so the sheet names a path class and not just a host. An empty list is the
+    /// catalog's safe default and the sheet says the bytes cannot come from
+    /// anywhere else.
+    private var redirectDestinations: [String] {
+        (manager.catalog?.redirectAllowList ?? [])
+            .map { "\($0.host)\($0.pathPrefix)" }
     }
 
     private var showsRuntimeCard: Bool {

@@ -14,6 +14,8 @@ public partial class ModelManagerWindow : Window
 {
     private ModelStore? _store;
     private CancellationTokenSource? _installCancel;
+    private long _transferGeneration;
+    private long _activeTransferGeneration;
     private bool _busy;
 
     public ModelManagerWindow()
@@ -204,18 +206,25 @@ public partial class ModelManagerWindow : Window
         var host = Uri.TryCreate(entry.SourceUrl, UriKind.Absolute, out var uri)
             ? uri.Host : entry.SourceUrl;
         var sha = (entry.Sha256 ?? "").Length > 16 ? entry.Sha256![..16] : "—";
+        // The redirect destinations are catalog data, named here so the approval
+        // covers where the bytes can actually come from. Only host and path class
+        // are ever shown — a signed query never reaches this text.
+        var destinations = _store.Catalog.RedirectAllowList
+            .Select(rule => rule.Host + rule.PathPrefix).ToList();
+        var redirectLine = destinations.Count == 0
+            ? "No other host may supply these bytes; a redirect is refused."
+            : "If the source redirects, the only allowed destinations are: " +
+              string.Join(", ", destinations) + ".";
         var text = $"{entry.Files.Count} file(s), {Bytes(entry.SizeBytes)}, from {host}.\n\n" +
+                   $"{redirectLine}\n" +
                    $"Code licence: {entry.CodeLicense}\nWeights licence: {entry.WeightsLicense}\n" +
                    $"SHA-256 (manifest): {sha}…\n\n" +
                    "This is the only step that uses the internet. Nothing is installed unless every file matches its size and checksum.";
         if (MessageBox.Show(this, text, $"Install {entry.Name}, version {entry.Version}?",
                 MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
             return;
-        // Build Progress<T> on the UI thread; inside Task.Run it would capture
-        // no synchronization context and update the bar from a pool thread.
-        var progress = TransferProgress(entry);
-        await RunTransfer(entry, () => _store.InstallAsync(entry, progress,
-            _installCancel!.Token), null);
+        await RunTransfer(entry,
+            (progress, token) => _store.InstallAsync(entry, progress, token), null);
     }
 
     private async void BeginAdopt(ModelCatalogEntry entry, long legacy)
@@ -227,17 +236,19 @@ public partial class ModelManagerWindow : Window
         if (MessageBox.Show(this, text, $"Adopt the existing {entry.Name} files?",
                 MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
             return;
-        var progress = TransferProgress(entry);
-        await RunTransfer(entry, () => _store.MigrateLegacyAsync(entry, progress,
-            _installCancel!.Token), "adopted");
+        await RunTransfer(entry,
+            (progress, token) => _store.MigrateLegacyAsync(entry, progress, token), "adopted");
     }
 
-    private async Task RunTransfer(ModelCatalogEntry entry, Func<Task<ModelVersionState>> work,
+    private async Task RunTransfer(ModelCatalogEntry entry,
+        Func<IProgress<ModelTransferProgress>, CancellationToken, Task<ModelVersionState>> work,
         string? verb)
     {
         _busy = true;
         RowsPanel.IsEnabled = false;
         _installCancel = new CancellationTokenSource();
+        var generation = ++_transferGeneration;
+        _activeTransferGeneration = generation;
         ProgressPanel.Visibility = Visibility.Visible;
         ProgressLabel.Text = $"{entry.Name} · version {entry.Version}";
         TransferBar.IsIndeterminate = entry.SizeBytes is null;
@@ -245,7 +256,10 @@ public partial class ModelManagerWindow : Window
         NoticeText.Text = "";
         try
         {
-            await Task.Run(work);
+            // Build Progress<T> on the UI thread; inside Task.Run it would capture
+            // no synchronization context and update the bar from a pool thread.
+            var progress = TransferProgress(entry, generation);
+            await Task.Run(() => work(progress, _installCancel!.Token));
             NoticeText.Text = verb == "adopted"
                 ? $"{entry.Name} was moved into the versioned store."
                 : $"{entry.Name} is installed.";
@@ -256,6 +270,7 @@ public partial class ModelManagerWindow : Window
         }
         finally
         {
+            _activeTransferGeneration = 0;
             _busy = false;
             _installCancel.Dispose();
             _installCancel = null;
@@ -264,9 +279,14 @@ public partial class ModelManagerWindow : Window
         }
     }
 
-    private IProgress<ModelTransferProgress> TransferProgress(ModelCatalogEntry entry) =>
+    private IProgress<ModelTransferProgress> TransferProgress(ModelCatalogEntry entry,
+        long generation) =>
         new Progress<ModelTransferProgress>(update =>
         {
+            // Progress<T> queues on the WPF synchronization context. A callback
+            // reported by a cancelled install can therefore arrive after a retry
+            // has reset the bar; only the active generation may mutate it.
+            if (generation != _activeTransferGeneration || !_busy) return;
             var total = update.TotalBytes ?? entry.SizeBytes;
             if (total is > 0)
             {

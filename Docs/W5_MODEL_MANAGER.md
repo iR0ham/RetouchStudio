@@ -56,11 +56,15 @@ Source rules: HTTPS only; the file URL must use the same scheme and host as
 the entry's recorded source; no credentials or fragments; the default port
 only in production. A test may opt into loopback HTTP, and that exception also
 covers the ephemeral port of the local fixture server; a non-default port is
-never accepted in production, even on loopback. Redirects are not followed: an
-HTTP 3xx is a non-200 failure, so a download cannot silently move to another
-host. Local HTTP is accepted only by tests through an injected flag.
-Only URLs already recorded from the official source may appear; none is
-invented.
+never accepted in production, even on loopback. W5-2 initially treated every
+3xx as a non-200 failure. **R1 correction (2026-11-24):** automatic redirects
+are disabled; the downloader handles 301, 302, 303, 307 and 308 itself, for at
+most three hops. Each `Location` must resolve to an HTTPS destination whose
+exact host and path prefix appear in the catalog's redirect allow-list; an
+unlisted, unsafe, unreadable or over-budget redirect is refused before any
+payload file is written. Local HTTP is accepted only by tests through an
+injected flag. Only URLs already recorded from the official source may appear;
+none is invented.
 
 ## 3. Store layout
 
